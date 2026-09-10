@@ -1612,3 +1612,98 @@ separately from the 166-path candidate's source-budget proof and runtime seals.
 Neither those static checks nor C's scoped passes qualify physical model
 extraction, the required 25% measured memory reduction, native/device execution,
 the full workspace or the first release.
+
+
+## Canonical SoraFS validator CLI migration (2026-09-09)
+
+The standalone `sorafs-validate` implementation and binary registration are
+removed. Artifact validation belongs to `iroha app sorafs toolkit validate`;
+signing, release-manifest verification, receipt verification and timed-OVN audit
+belong directly to `iroha app sorafs toolkit`. Typed Clap arguments and local
+dispatch run before node/client configuration or signer loading. The reusable
+manifest library retains validation and codec functions. No compatibility binary,
+alias or subprocess dispatch remains.
+
+All 95 original tests and their artifact/signature assertions are retained; five
+new tests cover namespace selection, configuration-free execution, irrelevant
+global arguments and help. Final isolated CLI build 5 passes 68 toolkit unit,
+42 executable integration and 216 SoraFS capability tests. This includes actual
+JSON incentives-state persistence: unused binary derives were removed, and the
+existing roundtrip test now uses production save/load functions and rejects
+malformed JSON, trailing values and unsupported versions. The ledger export and
+four model records retain explicit source-derived frame identities with canonical
+roundtrips and wrong-owner, truncated and trailing-frame rejection controls.
+These names are not claimed as compiler-captured historical frame evidence.
+
+`Cargo.lock` changes only the CLI's existing resolved `assert_cmd` edge and removal
+of the manifest library's unused `rustix` edge. The CLI owns its Ed25519 dependency.
+The renamed `scripts/package_iroha_cli_release.sh`, release workflow, artifact
+manifest, candidate installer, signing adapters, self-certification and fixtures
+use the canonical CLI. Native verifier calls use a fixed three-argument prefix;
+executable snapshot identity, minimal environment, closed descriptors, privilege
+drop, bounds and publication rollback remain enforced. Independent review traced
+a stale bootstrap pin to earlier committed descriptor and executable-size
+hardening before refreshing it. This source seal does not qualify publication.
+
+The broad delivery run records 1,366 passing tests and two unchanged production
+TODO failures; concurrent edits were limited to two documentation files and are
+recorded separately. Before the final Rust corrections, the release-controlled source rerun passes
+all 743 contract tests with an unchanged seal. Subsequent concurrent broker wire
+identity and fixture edits continue to change that surface. The current root seal
+is therefore pending reconciliation after that work settles; the CLI/model test
+evidence does not qualify the broker changes. The shell signing test passes.
+The cohesive billing-service contract now has a 396-line owner; all 47 assertions
+and 386 parent test IDs are retained, the parent's exception falls to 28,429 lines,
+and all 51 budget guard tests pass. The parent suite passes 384 tests with the same
+two TODO failures. No completion gate or architecture budget was weakened.
+
+Those gates remain red for unfinished capability routing, bounded fanout, provider
+authentication and hardware/state/evidence integration. All 16 resolved dependency
+boundaries pass. Five manifest dependency ratchets still fail, and the global
+source-size check reports 249 findings. The binary inventory pins 104 exact owners
+and keeps its 24-default maximum; all 12 focused tests pass. Historical target
+changes are traced separately from this migration's removed validator target.
+
+Failed build attempts and corrected source revisions are retained. Model build 1
+has no warnings and passes 24 incentives, 18 manifest and 32 Native AMX tests on
+default stacks with four workers. Its source is `7e8c6d2058d0e82c326980f8f7e2fbcdc2c720af5b42e3a75912a6726a9ff00b`;
+the final CLI-only JSON correction yields `3c25c5d9267ab67cd7a88fe13d23c6c393be922ea5061a2b267d5f9e3e2a09df`.
+Both builds and runtime groups preserve their exact source fingerprints. The
+final CLI's eight warnings originate in unchanged code, with attribution retained.
+Four corrected files were applied to the root only after every beforeimage matched.
+
+Formatting and retired-codec checks pass. Exact sources, failed and corrected
+commands, reviewed pins and logs are retained under
+`target/architecture-redesign/sorafs-validator-cli-migration-v1/` and
+`target/architecture-redesign/norito-identity-cutover/`. Full workspace, native,
+release, memory and four-validator qualification remain open.
+
+## Canonical SoraFS instruction CLI migration (2026-09-09)
+
+`iroha app sorafs toolkit instruction` now owns capacity-declaration,
+replication-order, complete-order and expire-order. Four typed Clap argument
+structs replace the old executable's flag parsers. Nonzero canonical integers,
+lowercase digests, canonical account spelling and signer-policy predecessor rules
+remain enforced. Exact instruction framing, base64 and single-array JSON output
+are preserved. Local dispatch needs no client configuration or signing context.
+The standalone builder and its old executable-test hook are removed.
+
+All six unit tests and twelve original executable cases are migrated; three new
+cases cover canonical help, configuration-free dispatch and irrelevant global
+arguments. The completion fixture now supplies the complete authority, assignment
+and finalized anchor required by its instruction. Its original assertions remain.
+The final isolated build passes 74 toolkit, 15 instruction-executable and 42
+validator-executable tests on unchanged source
+`e9c7e7f475ae08b598b42bde9a6a7db1dfe6f75d7d7b7e3a9dbe113e0dcda955`.
+The unused test import found by the first build is removed; eight pre-existing
+warnings remain. These counts overlap the earlier validator-stage selection.
+
+Fresh candidate metadata and all 14 inventory tests pass: 103 exact declared
+binary owners and 23 default binaries, with the maximum unchanged at 24. No
+normal or build dependency edge changes, and `Cargo.lock` remains byte-identical.
+All ten migration paths were applied only after their root beforeimages matched.
+Sources, assertion mappings, failed and corrected format attempts, compiler
+artifacts and runtime evidence are under
+`target/architecture-redesign/sorafs-instruction-cli-preparation-v1/` and the
+shared isolated qualification directory. Full workspace, current release-seal,
+consensus, native/device and memory qualification remain open.

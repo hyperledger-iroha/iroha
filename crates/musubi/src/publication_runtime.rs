@@ -95,6 +95,10 @@ const PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS: DecodeLimits = DecodeLimits
 // location transition may require rebasing still-missing registration transactions, but it must
 // never permit the coordinator to substitute the archive/order/provider proof set for this
 // publication generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "musubi::publication_runtime::PublicationProviderAttestationSetCheckpointV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct PublicationProviderAttestationSetCheckpointV1 {
     schema: String,
@@ -106,6 +110,8 @@ struct PublicationProviderAttestationSetCheckpointV1 {
     references: Vec<MusubiProviderBundleAttestationRefV1>,
     set_digest: MusubiProviderBundleAttestationSetDigestV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publication_runtime::PublicationProviderAttestationCheckpointV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct PublicationProviderAttestationCheckpointV1 {
     schema: String,
@@ -2115,6 +2121,32 @@ mod tests {
             Hash::prehashed([byte; Hash::LENGTH]),
         ))
     }
+    /// Build a reader for an independently selected simulated network before any query.
+    fn fixture_registry_reader(torii_url: &Url, network_id: NetworkId) -> RegistryReadClientV1 {
+        let signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("fixture reader signer");
+        let config = format!(
+            r#"
+chain = "musubi-publication-runtime-test"
+network_id = "{network_id}"
+torii_url = "{torii_url}"
+torii_request_timeout_ms = 2000
+
+[account]
+domain = "packages.universal"
+profile = "taira"
+public_key = "{}"
+private_key = "{}"
+"#,
+            signer.public_key(),
+            ExposedPrivateKey(signer.private_key().clone()),
+        );
+        RegistryReadClientV1::load_from_config_bytes(
+            Path::new("publication-runtime-reader-test.toml"),
+            config.as_bytes(),
+        )
+        .expect("reader with explicit fixture network")
+    }
     fn write_client_config(
         path: &Path,
         extra: &str,
@@ -2133,6 +2165,7 @@ mod tests {
                     chain = "musubi-publication-runtime-test"
                     network_id = "{network_id}"
                     torii_url = "https://torii.example/"
+                    torii_request_timeout_ms = 2000
                     [account]
                     domain = "packages.universal"
                     profile = "taira"
@@ -2443,8 +2476,7 @@ mod tests {
             next_cursor: None,
             snapshot: registered_snapshot,
         };
-        let read = RegistryReadClientV1::new_for_test(torii_url, Duration::from_secs(2), 369)
-            .expect("registry reader");
+        let read = fixture_registry_reader(&torii_url, request.network_id());
         let http = signing
             .publication_runtime_client(parsed.request_timeout)
             .expect("authenticated runtime client");
@@ -2508,8 +2540,7 @@ mod tests {
             .validate()
             .expect("valid finalized archive page");
         let (url, server) = serve_archive_page_once(&fixture.page);
-        fixture.runtime.read = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
-            .expect("loopback registry reader");
+        fixture.runtime.read = fixture_registry_reader(&url, fixture.request.network_id());
         server
     }
     fn advance_rebase_page(fixture: &mut RebaseFixture, location_revision: u64) {
@@ -3455,10 +3486,31 @@ mod tests {
                 .validate()
                 .expect("substituted projection remains structurally valid");
             let server = serve_rebase_fixture_page(&mut fixture);
-            let error = fixture
+            let runtime_error = fixture
                 .runtime
                 .finalized_location_state(&fixture.request, &fixture.registered, &fixture.response)
                 .expect_err("a later snapshot must reproduce the immutable projection exactly");
+            // Exact network/archive substitutions are rejected by the typed SDK before the
+            // publication projection gate. Other immutable mutations still reach that gate.
+            let expected_runtime_code = match mutation {
+                ProjectionMutation::Network | ProjectionMutation::Commitment => {
+                    "MUSUBI_PUBLICATION_REGISTRY_REJECTED"
+                }
+                ProjectionMutation::Receipt | ProjectionMutation::Registrant => {
+                    "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT"
+                }
+            };
+            assert_eq!(runtime_error.code(), expected_runtime_code);
+            assert_eq!(
+                runtime_error.class(),
+                PublicationBackendFailureClass::Permanent
+            );
+            let error = validate_finalized_archive_page(
+                &fixture.request,
+                &fixture.registered,
+                &fixture.page,
+            )
+            .expect_err("every immutable substitution must also fail the projection gate");
             assert_eq!(error.code(), "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT");
             assert_eq!(error.class(), PublicationBackendFailureClass::Permanent);
             server.join().expect("finalized query server");
@@ -3928,3 +3980,11 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_frame_fixture.rs"]
+mod persistence_frame_fixture;
+
+#[cfg(test)]
+#[path = "publication_runtime/frame_identity_tests.rs"]
+mod frame_identity_tests;

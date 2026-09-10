@@ -117,7 +117,8 @@ const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_CIRCUIT_FAMILY_BYTES: usize =
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_NESTING_DEPTH: usize = 16;
 #[cfg(feature = "zk-halo2-ipa")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::Halo2IpaProvingKeyArchive")]
 struct Halo2IpaProvingKeyArchive {
     version: u16,
     circuit_family: String,
@@ -8509,6 +8510,26 @@ mod halo2_ipa_proving_key_archive_tests {
         let archive =
             encode_halo2_ipa_proving_key_archive("proof-family-a", vk_commitment, vec![1, 2])
                 .expect("encode proving key archive");
+        let record = Halo2IpaProvingKeyArchive {
+            version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
+            circuit_family: "proof-family-a".to_owned(),
+            vk_commitment,
+            proving_key: vec![1, 2],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::zk::Halo2IpaProvingKeyArchive",
+        );
+        assert_eq!(
+            archive,
+            norito::encode_canonical(&record).expect("archive owner frame")
+        );
+        let mut wrong_owner = archive.clone();
+        wrong_owner[6] ^= 1;
+        assert!(
+            decode_halo2_ipa_proving_key_archive(&wrong_owner, "proof-family-a", vk_commitment)
+                .is_err()
+        );
         assert_eq!(
             decode_halo2_ipa_proving_key_archive(&archive, "proof-family-a", vk_commitment)
                 .expect("decode matching archive"),

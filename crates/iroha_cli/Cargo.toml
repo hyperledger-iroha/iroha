@@ -73,6 +73,7 @@ path = "src/bin/taira_fee_sponsor_program.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 iroha_service_model = { workspace = true }
 soranet_incentives = { workspace = true }
 iroha = { workspace = true }
@@ -132,7 +133,7 @@ tempfile = { workspace = true }
 build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
-ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
+assert_cmd = "2.1.1"
 iroha_test_samples = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
 iroha_sccp = { workspace = true, features = ["test-fixtures"] }

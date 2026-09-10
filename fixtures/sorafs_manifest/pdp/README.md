@@ -31,6 +31,6 @@ cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_pdp_fi
 Validate the positive bundle:
 
 ```sh
-sorafs-validate pdp --commitment fixtures/sorafs_manifest/pdp/commitment_v1.to --challenge fixtures/sorafs_manifest/pdp/challenge_v1.to --proof fixtures/sorafs_manifest/pdp/proof_v1.to
-sorafs-validate bundle --bundle fixtures/sorafs_manifest
+iroha app sorafs toolkit validate pdp --commitment fixtures/sorafs_manifest/pdp/commitment_v1.to --challenge fixtures/sorafs_manifest/pdp/challenge_v1.to --proof fixtures/sorafs_manifest/pdp/proof_v1.to
+iroha app sorafs toolkit validate bundle --bundle fixtures/sorafs_manifest
 ```

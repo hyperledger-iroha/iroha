@@ -56,6 +56,8 @@ const QUERY_PROJECTION_SHARD_CATALOG_DEFAULT_LIMIT: u32 = 1024;
 const QUERY_PROJECTION_SHARD_CATALOG_MAX_LIMIT: u32 = 8192;
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Node capabilities advert (subset)
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeCapabilitiesResponse")]
 pub struct NodeCapabilitiesResponse {
     /// ABI version accepted by this node.
     pub abi_version: u16,
@@ -174,6 +176,8 @@ pub struct NodeProjectionCapabilities {
 }
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the latest persisted query projection checkpoint descriptor.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionCheckpointResponse")]
 pub struct NodeProjectionCheckpointResponse {
     /// Descriptor payload version.
     pub version: u16,
@@ -214,6 +218,8 @@ pub struct NodeProjectionCheckpointShardRef {
 }
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the live projection shard catalog of one resource family.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardCatalogResponse")]
 pub struct NodeProjectionShardCatalogResponse {
     /// Catalog payload version.
     pub version: u16,
@@ -270,6 +276,8 @@ pub struct NodeProjectionShardCatalogQuery {
 }
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// JSON summary of runtime-related metrics of interest
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeMetricsResponse")]
 pub struct RuntimeMetricsResponse {
     /// ABI version accepted by the runtime.
     pub abi_version: u16,
@@ -282,12 +290,22 @@ pub struct UpgradeEventsCounters {
     pub activated: u64,
     pub canceled: u64,
 }
-#[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::derive::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeAbiActiveResponse")]
 pub struct RuntimeAbiActiveResponse {
     pub abi_version: u16,
 }
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response with the node's canonical ABI hash for the active policy.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeAbiHashResponse")]
 pub struct RuntimeAbiHashResponse {
     /// Policy label (first release: always "V1").
     pub policy: String,
@@ -301,7 +319,15 @@ pub struct RuntimeUpgradeListItem {
     pub id_hex: String,
     pub record: iroha_data_model::runtime::RuntimeUpgradeRecord,
 }
-#[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::derive::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeUpgradesListResponse")]
 pub struct RuntimeUpgradesListResponse {
     pub items: Vec<RuntimeUpgradeListItem>,
 }
@@ -1221,7 +1247,7 @@ fn current_unix_seconds() -> u64 {
         .unwrap_or(0)
 }
 fn signed_transaction_schema_hash_hex() -> String {
-    hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+    hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
 }
 fn summarize_curve_capabilities(
     crypto: &iroha_config::parameters::actual::Crypto,
@@ -1379,7 +1405,10 @@ pub async fn handle_runtime_upgrades_list(
     });
     Ok(RuntimeUpgradesListResponse { items })
 }
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize, norito::derive::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::ProposeUpgradeDto")]
 pub struct ProposeUpgradeDto(pub iroha_data_model::runtime::RuntimeUpgradeManifest);
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 pub struct TxInstr {
@@ -1394,7 +1423,8 @@ fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> 
         payload_hex: hex::encode(framed),
     }
 }
-#[derive(Debug, JsonSerialize, NoritoSerialize)]
+#[derive(Debug, JsonSerialize, NoritoSerialize, norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::ProposeUpgradeResponse")]
 pub struct ProposeUpgradeResponse {
     pub ok: bool,
     pub tx_instructions: Vec<TxInstr>,
@@ -1420,6 +1450,8 @@ pub async fn handle_runtime_propose_upgrade(
 }
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 /// Response payload describing the outcome of runtime activation/cancellation helpers.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::ActivateCancelResponse")]
 pub struct ActivateCancelResponse {
     /// Indicates whether the operation succeeded.
     pub ok: bool,
@@ -1563,6 +1595,10 @@ mod tests {
         let resp = handle_runtime_abi_hash(std::sync::Arc::new(state))
             .await
             .expect("ok");
+        crate::frame_test_support::assert_current_frame(
+            &resp,
+            "iroha_torii::runtime::RuntimeAbiHashResponse",
+        );
         assert_eq!(resp.policy, "V1");
         // Expected hex length for 32 bytes
         assert_eq!(resp.abi_hash_hex.len(), 64);
@@ -1578,6 +1614,10 @@ mod tests {
         let resp = handle_node_capabilities(std::sync::Arc::new(state))
             .await
             .expect("ok");
+        crate::frame_test_support::assert_current_frame(
+            &resp,
+            "iroha_torii::runtime::NodeCapabilitiesResponse",
+        );
         assert_eq!(resp.abi_version, 1);
         assert_eq!(
             resp.data_model_version,
@@ -1586,7 +1626,7 @@ mod tests {
         assert_eq!(resp.signed_transaction_schema_hash_hex.len(), 32);
         assert_eq!(
             resp.signed_transaction_schema_hash_hex,
-            signed_transaction_schema_hash_hex()
+            hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
         );
         assert_eq!(resp.crypto.curves.registry_version, CURVE_REGISTRY_VERSION);
         assert!(resp.query.aggregate.v1);

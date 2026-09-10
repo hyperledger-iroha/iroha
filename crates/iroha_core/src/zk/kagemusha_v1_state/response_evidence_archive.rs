@@ -77,7 +77,8 @@ pub struct KagemushaResponseEvidenceContextV1 {
     pub qualification_report_digest: [u8; 32],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::response_evidence_archive::Record")]
 enum Record {
     Initialize {
         lane: KagemushaLaneIdV1,
@@ -873,4 +874,12 @@ mod tests {
         );
         assert_eq!(archive.recovery_prefix(), Err(Error::DurabilityUncertain));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<Record>(
+        "iroha_core::zk::kagemusha_v1_state::response_evidence_archive::Record",
+    );
 }

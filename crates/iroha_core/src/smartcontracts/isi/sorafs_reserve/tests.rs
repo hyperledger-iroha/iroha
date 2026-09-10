@@ -1,3 +1,4 @@
+//! Reserve custody and durable state regression tests.
 include!("finalized_fixture_tests.rs");
 use super::*;
 use crate::{
@@ -212,6 +213,14 @@ fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
         let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
         let policy_digest = configured.digest().expect("reserve policy digest");
         SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
+        let persisted = read_reserve_state(transaction.world())?.expect("installed reserve state");
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &persisted,
+            "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1",
+        );
+        let frame = encode_state(&persisted, "reserve state")?;
+        assert_eq!(decode_reserve_state(&frame)?, persisted);
+
         RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
             .execute(&governance, transaction)?;
         RequestSorafsReserveMovement::new(
@@ -944,6 +953,16 @@ fn persisted_reserve_event_requires_exact_lifecycle_projection_shape() {
     );
     validate_persisted_event(&policy_activation, 1)
         .expect("policy activation without provider lifecycle is valid");
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &policy_activation,
+        "iroha_core::smartcontracts::isi::sorafs_reserve::ReservePersistedEventV1",
+    );
+    let bytes = encode_state(&policy_activation, "reserve event").expect("production event writer");
+    let decoded: ReservePersistedEventV1 =
+        decode_state(&bytes, "reserve event").expect("bounded event reader");
+    validate_persisted_event(&decoded, 1).expect("decoded event projection validates");
+    assert_eq!(decoded, policy_activation);
+
     let mut policy_with_provider_stage = policy_activation;
     policy_with_provider_stage.event.resulting_lifecycle_stage =
         Some(ReserveLifecycleStage::Active);

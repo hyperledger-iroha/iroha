@@ -82,14 +82,37 @@ const POTR_RECEIPT_LIMITS: DecodeLimits = DecodeLimits::new(
     2 * PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1,
     32,
 );
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomePersistedEventV1"
+)]
 struct ProofOutcomePersistedEventV1 {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
     outcome: ProofOutcomeRecordV1,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomeEventJournalHeadV1"
+)]
 struct ProofOutcomeEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -2127,6 +2150,26 @@ mod tests {
         assert_eq!(page.events[1].sequence, 2);
         assert_eq!(page.events[1].outcome.kind(), ProofOutcomeKindV1::Potr);
         assert_eq!(page.events[1].outcome.submitted_by, account(&relayer_b));
+        let view = state.view();
+        let head = read_event_journal_head(view.world())
+            .expect("validated durable journal head")
+            .expect("two committed events have a head");
+        let event = read_persisted_event(view.world(), head.last_sequence)
+            .expect("durable event reader")
+            .expect("head references a persisted event");
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &head,
+            "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomeEventJournalHeadV1",
+        );
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &event,
+            "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomePersistedEventV1",
+        );
+        let head_frame = encode_state(&head, "proof outcome head").expect("production head writer");
+        assert!(matches!(
+            norito::decode_canonical::<ProofOutcomePersistedEventV1>(&head_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
     }
     #[test]
     fn unsigned_pdp_outcome_requires_provider_scoped_scheduler_permission() {

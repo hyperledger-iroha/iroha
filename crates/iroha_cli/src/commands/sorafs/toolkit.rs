@@ -1,4 +1,7 @@
-//! Local SoraFS artifact compilation and archive packaging.
+//! Local SoraFS artifact compilation, validation, signing and archive packaging.
+
+pub mod instruction;
+pub mod validation;
 
 use super::ensure_parent_dir;
 use crate::{Run, RunContext};
@@ -36,6 +39,20 @@ pub enum Command {
     Compile(CompileArgs),
     /// Package a payload into a CAR and manifest bundle.
     Pack(PackArgs),
+    /// Prepare one offline instruction as transaction-stdin JSON.
+    #[command(subcommand)]
+    Instruction(instruction::Command),
+    /// Validate local adverts, orders, proofs, governance and fixture bundles.
+    #[command(subcommand)]
+    Validate(validation::Command),
+    /// Sign an advert, order, orderbook payload or governance node.
+    Sign(validation::SignArgs),
+    /// Verify a release signature, or explicitly sign a development release.
+    ReleaseManifest(validation::ReleaseManifestArgs),
+    /// Verify release evidence against independently pinned policy and trust inputs.
+    ReleaseManifestReceipt(validation::release_manifest_receipt::Args),
+    /// Validate the complete official timed-OVN release audit artifact set.
+    TimedOvnReleaseAudit(validation::TimedOvnReleaseAuditArgs),
 }
 
 impl Run for Command {
@@ -43,6 +60,46 @@ impl Run for Command {
         match self {
             Self::Compile(args) => args.run(context),
             Self::Pack(args) => args.run(context),
+            command => {
+                let status = command.run_artifact().map_err(|error| eyre!(error))?;
+                if status == std::process::ExitCode::SUCCESS {
+                    Ok(())
+                } else {
+                    Err(eyre!("artifact validation failed"))
+                }
+            }
+        }
+    }
+}
+
+impl Command {
+    /// Whether this command runs before any client configuration is loaded.
+    pub(crate) fn is_artifact_tool(&self) -> bool {
+        matches!(
+            self,
+            Self::Instruction(_)
+                | Self::Validate(_)
+                | Self::Sign(_)
+                | Self::ReleaseManifest(_)
+                | Self::ReleaseManifestReceipt(_)
+                | Self::TimedOvnReleaseAudit(_)
+        )
+    }
+
+    /// Execute the artifact operation with its documented validation exit status.
+    pub(crate) fn run_artifact(
+        self,
+    ) -> std::result::Result<std::process::ExitCode, validation::CliError> {
+        match self {
+            Self::Instruction(command) => Ok(command.run()),
+            Self::Validate(command) => command.run(),
+            Self::Sign(args) => validation::run_sign(args),
+            Self::ReleaseManifest(args) => validation::run_release_manifest(args),
+            Self::ReleaseManifestReceipt(args) => validation::release_manifest_receipt::run(args),
+            Self::TimedOvnReleaseAudit(args) => validation::run_timed_ovn_release_audit(args),
+            Self::Compile(_) | Self::Pack(_) => Err(validation::CliError::Config(
+                "compile and pack are separate toolkit operations".to_owned(),
+            )),
         }
     }
 }

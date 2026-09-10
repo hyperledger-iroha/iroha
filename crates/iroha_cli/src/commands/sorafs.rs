@@ -6907,7 +6907,7 @@ fn read_ledger_export(path: &Path) -> Result<LedgerExportFile> {
             if matches!(err, norito::Error::SchemaMismatch) {
                 const SCHEMA_OFFSET: usize = 4 + 1 + 1;
                 const SCHEMA_LEN: usize = 16;
-                let expected = LedgerExportFile::schema_hash();
+                let expected = norito::schema::identity::frame_hash::<LedgerExportFile>();
                 let actual = bytes
                     .get(SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN)
                     .map(|slice| {
@@ -7576,15 +7576,7 @@ fn require_budget_approval_id(budget_hex: Option<&String>) -> Result<[u8; 32]> {
         .map_err(|err| eyre!("invalid budget_approval_id hex: {err}"))?;
     Ok(digest)
 }
-#[derive(
-    Debug,
-    Clone,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::json::JsonSerialize,
-    norito::json::JsonDeserialize,
-)]
-#[norito(decode_from_slice)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct IncentivesState {
     version: u16,
     reward_config: RewardConfigState,
@@ -7601,6 +7593,8 @@ struct IncentivesState {
     norito::json::JsonDeserialize,
 )]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::commands::sorafs::LedgerExportFile")]
 struct LedgerExportFile {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
@@ -17328,6 +17322,18 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             version: LedgerExportFile::VERSION,
             transfers: vec![sample_transfer_record(TransferKind::Payout, 5)],
         };
+        assert_eq!(<LedgerExportFile as norito::NoritoSchema>::nominal_name(), "iroha::commands::sorafs::LedgerExportFile");
+        let frame = norito::encode_canonical(&export).expect("encode declared owner frame");
+        assert_eq!(frame[6..22], norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile"));
+        let restored: LedgerExportFile = norito::decode_canonical(&frame).expect("decode declared owner frame");
+        assert_eq!(norito::encode_canonical(&restored).expect("reencode restored owner"), frame);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(norito::decode_canonical::<LedgerExportFile>(&wrong_owner), Err(norito::Error::SchemaMismatch)));
+        assert!(norito::decode_canonical::<LedgerExportFile>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<LedgerExportFile>(&trailing).is_err());
         let mut bytes = to_bytes(&export).expect("encode ledger export");
         bytes[SCHEMA_OFFSET] ^= 0xFF;
         let file = NamedTempFile::new().expect("temp file");
@@ -22483,12 +22489,24 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let treasury_account = sample_account_id("treasury");
         let mut state = IncentivesState::new(&reward_config, treasury_account.clone());
         state.payouts.push(sample_reward_instruction());
-        let bytes = to_bytes(&state).expect("encode incentives state");
-        let decoded: IncentivesState = decode_from_bytes(&bytes).expect("decode incentives state");
+        let directory = tempfile::tempdir().expect("state directory");
+        let path = directory.path().join("payout_state.json");
+        save_incentives_state(&path, &state).expect("save incentives state JSON");
+        let bytes = fs::read(&path).expect("read saved state JSON");
+        let decoded = load_incentives_state(&path).expect("load incentives state JSON");
+        assert_eq!(norito::json::to_vec_pretty(&decoded).expect("reencode state JSON"), bytes);
         decoded.ensure_current().expect("state version matches");
         assert_eq!(decoded.treasury_account, treasury_account);
         assert_eq!(decoded.payouts.len(), state.payouts.len());
         assert_eq_compact! { decoded.reward_config.base_reward => state.reward_config.base_reward };
+        assert!(parse_incentives_state_snapshot(b"{").is_err());
+        let mut trailing = bytes;
+        trailing.extend_from_slice(b" []");
+        assert!(parse_incentives_state_snapshot(&trailing).is_err());
+        state.version = IncentivesState::VERSION + 1;
+        save_incentives_state(&path, &state).expect("save unsupported state version");
+        let error = load_incentives_state(&path).expect_err("unsupported state version");
+        assert!(error.to_string().contains("unsupported incentives state version"));
     }
     fn incentives_service_init_rejects_missing_budget_id() {
         let config_file = write_reward_config_with_budget(None);

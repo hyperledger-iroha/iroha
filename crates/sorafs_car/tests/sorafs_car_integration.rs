@@ -3,8 +3,6 @@
 mod capacity_cli;
 #[path = "capacity_simulation_toolkit.rs"]
 mod capacity_simulation_toolkit;
-#[path = "capacity_tx_stdin_cli.rs"]
-mod capacity_tx_stdin_cli;
 #[path = "chunk_store_cli.rs"]
 mod chunk_store_cli;
 #[path = "da_reconstruct_cli.rs"]

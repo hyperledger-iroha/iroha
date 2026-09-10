@@ -11,3 +11,6 @@ mod runtime_credential;
 #[cfg(all(feature = "daemon", unix))]
 pub use runtime_credential::RuntimeCredentialErrorV1;
 include!("main.rs");
+
+#[cfg(all(test, feature = "daemon"))]
+mod frame_test_support;

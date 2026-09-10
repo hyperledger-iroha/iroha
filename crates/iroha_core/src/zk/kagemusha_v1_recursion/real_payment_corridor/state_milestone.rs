@@ -44,7 +44,7 @@ use iroha_data_model::kagemusha::{
     KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentRuntimeV1,
     KagemushaTrustedCommitTimeV1,
 };
-use norito::NoritoSerialize;
+use norito::SerializePayload;
 
 #[path = "state_milestone/recovery_checkpoint.rs"]
 mod recovery_checkpoint;
@@ -434,13 +434,20 @@ impl KagemushaRecursiveVerifierV1 for DiagnosticVerifier<'_> {
     }
 }
 
-fn journal_message<T: NoritoSerialize>(domain: &[u8], statement: &T) -> Result<Vec<u8>, String> {
+// The diagnostic domains select fixed-v1 payloads; production journal frame types are separate.
+fn diagnostic_payload<T: SerializePayload>(value: &T) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut bytes).map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
+fn journal_message<T: SerializePayload>(domain: &[u8], statement: &T) -> Result<Vec<u8>, String> {
     let mut message = domain.to_vec();
-    message.extend(norito::encode_canonical(statement).map_err(|error| error.to_string())?);
+    message.extend(diagnostic_payload(statement)?);
     Ok(message)
 }
 
-fn sign_journal<T: NoritoSerialize>(key: &SigningKey, domain: &[u8], statement: &T) -> Vec<u8> {
+fn sign_journal<T: SerializePayload>(key: &SigningKey, domain: &[u8], statement: &T) -> Vec<u8> {
     device_signature(
         key,
         &journal_message(domain, statement).expect("diagnostic journal message"),
@@ -449,7 +456,7 @@ fn sign_journal<T: NoritoSerialize>(key: &SigningKey, domain: &[u8], statement: 
     .to_vec()
 }
 
-fn verify_journal<T: NoritoSerialize>(
+fn verify_journal<T: SerializePayload>(
     key: &KagemushaDevicePublicKeyV1,
     domain: &[u8],
     statement: &T,
@@ -2102,6 +2109,54 @@ fn diagnostic_sender_openings_bind_original_predecessor_counters_and_commit_time
 
 #[test]
 fn diagnostic_provider_journal_signatures_bind_operation_and_exact_bytes() {
+    #[derive(norito::Encode)]
+    struct PayloadOnlyStatement {
+        operation: u16,
+        identity: [u8; 32],
+        amount: u128,
+    }
+    let statement = PayloadOnlyStatement {
+        operation: 1,
+        identity: [7; 32],
+        amount: 3,
+    };
+    let key = deterministic_signing_key(0x7100);
+    let signature = sign_journal(&key, RESERVATION_DOMAIN, &statement);
+    verify_journal(
+        &device_public_key(&key),
+        RESERVATION_DOMAIN,
+        &statement,
+        &signature,
+    )
+    .unwrap();
+    let mut expected = RESERVATION_DOMAIN.to_vec();
+    expected.extend(norito::codec::Encode::encode(&statement));
+    assert_eq!(
+        journal_message(RESERVATION_DOMAIN, &statement).unwrap(),
+        expected
+    );
+    assert!(
+        verify_journal(
+            &device_public_key(&key),
+            STAGE_DOMAIN,
+            &statement,
+            &signature
+        )
+        .is_err()
+    );
+    let changed = PayloadOnlyStatement {
+        amount: 4,
+        ..statement
+    };
+    assert!(
+        verify_journal(
+            &device_public_key(&key),
+            RESERVATION_DOMAIN,
+            &changed,
+            &signature
+        )
+        .is_err()
+    );
     let key = deterministic_signing_key(0x7100);
     let public = device_public_key(&key);
     let signature = sign_journal(&key, RESERVATION_DOMAIN, &(1_u16, [7_u8; 32], 3_u128));

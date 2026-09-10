@@ -187,7 +187,7 @@ fn reputation_catalog_projects_exact_retention_authority_binding() {
         ),
         (
             IrohaRuntimeProviderSlotV1::ReputationThresholdSigner,
-            "software://sorafs/reputation/threshold-primary",
+            "software://sorafs/reputation/primary",
             12,
             [0x62; 32],
         ),
@@ -635,6 +635,12 @@ fn standalone_governance_service_view_projection_rejects_invalid_public_bindings
     zero_bound.service.max_request_bytes = Bytes(0);
     assert_invalid(
         &zero_bound,
+        IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
+    );
+    let mut zero_ipns_bound = governance_service_view("ipns");
+    zero_ipns_bound.service.max_request_bytes = Bytes(0);
+    assert_invalid(
+        &zero_ipns_bound,
         IrohaRuntimeProviderSlotV1::GovernanceDagIpfsAuthenticator,
     );
     let mut test_marked = governance_service_view("signed_http");

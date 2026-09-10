@@ -194,8 +194,18 @@ impl ReputationRequiredSourceMaskV1 {
 }
 /// Exact identity of one immutable finalized ledger view.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "sorafs_node::reputation::ReputationFinalizedIdentityV1")]
 pub struct ReputationFinalizedIdentityV1 {
     /// Finalized block height.
     pub height: u64,
@@ -233,7 +243,8 @@ impl ReputationCommittedEventIdentityV1 {
     }
 }
 /// Governed, deterministic ingest policy for one reputation release window.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::ReputationIngestPolicyV1")]
 pub struct ReputationIngestPolicyV1 {
     /// Schema version.
     pub version: u8,
@@ -377,7 +388,8 @@ pub struct ReputationCommittedFeedCursorV1 {
 ///
 /// The service returns the exact snapshot signing digest but contains no key,
 /// signature, signer identity, or signing callback.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::ReputationUnsignedSigningMaterialV1")]
 pub struct ReputationUnsignedSigningMaterialV1 {
     /// Schema version.
     pub version: u8,
@@ -1074,7 +1086,8 @@ struct ReputationUnsignedMaterialOutboxEntryV1 {
     state: ReputationUnsignedMaterialDeliveryStateV1,
     failure_receipts: Vec<[u8; 32]>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::ReputationIngestCheckpointV1")]
 struct ReputationIngestCheckpointV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -3095,7 +3108,8 @@ fn build_signing_material(
         snapshot_signing_digest: signing_digest,
     })
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::ReputationSnapshotSeedV1")]
 struct ReputationSnapshotSeedV1 {
     network_id: NetworkId,
     ingest_policy_digest: [u8; 32],
@@ -4366,6 +4380,83 @@ mod tests {
             .expect("read ready material")
             .expect("pending ready material");
         (root, service, delivery)
+    }
+    pub(super) fn assert_reputation_frame<T>(value: &T, name: &str) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + std::fmt::Debug,
+    {
+        assert_eq!(T::nominal_name(), name);
+        assert_eq!(T::frame_name(), name);
+        let bytes = norito::encode_canonical(value).expect("reputation owner frame");
+        let decoded: T = norito::decode_canonical(&bytes).expect("reputation frame roundtrip");
+        assert_eq!(&decoded, value);
+        let mut wrong_owner = bytes.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<T>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        bytes
+    }
+    #[test]
+    fn unsigned_material_frame_preserves_current_owner_and_finality() {
+        let (_root, service, delivery) = ready_material_service(&trust_policy(), 17);
+        let material = &delivery.material;
+        assert_reputation_frame(
+            &service.policy,
+            "sorafs_node::reputation::ReputationIngestPolicyV1",
+        );
+        assert_reputation_frame(
+            material,
+            "sorafs_node::reputation::ReputationUnsignedSigningMaterialV1",
+        );
+        assert_reputation_frame(
+            &material.target_finalized,
+            "sorafs_node::reputation::ReputationFinalizedIdentityV1",
+        );
+        let stored = service
+            .canonical_checkpoint_bytes()
+            .expect("live checkpoint bytes");
+        let checkpoint: ReputationIngestCheckpointV1 =
+            norito::decode_canonical(&stored).expect("checkpoint owner");
+        assert_eq!(
+            assert_reputation_frame(
+                &checkpoint,
+                "sorafs_node::reputation::ReputationIngestCheckpointV1"
+            ),
+            stored
+        );
+        let mut seed = ReputationSnapshotSeedV1 {
+            network_id: material.network_id,
+            ingest_policy_digest: material.ingest_policy_digest,
+            snapshot_trust_policy_digest: material.snapshot_trust_policy_digest,
+            target_finalized: material.target_finalized,
+            target_finalized_at_unix_ms: material.target_finalized_at_unix_ms,
+            window_start_height: material.window_start_height,
+            window_end_height: material.window_end_height,
+            source_finality: material.source_finality.clone(),
+            scoring_evidence_digest: material.scoring_evidence_digest,
+        };
+        assert_eq!(
+            <ReputationSnapshotSeedV1 as norito::NoritoSchema>::frame_name(),
+            "sorafs_node::reputation::ReputationSnapshotSeedV1"
+        );
+        let digest =
+            hash_canonical(b"sorafs-reputation-snapshot-id-v1", &seed).expect("live snapshot seed");
+        assert_eq!(&digest[..16], material.snapshot.snapshot_id.as_slice());
+        seed.target_finalized.height += 1;
+        assert_ne!(
+            digest,
+            hash_canonical(b"sorafs-reputation-snapshot-id-v1", &seed)
+                .expect("different finality seed")
+        );
     }
     #[test]
     fn exact_replay_is_idempotent_and_byte_identical() {

@@ -2540,3 +2540,94 @@ fn delayed_old_tenure_delivery_cannot_replace_newer_worker_reply_route() {
     assert_eq!(pending.reservation_owner_counts, ownership_before);
     assert_eq!(pending.source_fifo_owners, source_fifo_before);
 }
+
+#[test]
+fn empty_lane_dispatch_retries_retained_sidecar_request_and_close() {
+    for close in [false, true] {
+        let (mut service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let message = if close {
+            certified_sidecar_close(&service.local_peer, &target, 271)
+        } else {
+            certified_sidecar_outputs(&service.local_peer, &target).0
+        };
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_in_hook = Arc::clone(&attempts);
+        let ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
+        let tickets_in_hook = Arc::clone(&ticket_fixtures);
+        service.set_exact_output_admission_hook(move |post, ticket| {
+            attempts_in_hook.fetch_add(1, Ordering::Relaxed);
+            let ticket = ticket.unwrap_or_else(|| {
+                let (fixture, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                tickets_in_hook
+                    .lock()
+                    .expect("retain the actor-owned topology waiter")
+                    .push(fixture);
+                ticket
+            });
+            assert_eq!(ticket.rank(), Some(1));
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket: Some(ticket),
+                rank: 1,
+            })
+        });
+        assert_eq!(
+            service
+                .post_certified_merge_sidecar_with_reply_routes(
+                    target.clone(),
+                    None,
+                    Arc::new(message),
+                )
+                .expect("the exact current Request/Close transfers to the worker"),
+            ExactFanoutOwnership::Owned
+        );
+        assert!(attempts.load(Ordering::Relaxed) > 0);
+        let retained = service
+            .exact_output_scheduler_snapshot()
+            .expect("inspect the worker-owned topology occurrence");
+        assert_eq!(retained.fanouts, 1);
+        assert_eq!(retained.admission_tickets, 1);
+        assert_eq!(retained.sidecar_topology_units, 1);
+        assert_eq!(retained.source_owner_edges, 1);
+        let (mut lane_work, _) =
+            super::super::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+        assert_eq!(lane_work.effect_count(), 0);
+        assert!(lane_work.native_amx_output_retention().is_none());
+        super::super::v2_runner::dispatch_lane_work_effects(&mut lane_work, &service, 1)
+            .expect("an unavailable actor keeps the exact owner retryable");
+        let blocked = service
+            .exact_output_scheduler_snapshot()
+            .expect("inspect retained output after the bounded lane turn");
+        assert_eq!(blocked.fanouts, 1);
+        assert_eq!(blocked.admission_tickets, 1);
+        assert_eq!(blocked.sidecar_topology_units, 1);
+        assert_eq!(blocked.source_owner_edges, 1);
+        assert_eq!(lane_work.effect_count(), 0);
+        let admitted = Arc::new(AtomicUsize::new(0));
+        let admitted_in_hook = Arc::clone(&admitted);
+        service.set_exact_output_admission_hook(move |post, ticket| {
+            assert_eq!(post.peer_id, target);
+            assert_eq!(
+                ticket.expect("retry preserves its actor rank").rank(),
+                Some(1)
+            );
+            admitted_in_hook.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        super::super::v2_runner::dispatch_lane_work_effects(&mut lane_work, &service, 1)
+            .expect("an empty lane turn retries the existing authenticated topology owner");
+        assert_eq!(
+            admitted.load(Ordering::Relaxed),
+            1,
+            "the retained Request/Close must not require a new lane effect to resume"
+        );
+        assert!(
+            !service
+                .has_pending_exact_output()
+                .expect("the exact post drained")
+        );
+        assert_eq!(lane_work.effect_count(), 0);
+        assert_output_guard_open(&service.output_guard);
+    }
+}

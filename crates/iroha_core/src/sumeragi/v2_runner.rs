@@ -2200,19 +2200,19 @@ pub(in crate::sumeragi) fn advance_executor(
                 })?;
             match attestation {
                 Some(attestation)
+                    if executor.lifecycle_decision_apply_runtime_predecessor_drain_available(
+                        &attestation,
+                    )? =>
+                {
+                    (Some(attestation), false)
+                }
+                Some(attestation)
                     if matches!(
                         attestation.mode(),
                         super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
                     ) =>
                 {
                     (None, true)
-                }
-                Some(attestation)
-                    if executor.lifecycle_decision_apply_runtime_predecessor_drain_available(
-                        &attestation,
-                    )? =>
-                {
-                    (Some(attestation), false)
                 }
                 Some(_) | None => (None, false),
             }
@@ -3023,13 +3023,11 @@ fn dispatch_lane_work_effects_with_progress(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<usize, V2RunnerError> {
-    let _ = apply_native_amx_output_retention(lane_work, services)?;
-    let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
-    let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
-    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
-    let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
-    apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
-    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    // The adapter may be empty while a previously transferred Request/Close
+    // still owns a backpressured worker fanout. Retire stale transport first,
+    // then retry that exact output within its existing admission budget; a new
+    // lane effect must not be required to service an already-owned occurrence.
+    let _ = retry_exact_output_and_apply_sidecar_admissions(lane_work, services, limit)?;
     let mut queue_plan_sources = None;
     let scan_limit = lane_work.effect_count();
     let mut dispatched = 0usize;

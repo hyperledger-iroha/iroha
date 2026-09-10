@@ -3,8 +3,8 @@
 
 The check runs ``cargo metadata --locked`` and compares the resolved default
 feature graph with the first-release shipping inventory below. It also pins
-the total declared binary count so developer generators, probes, benchmarks,
-and evidence tools cannot silently disappear while remaining behind explicit
+the exact declared binary owners and count so developer generators, probes,
+benchmarks, and evidence tools cannot silently disappear or be replaced behind explicit
 non-default features such as ``dev-tools``.
 """
 
@@ -25,6 +25,7 @@ EXPECTED_DEFAULT_BINS = frozenset(
         ("iroha_python_rs", "iroha_privacy_wallet_worker"),
         ("iroha_torii", "attachment_sanitizer"),
         ("irohad", "iroha3d"),
+        ("irohad", "iroha3d_taira"),
         ("irohad", "sorafs_governance_dag"),
         ("irohad", "taira_bootle_lantern_broker"),
         ("ivm", "koto"),
@@ -36,13 +37,96 @@ EXPECTED_DEFAULT_BINS = frozenset(
         ("soradns-resolver", "soradns-resolver"),
         ("sorafs_car", "sorafs_fetch"),
         ("sorafs_car", "sorafs_manifest_builder"),
-        ("sorafs_car", "sorafs_tx_stdin_builder"),
-        ("sorafs_manifest", "sorafs-validate"),
         ("sorafs_node", "sorafs-node"),
         ("sorafs_orchestrator", "sorafs_cli"),
         ("soranet-puzzle-service", "soranet-puzzle-service"),
         ("soranet-relay", "directory"),
         ("soranet-relay", "soranet-relay"),
+    }
+)
+# Non-default generators, probes, and evidence tools retain explicit ownership.
+EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
+    {
+        ("build-support", "clippy-inventory"),
+        ("build-support", "sumeragi_baseline_report"),
+        ("build-support", "sumeragi_da_report"),
+        ("connect_norito_bridge", "kagemusha_sender_release_parser"),
+        ("connect_norito_bridge", "soracloud_request_signer"),
+        ("connect_norito_bridge", "swift_parity_regen"),
+        ("fastpq_prover", "fastpq_cuda_bench"),
+        ("fastpq_prover", "fastpq_fixture_rebind"),
+        ("fastpq_prover", "fastpq_json"),
+        ("fastpq_prover", "fastpq_metal_bench"),
+        ("integration_tests", "refresh_nexus_streaming_fixtures"),
+        ("integration_tests", "sorafs-gateway-fixtures"),
+        ("iroha_cli", "account_literal_reencode"),
+        ("iroha_cli", "gov_instruction"),
+        ("iroha_cli", "ivm_contract_deploy"),
+        ("iroha_cli", "ivm_execution_keygen"),
+        ("iroha_cli", "taira_fee_sponsor_program"),
+        ("iroha_core", "fastpq_fixture_capture"),
+        ("iroha_core", "kagemusha_real_proof"),
+        ("iroha_core", "pk2_bridge_finality_verify"),
+        ("iroha_core", "privacy_exact12_action_driver"),
+        ("iroha_crypto", "gost_perf_check"),
+        ("iroha_crypto", "sm_perf_check"),
+        ("iroha_crypto", "soranet_handshake_check"),
+        ("iroha_data_model", "axt_fixtures"),
+        ("iroha_data_model", "cancel_asset_lock_fixtures"),
+        ("iroha_data_model", "musubi_fixtures"),
+        ("iroha_data_model", "privacy_exact12_fixtures"),
+        ("iroha_data_model", "sumeragi_v2_wire_fixtures"),
+        ("iroha_genesis", "account_literal"),
+        ("iroha_genesis", "genesis_dump"),
+        ("iroha_genesis", "genesis_inspect"),
+        ("iroha_genesis", "genesis_resign"),
+        ("iroha_genesis", "manifest_normalize"),
+        ("iroha_genesis", "tx_decode"),
+        ("iroha_kagami", "iroha_authenticated_tool_controller"),
+        ("iroha_sccp", "sccp_release_evidence"),
+        ("irohad", "sorafs_external_software_signer"),
+        ("ivm", "dump_program"),
+        ("ivm", "gas_probe"),
+        ("ivm", "gen_abi_hash_doc"),
+        ("ivm", "gen_header_doc"),
+        ("ivm", "gen_pointer_types_doc"),
+        ("ivm", "gen_syscalls_doc"),
+        ("ivm", "ivm_fixture_export"),
+        ("ivm", "ivm_prebuild"),
+        ("ivm", "ivm_predecoder_export"),
+        ("kotlin-fixture-gen", "kotlin-fixture-gen"),
+        ("mochi-integration", "kagami_mock"),
+        ("norito", "norito_regen_goldens"),
+        ("norito_codegen_exporter", "norito-schema-inventory"),
+        ("norito_codegen_exporter", "norito_codegen_exporter"),
+        ("soradns-resolver", "soradns_transparency_report"),
+        ("soradns-resolver", "soradns_transparency_tail"),
+        ("sorafs_car", "da_reconstruct"),
+        ("sorafs_car", "provider_admission_fixtures"),
+        ("sorafs_car", "sorafs_chunk_store"),
+        ("sorafs_car", "sorafs_manifest_chunk_store"),
+        ("sorafs_car", "sorafs_provider_advert"),
+        ("sorafs_car", "soranet_trustless_verifier"),
+        ("sorafs_car", "taikai_car"),
+        ("sorafs_chunker", "export_vectors"),
+        ("sorafs_chunker", "sorafs_chunk_digest"),
+        ("sorafs_chunker", "sorafs_chunk_dump"),
+        ("sorafs_manifest", "generate_hedging_fixtures"),
+        ("sorafs_manifest", "generate_orderbook_fixtures"),
+        ("sorafs_manifest", "generate_pdp_fixtures"),
+        ("sorafs_manifest", "generate_por_fixtures"),
+        ("sorafs_manifest", "generate_replication_order_fixture"),
+        ("sorafs_node", "moderation_orchestrator_check"),
+        ("sorafs_orchestrator", "taikai_viewer"),
+        ("soranet-handshake-harness", "soranet-handshake-harness"),
+        ("soranet-relay", "soranet-popctl"),
+        ("soranet-relay", "soranet_admission_token"),
+        ("soranet-relay", "soranet_vpn_settlement"),
+        ("telemetry-schema-diff", "telemetry-schema-diff"),
+        ("xtask", "compute_gateway"),
+        ("xtask", "control-plane-mock"),
+        ("xtask", "torii-mock-harness"),
+        ("xtask", "xtask"),
     }
 )
 
@@ -52,7 +136,7 @@ FORBIDDEN_COMPATIBILITY_BINS = frozenset(
 BASELINE_DEFAULT_BIN_COUNT = 92
 MAX_DEFAULT_BIN_COUNT = 24
 BASELINE_DECLARED_BIN_COUNT = 116
-EXPECTED_DECLARED_BIN_COUNT = 111
+EXPECTED_DECLARED_BIN_COUNT = 103
 
 
 def load_metadata(root: Path) -> dict[str, Any]:
@@ -122,11 +206,16 @@ def check_metadata(metadata: dict[str, Any]) -> list[str]:
         )
 
     declared = all_workspace_bins(metadata)
+    missing_declared = sorted(EXPECTED_DECLARED_BINS - declared)
+    unexpected_declared = sorted(declared - EXPECTED_DECLARED_BINS)
+    if missing_declared:
+        errors.append(f"reviewed binary owners are no longer declared: {missing_declared!r}")
+    if unexpected_declared:
+        errors.append(f"unreviewed binary owners are declared: {unexpected_declared!r}")
     if len(declared) != EXPECTED_DECLARED_BIN_COUNT:
         errors.append(
             f"declared binary count {len(declared)} differs from the expected "
-            f"{EXPECTED_DECLARED_BIN_COUNT} after retiring obsolete aliases and "
-            "adding the three reviewed first-release targets "
+            f"{EXPECTED_DECLARED_BIN_COUNT} in the reviewed first-release inventory "
             f"(pre-refactor baseline: {BASELINE_DECLARED_BIN_COUNT})"
         )
 

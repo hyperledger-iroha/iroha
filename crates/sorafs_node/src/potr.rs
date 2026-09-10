@@ -301,6 +301,8 @@ impl StoredPotrReceiptV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::potr::PotrTrackerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PotrTrackerCheckpointV1 {
     version: u8,
@@ -2806,9 +2808,14 @@ mod tests {
             .commit(&empty_checkpoint(1), None)
             .expect("first PoTR checkpoint");
         let second_checkpoint = empty_checkpoint(2);
+        let expected_frame = crate::frame_test_support::assert_current_frame(
+            &second_checkpoint,
+            "sorafs_node::potr::PotrTrackerCheckpointV1",
+        );
         store
             .commit(&second_checkpoint, Some(first))
             .expect("replace existing PoTR checkpoint");
+        assert_eq!(fs::read(&store.checkpoint_path).unwrap(), expected_frame);
         assert_eq!(
             store.load(8).expect("load replacement").0,
             Some(second_checkpoint)

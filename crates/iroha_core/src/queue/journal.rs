@@ -208,7 +208,8 @@ impl QueuePlanJournalLimits {
     }
 }
 /// Pending transaction routing-plan journal record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalRecordV1")]
 pub struct QueuePlanJournalRecordV1 {
     /// Record format version.
     pub version: u16,
@@ -273,7 +274,8 @@ impl QueuePlanJournalRecordV1 {
     }
 }
 /// One append-only queue plan journal operation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalFrameV1")]
 enum QueuePlanJournalFrameV1 {
     /// Typed file-format marker atomically installed before any ownership operation.
     Bootstrap {
@@ -4387,6 +4389,31 @@ mod tests {
     }
     fn raw_bootstrap_frame() -> Vec<u8> {
         raw_frame(&bootstrap_frame())
+    }
+    #[test]
+    fn queue_plan_record_and_operation_frames_reject_identity_substitution() {
+        let record = record("typed-frame-owner");
+        let operation = QueuePlanJournalFrameV1::Put(record.clone());
+        let record_bytes = norito::encode_canonical(&record).expect("encode record owner");
+        let operation_bytes = norito::encode_canonical(&operation).expect("encode operation owner");
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanJournalRecordV1>(&record_bytes)
+                .expect("decode record owner"),
+            record
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&operation_bytes)
+                .expect("decode operation owner"),
+            operation
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<QueuePlanJournalRecordV1>(&operation_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&record_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
     }
     #[test]
     fn durable_frames_and_claims_ignore_ambient_layout_and_survive_restart() {

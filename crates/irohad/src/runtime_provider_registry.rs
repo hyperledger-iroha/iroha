@@ -143,13 +143,14 @@ pub enum IrohaRuntimeProviderSlotV1 {
     /// Reputation journal externally sealed monotonic checkpoint provider.
     ReputationJournalCheckpoint = 50,
     /// Moderation sealed predecessor-bound monotonic checkpoint store.
-    ModerationCheckpointStore = 51,
+    ModerationCheckpointStore = sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
     /// Evidence-viewer signed monotonic transparency-head publisher.
     EvidenceViewerTransparencyPublisher = 52,
     /// Stream-token quota, sealed-sequence, and ordered callback-outbox owner.
     StreamTokenGatewayAdmission = 53,
     /// Authenticated immutable moderation panel-notification receipt archive.
-    ModerationPanelNotificationArchive = 54,
+    ModerationPanelNotificationArchive =
+        sorafs_node::moderation_orchestrator::MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1,
     /// Native Bootle/Lantern issuer and opaque-client authentication registry.
     BootleLanternIssuanceProviderRegistry = 55,
     /// Rollback-resistant monotonic clock seal for Musubi provider attestations.
@@ -4962,22 +4963,33 @@ mod tests {
             .join("../../defaults/kagami/iroha3-dev/peer0.toml");
         let source = std::fs::read_to_string(path).expect("read checked-in default daemon config");
         let mut table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
-        let expected_hash = table
+        let genesis = table
             .get_mut("genesis")
             .and_then(toml::Value::as_table_mut)
-            .and_then(|genesis| genesis.get_mut("expected_hash"))
-            .expect("default daemon genesis expected-hash placeholder");
+            .expect("default daemon genesis config");
         assert_eq!(
-            expected_hash.as_str(),
-            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+            genesis.remove("expected_hash_file"),
+            Some(toml::Value::String("genesis.expected_hash".to_owned()))
         );
-        // This test-only value permits inspection of unrelated provider bindings without making
-        // the checked-in signing profile a runnable validator config.
-        *expected_hash = toml::Value::String(
-            Hash::new(b"runtime-provider non-runtime profile inspection").to_string(),
+        // Supply a canonical, explicit test trust root instead of opening the
+        // operator-provisioned identity file while inspecting provider bindings.
+        let expected_hash = HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"runtime-provider non-runtime profile inspection"),
         );
-        Config::from_toml_source(TomlSource::inline(table))
-            .expect("resolve checked-in default daemon config for inspection")
+        let network_id = NetworkId::from_genesis_hash(expected_hash);
+        assert!(
+            genesis
+                .insert(
+                    "expected_hash".to_owned(),
+                    toml::Value::String(network_id.to_string()),
+                )
+                .is_none(),
+            "checked-in profile must use the single file-backed identity source"
+        );
+        let config = Config::from_toml_source(TomlSource::inline(table))
+            .expect("resolve checked-in default daemon config for inspection");
+        assert_eq!(config.genesis.expected_hash, expected_hash);
+        config
     }
     fn assert_canonical_config_catalog_roundtrip(
         family: &str,
@@ -5440,7 +5452,7 @@ mod tests {
                     max_active_entries: 32,
                     max_terminal_entries: 4_096,
                     max_attempts: 8,
-                    checkpoint_max_bytes: Bytes(160 * 1024 * 1024),
+                    checkpoint_max_bytes: Bytes(192 * 1024 * 1024),
                     checkpoint_operation_timeout_ms: 30_000,
                     source_lease_ttl_ms: 30_000,
                     retry_base_delay_ms: 1_000,

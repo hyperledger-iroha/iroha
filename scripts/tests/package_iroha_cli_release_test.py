@@ -1,4 +1,4 @@
-"""Tests for the unsigned deterministic SoraFS reference-validator packager."""
+"""Tests for the unsigned deterministic Iroha CLI packager."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "package_sorafs_validate_release.sh"
-PACKAGE_NAME = "sorafs-validate-test-version-test-target"
+SCRIPT = REPO_ROOT / "scripts" / "package_iroha_cli_release.sh"
+PACKAGE_NAME = "iroha-test-version-test-target"
 TEST_EPOCH = 1_234_567_890
 
 
@@ -23,10 +23,14 @@ def write_fake_validator(path: Path, body: str = "") -> Path:
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
         f"{body}\n"
+        "if sys.argv[1:4] != ['app', 'sorafs', 'toolkit']:\n"
+        "    raise SystemExit(4)\n"
         "if '--help' in sys.argv:\n"
         "    print('deterministic fake validator help')\n"
         "else:\n"
-        "    command = sys.argv[1]\n"
+        "    if sys.argv[4] != 'validate':\n"
+        "        raise SystemExit(4)\n"
+        "    command = sys.argv[5]\n"
         "    code = 'SFS-OK-000' if command == 'advert' else 'SFS-PDP-DIAG-000'\n"
         "    family = 'advert' if command == 'advert' else 'bundle'\n"
         "    tags = [f'sorafs.reference.{family}', f'sorafs.reference.code.{code}']\n"
@@ -99,7 +103,7 @@ def output_paths(root: Path) -> dict[str, Path]:
 
 
 def test_release_packager_emits_unsigned_closed_outputs(tmp_path: Path) -> None:
-    result = run_packager(tmp_path, write_fake_validator(tmp_path / "sorafs-validate"))
+    result = run_packager(tmp_path, write_fake_validator(tmp_path / "iroha"))
     assert result.returncode == 0, result.stderr
 
     outputs = output_paths(tmp_path / "out")
@@ -107,7 +111,7 @@ def test_release_packager_emits_unsigned_closed_outputs(tmp_path: Path) -> None:
     assert not list((tmp_path / "out").glob("*.sig"))
     manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
-    assert manifest["package"] == "sorafs-validate"
+    assert manifest["package"] == "iroha"
     assert manifest["commit"] == subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
         cwd=REPO_ROOT,
@@ -134,11 +138,11 @@ def test_release_packager_requires_reviewed_identity_before_outputs(
 ) -> None:
     result = run_packager(
         tmp_path,
-        write_fake_validator(tmp_path / "sorafs-validate"),
+        write_fake_validator(tmp_path / "iroha"),
         omit_options={missing_option},
     )
     assert result.returncode != 0
-    assert "package_sorafs_validate_release.sh --target" in result.stderr
+    assert "package_iroha_cli_release.sh --target" in result.stderr
     assert not (tmp_path / "out").exists()
 
 
@@ -158,7 +162,7 @@ def test_release_packager_rejects_retired_signing_options_before_outputs(
     tmp_path: Path,
     retired_option: str,
 ) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     extra = [retired_option]
     if retired_option != "--development-local-signing":
         extra.append("retired-value")
@@ -169,7 +173,7 @@ def test_release_packager_rejects_retired_signing_options_before_outputs(
 
 
 def test_release_packager_replay_is_byte_identical(tmp_path: Path) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     first_root = tmp_path / "first"
     second_root = tmp_path / "second"
     first = run_packager(tmp_path, fake, out_dir=first_root)
@@ -182,7 +186,7 @@ def test_release_packager_replay_is_byte_identical(tmp_path: Path) -> None:
 def test_release_packager_archive_has_canonical_metadata_and_order(
     tmp_path: Path,
 ) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     result = run_packager(tmp_path, fake)
     assert result.returncode == 0, result.stderr
     archive = output_paths(tmp_path / "out")["archive"]
@@ -209,7 +213,7 @@ def test_release_packager_builds_locked_target_binary_path(tmp_path: Path) -> No
         "Path(os.environ['FAKE_CARGO_LOG']).write_text(json.dumps(args))\n"
         "root = Path(args[args.index('--target-dir') + 1])\n"
             "target = args[args.index('--target') + 1]\n"
-            "binary = root / target / 'release' / 'sorafs-validate'\n"
+            "binary = root / target / 'release' / 'iroha'\n"
             "binary.parent.mkdir(parents=True, exist_ok=True)\n"
             "validator = (\n"
             "    '#!/usr/bin/env python3\\n'\n"
@@ -217,7 +221,7 @@ def test_release_packager_builds_locked_target_binary_path(tmp_path: Path) -> No
             "    \"if '--help' in sys.argv:\\n\"\n"
             "    \"    print('deterministic help')\\n\"\n"
             "    'else:\\n'\n"
-            "    \"    command = sys.argv[1]\\n\"\n"
+            "    \"    command = sys.argv[5]\\n\"\n"
             "    \"    code = 'SFS-OK-000' if command == 'advert' else 'SFS-PDP-DIAG-000'\\n\"\n"
             "    \"    family = 'advert' if command == 'advert' else 'bundle'\\n\"\n"
             "    \"    tags = [f'sorafs.reference.{family}', f'sorafs.reference.code.{code}']\\n\"\n"
@@ -268,7 +272,8 @@ def test_release_packager_builds_locked_target_binary_path(tmp_path: Path) -> No
     args = json.loads(cargo_log.read_text(encoding="utf-8"))
     assert args[:3] == ["build", "--locked", "-p"]
     assert args.count("--locked") == 1
-    assert (target_dir / "test-target" / "release" / "sorafs-validate").is_file()
+    assert args[3:6] == ["iroha_cli", "--bin", "iroha"]
+    assert (target_dir / "test-target" / "release" / "iroha").is_file()
 
 
 def test_release_packager_rejects_symlinked_binary_before_outputs(
@@ -285,12 +290,12 @@ def test_release_packager_rejects_symlinked_binary_before_outputs(
 
 def test_release_packager_rejects_symlinked_staged_entries(tmp_path: Path) -> None:
     fake = write_fake_validator(
-        tmp_path / "sorafs-validate",
+        tmp_path / "iroha",
         "import os\n"
         "from pathlib import Path\n"
         "if '--help' in sys.argv:\n"
         "    root = Path(os.environ['IROHA_RELEASE_ORIGINAL_EXECUTABLE_ROOT'])\n"
-        "    root.joinpath('linked').symlink_to(root / 'sorafs-validate')",
+        "    root.joinpath('linked').symlink_to(root / 'iroha')",
     )
     result = run_packager(tmp_path, fake)
     assert result.returncode != 0
@@ -300,7 +305,7 @@ def test_release_packager_rejects_symlinked_staged_entries(tmp_path: Path) -> No
 
 def test_release_packager_rejects_hardlinked_binary_input(tmp_path: Path) -> None:
     original = write_fake_validator(tmp_path / "original-validator")
-    linked = tmp_path / "sorafs-validate"
+    linked = tmp_path / "iroha"
     os.link(original, linked)
     result = run_packager(tmp_path, linked)
     assert result.returncode != 0
@@ -311,7 +316,7 @@ def test_release_packager_rejects_hardlinked_binary_input(tmp_path: Path) -> Non
 def test_release_packager_rejects_group_writable_binary_input(
     tmp_path: Path,
 ) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     fake.chmod(0o775)
     result = run_packager(tmp_path, fake)
     assert result.returncode != 0
@@ -323,7 +328,7 @@ def test_release_packager_rejects_unexpected_staged_regular_file(
     tmp_path: Path,
 ) -> None:
     fake = write_fake_validator(
-        tmp_path / "sorafs-validate",
+        tmp_path / "iroha",
         "import os\n"
         "from pathlib import Path\n"
         "if '--help' in sys.argv:\n"
@@ -344,7 +349,7 @@ def test_release_packager_rejects_invalid_source_date_epoch_before_outputs(
     tmp_path: Path,
     raw_epoch: str,
 ) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     result = run_packager(
         tmp_path,
         fake,
@@ -371,7 +376,7 @@ def test_release_packager_rejects_control_or_path_tokens_before_outputs(
     option: str,
     value: str,
 ) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     result = run_packager(tmp_path, fake, extra_args=[option, value])
     assert result.returncode != 0
     assert "bounded safe release token" in result.stderr
@@ -379,7 +384,7 @@ def test_release_packager_rejects_control_or_path_tokens_before_outputs(
 
 
 def test_release_packager_rejects_symlinked_output_root(tmp_path: Path) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     real = tmp_path / "real-out"
     real.mkdir()
     link = tmp_path / "out"
@@ -392,7 +397,7 @@ def test_release_packager_rejects_symlinked_output_root(tmp_path: Path) -> None:
 
 
 def test_release_packager_rejects_stale_signature_sidecar(tmp_path: Path) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     out = tmp_path / "out"
     out.mkdir()
     stale = out / f"{PACKAGE_NAME}.manifest.json.sig"
@@ -404,7 +409,7 @@ def test_release_packager_rejects_stale_signature_sidecar(tmp_path: Path) -> Non
 
 
 def test_release_packager_checksum_sidecars_match_bytes(tmp_path: Path) -> None:
-    fake = write_fake_validator(tmp_path / "sorafs-validate")
+    fake = write_fake_validator(tmp_path / "iroha")
     result = run_packager(tmp_path, fake)
     assert result.returncode == 0, result.stderr
     outputs = output_paths(tmp_path / "out")

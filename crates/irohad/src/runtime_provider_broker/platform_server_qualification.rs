@@ -1,5 +1,6 @@
 #[derive(Clone)]
 struct BrokerServerStateV1 {
+    decode_pool: Arc<DecodeResourcePoolV1>,
     chain_id: String,
     network_id: NetworkId,
     catalog: Vec<ProviderBindingWireV1>,
@@ -1592,6 +1593,7 @@ fn validate_exact_backend_set(
 fn prepare_server_state(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<BrokerServerStateV1, RuntimeProviderBrokerServerErrorV1> {
     let catalog = bindings
         .iter()
@@ -1604,6 +1606,7 @@ fn prepare_server_state(
         .map(|binding| make_server_observation(binding, &backends))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BrokerServerStateV1 {
+        decode_pool,
         chain_id: bindings.chain_id().to_owned(),
         network_id: *bindings.network_id(),
         catalog,
@@ -1620,6 +1623,7 @@ fn prepare_server_state_for_lifecycle(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: &Arc<RuntimeProviderBrokerLifecycleV1>,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<BrokerServerStateV1, StartupQualificationErrorV1> {
     let catalog = bindings
         .iter()
@@ -1639,6 +1643,7 @@ fn prepare_server_state_for_lifecycle(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BrokerServerStateV1 {
+        decode_pool,
         chain_id: bindings.chain_id().to_owned(),
         network_id: *bindings.network_id(),
         catalog,

@@ -3923,7 +3923,8 @@ fn with_status(mut response: Response, status: StatusCode) -> Response {
     *response.status_mut() = status;
     response
 }
-#[derive(JsonSerialize, norito::derive::NoritoSerialize)]
+#[derive(JsonSerialize, norito::derive::NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::ingest::DaIngestResponse")]
 struct DaIngestResponse {
     status: &'static str,
     duplicate: bool,

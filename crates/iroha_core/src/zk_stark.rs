@@ -326,7 +326,10 @@ fn two_inv() -> Fq {
 /// irreducible. Every verifier entry point rejects coefficients outside the canonical base-field
 /// range. The Norito payload is exactly four little-endian coefficients (32 bytes), using the
 /// same canonical field codec as FASTPQ without a struct frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::zk_stark::GoldilocksFp4V1")]
 pub struct GoldilocksFp4V1 {
     c0: u64,
     c1: u64,
@@ -360,7 +363,6 @@ impl GoldilocksFp4V1 {
         [self.c0, self.c1, self.c2, self.c3]
     }
 }
-impl norito::NoritoSerialize for GoldilocksFp4V1 {}
 impl norito::SerializePayload for GoldilocksFp4V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         let value = fastpq_prover::GoldilocksFp4V1::new(self.coefficients()).ok_or_else(|| {
@@ -377,7 +379,6 @@ impl norito::SerializePayload for GoldilocksFp4V1 {
         Some(Self::BYTES)
     }
 }
-impl norito::NoritoDeserialize<'_> for GoldilocksFp4V1 {}
 impl<'de> norito::DeserializePayload<'de> for GoldilocksFp4V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical GoldilocksFp4V1 decode")
@@ -890,6 +891,9 @@ fn validate_stark_opening_commitment_params_with_limits_v1(
     Ok(())
 }
 #[cfg(test)]
+#[path = "zk_stark/frame_identity_tests.rs"]
+mod frame_identity_tests;
+#[cfg(test)]
 mod tests {
     include!("zk_stark/tests.rs");
 }
@@ -1020,8 +1024,15 @@ pub struct MerklePath {
 }
 /// Parameters for a binary multi-round FRI check.
 #[derive(
-    Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::zk_stark::StarkFriParamsV1")]
 pub struct StarkFriParamsV1 {
     /// Version tag for format evolution
     pub version: u16,
@@ -1047,8 +1058,15 @@ pub struct StarkFriParamsV1 {
 /// Note: `domain_tag` is **not** part of the verifying key because it is instance-specific
 /// and is derived from the outer [`iroha_data_model::zk::OpenVerifyEnvelope`] metadata.
 #[derive(
-    Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::zk_stark::StarkFriVerifyingKeyV1")]
 pub struct StarkFriVerifyingKeyV1 {
     /// Version tag for format evolution.
     pub version: u16,
@@ -1231,7 +1249,17 @@ mod verifying_key_decode_tests {
             merkle_arity: payload.merkle_arity,
             hash_fn: 1,
         };
-        let bytes = norito::encode_canonical(&retired).expect("encode retired selector key");
+        let (payload, flags) = norito::codec::encode_with_header_flags(&retired);
+        let bytes =
+            norito::core::frame_bare_with_header_flags::<StarkFriVerifyingKeyV1>(&payload, flags)
+                .expect("frame retired key payload under the actual V1 owner");
+        let view = norito::core::from_bytes_view(&bytes).expect("valid frame and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<StarkFriVerifyingKeyV1>(),
+            "rejection must exercise the retired payload, not an unrelated frame identity"
+        );
+        assert_eq!(view.as_bytes(), payload);
         assert!(
             decode_stark_fri_verifying_key_v1(&bytes).is_err(),
             "the selector-free V1 decoder must reject pre-release selector-bearing keys"
@@ -1394,8 +1422,15 @@ pub struct StarkProofV1 {
 }
 /// Verification envelope for STARK FRI multi-round (binary) proofs.
 #[derive(
-    Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::zk_stark::StarkVerifyEnvelopeV1")]
 pub struct StarkVerifyEnvelopeV1 {
     /// Parameters used by the prover
     pub params: StarkFriParamsV1,

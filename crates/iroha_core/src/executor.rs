@@ -11283,7 +11283,8 @@ impl LoadedExecutor {
 pub mod executor_norito {
     use super::*;
     /// Local DTO used for Norito encoding of `Executor`.
-    #[derive(Encode, Decode)]
+    #[derive(Encode, Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::executor::executor_norito::ExecutorDto")]
     enum ExecutorDto {
         Initial,
         UserProvided(iroha_data_model::executor::Executor),
@@ -11329,7 +11330,34 @@ pub mod executor_norito {
         fn initial_roundtrip() {
             let exec = Executor::Initial;
             let bytes = to_bytes(&exec).expect("encode");
+            assert_eq!(
+                <ExecutorDto as norito::NoritoSchema>::nominal_name(),
+                "iroha_core::executor::executor_norito::ExecutorDto"
+            );
+            assert_eq!(
+                bytes[6..22],
+                norito::schema::identity::frame_hash::<ExecutorDto>()
+            );
+            assert!(matches!(
+                norito::decode_canonical::<ExecutorDto>(&bytes).expect("DTO frame"),
+                ExecutorDto::Initial
+            ));
+            let mut substituted = bytes.clone();
+            substituted[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<ExecutorDto>(&substituted),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(from_bytes(&substituted).is_err());
+            assert!(from_bytes(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(from_bytes(&trailing).is_err());
             let dec = from_bytes(&bytes).expect("decode");
+            assert_eq!(
+                to_bytes(&dec).expect("materialized executor re-encodes"),
+                bytes
+            );
             match dec {
                 Executor::Initial => {}
                 _ => panic!("expected Initial variant"),

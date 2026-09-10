@@ -530,11 +530,15 @@ struct PrfContext {
     epoch_seed: Option<String>,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SumeragiLeaderResponse")]
 struct SumeragiLeaderResponse {
     leader_index: u64,
     prf: PrfContext,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SumeragiParamsResponse")]
 struct SumeragiParamsResponse {
     block_cadence_ms: u64,
     max_clock_drift_ms: u64,
@@ -586,6 +590,8 @@ pub(crate) struct PipelinePreflightFees {
     pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::PipelinePreflightResponse")]
 pub(crate) struct PipelinePreflightResponse {
     pub schema_version: u64,
     pub chain_height: u64,
@@ -1597,6 +1603,8 @@ derived_items! {
 )
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/event`.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordSoranetPrivacyEventDto")]
 pub struct RecordSoranetPrivacyEventDto {
     /// Privacy telemetry event emitted by a relay component.
     pub event: SoranetPrivacyEventV1,
@@ -1613,6 +1621,8 @@ pub struct RecordSoranetPrivacyEventDto {
 )
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/share`.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordSoranetPrivacyShareDto")]
 pub struct RecordSoranetPrivacyShareDto {
     /// Secret-shared Prio contribution emitted by a collector.
     pub share: SoranetPrivacyPrioShareV1,
@@ -1626,6 +1636,8 @@ pub struct AliasResolveRequestDto {
     pub alias: String,
 }
 (crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AssetAliasResolveRequestDto")]
 pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
@@ -1952,6 +1964,8 @@ const KAIGI_CALL_SIGNALS_CURSOR_VERSION: u8 = 1;
 const KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::KaigiCallSignalsCursorV1")]
 struct KaigiCallSignalsCursorV1 {
     version: u8,
     call_id: KaigiId,
@@ -3052,6 +3066,8 @@ pub struct RamLfeProgramPolicyListDto {
 }
 (Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Execute one RAM-LFE program from a BFV-encrypted input.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RamLfeExecuteRequestDto")]
 pub struct RamLfeExecuteRequestDto {
     pub encrypted_input: String,
 }
@@ -3157,6 +3173,8 @@ pub struct RamLfeExecutionReceiptDto {
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Stateless receipt-verification request for RAM-LFE execution receipts.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RamLfeReceiptVerifyRequestDto")]
 pub struct RamLfeReceiptVerifyRequestDto {
     pub receipt: iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -3210,6 +3228,8 @@ pub struct IdentifierPolicyListDto {
 }
 (Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Resolve an encrypted identifier under one policy namespace.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::IdentifierResolveRequestDto")]
 pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
     pub encrypted_input: String,
@@ -5221,6 +5241,8 @@ include!("routing/signed_query_execution.rs");
 )]
 #[norito(deny_unknown_fields)]
 /// Request body for creating a Connect session.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ConnectSessionRequest")]
 pub struct ConnectSessionRequest {
     /// Client-provided session id (canonical base64url without padding).
     pub sid: String,
@@ -5528,6 +5550,8 @@ derived_items! {
 #[norito(deny_unknown_fields)]
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkRootsGetRequestDto")]
 pub struct ZkRootsGetRequestDto {
     /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
     /// whose shielded pool roots to fetch.
@@ -5537,6 +5561,8 @@ pub struct ZkRootsGetRequestDto {
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with recent roots and the exact committed state snapshot.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkRootsGetResponseDto")]
 pub struct ZkRootsGetResponseDto {
     /// Latest or profile-defined empty root as a lowercase, 0x-less hex string.
     pub latest: String,
@@ -5550,6 +5576,8 @@ pub struct ZkRootsGetResponseDto {
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for current profiled confidential-tree inclusion paths.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkMerklePathGetRequestDto")]
 pub struct ZkMerklePathGetRequestDto {
     /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
     /// whose shielded pool commitment paths to fetch.
@@ -5575,6 +5603,8 @@ pub struct ZkMerklePathDto {
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with current profiled confidential-tree inclusion paths.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkMerklePathGetResponseDto")]
 pub struct ZkMerklePathGetResponseDto {
     /// Committed block height at which the frontier and paths were read.
     pub evaluated_block_height: u64,
@@ -5594,12 +5624,16 @@ pub struct ZkMerklePathGetResponseDto {
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for election tally (convenience JSON wrapper).
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVoteGetTallyRequestDto")]
 pub struct ZkVoteGetTallyRequestDto {
     /// Canonical governance selector V1 identifying the election.
     pub election_id: String,
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with election tally (convenience JSON wrapper).
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVoteGetTallyResponseDto")]
 pub struct ZkVoteGetTallyResponseDto {
     /// Height of the committed block whose state supplied this tally.
     pub evaluated_block_height: u64,
@@ -5784,6 +5818,8 @@ pub async fn handle_get_proof(
 )]
 #[norito(deny_unknown_fields)]
 /// Canonical signed-query envelope for `FindProofRecordById`.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ProofFindByIdQueryDto")]
 pub struct ProofFindByIdQueryDto {
     /// Versioned Norito `SignedQuery` bytes encoded as canonical padded base64.
     pub signed_query_b64: String,
@@ -6433,6 +6469,8 @@ derived_items! {
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Stable first-release SCCP HTTP surface discovery.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SccpCapabilitiesDto")]
 pub struct SccpCapabilitiesDto {
     /// Capability schema version. First release is exactly `1`.
     pub version: u8,
@@ -6474,6 +6512,8 @@ pub struct SccpCapabilitiesDto {
 /// resolves the exact enabled typed route, locates the already registered
 /// contract artifact by the route's SHA-256 policy commitment, and verifies
 /// that the referenced proof key is currently active before returning bytes.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SccpSoraOutboundMaterialDto")]
 pub struct SccpSoraOutboundMaterialDto {
     /// Response schema version. First release is exactly `1`.
     pub version: u8,
@@ -6558,6 +6598,8 @@ pub struct SccpRecentCursorDto {
 (Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
 #[norito(deny_unknown_fields)]
 /// Newest-first SCCP recent-message discovery response.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SccpRecentMessagesDto")]
 pub struct SccpRecentMessagesDto {
     /// Finalized outbound messages selected by the ordered consensus index.
     pub items: Vec<SccpRecentMessageDto>,
@@ -29301,6 +29343,8 @@ derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// DTO for registering a verifying key
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVkRegisterDto")]
 pub struct ZkVkRegisterDto {
     /// Account authorizing the operation
     pub authority: iroha_data_model::account::AccountId,
@@ -29365,6 +29409,8 @@ derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// DTO for updating a verifying key record
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVkUpdateDto")]
 pub struct ZkVkUpdateDto {
     /// Account authorizing the operation
     pub authority: iroha_data_model::account::AccountId,
@@ -30042,6 +30088,8 @@ derived_items! {
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request for binding, updating, or clearing a contract alias.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SetContractAliasDto")]
 pub struct SetContractAliasDto {
     /// Transaction authority.
     pub authority: iroha_data_model::account::AccountId,
@@ -30218,6 +30266,8 @@ derived_items! {
 /// Omitting both signing fields prepares a canonical unsigned draft. Supplying both
 /// fields verifies and submits the exact deterministic transaction described by
 /// the remaining fields. No server-side private-key or nonce surface exists.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AssetTransferRequestDto")]
 pub struct AssetTransferRequestDto {
     /// Exact canonical I105 account authorizing and sourcing the transfer.
     pub authority: String,
@@ -30329,6 +30379,8 @@ pub struct AssetTransferResponseDto {
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking a deployed contract.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractCallDto")]
 pub struct ContractCallDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -30403,6 +30455,8 @@ pub struct ContractCallBatchPrepareItemDto {
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request for canonical ordered contract-call batch preparation.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractCallBatchPrepareDto")]
 pub struct ContractCallBatchPrepareDto {
     /// Ordered call and native-instruction items.
     pub entries: Vec<ContractCallBatchPrepareItemDto>,
@@ -30497,6 +30551,8 @@ pub struct ContractCallBatchPlanDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for simulating a deployed contract call without submitting a transaction.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractCallSimulateDto")]
 pub struct ContractCallSimulateDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -30956,6 +31012,8 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
 derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking a read-only contract view entrypoint.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractViewDto")]
 pub struct ContractViewDto {
     /// Account identity used as the read authority and host context.
     pub authority: iroha_data_model::account::AccountId,
@@ -30996,6 +31054,8 @@ pub struct ContractViewBatchItemDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking multiple read-only contract view entrypoints in one HTTP round-trip.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractViewBatchDto")]
 pub struct ContractViewBatchDto {
     /// Account identity used as the read authority and host context.
     pub authority: iroha_data_model::account::AccountId,
@@ -31091,6 +31151,8 @@ pub struct MultisigAccountSelectorDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for proposing a generic multisig instruction batch.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposeDto")]
 pub struct MultisigProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31132,6 +31194,8 @@ pub struct MultisigProposeDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for approving a generic multisig proposal.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigApproveDto")]
 pub struct MultisigApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31159,6 +31223,8 @@ pub struct MultisigApproveDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for proposing a multisig-wrapped contract call.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigContractCallProposeDto")]
 pub struct MultisigContractCallProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31191,6 +31257,8 @@ pub struct MultisigContractCallProposeDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for approving a multisig-wrapped contract call proposal.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigContractCallApproveDto")]
 pub struct MultisigContractCallApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31228,8 +31296,8 @@ mod multisig_native_norito_dto_tests {
         IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
     use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
-    use norito::{NoritoSerialize, SerializePayload};
-    fn bare_payload_with_flags<T: NoritoSerialize>(
+    use norito::SerializePayload;
+    fn bare_payload_with_flags<T: SerializePayload>(
         value: &T,
         flags: u8,
     ) -> Vec<u8> {
@@ -31271,7 +31339,10 @@ mod multisig_native_norito_dto_tests {
                 std::num::NonZeroU64::new(10_000),
             ),
         };
-        let bytes = norito::to_bytes(&request).expect("encode request");
+        let bytes = crate::frame_test_support::assert_current_frame(
+            &request,
+            "iroha_torii::routing::MultisigContractCallProposeDto",
+        );
         let view = norito::core::from_bytes_view(&bytes).expect("payload view");
         let selector_payload = bare_payload_with_flags(&request.selector, view.flags());
         assert_eq!(
@@ -31298,27 +31369,64 @@ mod multisig_native_norito_dto_tests {
             Some(10_000)
         );
     }
+    fn assert_retired_multisig_payload_rejected_under_current_owner(mut bytes: Vec<u8>) {
+        let signer = AccountId::new(
+            super::checked_routing_fixture_keypair(
+                0x73, iroha_crypto::Algorithm::Ed25519,
+                "derive current multisig payload control signer",
+            ).public_key().clone(),
+        );
+        let current = MultisigProposeDto {
+            selector: MultisigAccountSelectorDto {
+                multisig_account_id: None,
+                multisig_account_alias: Some("cbdc@hbl.sbp".into()),
+            },
+            signer_account_id: signer,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(1_700_000_000_234),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(), std::num::NonZeroU64::new(10_000),
+            ),
+            memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
+            validation_fee_hijiri_fee_quote_hash: None,
+            instructions: Vec::new(),
+            validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
+        };
+        crate::frame_test_support::assert_current_frame(
+            &current, "iroha_torii::routing::MultisigProposeDto",
+        );
+        // Keep the captured unsupported payload and declared layout, replacing only
+        // its outer owner so rejection exercises the current payload decoder.
+        bytes[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<MultisigProposeDto>());
+        let error = norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
+            .expect_err("unsupported sponsor metadata payload must not decode under current owner");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
+    }
     routing_test! { sync retired_multisig_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9003403000000000000c451acc6dd15a8f70251014f000000004a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101004f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110100010001000a0108d2040000000000001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432d8040200000000000000a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e400000000000000e600289487e97fb60202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000504000000004f000000004a2100000000000000010001220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e4000000000000005a9e96352b9536ab0202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000a04020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
         .expect("fixture hex");
-        norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
-            .expect_err("retired metadata fee sponsor fixture must not decode");
+        assert_retired_multisig_payload_rejected_under_current_owner(bytes);
     }
     routing_test! { sync retired_multisig_account_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9004302000000000000af7359993510158c02640162010000005d01010201005701000000000000004e4a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011102010001004f000000004a210000000000000001000122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201000b01090864656164626565660701050463326c6e0a010873658e10940100001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432c4020100000000000000ba020f0e69726f68612e7472616e73666572a80220010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900f800000000000000a25f939a2d0a8f7e0202000000f201930162010000005d01010201005701000000000000004e4a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110201002001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd01660e01000000090801000000000000000c0602000000f40104020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
         .expect("fixture hex");
-        norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
-            .expect_err("retired multisig metadata fee sponsor fixture must not decode");
+        assert_retired_multisig_payload_rejected_under_current_owner(bytes);
     }
 }
 derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for canceling a multisig proposal through a multisig action.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigCancelRequestDto")]
 pub struct MultisigCancelRequestDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31416,6 +31524,8 @@ pub struct MultisigCancelResponseDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a multisig spec through the alias-aware selector.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigSpecRequestDto")]
 pub struct MultisigSpecRequestDto {
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
@@ -31438,6 +31548,8 @@ pub struct MultisigProposalsQueryResponseDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a single multisig proposal.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposalsResolveRequestDto")]
 pub struct MultisigProposalsResolveRequestDto {
     /// Alias-aware selector for the multisig authority that owns the proposal.
     #[norito(flatten)]
@@ -31466,6 +31578,8 @@ pub struct MultisigProposalResolveResponseDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Request payload for querying multisig proposals.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposalsQueryRequestDto")]
 pub struct MultisigProposalsQueryRequestDto {
     /// Alias-aware selector for the multisig authority whose proposals are queried.
     #[norito(flatten)]
@@ -31521,6 +31635,8 @@ pub struct AccountRecoveryDetachedAuthDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Configure the exact regulated 2-of-3, 72-hour account-recovery policy.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryPolicySetDto")]
 pub struct AccountRecoveryPolicySetDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31536,6 +31652,8 @@ pub struct AccountRecoveryPolicySetDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Propose an alias-bound controller replacement through regulated recovery.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryProposeDto")]
 pub struct AccountRecoveryProposeDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31547,6 +31665,8 @@ pub struct AccountRecoveryProposeDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Approve an alias-bound regulated account-recovery request.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryApproveDto")]
 pub struct AccountRecoveryApproveDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31556,6 +31676,8 @@ pub struct AccountRecoveryApproveDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Finalize an alias-bound regulated account-recovery request after quorum and cooling.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryFinalizeDto")]
 pub struct AccountRecoveryFinalizeDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31565,6 +31687,8 @@ pub struct AccountRecoveryFinalizeDto {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(deny_unknown_fields)]
 /// Query an alias-bound recovery policy, request, and proposal-invalidation evidence.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryStatusRequestDto")]
 pub struct AccountRecoveryStatusRequestDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31609,6 +31733,8 @@ pub struct AccountRecoveryStatusResponseDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for reading asset-transfer control state for one account and asset definition.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AssetTransferControlGetRequestDto")]
 pub struct AssetTransferControlGetRequestDto {
     pub account_id: iroha_data_model::account::AccountId,
     pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
@@ -31733,12 +31859,16 @@ pub struct PorExportQueryDto {
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording a PoR proof submitted by a provider.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordPorProofDto")]
 pub struct RecordPorProofDto {
     /// Base64-encoded Norito `PorProofV1`.
     pub proof_b64: String,
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording a PoR audit verdict.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordPorVerdictDto")]
 pub struct RecordPorVerdictDto {
     /// Base64-encoded Norito `AuditVerdictV1`.
     pub verdict_b64: String,
@@ -61561,6 +61691,8 @@ derived_items! {
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for preparing a space-directory manifest transaction.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SpaceDirectoryManifestPublishDto")]
 pub struct SpaceDirectoryManifestPublishDto {
     /// Account that authorizes the manifest publication.
     pub authority: iroha_data_model::account::AccountId,
@@ -61574,6 +61706,8 @@ pub struct SpaceDirectoryManifestPublishDto {
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for revoking a manifest from the space directory.
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SpaceDirectoryManifestRevokeDto")]
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.
     pub authority: iroha_data_model::account::AccountId,

@@ -272,7 +272,10 @@ impl ProviderIngestFinalizedArchivedOrderV1 {
     }
 }
 /// Complete provider-scoped state at one exact finalized anchor.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedProviderProjectionV1"
+)]
 pub struct ProviderIngestFinalizedProviderProjectionV1 {
     /// Governed provider identity.
     pub provider_id: ProviderId,
@@ -456,6 +459,8 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
 /// Context-bound exclusive cursor for provider-indexed archive pages.
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCursorV1")]
 pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Exact finalized key whose immutable snapshot is being paged.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -467,7 +472,10 @@ pub struct ProviderIngestFinalizedArchiveCursorV1 {
     pub after_order_id: ReplicationOrderId,
 }
 /// Bounded stable page from one exact provider-indexed committed projection.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchivePageV1"
+)]
 pub struct ProviderIngestFinalizedArchivePageV1 {
     /// Exact finalized key shared by every returned row.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -618,7 +626,10 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
         self.qualification
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCompactionProposalMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveCompactionProposalMaterialV1 {
     version: u16,
     fence: ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -690,7 +701,10 @@ impl ProviderIngestFinalizedArchiveCompactionProposalV1 {
         self.proposal_digest
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1 {
     namespace: [u8; 32],
     version: u16,
@@ -701,7 +715,10 @@ struct ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1 {
     predecessor_checkpoint_digest: Option<[u8; 32]>,
 }
 /// Canonical monotonic CAS record approving one exact compaction proposal.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionApprovalRecordV1"
+)]
 pub struct ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
     material: ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1,
     revision: [u8; 32],
@@ -1008,7 +1025,10 @@ struct ProviderIngestFinalizedArchivePredecessorV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     record_digest: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRecordMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveRecordMaterialV1 {
     version: u16,
     key: ProviderIngestFinalizedArchiveKeyV1,
@@ -1016,7 +1036,10 @@ struct ProviderIngestFinalizedArchiveRecordMaterialV1 {
     deltas: Vec<ProviderProjectionDeltaV1>,
     provider_state_root: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRecordV1"
+)]
 struct ProviderIngestFinalizedArchiveRecordV1 {
     material: ProviderIngestFinalizedArchiveRecordMaterialV1,
     record_digest: [u8; 32],
@@ -1188,13 +1211,19 @@ struct ProviderPolicyHistoryCheckpointV1 {
     active: bool,
     seen_policy_digests: Vec<ProviderPolicyDigestHistoryCheckpointV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedPrefixLinkV1"
+)]
 struct ProviderIngestFinalizedPrefixLinkV1 {
     previous_cumulative_digest: Option<[u8; 32]>,
     key: ProviderIngestFinalizedArchiveKeyV1,
     record_digest: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCheckpointMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     version: u16,
     original_activation_floor: ProviderIngestFinalizedArchiveKeyV1,
@@ -1212,7 +1241,10 @@ struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     seen_order_ids: Vec<ReplicationOrderId>,
     kura_finality_artifact_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCheckpointV1"
+)]
 struct ProviderIngestFinalizedArchiveCheckpointV1 {
     material: ProviderIngestFinalizedArchiveCheckpointMaterialV1,
     checkpoint_digest: [u8; 32],
@@ -6978,6 +7010,7 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
 }
 #[cfg(test)]
 mod tests {
+    mod frame_identity_tests;
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -7068,7 +7101,11 @@ mod tests {
             [order_seed.wrapping_add(0x60); 32],
             [order_seed.wrapping_add(0x70); 32],
             4_096,
-            PinPolicy::default(),
+            PinPolicy {
+                // Approval at epoch 1 must precede the order's retention horizon.
+                retention_epoch: 1_000,
+                ..PinPolicy::default()
+            },
             account(1),
             1,
             None,
@@ -7119,6 +7156,25 @@ mod tests {
             },
             musubi_archive: None,
         }
+    }
+    fn set_order_window(
+        archived: &mut ProviderIngestFinalizedArchivedOrderV1,
+        issued_epoch: u64,
+        deadline_epoch: u64,
+        ingest_deadline_secs: u32,
+    ) {
+        let record = &mut archived.replication_order;
+        let mut canonical = validated_replication_order_from_record(&record.order_id, record)
+            .expect("valid source order before changing the fixture window");
+        canonical.issued_at = issued_epoch;
+        canonical.deadline_at = deadline_epoch;
+        canonical.sla.ingest_deadline_secs = ingest_deadline_secs;
+        canonical
+            .validate()
+            .expect("valid replacement order window");
+        record.canonical_order = norito::to_bytes(&canonical).expect("canonical order bytes");
+        record.issued_epoch = issued_epoch;
+        record.deadline_epoch = deadline_epoch;
     }
     fn projection(height: u64) -> ProviderIngestFinalizedProjectionV1 {
         let key = key(height);
@@ -8197,7 +8253,7 @@ mod tests {
         for provider in &mut order_floor.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() == target {
-                    archived.replication_order.deadline_epoch = 7;
+                    set_order_window(archived, 1, 7, 6);
                 }
             }
         }
@@ -8559,7 +8615,7 @@ mod tests {
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() == target {
-                    archived.replication_order.deadline_epoch = 7;
+                    set_order_window(archived, 1, 7, 6);
                 }
             }
         }
@@ -8606,7 +8662,7 @@ mod tests {
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() == target {
-                    archived.replication_order.deadline_epoch = 7;
+                    set_order_window(archived, 1, 7, 6);
                 }
             }
         }
@@ -8670,6 +8726,30 @@ mod tests {
     }
     #[test]
     fn canonical_order_timestamps_must_match_archived_record_epochs() {
+        let mut shortened = archived_order(0x23, &[PROVIDER_A]);
+        set_order_window(&mut shortened, 1, 7, 6);
+        let canonical = validated_replication_order_from_record(
+            &shortened.replication_order.order_id,
+            &shortened.replication_order,
+        )
+        .expect("fixture deadline and canonical payload agree");
+        assert_eq!(canonical.deadline_at, 7);
+        assert_eq!(shortened.replication_order.deadline_epoch, 7);
+        assert_eq!(canonical.issued_at, 1);
+        assert_eq!(canonical.sla.ingest_deadline_secs, 6);
+        assert_eq!(
+            u64::from(canonical.sla.ingest_deadline_secs),
+            canonical.deadline_at - canonical.issued_at
+        );
+        let mut excessive_sla = canonical.clone();
+        excessive_sla.sla.ingest_deadline_secs = 7;
+        assert!(matches!(
+            excessive_sla.validate(),
+            Err(sorafs_manifest::capacity::ReplicationOrderValidationError::SlaExceedsOrderWindow)
+        ));
+        validate_archived_order(&key(7), PROVIDER_A, &shortened)
+            .expect("the shortened pending fixture remains valid at its deadline");
+
         let mut issued_mismatch = archived_order(0x23, &[PROVIDER_A]).replication_order;
         issued_mismatch.issued_epoch = issued_mismatch.issued_epoch.saturating_add(1);
         assert!(matches!(
@@ -8791,7 +8871,7 @@ mod tests {
         let mut first = projection(7);
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
-                archived.replication_order.deadline_epoch = 7;
+                set_order_window(archived, 2, 7, 5);
             }
         }
         archive.insert(first.clone()).expect("insert first");
@@ -8811,6 +8891,9 @@ mod tests {
                 archived.pin_manifest.approved_epoch = Some(2);
             }
         }
+        substituted_approval
+            .validate(bounds())
+            .expect("substituted approval is locally valid before checking history");
         assert!(matches!(
             archive.insert(substituted_approval),
             Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
@@ -8821,6 +8904,9 @@ mod tests {
                 archived.pin_manifest.approve(1, None);
             }
         }
+        rollback
+            .validate(bounds())
+            .expect("approval rollback is locally valid before checking history");
         assert!(matches!(
             archive.insert(rollback),
             Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })

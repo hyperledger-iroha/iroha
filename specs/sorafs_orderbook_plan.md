@@ -18,7 +18,7 @@ canonical Ed25519 digest and verification helpers for order, cancel, and
 settlement-receipt payloads.
 `sorafs_manifest::reference` exposes
 `validate_orderbook_payload_bytes` and `OrderbookValidationPayloadKindV1`, and
-the `sorafs-validate orderbook` CLI validates those payloads by exact V1 kind.
+the `iroha app sorafs toolkit validate orderbook` CLI validates those payloads by exact V1 kind.
 The composite fixture-bundle validator also accepts the committed orderbook
 payloads so release smoke checks catch drift in order, trade, channel, and
 settlement-receipt fixtures.
@@ -252,10 +252,10 @@ book.
 - The validator emits stable `ValidationOutcomeV1` records and maps orderbook
   structural, settlement-accounting, policy, signature, and Norito decode
   failures into the reference SDK error catalogue.
-- The `sorafs-validate orderbook` CLI supports only the exact `--kind
+- The `iroha app sorafs toolkit validate orderbook` CLI supports only the exact `--kind
   <payload-kind> --input <path>` V1 form. Payload flags and the retired
   runtime-snapshot selector are rejected.
-- The `sorafs-validate sign --kind orderbook --payload-kind
+- The `iroha app sorafs toolkit sign --kind orderbook --payload-kind
   order-request|order-cancel|settlement-receipt` CLI path signs those
   orderbook payloads with runtime-only Ed25519 seeds, validates the signed
   Norito bytes, and writes output only after validation succeeds.
@@ -403,7 +403,7 @@ Implemented:
   payloads, malformed Norito, policy failures, signature failures, and
   settlement-accounting imbalance outcomes; bundle tests cover orderbook
   payloads mixed with linked SoraFS artifacts.
-- `crates/sorafs_manifest/src/bin/sorafs-validate.rs` parser tests cover the
+- `crates/iroha_cli/src/commands/sorafs/toolkit/validation/tests.rs` parser tests cover the
   exact orderbook CLI kind path and reject every retired flag and kind alias.
 - `crates/sorafs_manifest/src/reference_ffi.rs` tests cover accepted orderbook
   FFI validation, bundle validation with canonical order/trade/channel/receipt

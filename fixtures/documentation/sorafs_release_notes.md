@@ -34,7 +34,7 @@
      --external-signer /run/sorafs-release/ed25519-sign \
      --signing-public-key /run/sorafs-release/release.ed25519.pub \
      --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
-     --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+     --release-manifest-verifier /opt/iroha/bin/iroha \
      --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
    ```
    Regenerate content fixtures separately when the release changes canonical

@@ -186,6 +186,35 @@ fn completed_musubi_capture_transcript_ignores_ambient_norito_flags() {
         rows: vec![row],
         next_after_order_id: None,
     };
+    fn framed_material<T: norito::NoritoSerialize>(value: &T, name: &str) -> Vec<u8> {
+        assert_eq!(T::nominal_name(), name);
+        assert_eq!(T::frame_name(), name);
+        let bytes = norito::encode_canonical(value).expect("transcript material frame");
+        assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+        norito::core::from_bytes_view(&bytes).expect("complete valid material envelope");
+        bytes
+    }
+    let session = ProviderIngestCompletedMusubiCaptureSessionMaterialV1 {
+        version: PROVIDER_INGEST_COMPLETED_MUSUBI_CAPTURE_TRANSCRIPT_VERSION_V1,
+        network_id: ledger.binding.network_id,
+        provider_id: ledger.binding.provider_id,
+        reader_generation: ledger.binding.reader_generation,
+        public_key: ledger.binding.public_key,
+    };
+    let session_bytes = framed_material(
+        &session,
+        "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCaptureSessionMaterialV1",
+    );
+    let request_bytes = framed_material(
+        &completed_musubi_capture_request_material(&request),
+        "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCaptureRequestMaterialV1",
+    );
+    let header_bytes = framed_material(
+        &completed_musubi_capture_page_header_material(&page).unwrap(),
+        "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1",
+    );
+    assert_ne!(session_bytes[6..22], request_bytes[6..22]);
+    assert_ne!(request_bytes[6..22], header_bytes[6..22]);
     let expected = provider_ingest_completed_musubi_capture_transcript_digest_v1(&request, &page)
         .expect("baseline transcript digest");
     validate_completed_musubi_capture_source_page(
@@ -280,7 +309,9 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
     }
 }
 fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
-    let root = root.canonicalize().expect("canonical coordinator test root");
+    let root = root
+        .canonicalize()
+        .expect("canonical coordinator test root");
     NodeHandle::try_new(
         StorageConfig::builder()
             .enabled(true)

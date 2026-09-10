@@ -1,5 +1,89 @@
     use iroha_data_model::nexus::{AxtHandleReplayKey, AxtPolicyEntry, AxtReplayRecord};
 
+    #[test]
+    fn tiered_collection_requires_only_json_and_resident_measurement_for_values() {
+        #[derive(norito::derive::JsonSerialize)]
+        struct JsonOnlyValue {
+            label: String,
+        }
+        impl MeasuredBytes for JsonOnlyValue {
+            fn measured_bytes(&self) -> usize {
+                std::mem::size_of::<Self>() + self.label.capacity()
+            }
+        }
+        let key = iroha_test_samples::ALICE_ID.clone();
+        let handle = TieredKeyHandle::Account(key.clone());
+        let mut backend = TieredStateBackend::default();
+        let mut scores = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut context = CollectContext {
+            snapshot_idx: 1,
+            scores: &mut scores,
+            seen: &mut seen,
+        };
+        let mut value = JsonOnlyValue {
+            label: "first".to_owned(),
+        };
+        backend
+            .collect_entry(TieredSegment::Accounts, &handle, &key, &value, &mut context)
+            .unwrap();
+        let metadata = backend.entries.values().next().unwrap();
+        assert_eq!(
+            metadata.last_value_hash,
+            compute_json_hash(&value).unwrap().0
+        );
+        assert_eq!(
+            metadata.value_size_bytes,
+            MeasuredBytes::measured_bytes(&value)
+        );
+        assert_eq!(metadata.last_mutated_snapshot, 1);
+        let key_bytes = norito::codec::Encode::encode(&key);
+        assert_eq!(
+            backend.entry_keys.values().next().unwrap().key_encoded,
+            key_bytes
+        );
+
+        context.snapshot_idx = 2;
+        backend
+            .collect_entry_with_encoded_key(
+                TieredSegment::Accounts,
+                &handle,
+                key_bytes.clone(),
+                &value,
+                &mut context,
+            )
+            .unwrap();
+        let metadata = backend.entries.values().next().unwrap();
+        assert_eq!(metadata.last_present_snapshot, 2);
+        assert_eq!(metadata.last_mutated_snapshot, 1);
+
+        value.label.push_str(" changed");
+        context.snapshot_idx = 3;
+        backend
+            .collect_entry_with_encoded_key(
+                TieredSegment::Accounts,
+                &handle,
+                key_bytes,
+                &value,
+                &mut context,
+            )
+            .unwrap();
+        let metadata = backend.entries.values().next().unwrap();
+        assert_eq!(
+            metadata.last_value_hash,
+            compute_json_hash(&value).unwrap().0
+        );
+        assert_eq!(
+            metadata.value_size_bytes,
+            MeasuredBytes::measured_bytes(&value)
+        );
+        assert_eq!(metadata.last_present_snapshot, 3);
+        assert_eq!(metadata.last_mutated_snapshot, 3);
+        assert_eq!(backend.entries.len(), 1);
+        assert_eq!(context.seen.len(), 1);
+        assert_eq!(context.scores.len(), 3);
+    }
+
     type AxtSecurityMapFixture = (
         DataSpaceId,
         AxtHandleCounterRecord,

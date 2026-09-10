@@ -1624,7 +1624,8 @@ fn normalize_nfc(component: &str) -> Result<String, ()> {
         if segment.is_empty() {
             return Ok(());
         }
-        let normalized = Name::from_str(segment).map_err(|_| ())?;
+        let canonical = Name::normalize(segment).map_err(|_| ())?;
+        let normalized = Name::from_str(&canonical).map_err(|_| ())?;
         output.push_str(normalized.as_ref());
         segment.clear();
         Ok(())

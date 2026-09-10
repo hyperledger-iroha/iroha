@@ -169,11 +169,53 @@ fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
         reservation_owner_hash: key.reservation_owner_hash,
         proposal_identity_hash: key.proposal_identity_hash,
     };
+    // The adversarial shape remains payload-only. Use the real owner's header so
+    // rejection must inspect the duplicate field rather than an unrelated schema.
+    let (current_payload, current_flags, pre_release_payload, pre_release_flags) = {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (current_payload, current_flags) = norito::codec::encode_with_header_flags(&key);
+        let (pre_release_payload, pre_release_flags) =
+            norito::codec::encode_with_header_flags(&pre_release);
+        (
+            current_payload,
+            current_flags,
+            pre_release_payload,
+            pre_release_flags,
+        )
+    };
+    let current_framed = norito::core::frame_bare_with_header_flags::<LaneQueueReservationKeyV1>(
+        &current_payload,
+        current_flags,
+    )
+    .expect("frame current reservation payload");
+    assert_eq!(
+        current_framed,
+        norito::encode_canonical(&key).expect("encode canonical current reservation")
+    );
+    assert_eq!(
+        norito::decode_canonical::<LaneQueueReservationKeyV1>(&current_framed)
+            .expect("the same framing method accepts the current payload"),
+        key
+    );
     let pre_release_framed =
-        norito::encode_canonical(&pre_release).expect("encode pre-release reservation key");
+        norito::core::frame_bare_with_header_flags::<LaneQueueReservationKeyV1>(
+            &pre_release_payload,
+            pre_release_flags,
+        )
+        .expect("frame duplicate-identity payload under the current reservation owner");
+    let view = norito::core::from_bytes_view(&pre_release_framed)
+        .expect("adversarial frame has valid header, length, padding, and checksum");
+    assert_eq!(
+        view.schema(),
+        norito::schema::identity::frame_hash::<LaneQueueReservationKeyV1>()
+    );
+    assert_eq!(view.as_bytes(), pre_release_payload.as_slice());
+    let error = norito::decode_canonical::<LaneQueueReservationKeyV1>(&pre_release_framed)
+        .expect_err("the duplicate-identity payload must fail closed under the real owner");
     assert!(
-        norito::decode_canonical::<LaneQueueReservationKeyV1>(&pre_release_framed).is_err(),
-        "the duplicate-identity pre-release layout must fail closed"
+        !matches!(error, norito::Error::SchemaMismatch),
+        "the malformed payload must reach payload validation"
     );
 }
 fn install_test_reservation_journal(queue: &Queue, dir: &tempfile::TempDir) -> PathBuf {

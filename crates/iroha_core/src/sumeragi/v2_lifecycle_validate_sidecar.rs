@@ -653,7 +653,10 @@ struct DurableValidateSidecarRegistrationV1 {
     reference: CertifiedMergeLedgerReference,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationFrameV1"
+)]
 #[norito(deny_unknown_fields)]
 struct DurableValidateSidecarRegistrationFrameV1 {
     registration: DurableValidateSidecarRegistrationV1,
@@ -1022,6 +1025,36 @@ mod tests {
 
         persist_registration(&store, &identity).expect("persist exact registration");
         persist_registration(&store, &identity).expect("repeat registration is idempotent");
+
+        let frame = DurableValidateSidecarRegistrationFrameV1::new(&identity);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &frame,
+            "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationFrameV1",
+        );
+        let persisted = store
+            .load_validate_sidecar_registration_bytes(MAX_REGISTRATION_BYTES)
+            .expect("read durable registration")
+            .expect("registration exists");
+        assert_eq!(
+            persisted,
+            encode_registration_frame(&frame).expect("exact frame")
+        );
+        assert_eq!(
+            decode_registration_frame(&persisted).expect("decode persisted frame"),
+            frame
+        );
+        assert_eq!(frame.registration_hash, HashOf::new(&frame.registration));
+        let mut wrong_owner = persisted.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<Hash>());
+        assert!(matches!(
+            norito::decode_from_bytes::<DurableValidateSidecarRegistrationFrameV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(decode_registration_frame(&wrong_owner).is_err());
+        assert!(decode_registration_frame(&persisted[..persisted.len() - 1]).is_err());
+        let mut trailing = persisted;
+        trailing.push(0);
+        assert!(decode_registration_frame(&trailing).is_err());
 
         let mut foreign = identity.clone();
         let foreign_owner = OwnerId::new(

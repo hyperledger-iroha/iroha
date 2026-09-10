@@ -281,6 +281,8 @@ game_record! {
 }
 game_record! {
  /// Canonical GameSessionRecordV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameSessionRecordV1")]
  pub struct GameSessionRecordV1 {
   /// Canonical version bound by the session or proof.
   pub version:u16,

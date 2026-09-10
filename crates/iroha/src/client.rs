@@ -8,10 +8,12 @@ mod configuration_http_tests;
 mod dispatch;
 mod moderation;
 mod multisig_validation;
+pub mod musubi;
+#[cfg(test)]
+mod musubi_http_tests;
 #[cfg(test)]
 mod operator_auth_tests;
 mod private_settlement;
-mod public_musubi;
 mod queue_plan_error;
 mod repair;
 mod reputation_journal;
@@ -238,9 +240,6 @@ use norito::{
     },
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
-};
-pub use public_musubi::{
-    PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
 };
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
@@ -14490,10 +14489,13 @@ mod evidence_http_tests {
         );
         let err = validate_global_pipeline_status_response(&payload, expected)
             .expect_err("response hash must bind to request");
-        assert!(
-            err.to_string()
-                .contains("does not match requested transaction")
-        );
+        assert!(matches!(
+            err.downcast_ref::<crate::error::Error>(),
+            Some(crate::error::Error::ResponseBinding {
+                operation: "pipeline.transaction_status",
+                field: "hash",
+            })
+        ));
         for hash in [
             expected.to_string().to_ascii_uppercase(),
             format!("{}0", &expected.to_string()[..63]),
@@ -23170,10 +23172,11 @@ fn validate_pipeline_status_response(
         ));
     }
     if payload.hash != expected_hash {
-        return Err(eyre!(
-            "pipeline status response hash {} does not match requested transaction {expected_hash}",
-            payload.hash
-        ));
+        return Err(crate::error::Error::ResponseBinding {
+            operation: "pipeline.transaction_status",
+            field: "hash",
+        }
+        .into());
     }
     if payload.scope != expected_scope {
         return Err(eyre!(

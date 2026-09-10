@@ -2937,6 +2937,10 @@ mod tests {
         let mut session = fixture();
         session.verification_id = Some(Hash::new(b"verified-execution-reference"));
         session.terminal_at_height = Some(123);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &session,
+            "iroha_data_model::game::GameSessionRecordV1",
+        );
         let bytes = session.encode();
         let decoded = GameSessionRecordV1::decode(&mut bytes.as_slice()).unwrap();
         assert_eq!(decoded, session);

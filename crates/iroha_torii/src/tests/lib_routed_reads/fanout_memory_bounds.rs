@@ -238,6 +238,32 @@ fn canonical_iterable_writer_matches_query_response_wire_and_exact_cap() {
         let encoded = crate::utils::encode_norito_bounded(&bounded, golden.len())
             .expect("the exact response boundary must fit");
         assert_eq!(encoded, golden);
+        assert_eq!(
+            <BoundedCanonicalIterableFanoutResponse as norito::NoritoSchema>::nominal_name(),
+            "iroha_torii::BoundedCanonicalIterableFanoutResponse",
+        );
+        assert_eq!(
+            <BoundedCanonicalIterableFanoutResponse as norito::NoritoSchema>::frame_name(),
+            <iroha_data_model::query::QueryResponse as norito::NoritoSchema>::frame_name(),
+        );
+        let decoded: iroha_data_model::query::QueryResponse =
+            norito::decode_canonical(&encoded).expect("bounded writer uses the actual model frame");
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("reencode model frame"),
+            encoded
+        );
+        let mut wrong_owner = encoded.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<iroha_data_model::query::QueryResponse>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch),
+        ));
+        assert!(
+            norito::decode_canonical::<iroha_data_model::query::QueryResponse>(
+                &encoded[..encoded.len() - 1]
+            )
+            .is_err()
+        );
         let error = crate::utils::encode_norito_bounded(&bounded, golden.len() - 1)
             .expect_err("F + 1 must fail before allocating the destination");
         assert!(matches!(
@@ -833,11 +859,14 @@ fn fanout_decode_budget_accepts_exact_bound_and_rejects_next_byte() {
 #[test]
 fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(norito::derive::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_torii::torii_routed_read_tests::versioned_ingress_counts_bad_exact_serializer_before_destination_allocation::BadExact"
+    )]
     struct BadExact<'a> {
         calls: &'a AtomicUsize,
         payload: [u8; 32],
     }
-    impl norito::core::NoritoSerialize for BadExact<'_> {}
     impl norito::core::SerializePayload for BadExact<'_> {
         fn serialize(
             &self,

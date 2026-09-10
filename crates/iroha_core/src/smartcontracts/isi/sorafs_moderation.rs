@@ -235,14 +235,36 @@ impl VerifiedModerationChallengeBondMovement {
         )
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::AppealDepositBindingStateV1"
+)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::AppealProofTokenBindingStateV1"
+)]
 struct AppealProofTokenBindingStateV1 {
     proof_token_digest: [u8; 32],
     case_id: String,
@@ -256,19 +278,53 @@ struct ModerationSortitionAnchorScheduleEntryV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationSortitionAnchorScheduleV1"
+)]
 struct ModerationSortitionAnchorScheduleV1 {
     version: u16,
     entries: Vec<ModerationSortitionAnchorScheduleEntryV1>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationPersistedEventV1"
+)]
 struct ModerationPersistedEventV1 {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
     event: SorafsModerationLedgerEvent,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationEventJournalHeadV1"
+)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -6667,6 +6723,51 @@ mod tests {
             unrevealed_commit_penalty_points: current.unrevealed_commit_penalty_points,
         }
     }
+    fn frame_pre_cut_moderation_payload<Owner, Payload>(
+        current: &Owner,
+        unsupported: &Payload,
+    ) -> Vec<u8>
+    where
+        Owner: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        Payload: norito::SerializePayload,
+    {
+        let (current_payload, current_flags, payload, flags) = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (current_payload, current_flags) = norito::codec::encode_with_header_flags(current);
+            let (payload, flags) = norito::codec::encode_with_header_flags(unsupported);
+            (current_payload, current_flags, payload, flags)
+        };
+        let control =
+            norito::core::frame_bare_with_header_flags::<Owner>(&current_payload, current_flags)
+                .unwrap();
+        assert_eq!(
+            control,
+            encode_state(current, "current layout control").unwrap()
+        );
+        let decoded: Owner = decode_state_with_current(&control, "current layout control", None)
+            .expect("the production state decoder accepts the current layout under this envelope");
+        assert_eq!(
+            encode_state(&decoded, "decoded current control").unwrap(),
+            control
+        );
+        let frame = norito::core::frame_bare_with_header_flags::<Owner>(&payload, flags).unwrap();
+        let view = norito::core::from_bytes_view(&frame)
+            .expect("valid unsupported frame header, length and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<Owner>()
+        );
+        assert_eq!(view.as_bytes(), payload.as_slice());
+        assert!(
+            !matches!(
+                norito::decode_canonical::<Owner>(&frame),
+                Err(norito::Error::SchemaMismatch)
+            ),
+            "unsupported payload must reach the actual current owner decoder"
+        );
+        frame
+    }
     fn startup_error(world: World) -> String {
         State::try_new(
             world,
@@ -6760,6 +6861,12 @@ mod tests {
     #[test]
     fn startup_rejects_pre_cut_moderation_policy_layout() {
         let manager = account(&keypair(0x11));
+        let current = ModerationLedgerPolicyRecord {
+            policy: policy(),
+            policy_digest: policy().digest().expect("current policy digest"),
+            activated_at_unix_ms: OPENED_AT,
+            activated_by: manager.clone(),
+        };
         let legacy = PreCutModerationLedgerPolicyRecord {
             policy: pre_cut_policy(),
             policy_digest: [0x41; 32],
@@ -6769,7 +6876,7 @@ mod tests {
         let mut world = World::new();
         world.smart_contract_state.insert(
             policy_key().clone(),
-            norito::to_bytes(&legacy).expect("encode pre-cut moderation policy"),
+            frame_pre_cut_moderation_payload(&current, &legacy),
         );
         let error = startup_error(world);
         assert!(
@@ -6790,6 +6897,20 @@ mod tests {
             policy_digest: current_policy_digest,
             activated_at_unix_ms: OPENED_AT,
             activated_by: manager.clone(),
+        };
+        let current = ModerationCaseRecordV1 {
+            spec: spec_with_policy(jurors.to_vec(), 1, &active_policy.policy),
+            policy: active_policy.policy.clone(),
+            status: ModerationCaseStatusV1::Open,
+            opened_at_unix_ms: OPENED_AT,
+            opened_by: manager.clone(),
+            commitment_count: 0,
+            reveal_count: 0,
+            challenge_count: 0,
+            challenge_ids: Vec::new(),
+            pending_challenge_count: 0,
+            accepted_challenge_count: 0,
+            expired_challenge_count: 0,
         };
         let legacy = PreCutModerationCaseRecordV1 {
             spec: PreCutModerationCaseSpecV1 {
@@ -6825,7 +6946,7 @@ mod tests {
         );
         world.smart_contract_state.insert(
             case_key(&case_id, &round_id),
-            norito::to_bytes(&legacy).expect("encode pre-cut moderation case"),
+            frame_pre_cut_moderation_payload(&current, &legacy),
         );
         let error = startup_error(world);
         assert!(
@@ -6842,6 +6963,7 @@ mod tests {
         let current = startup_registering_appeal(&appellant);
         let case_id = current.intake.case_id.clone();
         let round_id = current.intake.round_id.clone();
+        let current_control = current.clone();
         let legacy = PreCutModerationAppealRecordV1 {
             intake: current.intake,
             intake_digest: current.intake_digest,
@@ -6861,7 +6983,7 @@ mod tests {
         let mut world = startup_world_with_policy(&manager);
         world.smart_contract_state.insert(
             appeal_key(&case_id, &round_id),
-            norito::to_bytes(&legacy).expect("encode pre-cut moderation appeal"),
+            frame_pre_cut_moderation_payload(&current_control, &legacy),
         );
         let error = startup_error(world);
         assert!(
@@ -10164,6 +10286,109 @@ mod tests {
                 .activated_by,
             genesis_authority
         );
+    }
+    #[test]
+    fn moderation_durable_frames_preserve_appeal_and_sortition_bindings() {
+        fn check<T>(
+            world: &impl crate::state::WorldReadOnly,
+            key: &StatePath,
+            name: &str,
+            decode: impl Fn(&[u8]) -> Result<T, InstructionExecutionError>,
+        ) where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        {
+            let bytes = world
+                .smart_contract_state()
+                .get(key)
+                .expect("persisted owner frame");
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            let view = norito::core::from_bytes_view(bytes).expect("valid persisted envelope");
+            assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
+            let decoded = decode(bytes).expect("bounded production state decoder");
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("re-encode all fields"),
+                *bytes
+            );
+            let mut substituted = bytes.to_vec();
+            substituted[6..22]
+                .copy_from_slice(&norito::schema::identity::frame_hash::<iroha_crypto::Hash>());
+            assert!(matches!(
+                norito::decode_canonical::<T>(&substituted),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(decode(&substituted).is_err());
+            assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes.to_vec();
+            trailing.push(0);
+            assert!(decode(&trailing).is_err());
+        }
+        let mut fixture = PanelFixture::new();
+        fixture.submit(1, 0, 1);
+        let view = fixture.state.view();
+        let world = view.world();
+        let deposit = read_appeal_deposit_binding(world, [0x91; 32])
+            .expect("deposit binding agrees with appeal")
+            .expect("deposit exists");
+        let proof_token = read_appeal_proof_token_binding(world, [0x32; 32])
+            .expect("proof-token binding agrees with appeal")
+            .expect("proof-token exists");
+        assert_eq!(deposit.intake_digest, proof_token.intake_digest);
+        let schedule = read_sortition_anchor_schedule(world).expect("validated sortition schedule");
+        assert_eq!(schedule.entries.len(), 1);
+        assert_eq!(schedule.entries[0].intake_digest, deposit.intake_digest);
+        let head = read_event_journal_head(world)
+            .expect("journal head agrees with terminal event")
+            .expect("journal head exists");
+        read_persisted_event(world, head.last_sequence)
+            .expect("validated terminal event")
+            .expect("terminal event exists");
+        check::<AppealDepositBindingStateV1>(
+            world,
+            &appeal_deposit_key([0x91; 32]),
+            "iroha_core::smartcontracts::isi::sorafs_moderation::AppealDepositBindingStateV1",
+            |bytes| decode_state_with_current(bytes, "test deposit binding", None),
+        );
+        check::<AppealProofTokenBindingStateV1>(
+            world,
+            &appeal_proof_token_key([0x32; 32]),
+            "iroha_core::smartcontracts::isi::sorafs_moderation::AppealProofTokenBindingStateV1",
+            |bytes| decode_state_with_current(bytes, "test proof-token binding", None),
+        );
+        check::<ModerationSortitionAnchorScheduleV1>(
+            world,
+            sortition_anchor_schedule_key(),
+            "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationSortitionAnchorScheduleV1",
+            |bytes| decode_state_with_current(bytes, "test sortition schedule", None),
+        );
+        check::<ModerationPersistedEventV1>(
+            world,
+            &event_key(head.last_sequence),
+            "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationPersistedEventV1",
+            |bytes| decode_state_with_current(bytes, "test persisted event", None),
+        );
+        check::<ModerationEventJournalHeadV1>(
+            world,
+            event_journal_head_key(),
+            "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationEventJournalHeadV1",
+            |bytes| decode_state_with_current(bytes, "test journal head", None),
+        );
+        let deposit_frame = world
+            .smart_contract_state()
+            .get(&appeal_deposit_key([0x91; 32]))
+            .expect("deposit frame");
+        assert!(matches!(
+            norito::decode_canonical::<AppealProofTokenBindingStateV1>(deposit_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let proof_frame = world
+            .smart_contract_state()
+            .get(&appeal_proof_token_key([0x32; 32]))
+            .expect("proof-token frame");
+        assert!(matches!(
+            norito::decode_canonical::<AppealDepositBindingStateV1>(proof_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
     }
     #[test]
     fn appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic() {

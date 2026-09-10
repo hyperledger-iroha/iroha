@@ -164,7 +164,8 @@ pub struct QueryProjectionDomainsShardRowSet {
     pub rows: Vec<QueryProjectionDomainRow>,
 }
 /// Canonical rowset payload variants supported by the projection archive contract today.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionShardRowSet")]
 pub enum QueryProjectionShardRowSet {
     /// Rowset for the `accounts` resource family.
     Accounts(QueryProjectionAccountsShardRowSet),
@@ -310,6 +311,10 @@ mod tests {
                 has_primary_alias: true,
             }],
         ));
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &rowset,
+            "iroha_core::query::projection_rowset::QueryProjectionShardRowSet",
+        );
         let encoded = rowset.encode_payload().expect("encode rowset");
         let decoded: QueryProjectionShardRowSet =
             decode_from_bytes(&encoded).expect("decode rowset");

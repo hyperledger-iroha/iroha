@@ -327,7 +327,10 @@ pub enum ReputationJournalCheckpointExternalErrorV1 {
 /// The record carries the exact canonical checkpoint bytes rather than a local-store fingerprint.
 /// Its deterministic revision authenticates the sequence, predecessor, checkpoint digest, and every
 /// checkpoint field, including the compacted replay floor and cumulative eviction count.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1"
+)]
 pub struct ReputationJournalSealedCheckpointRecordV1 {
     version: u8,
     checkpoint_sequence: u64,
@@ -1539,7 +1542,10 @@ impl ReputationJournalProducerPolicyV1 {
         )
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalProducerPolicyDigestMaterialV1"
+)]
 struct ReputationJournalProducerPolicyDigestMaterialV1 {
     network_id: NetworkId,
     max_pending: u32,
@@ -1791,7 +1797,8 @@ struct StoredStreamTokenGatewayAdmissionV1 {
     event_id: ReputationJournalEventIdV1,
     entry: ReputationJournalEntryV1,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationJournalProducerCheckpointV1")]
 struct ReputationJournalProducerCheckpointV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -4018,7 +4025,8 @@ fn instruction_for_entry(
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationJournalSourceMaterialV1")]
 struct ReputationJournalSourceMaterialV1 {
     provider_id: ProviderId,
     source_time_unix_ms: u64,
@@ -5216,7 +5224,10 @@ pub fn reputation_journal_submitter_policy_digest_v1(
         },
     )
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalSubmitterPolicyDigestMaterialV1"
+)]
 struct ReputationJournalSubmitterPolicyDigestMaterialV1 {
     network_id: NetworkId,
     handle_digest: [u8; 32],
@@ -5765,7 +5776,10 @@ impl ReputationJournalDeliveryWorkerV1 {
             .revalidate_submitter_provider(self.submitter.as_ref())
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalTransactionIdempotencyMaterialV1"
+)]
 struct ReputationJournalTransactionIdempotencyMaterialV1 {
     sequence: u64,
     network_id: NetworkId,
@@ -5775,7 +5789,10 @@ struct ReputationJournalTransactionIdempotencyMaterialV1 {
     attempt: u32,
     instruction_digest: [u8; 32],
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalAbsenceReceiptMaterialV1"
+)]
 struct ReputationJournalAbsenceReceiptMaterialV1 {
     event_id: ReputationJournalEventIdV1,
     attempt: u32,
@@ -5879,7 +5896,8 @@ pub struct ReputationGovernanceDagPublicationRequestV1 {
 /// `inclusion_path` is in ascending block order, contains the exact requested snapshot exactly
 /// once, and ends at `head.head_block_cid`. After the first acknowledgement, its first block must
 /// be the immediate successor of the previously authenticated head.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationGovernanceDagReadbackV1")]
 pub struct ReputationGovernanceDagReadbackV1 {
     /// Schema version.
     pub version: u8,
@@ -6215,7 +6233,10 @@ impl ReputationPublicationPolicyV1 {
         )
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationPublicationPolicyDigestMaterialV1"
+)]
 struct ReputationPublicationPolicyDigestMaterialV1 {
     trust_policy_digest: [u8; 32],
     threshold_signer_handle_digest: [u8; 32],
@@ -6488,7 +6509,8 @@ pub trait ReputationNativeOutcomeAdmissionApiV1: Send + Sync + fmt::Debug {
         outcome: StreamTokenValidationOutcomeV1,
     ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError>;
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationPublicationCheckpointV1")]
 struct ReputationPublicationCheckpointV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -9800,6 +9822,64 @@ mod tests {
         );
     }
     #[test]
+    fn runtime_frame_owner_domains_bind_exact_declarations_and_submitter() {
+        macro_rules! owner {
+            ($owner:ty, $name:literal) => {
+                assert_eq!(
+                    <$owner as norito::NoritoSchema>::nominal_name(),
+                    concat!("sorafs_node::reputation::runtime::", $name)
+                );
+                assert_eq!(
+                    <$owner as norito::NoritoSchema>::frame_name(),
+                    concat!("sorafs_node::reputation::runtime::", $name)
+                );
+            };
+        }
+        owner!(
+            ReputationJournalSealedCheckpointRecordV1,
+            "ReputationJournalSealedCheckpointRecordV1"
+        );
+        owner!(
+            ReputationJournalProducerPolicyDigestMaterialV1,
+            "ReputationJournalProducerPolicyDigestMaterialV1"
+        );
+        owner!(
+            ReputationJournalProducerCheckpointV1,
+            "ReputationJournalProducerCheckpointV1"
+        );
+        owner!(
+            ReputationJournalSourceMaterialV1,
+            "ReputationJournalSourceMaterialV1"
+        );
+        owner!(
+            ReputationJournalSubmitterPolicyDigestMaterialV1,
+            "ReputationJournalSubmitterPolicyDigestMaterialV1"
+        );
+        owner!(
+            ReputationJournalTransactionIdempotencyMaterialV1,
+            "ReputationJournalTransactionIdempotencyMaterialV1"
+        );
+        owner!(
+            ReputationJournalAbsenceReceiptMaterialV1,
+            "ReputationJournalAbsenceReceiptMaterialV1"
+        );
+        owner!(
+            ReputationPublicationPolicyDigestMaterialV1,
+            "ReputationPublicationPolicyDigestMaterialV1"
+        );
+        owner!(
+            ReputationPublicationCheckpointV1,
+            "ReputationPublicationCheckpointV1"
+        );
+        let network = test_network_id();
+        assert_ne!(
+            reputation_journal_submitter_policy_digest_v1(&network, "queue.reputation.journal")
+                .expect("journal submitter"),
+            reputation_journal_submitter_policy_digest_v1(&network, "queue.reputation.archive")
+                .expect("other submitter")
+        );
+    }
+    #[test]
     fn query_policy_reserves_capacity_for_authoritative_provider_projection() {
         let trust = trust_policy();
         let ingest = ingest_policy(&trust);
@@ -10325,6 +10405,19 @@ mod tests {
         let (temp, outbox) = sealed_outbox(policy.clone(), Arc::clone(&runtime));
         let exact_bytes = fs::read(checkpoint_path(temp.path())).expect("exact local cache");
         let exact_record = runtime.latest().expect("exact sealed record");
+        super::super::tests::assert_reputation_frame(
+            &exact_record,
+            "sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1",
+        );
+        let checkpoint: ReputationJournalProducerCheckpointV1 =
+            norito::decode_canonical(&exact_bytes).expect("actual producer checkpoint");
+        assert_eq!(
+            super::super::tests::assert_reputation_frame(
+                &checkpoint,
+                "sorafs_node::reputation::runtime::ReputationJournalProducerCheckpointV1"
+            ),
+            exact_bytes
+        );
         let canonical_record = exact_record
             .to_canonical_bytes(policy.checkpoint_max_bytes)
             .expect("canonical sealed record");
@@ -12262,6 +12355,21 @@ mod tests {
             Some(second.snapshot.clone())
         );
         drop(reconciler);
+        let actual_bytes = fs::read(
+            publication_root
+                .path()
+                .join(REPUTATION_PUBLICATION_CHECKPOINT_FILE_NAME_V1),
+        )
+        .expect("actual publication checkpoint");
+        let checkpoint: ReputationPublicationCheckpointV1 =
+            norito::decode_canonical(&actual_bytes).expect("publication owner");
+        assert_eq!(
+            super::super::tests::assert_reputation_frame(
+                &checkpoint,
+                "sorafs_node::reputation::runtime::ReputationPublicationCheckpointV1"
+            ),
+            actual_bytes
+        );
         let restored =
             open_publication_reconciler(publication_root.path(), projector, trust, policy);
         assert_eq!(
@@ -12541,6 +12649,22 @@ mod tests {
             None,
         )
         .expect("validate previous authenticated head");
+        let frame = crate::frame_test_support::assert_current_frame(
+            &previous_readback,
+            "sorafs_node::reputation::runtime::ReputationGovernanceDagReadbackV1",
+        );
+        let decoded: ReputationGovernanceDagReadbackV1 =
+            norito::decode_canonical(&frame).expect("decode authenticated Governance DAG readback");
+        governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            [0x52; 32],
+            signed_result_digest(&previous).expect("previous digest"),
+            &previous,
+            &decoded,
+            None,
+        )
+        .expect("decoded frame retains the exact signed head and inclusion path");
         let target = signed_snapshot(
             &trust,
             [0x53; 16],

@@ -117,6 +117,8 @@ pub enum NftSaleStatusV1 {
 }
 record! {
     /// Exact offer terms and permanent lifecycle decision.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft_market::NftSaleRecordV1")]
     pub struct NftSaleRecordV1 {
         /// Version of the retained format.
         pub version: u16,

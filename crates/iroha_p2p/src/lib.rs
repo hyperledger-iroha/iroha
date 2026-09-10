@@ -16,6 +16,8 @@ mod dial_policy;
 #[cfg(test)]
 mod frame_identity_tests;
 pub mod network;
+#[cfg(test)]
+mod payload_codec_tests;
 pub mod peer;
 mod preauth;
 mod puzzle_work_admission;

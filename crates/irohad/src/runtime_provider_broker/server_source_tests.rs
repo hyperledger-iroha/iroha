@@ -204,7 +204,7 @@ fn broker_server_preserves_active_listener_without_lock_or_readiness() {
     for attempt in 0..2 {
         let ready = AtomicBool::new(false);
         assert_eq!(
-            serve_with_policy_and_lifecycle(
+            serve_test_process_with_lifecycle(
                 &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
                 RuntimeProviderBrokerBackendsV1::new(),
                 &policy,
@@ -236,7 +236,7 @@ fn broker_server_rejects_active_locked_socket_without_unlinking_it() {
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     assert_eq!(
-        serve_with_policy(
+        serve_test_process(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -261,7 +261,7 @@ fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden stale broker directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     seed_instance_lock_marker(&policy);
     let stale = UnixListener::bind(&path).expect("bind stale broker socket");
     set_socket_mode(&path).expect("harden stale broker socket");
@@ -273,7 +273,7 @@ fn broker_server_recovers_exact_stale_socket_after_unclean_exit() {
     let server_lifecycle = Arc::clone(&lifecycle);
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || {
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
             RuntimeProviderBrokerBackendsV1::new(),
             &server_policy,
@@ -303,11 +303,11 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden rejected endpoint directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
     fs::write(&path, b"not-a-socket").expect("write regular endpoint substitution");
     assert_eq!(
-        serve_with_policy(
+        serve_test_process(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -324,7 +324,7 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
     fs::write(&target, b"target").expect("write symlink target");
     symlink(&target, &path).expect("create endpoint symlink");
     assert_eq!(
-        serve_with_policy(
+        serve_test_process(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -343,7 +343,7 @@ fn broker_server_preserves_non_socket_symlink_and_wrong_mode_entries() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("set wrong socket mode");
     drop(wrong_mode);
     assert_eq!(
-        serve_with_policy(
+        serve_test_process(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -361,7 +361,7 @@ fn stale_socket_recovery_detects_identity_substitution_before_unlink() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden recovery race directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     seed_instance_lock_marker(&policy);
     let stale = UnixListener::bind(&path).expect("bind stale race socket");
     set_socket_mode(&path).expect("harden stale race socket");
@@ -401,7 +401,7 @@ fn orderly_cleanup_quarantines_before_detecting_identity_substitution() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden cleanup race directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     seed_instance_lock_marker(&policy);
     let original = UnixListener::bind(&path).expect("bind cleanup race socket");
     set_socket_mode(&path).expect("harden cleanup race socket");
@@ -441,7 +441,7 @@ fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
         .expect("harden hardlink regression directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
     let alias = directory.path().join("runtime-provider-broker-v1.alias");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     seed_instance_lock_marker(&policy);
     let listener = UnixListener::bind(&path).expect("bind hardlinked broker socket");
     set_socket_mode(&path).expect("harden hardlinked broker socket");
@@ -450,7 +450,7 @@ fn broker_endpoint_rejects_socket_hardlink_alias_without_removal() {
     assert_eq!(original.nlink(), 2);
     assert_eq!(endpoint_identity(&policy), Err(BrokerError::Unavailable));
     assert_eq!(
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -474,7 +474,7 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let server_policy = policy.clone();
     let ready_policy = policy.clone();
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
@@ -482,7 +482,7 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
     let server_lifecycle = Arc::clone(&lifecycle);
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || {
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &server_policy,
@@ -509,11 +509,11 @@ fn broker_server_readiness_follows_qualification_and_secure_bind() {
         .expect("ready broker server exits cleanly");
     assert!(!path.exists(), "orderly shutdown removes the bound socket");
     let rejected_path = directory.path().join("rejected-runtime-provider.sock");
-    let rejected_policy = EndpointPolicy::for_test(rejected_path.clone());
+    let rejected_policy = BrokerTestEndpoint::for_test(rejected_path.clone());
     let rejected_lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     let rejected_ready = AtomicBool::new(false);
     assert_eq!(
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &server_test_catalog(),
             RuntimeProviderBrokerBackendsV1::new(),
             &rejected_policy,
@@ -537,12 +537,12 @@ fn broker_server_readiness_failure_stops_before_accept_and_cleans_endpoint() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden failed-readiness server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     let callback_lifecycle = Arc::clone(&lifecycle);
     let callback_invoked = AtomicBool::new(false);
     assert_eq!(
-        serve_with_policy_and_fallible_readiness(
+        serve_test_process_with_fallible_readiness(
             &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -580,7 +580,7 @@ fn unauthorized_peer_rejection_is_connection_local() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden peer-authorization server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let bindings = server_test_catalog();
     let server_bindings = bindings.clone();
     let server_policy = policy.clone();
@@ -591,7 +591,7 @@ fn unauthorized_peer_rejection_is_connection_local() {
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let (rejected_sender, rejected_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || {
-        serve_with_policy_and_fallible_readiness_and_peer_authorizer(
+        serve_test_process_with_peer_authorizer(
             &server_bindings,
             server_test_backends(),
             &server_policy,
@@ -623,7 +623,7 @@ fn unauthorized_peer_rejection_is_connection_local() {
         .recv_timeout(Duration::from_secs(2))
         .expect("broker rejects the first peer before the authorized connection");
     drop(rejected);
-    let (authorized, observations) = BrokerSession::connect(
+    let (authorized, observations) = connect_test_process(
         &policy,
         bindings.chain_id(),
         *bindings.network_id(),
@@ -647,7 +647,7 @@ fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     for attempt in 0..2 {
         let server_policy = policy.clone();
         let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
@@ -655,7 +655,7 @@ fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
         let server_lifecycle = Arc::clone(&lifecycle);
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
         let server = thread::spawn(move || {
-            serve_with_policy_and_lifecycle(
+            serve_test_process_with_lifecycle(
                 &bindings,
                 RuntimeProviderBrokerBackendsV1::new(),
                 &server_policy,
@@ -692,7 +692,7 @@ fn broker_server_never_signals_ready_for_existing_endpoint() {
     let existing_ready = AtomicBool::new(false);
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
     assert_eq!(
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -758,7 +758,7 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let server_policy = policy.clone();
     let second_probe_entered = Arc::new(std::sync::Barrier::new(2));
     let release_second_probe = Arc::new(std::sync::Barrier::new(2));
@@ -769,7 +769,7 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
         let second_probe_entered = Arc::clone(&second_probe_entered);
         let release_second_probe = Arc::clone(&release_second_probe);
         move || {
-            let result = serve_with_policy_and_lifecycle(
+            let result = serve_test_process_with_lifecycle(
                 &server_test_catalog(),
                 RuntimeProviderBrokerBackendsV1::new().with_governance_dag_signer(Arc::new(
                     BlockingReadySigner {
@@ -819,7 +819,7 @@ fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replaceme
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let server_policy = policy.clone();
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
@@ -827,7 +827,7 @@ fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replaceme
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || {
-        let result = serve_with_policy_and_lifecycle(
+        let result = serve_test_process_with_lifecycle(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &server_policy,
@@ -869,12 +869,12 @@ fn broker_server_callback_panic_still_cleans_bound_endpoint() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     let server_lifecycle = Arc::clone(&lifecycle);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = serve_with_policy_and_lifecycle(
+        let _ = serve_test_process_with_lifecycle(
             &bindings,
             RuntimeProviderBrokerBackendsV1::new(),
             &policy,
@@ -928,11 +928,11 @@ fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     let ready = AtomicBool::new(false);
     assert_eq!(
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &server_test_catalog(),
             RuntimeProviderBrokerBackendsV1::new().with_governance_dag_signer(Arc::new(
                 DriftingReadySigner {
@@ -996,7 +996,7 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let server_policy = policy.clone();
     let second_probe_entered = Arc::new(std::sync::Barrier::new(2));
     let release_second_probe = Arc::new(std::sync::Barrier::new(2));
@@ -1008,7 +1008,7 @@ fn broker_server_preserves_requalification_failure_during_shutdown() {
         let second_probe_entered = Arc::clone(&second_probe_entered);
         let release_second_probe = Arc::clone(&release_second_probe);
         move || {
-            serve_with_policy_and_lifecycle(
+            serve_test_process_with_lifecycle(
                 &server_test_catalog(),
                 RuntimeProviderBrokerBackendsV1::new().with_governance_dag_signer(Arc::new(
                     FailingReadySigner {
@@ -1059,7 +1059,7 @@ fn stock_registry_projects_exact_streamed_provider_source_limits() {
     assert_eq!(projected.provider_ingest_source_limits, Some(limits.into()));
     assert_eq!(validate_wire_binding(&projected), Ok(()));
     assert!(matches!(
-        prepare_server_state(&bindings, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&bindings, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
 }
@@ -1296,10 +1296,10 @@ fn broker_server_pre_requested_shutdown_skips_qualification_and_bind() {
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
         .expect("harden broker server directory");
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     lifecycle.request_shutdown();
-    serve_with_policy(
+    serve_test_process(
         &server_test_catalog(),
         RuntimeProviderBrokerBackendsV1::new(),
         &policy,
@@ -1479,7 +1479,7 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
     drop(sessions.pop());
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     let replacement = loop {
-        match BrokerSession::connect(
+        match connect_test_process(
             &policy,
             "server-test-chain",
             server_test_network_id(),
@@ -1502,13 +1502,15 @@ fn broker_server_rejects_excess_persistent_session_without_queueing() {
         .expect("join broker server")
         .expect("broker server exits cleanly");
 }
-fn read_handshake(stream: &mut UnixStream) -> HandshakeRequestV1 {
+fn read_handshake(stream: &mut BrokerTestStream) -> HandshakeRequestV1 {
     let frame = read_length_prefixed(stream, MAX_HANDSHAKE_FRAME_BYTES_V1)
         .expect("read fake broker handshake");
-    let request = decode_frame::<HandshakeRequestV1>(
+    let request = decode_frame_with_policy_from::<HandshakeRequestV1>(
         &frame,
         FRAME_KIND_HANDSHAKE_REQUEST_V1,
         MAX_HANDSHAKE_FRAME_BYTES_V1,
+        CONTROL_DECODE_POLICY_V1,
+        Arc::clone(&stream.decode_pool),
     )
     .expect("decode fake broker handshake");
     assert_valid_handshake_request(&request);
@@ -1524,10 +1526,10 @@ fn send_handshake(stream: &mut UnixStream, response: &HandshakeResponseV1) {
     write_length_prefixed(stream, &frame, MAX_HANDSHAKE_FRAME_BYTES_V1)
         .expect("write fake broker handshake response");
 }
-fn read_operation(stream: &mut UnixStream) -> OperationRequestV1 {
+fn read_operation(stream: &mut BrokerTestStream) -> OperationRequestV1 {
     // The fake broker represents a separate process, so its decode admission
     // must not compete with the in-process client for one process-local pool.
-    let decode_pool = Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1));
+    let decode_pool = Arc::clone(&stream.decode_pool);
     let (announced_slot, announced_operation, frame, admission) =
         read_operation_request_frame_inner(stream, None, Some(decode_pool))
             .expect("read fake broker operation");
@@ -1563,6 +1565,7 @@ fn source_reader_for_test(
     transcript.update(b"test-source-reader");
     (
         ProviderIngestBrokerSourceReader {
+            decode_pool: new_test_process_pool(),
             stream: reader_stream,
             deadline: std::time::Instant::now() + timeout,
             content_length: u64::try_from(payload.len()).expect("test payload length fits u64"),
@@ -2029,6 +2032,17 @@ fn source_fetch_v1_accepts_generic_and_rejects_musubi_substitution() {
 }
 #[test]
 fn source_fetch_v1_rejects_an_incomplete_two_field_wire() {
+    fn frame_payload<T: norito::SerializePayload>(value: &T) -> ScrubbedBytes {
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        let payload = ScrubbedBytes::new(payload);
+        ScrubbedBytes::new(
+            norito::core::frame_bare_with_header_flags::<ProviderIngestSourceFetchRequestWireV1>(
+                &payload, flags,
+            )
+            .expect("frame source-fetch payload under current owner"),
+        )
+    }
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct IncompleteProviderIngestSourceFetchRequestWire {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
@@ -2042,8 +2056,29 @@ fn source_fetch_v1_rejects_an_incomplete_two_field_wire() {
         authorization: test_source_authorization(16),
         source_provider_ids: SERVER_TEST_SOURCE_PROVIDER_IDS.to_vec(),
     };
-    let payload = encode_canonical(&incomplete, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
-        .expect("encode incomplete source request");
+    let current = ProviderIngestSourceFetchRequestWireV1 {
+        authorization: incomplete.authorization.clone(),
+        source_provider_ids: incomplete.source_provider_ids.clone(),
+        musubi_archive: None,
+    };
+    let current_payload = frame_payload(&current);
+    let decoded_current = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
+        &current_payload,
+        MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
+    )
+    .expect("decode current source request with explicit absent Musubi archive");
+    assert_eq!(decoded_current, current);
+    validate_source_fetch_request(
+        &decoded_current,
+        &binding,
+        Some(&SERVER_TEST_SOURCE_PROVIDER_IDS),
+        &server_test_network_id(),
+    )
+    .expect("validate current source-fetch positive control");
+    let payload = frame_payload(&incomplete);
+    let error = norito::decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(&payload)
+        .expect_err("missing Musubi field must fail under the current request owner");
+    assert!(!matches!(error, norito::Error::SchemaMismatch));
     assert!(
         decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
             &payload,
@@ -2062,7 +2097,7 @@ fn source_fetch_v1_rejects_an_incomplete_two_field_wire() {
         binding,
         [0x92; 32],
         OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
-        payload,
+        payload.to_vec(),
     )
     .expect("construct exact V1 operation request with malformed payload");
     assert_eq!(
@@ -2074,6 +2109,148 @@ fn source_fetch_v1_rejects_an_incomplete_two_field_wire() {
         Err(BrokerError::Protocol)
     );
 }
+#[test]
+fn source_handoff_decode_uses_selected_pool_and_releases_before_streaming() {
+    let fetch = ProviderIngestSourceFetchRequestWireV1 {
+        authorization: test_source_authorization(17),
+        source_provider_ids: vec![[1; 32], [2; 32]],
+        musubi_archive: None,
+    };
+    let bytes = encode_canonical(&fetch, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+        .expect("encode source handoff request");
+    let pool = new_test_process_pool();
+    let decode = |bytes: &[u8], limit| {
+        decode_canonical_with_policy_from::<ProviderIngestSourceFetchRequestWireV1>(
+            bytes,
+            limit,
+            CONTROL_DECODE_POLICY_V1,
+            Arc::clone(&pool),
+        )
+    };
+    assert_eq!(
+        decode(&bytes, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+            .expect("decode selected source handoff"),
+        fetch
+    );
+    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    let full = pool
+        .try_acquire(pool.max_bytes)
+        .expect("fill selected pool");
+    assert_eq!(
+        decode(&bytes, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1),
+        Err(BrokerError::Unavailable),
+        "source handoff cannot use the global pool when its selected owner is full"
+    );
+    drop(full);
+    assert_eq!(
+        decode(&bytes, bytes.len() - 1),
+        Err(BrokerError::Protocol),
+        "the original raw-frame reservation still enforces the exact semantic bound"
+    );
+    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(
+        decode(
+            &bytes[..bytes.len() - 1],
+            MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1
+        ),
+        Err(BrokerError::Protocol)
+    );
+    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert_eq!(
+        decode(&trailing, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1),
+        Err(BrokerError::Protocol)
+    );
+    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert!(current_decode_resource_admission().is_none());
+}
+
+#[test]
+fn source_handoff_decode_preserves_enclosing_admission_and_cumulative_usage() {
+    let fetch = ProviderIngestSourceFetchRequestWireV1 {
+        authorization: test_source_authorization(17),
+        source_provider_ids: vec![[1; 32], [2; 32]],
+        musubi_archive: None,
+    };
+    let bytes = encode_canonical(&fetch, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+        .expect("encode source handoff request");
+    let selected = new_test_process_pool();
+    let full = selected
+        .try_acquire(selected.max_bytes)
+        .expect("fill selected pool");
+    let outer_pool = new_test_process_pool();
+    let outer = DecodeResourceAdmissionV1::acquire_operation_from(
+        Arc::clone(&outer_pool),
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+    )
+    .expect("reserve enclosing source operation");
+    outer
+        .reserve_raw_frame(bytes.len(), MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)
+        .expect("charge original ingress bytes");
+    let charge = decode_resource_budget(
+        bytes.len(),
+        MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
+        outer.policy,
+    )
+    .expect("derive inherited decode charge")
+    .composed_charge_bytes;
+    {
+        let _scope = outer.enter();
+        for iteration in 1..=2 {
+            assert_eq!(
+                decode_canonical_with_policy_from::<ProviderIngestSourceFetchRequestWireV1>(
+                    &bytes,
+                    MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
+                    CONTROL_DECODE_POLICY_V1,
+                    Arc::clone(&selected),
+                )
+                .expect("use existing operation despite selected pool exhaustion"),
+                fetch
+            );
+            assert!(Arc::ptr_eq(
+                &current_decode_resource_admission().expect("enclosing operation remains"),
+                &outer,
+            ));
+            assert_eq!(
+                outer
+                    .usage
+                    .lock()
+                    .expect("read cumulative charge")
+                    .consumed_bytes,
+                bytes.len() + iteration * charge,
+                "a repeated decode must not reset the enclosing operation's budget"
+            );
+        }
+        assert_eq!(
+            decode_canonical_with_policy_from::<ProviderIngestSourceFetchRequestWireV1>(
+                &bytes,
+                bytes.len() - 1,
+                CONTROL_DECODE_POLICY_V1,
+                Arc::clone(&selected),
+            ),
+            Err(BrokerError::Protocol)
+        );
+        assert_eq!(
+            outer
+                .usage
+                .lock()
+                .expect("read failed-decode charge")
+                .consumed_bytes,
+            bytes.len() + 2 * charge
+        );
+        assert_eq!(
+            selected.used_bytes.load(Ordering::Acquire),
+            selected.max_bytes
+        );
+    }
+    assert!(current_decode_resource_admission().is_none());
+    drop(outer);
+    drop(full);
+    assert_eq!(outer_pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(selected.used_bytes.load(Ordering::Acquire), 0);
+}
+
 #[test]
 fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_allocating() {
     assert_eq!(
@@ -2166,6 +2343,11 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
 fn source_plan_metadata_roundtrips_canonically_and_rejects_trailing_bytes() {
     let payload = vec![0xAB; 512 * 1024 + 3];
     let plan = sorafs_car::CarBuildPlan::single_file(&payload).expect("build test source plan");
+    assert_broker_frame_owner(
+        &source_plan_to_wire(&plan).expect("project source plan"),
+        "irohad::runtime_provider_broker::protocol::ProviderIngestCarPlanWireV1",
+        MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
+    );
     let bytes = encode_source_plan(&plan).expect("encode bounded source plan");
     assert_eq!(
         decode_source_plan(&bytes).expect("decode exact source plan"),
@@ -2284,6 +2466,34 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         Some(qualification.max_tracked_tokens);
     binding.stream_token_gateway_admission_reconcile_max_items = Some(16);
     validate_wire_binding(&binding).expect("valid stream-token gateway binding");
+    // This role must pass its own exact policy, while rejecting every unrelated
+    // metadata family checked by the terminal role branch.
+    let mut confused = binding.clone();
+    confused.governance_request_ingress_binding = Some(governance_request_ingress_binding_to_wire(
+        ingress_fixture(TEST_SIGNER_KEY),
+    ));
+    assert_eq!(
+        validate_wire_binding(&confused),
+        Err(BrokerError::BindingMismatch)
+    );
+    let mut confused = binding.clone();
+    confused.provider_ingest_checkpoint_max_bytes = Some(64);
+    assert_eq!(
+        validate_wire_binding(&confused),
+        Err(BrokerError::BindingMismatch)
+    );
+    let mut confused = binding.clone();
+    confused.evidence_viewer_grant_ttl_ms = Some(1);
+    assert_eq!(
+        validate_wire_binding(&confused),
+        Err(BrokerError::BindingMismatch)
+    );
+    let mut confused = binding.clone();
+    confused.stream_token_gateway_admission_max_pending = Some(qualification.max_pending + 1);
+    assert_eq!(
+        validate_wire_binding(&confused),
+        Err(BrokerError::BindingMismatch)
+    );
     let backends = RuntimeProviderBrokerBackendsV1::new()
         .with_stream_token_gateway_admission(Arc::new(QualificationOnlyProvider { qualification }));
     validate_exact_backend_set(std::slice::from_ref(&binding), &backends)
@@ -2291,6 +2501,7 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
     let observation = make_server_observation(&binding, &backends)
         .expect("observe exact stream-token gateway backend");
     let state = BrokerServerStateV1 {
+        decode_pool: new_test_process_pool(),
         chain_id: "server-test-chain".to_owned(),
         network_id: server_test_network_id(),
         catalog: vec![binding.clone()],
@@ -2335,8 +2546,8 @@ fn macos_socket_device_identity_preserves_signed_dev_t_bits() {
 fn bind_fake_broker() -> (
     tempfile::TempDir,
     std::path::PathBuf,
-    EndpointPolicy,
-    UnixListener,
+    BrokerTestEndpoint,
+    BrokerTestListener,
 ) {
     // Keep the pathname supplied to `bind(2)` short even when the caller has a
     // deeply nested TMPDIR; macOS limits `sockaddr_un.sun_path` to 104 bytes.
@@ -2349,16 +2560,17 @@ fn bind_fake_broker() -> (
     let path = directory.path().join("runtime-provider-broker-v1.sock");
     let listener = UnixListener::bind(&path).expect("bind fake broker socket");
     set_socket_mode(&path).expect("set fake broker socket mode");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
+    let listener = policy.fake_listener(listener);
     (directory, path, policy, listener)
 }
-fn hold_instance_lock(policy: &EndpointPolicy) -> endpoint_recovery::InstanceLockGuard {
+fn hold_instance_lock(policy: &BrokerTestEndpoint) -> endpoint_recovery::InstanceLockGuard {
     let parent = fs::File::open(policy.path.parent().expect("broker endpoint parent"))
         .expect("open broker endpoint parent");
     endpoint_recovery::InstanceLockGuard::acquire(&parent, policy.expected_service_uid)
         .expect("hold active broker instance lock")
 }
-fn seed_instance_lock_marker(policy: &EndpointPolicy) {
+fn seed_instance_lock_marker(policy: &BrokerTestEndpoint) {
     let marker = hold_instance_lock(policy);
     drop(marker);
 }

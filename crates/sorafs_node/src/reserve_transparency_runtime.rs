@@ -219,7 +219,10 @@ impl ReserveTransparencyScannerErrorV1 {
         )
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transparency_runtime::ReserveTransparencyCheckpointPayloadV1"
+)]
 struct ReserveTransparencyCheckpointPayloadV1 {
     version: u8,
     generation: u64,
@@ -230,7 +233,10 @@ struct ReserveTransparencyCheckpointPayloadV1 {
     finalized_anchor: ReserveFinalizedCursorV1,
     after: Option<ReserveFinalizedEventCursorV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transparency_runtime::ReserveTransparencyCheckpointV1"
+)]
 struct ReserveTransparencyCheckpointV1 {
     payload: ReserveTransparencyCheckpointPayloadV1,
     digest: [u8; 32],

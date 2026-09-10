@@ -1613,6 +1613,14 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
         None,
     )
     .expect("canonical DA compute pipeline");
+    crate::frame_test_support::assert_current_frame(
+        &computed.manifest.manifest,
+        "iroha_data_model::da::manifest::DaManifestV1",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &computed.server_assignment,
+        "iroha_torii::da::persistence::DaIngestServerAssignmentV1",
+    );
     assert_eq!(computed.proof_scheme, DaProofScheme::MerkleSha256);
     assert_eq!(computed.canonical_payload, request.payload);
     assert_eq!(
@@ -2818,3 +2826,28 @@ use replay_manifest_and_metrics::{
     sample_manifest_context_for, telemetry_handle_for_tests, zero_sequence_manifest_context_for,
 };
 use taikai_validation::taikai_ssm_validation_fixture;
+
+#[tokio::test]
+async fn ingest_response_binary_body_advertises_exact_current_owner() {
+    assert_eq!(
+        <DaIngestResponse as norito::NoritoSchema>::nominal_name(),
+        "iroha_torii::da::ingest::DaIngestResponse"
+    );
+    let value = DaIngestResponse {
+        status: "pending_pin_authorization",
+        duplicate: false,
+        receipt: None,
+        pin_scope: None,
+    };
+    let expected = norito::to_bytes(&value).expect("encode response frame");
+    assert_eq!(
+        &expected[6..22],
+        &norito::schema::identity::frame_hash::<DaIngestResponse>()
+    );
+    let response = utils::respond_with_format(value, ResponseFormat::Norito);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .expect("read response body");
+    assert_eq!(body.as_ref(), expected.as_slice());
+}

@@ -74,6 +74,8 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[display("{self:?}")]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ExecutorDataModel")]
     pub struct ExecutorDataModel {
         /// Corresponds to the [`crate::parameter::Parameter::Custom`].
         /// Holds the initial value of the parameter
@@ -538,6 +540,29 @@ mod tests {
             BTreeSet::from([String::from("permission")]),
             Json::new(norito::json!({"nested": [true, false]})),
         );
+        assert_eq!(
+            <ExecutorDataModel as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::executor::model::ExecutorDataModel",
+        );
+        let frame = norito::encode_canonical(&data_model).expect("executor model frame");
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<ExecutorDataModel>()
+        );
+        let decoded: ExecutorDataModel =
+            norito::decode_canonical(&frame).expect("executor model frame");
+        assert_eq!(decoded, data_model);
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ExecutorDataModel>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<ExecutorDataModel>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<ExecutorDataModel>(&trailing).is_err());
         let expected = norito::json::to_json(&data_model).expect("serialize data model JSON");
         assert_eq!(
             norito::json::to_json_bounded(&data_model, expected.len())

@@ -26,7 +26,7 @@ artefacts:
 - Confirm the protected signing job uses
   `signing_provider=authenticated_external_signer` with exact
   `signing_backend=software`, the governed raw Ed25519 public key and reviewed
-  fingerprint, and the exact `sorafs-validate` path plus reviewed SHA256.
+  fingerprint, and the exact `iroha` path plus reviewed SHA256.
 
 Include these artefacts when notifying governance and publishing the release.
 
@@ -96,7 +96,7 @@ them alongside deterministically generated artefacts.
 Run `scripts/release_sorafs_cli.sh` on the canonical aggregate release manifest.
 The wrapper invokes the reviewed external signer and immediately verifies the
 raw 64-byte signature and raw 32-byte public key through a SHA256-pinned
-`sorafs-validate release-manifest` binary:
+`iroha app sorafs toolkit release-manifest` binary:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -104,7 +104,7 @@ scripts/release_sorafs_cli.sh \
   --external-signer /run/sorafs-release/ed25519-sign \
   --signing-public-key /run/sorafs-release/release.ed25519.pub \
   --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
-  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --release-manifest-verifier /opt/iroha/bin/iroha \
   --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 

@@ -97,7 +97,10 @@ impl ReserveTransactionForwarderPolicyV1 {
     }
 }
 /// Exact finalized reserve projection required to validate an operation.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transaction_forwarder::ReserveTransactionProjectionV1"
+)]
 pub enum ReserveTransactionProjectionV1 {
     /// Provider registration, bound to the separate finalized provider registry.
     Registration {
@@ -214,7 +217,8 @@ pub enum ReserveTransactionKindV1 {
     DecideAppeal,
 }
 /// Validated native reserve operation retained for isolated external signing.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reserve_transaction_forwarder::ReserveOperationV1")]
 pub enum ReserveOperationV1 {
     /// Register one provider reserve partition.
     RegisterProvider(RegisterSorafsReserveAccount),
@@ -697,7 +701,10 @@ struct StoredDeadReserveTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transaction_forwarder::ReserveTransactionForwarderCheckpointV1"
+)]
 struct ReserveTransactionForwarderCheckpointV1 {
     version: u8,
     next_sequence: u64,
@@ -2837,6 +2844,14 @@ mod tests {
         ];
         let forwarder = ReserveTransactionForwarder::in_memory(forwarder_policy()).unwrap();
         for (operation, context, expected_authority) in operations_and_contexts {
+            crate::frame_test_support::assert_current_frame(
+                &operation,
+                "sorafs_node::reserve_transaction_forwarder::ReserveOperationV1",
+            );
+            crate::frame_test_support::assert_current_frame(
+                &context.projection,
+                "sorafs_node::reserve_transaction_forwarder::ReserveTransactionProjectionV1",
+            );
             let operation_id = forwarder
                 .enqueue_unsigned_operation(operation, &context)
                 .unwrap()
@@ -2852,6 +2867,11 @@ mod tests {
             assert_eq!(retained.projection, context.projection);
         }
         assert_eq!(forwarder.pending(32).unwrap().len(), 9);
+        let checkpoint = forwarder.state.lock().unwrap().checkpoint.clone();
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint,
+            "sorafs_node::reserve_transaction_forwarder::ReserveTransactionForwarderCheckpointV1",
+        );
     }
     #[test]
     fn registration_owner_policy_rotation_revision_and_signer_substitution_fail_closed() {

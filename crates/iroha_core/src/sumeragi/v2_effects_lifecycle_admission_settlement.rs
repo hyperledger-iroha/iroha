@@ -2186,6 +2186,299 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         }
     }
 
+    /// Retain the real two-effect periodic CommitQC/Apply batch, then drain only its prefix.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn retain_periodic_commit_qc_apply_suffix_for_test<
+        S: V2EffectServices,
+    >(
+        &mut self,
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        certificate: wire::QuorumCertificate,
+        runtime_ordinal: u128,
+        services: &mut S,
+    ) -> Result<(), EffectExecutorError> {
+        let effects = vec![
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone()),
+            )),
+            AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate,
+            },
+        ];
+        let ownership = bind_adapter_effect_batch_ownership(
+            &effects,
+            vec![
+                RuntimeEffectOwnership::periodic_retransmit_for_test(tag, runtime_ordinal),
+                RuntimeEffectOwnership::periodic_retransmit_for_test(tag, runtime_ordinal),
+            ],
+        )
+        .map_err(EffectExecutorError::Contract)?;
+        self.retain_effect_batch(effects, ownership)?;
+        assert_eq!(self.drain_retained_effect_batch(services, false)?, 1);
+        let batch = self
+            .retained_effect_batch
+            .as_ref()
+            .expect("periodic Broadcast admission retains its Apply suffix");
+        let owned = batch.effects.front().expect("one retained Apply effect");
+        assert_eq!(batch.effects.len(), 1);
+        assert_eq!(self.pending_lifecycle_output_admissions.len(), 1);
+        assert!(
+            self.pending_lifecycle_output_admissions
+                .values()
+                .next()
+                .expect("periodic prefix remains a pending output")
+                .exactly_precedes_periodic_retransmit_apply(&owned.effect, &owned.ownership)
+        );
+        assert!(
+            self.ready_to_finish_blockers()
+                .contains(&"retained-effect-batch")
+        );
+        Ok(())
+    }
+
+    /// Reject substitutions of the retained suffix without changing any dispatch census.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn assert_retained_apply_suffix_substitutions_rejected_for_test(
+        &mut self,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+    ) {
+        let original = self
+            .retained_effect_batch
+            .as_ref()
+            .expect("paired suffix exists before substitution")
+            .effects
+            .clone();
+        assert_eq!(original.len(), 1);
+        let original_apply = original.front().expect("one exact Apply");
+        let AdapterEffect::Apply { tag, .. } = &original_apply.effect else {
+            panic!("paired suffix must be Apply");
+        };
+        let mut foreign_subject = original.clone();
+        let AdapterEffect::Apply { subject, .. } = &mut foreign_subject
+            .front_mut()
+            .expect("substituted Apply exists")
+            .effect
+        else {
+            unreachable!("the copied suffix retains its Apply variant");
+        };
+        let replacement = Hash::new(b"foreign retained periodic Apply subject");
+        assert_ne!(subject.payload_hash, replacement);
+        subject.payload_hash = replacement;
+        let mut extra_effect = original.clone();
+        extra_effect.push_back(original_apply.clone());
+        let mut foreign_ownership = original.clone();
+        foreign_ownership
+            .front_mut()
+            .expect("foreign-owner Apply exists")
+            .ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&original_apply.effect),
+            vec![
+                RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                    *tag,
+                    original_apply.ownership.owner().lifecycle_ordinal(),
+                    b"foreign retained periodic Apply owner",
+                ),
+            ],
+        )
+        .expect("bind a different exact owner for the retained Apply")
+        .pop()
+        .expect("one replacement owner");
+        let captured_at = Instant::now();
+        let snapshot = |executor: &Self| {
+            (
+                executor.retained_effect_batch.as_ref().map(|batch| {
+                    (
+                        batch
+                            .effects
+                            .iter()
+                            .map(|owned| {
+                                (
+                                    owned.effect.clone(),
+                                    owned.ownership.clone(),
+                                    owned.highest_prepare_retention,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                        batch.oldest_at,
+                    )
+                }),
+                (
+                    executor
+                        .pending_lifecycle_output_admissions
+                        .keys()
+                        .copied()
+                        .collect::<Vec<_>>(),
+                    executor
+                        .live_lifecycle_decision_apply
+                        .as_ref()
+                        .map(|owner| owner.dispatch_key),
+                    executor
+                        .lifecycle_decision_apply_successor_outputs
+                        .is_some(),
+                    executor.pending_work(),
+                    executor.parked_effect_batch.is_some(),
+                    executor.pending_runner_decision_cleanup,
+                    executor.protected_decision,
+                    executor.finality_completion.is_some(),
+                ),
+                (
+                    executor.runtime.queue_snapshot(captured_at),
+                    executor.runtime.authoritative_tag(),
+                    executor.next_work_id,
+                    executor.reconciled_tag,
+                    executor.fatal_reason.clone(),
+                    executor.output_guard.restart_required(),
+                ),
+            )
+        };
+        for replacement in [foreign_subject, extra_effect, foreign_ownership] {
+            self.retained_effect_batch
+                .as_mut()
+                .expect("retained fixture")
+                .effects = replacement;
+            let before = snapshot(self);
+            assert!(self.lifecycle_decision_apply_successor_census_is_exact(attestation));
+            assert!(
+                !self.lifecycle_decision_apply_successor_batch_is_exact(
+                    attestation,
+                    self.retained_effect_batch
+                        .as_ref()
+                        .expect("retained fixture"),
+                )
+            );
+            assert!(
+                !self
+                    .lifecycle_decision_apply_dispatch_available(Some(attestation))
+                    .expect("malformed suffix is unavailable without closing the executor")
+            );
+            assert!(
+                !self
+                    .lifecycle_decision_apply_runtime_predecessor_drain_available(attestation)
+                    .expect("malformed suffix cannot borrow a predecessor turn")
+            );
+            assert!(
+                !self
+                    .lifecycle_decision_apply_runtime_predecessor_remains_exact(attestation)
+                    .expect("malformed suffix has no exact predecessor continuation")
+            );
+            assert!(
+                snapshot(self) == before,
+                "rejected suffix changed executor or runtime state"
+            );
+        }
+        self.retained_effect_batch
+            .as_mut()
+            .expect("restore exact retained suffix")
+            .effects = original;
+        assert!(self.lifecycle_decision_apply_successor_census_is_exact(attestation));
+    }
+
+    /// Reconcile the real Decision while two earlier authenticated vote owners remain queued.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn reconcile_queued_decision_for_delayed_apply_fixture<
+        S: V2EffectServices,
+    >(
+        &mut self,
+        services: &mut S,
+        certificate: &wire::QuorumCertificate,
+        apply_ordinal: u128,
+    ) -> Result<DurableDecision, EffectExecutorError> {
+        self.ensure_open()?;
+        let captured_at = Instant::now();
+        let before_queue = self.runtime.queue_snapshot(captured_at);
+        let before_tag = self.runtime.authoritative_tag();
+        let expected = (
+            certificate.round,
+            certificate.proposal_round,
+            certificate.subject,
+            certificate.execution_commitment,
+        );
+        assert_eq!(certificate.phase, wire::GlobalPhase::Commit);
+        assert_eq!(
+            self.runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?,
+            Some(expected)
+        );
+        let exact_queued_cut = |executor: &Self| {
+            executor.runtime.lifecycle_live_clocks_are_armed()
+                && executor.live_lifecycle_validate_successor.is_some()
+                && executor.live_lifecycle_decision_apply.is_none()
+                && executor.pending_runner_decision_cleanup.is_none()
+                && !executor.decision_body_drained
+                && executor.pending_work() == 0
+                && executor.recovered_decision_fetch_request_index_is_exact_and_empty()
+                && executor.certified_work.is_empty()
+                && executor.outstanding_requests.is_empty()
+                && executor.retained_effect_batch.is_none()
+                && executor.parked_effect_batch.is_none()
+                && executor.pending_tip_recovery.is_none()
+                && executor.finality_completion.is_none()
+                && executor.runtime.queued_commands() == 2
+                && executor.runtime.queue_snapshot(captured_at).normal.depth == 2
+                && executor.runtime.queue_snapshot(captured_at).progress.depth == 0
+                && executor
+                    .runtime
+                    .queue_snapshot(captured_at)
+                    .completion
+                    .depth
+                    == 0
+                && executor
+                    .runtime
+                    .lifecycle_decision_apply_runtime_predecessor_remains_exact(apply_ordinal)
+                && executor.fatal_reason.is_none()
+                && !executor.output_guard.restart_required()
+        };
+        assert!(exact_queued_cut(self));
+        assert!(self.protected_decision.is_none());
+        let decision = self
+            .reconcile_runtime_decision(services)?
+            .expect("queued fixture has a real durable Decision");
+        assert_eq!(decision, expected);
+        assert_eq!(self.protected_decision, Some(expected));
+        assert!(exact_queued_cut(self));
+        assert_eq!(self.runtime.queue_snapshot(captured_at), before_queue);
+        assert_eq!(self.runtime.authoritative_tag(), before_tag);
+        assert_eq!(
+            self.runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?,
+            Some(expected)
+        );
+        Ok(decision)
+    }
+
+    /// Stage the exact production parking transition for a queued predecessor continuation.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn park_attested_lifecycle_apply_suffix_for_test(
+        &mut self,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+    ) {
+        assert!(
+            self.lifecycle_decision_apply_runtime_predecessor_drain_available(attestation)
+                .expect("the unparked suffix has an exact finite predecessor bound")
+        );
+        assert!(self.parked_effect_batch.is_none());
+        self.park_retained_effect_batch()
+            .expect("park the existing exact Apply owner");
+        assert!(self.retained_effect_batch.is_none());
+        assert!(
+            self.lifecycle_decision_apply_successor_batch_is_exact(
+                attestation,
+                self.parked_effect_batch
+                    .as_ref()
+                    .expect("the exact Apply is parked")
+            )
+        );
+        assert!(
+            self.lifecycle_decision_apply_runtime_predecessor_drain_available(attestation)
+                .expect("the parked suffix preserves the same bounded continuation")
+        );
+    }
+
     /// Settle exactly one registry-attested direct Broadcast after Apply terminal settlement.
     ///
     /// Unlike the ordinary Runtime drain, this consumes only the pending-map key

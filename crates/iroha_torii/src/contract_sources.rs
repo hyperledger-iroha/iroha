@@ -206,7 +206,9 @@ pub struct ContractCodeViewDto {
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii::contract_sources::SubmitVerifiedContractSourceDto")]
 pub struct SubmitVerifiedContractSourceDto {
     pub language: String,
     #[norito(default)]
@@ -3268,16 +3270,18 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
                 .data_dir(_guard.path().join("sorafs"))
                 .build(),
         );
-        let (status, JsonBody(response)) = handle_post_verified_source_job(
-            code_hash_hex.clone(),
-            SubmitVerifiedContractSourceDto {
-                language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
-                source_name: Some("demo.ko".to_owned()),
-                source_text: source.to_owned(),
-            },
-            node,
-        )
-        .expect("submit verified source");
+        let request = SubmitVerifiedContractSourceDto {
+            language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
+            source_name: Some("demo.ko".to_owned()),
+            source_text: source.to_owned(),
+        };
+        crate::frame_test_support::assert_current_frame(
+            &request,
+            "iroha_torii::contract_sources::SubmitVerifiedContractSourceDto",
+        );
+        let (status, JsonBody(response)) =
+            handle_post_verified_source_job(code_hash_hex.clone(), request, node)
+                .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(response.status, "accepted");
         assert!(response.verified_source_ref.is_none());

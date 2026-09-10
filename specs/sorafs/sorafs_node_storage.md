@@ -577,7 +577,7 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   governance-aware external software signer backend with atomic rotation/revocation
   enforcement, and the deployment-owned sealed-CAS backend remain open.
 - Manual completion tooling must supply that complete context through
-  `sorafs_tx_stdin_builder complete-order`; the retired three-field completion
+  `iroha app sorafs toolkit instruction complete-order`; the retired three-field completion
   form and offline Izanami completion recipe are not accepted.
 - The embedded `TelemetryAccumulator` can be mutated through
   `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples

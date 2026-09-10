@@ -1747,14 +1747,16 @@ mod tests {
             .expect("schedule order")
             .expect("targeted plan");
         let checkpoint = manager.checkpoint().expect("checkpoint");
-        let expected = norito::to_bytes(&checkpoint).expect("encode checkpoint");
+        // Capacity is embedded in the node checkpoint under the fixed V1 payload layout.
+        let expected = norito::codec::encode_adaptive(&checkpoint);
+        let decoded =
+            norito::codec::decode_adaptive(&expected).expect("capacity payload roundtrip");
         let restored = CapacityManager::with_entry_limit(8);
         restored
-            .restore_checkpoint(checkpoint.clone())
+            .restore_checkpoint(decoded)
             .expect("restore checkpoint");
         assert_eq!(
-            norito::to_bytes(&restored.checkpoint().expect("restored checkpoint"))
-                .expect("encode restored checkpoint"),
+            norito::codec::encode_adaptive(&restored.checkpoint().expect("restored checkpoint")),
             expected
         );
         assert_eq!(restored.usage_snapshot().allocated_total_gib, 100);

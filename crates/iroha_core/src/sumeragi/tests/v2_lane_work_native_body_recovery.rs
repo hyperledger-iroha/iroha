@@ -2868,8 +2868,11 @@ fn native_applied_first_slot_cannot_be_reused_at_lane_signing_or_progress() {
     assert!(!adapter.output_guard.restart_required());
 }
 
-#[derive(Clone, norito::Encode, norito::Decode)]
-#[norito(schema_name = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
+#[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lane_work::tests::IndependentlyEncodedSharedLaneFrontierForTest",
+    frame = "iroha_core::state::AppliedMergeLaneFrontierMarker"
+)]
 struct IndependentlyEncodedSharedLaneFrontierForTest {
     version: u8,
     lane_id: LaneId,
@@ -2881,6 +2884,16 @@ struct IndependentlyEncodedSharedLaneFrontierForTest {
 
 #[test]
 fn native_application_rejects_valid_but_contradictory_shared_frontier() {
+    // This independent adversarial fixture writes the current production frame; it does not
+    // create an alternate accepted marker format or weaken the semantic conflict check below.
+    assert_eq!(
+        <IndependentlyEncodedSharedLaneFrontierForTest as norito::NoritoSchema>::frame_name(),
+        "iroha_core::state::AppliedMergeLaneFrontierMarker",
+    );
+    assert_ne!(
+        <IndependentlyEncodedSharedLaneFrontierForTest as norito::NoritoSchema>::nominal_name(),
+        <IndependentlyEncodedSharedLaneFrontierForTest as norito::NoritoSchema>::frame_name(),
+    );
     for fault in ["different descriptor", "missing shared marker"] {
         let (mut adapter, _, lane_id, dataspace_id, previous) =
             native_coordinator_after_applied_participant_fixture();

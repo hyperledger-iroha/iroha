@@ -216,6 +216,12 @@ seiyaku DedicatedQueryContract {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         }),
     );
+    // This positive fixture reads NFTs and an unrelated missing account through the
+    // production native query gate, which requires the ledger-wide read permission.
+    tx.world_mut_for_testing().add_account_permission(
+        &authority,
+        Permission::from(iroha_executor_data_model::permission::query::CanReadAllLedgerData),
+    );
     iroha_data_model::isi::SetContractAlias::bind(contract_address.clone(), alias.clone(), None)
         .execute(&authority, &mut tx)
         .expect("bind contract alias");
@@ -419,6 +425,20 @@ seiyaku DedicatedQueryContract {
     assert_eq!(instance_out.contract_address, contract_address);
     assert_eq!(instance_out.code_hash, code_hash);
     assert_eq!(instance_out.contract_alias, Some(alias.clone()));
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &instance_out,
+        "iroha_data_model::smart_contract::model::ContractInstance",
+    );
+    assert_eq!(
+        contract_tlv.payload,
+        norito::encode_canonical(&instance_out).expect("shared instance owner frame"),
+    );
+    let mut wrong_owner = contract_tlv.payload.to_vec();
+    wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<ContractAddress>());
+    assert!(matches!(
+        norito::decode_from_bytes::<ContractInstance>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch),
+    ));
     let alias_name: Name = alias.as_ref().parse().expect("alias name pointer");
     let alias_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&alias_name));
     vm.set_register(10, alias_ptr);

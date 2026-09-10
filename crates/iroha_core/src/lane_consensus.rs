@@ -115,7 +115,8 @@ pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
 /// advances the synthetic retransmission cursor. The producer signature also
 /// excludes only the advisory hint while separately binding the payload hash
 /// to the immutable certification proposal.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneExecutablePayloadV1")]
 pub struct LaneExecutablePayloadV1 {
     /// Artifact schema version. Only version two is accepted.
     pub version: u8,
@@ -147,7 +148,8 @@ pub struct LaneExecutablePayloadV1 {
     /// BLS-normal signature over the producer-bound payload preimage.
     pub producer_signature: Vec<u8>,
 }
-#[derive(Clone, Debug, Encode)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneExecutablePayloadPreimage")]
 struct LaneExecutablePayloadPreimage {
     purpose: String,
     version: u8,
@@ -173,7 +175,8 @@ struct LaneExecutablePayloadPreimage {
     routing_plans: Vec<RoutingPlan>,
     native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
-#[derive(Clone, Debug, Encode)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneExecutablePayloadSignaturePreimage")]
 struct LaneExecutablePayloadSignaturePreimage {
     purpose: String,
     version: u8,
@@ -187,7 +190,8 @@ struct LaneExecutablePayloadSignaturePreimage {
 }
 /// Authenticated request to advance one lane height to the next view while
 /// retaining the exact executable payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneBlockNewViewBodyV1")]
 pub struct LaneBlockNewViewBodyV1 {
     /// Certificate schema version. Only version one is accepted.
     pub version: u8,
@@ -254,7 +258,8 @@ pub struct LaneBlockNewViewVoteV1 {
 }
 /// Individual authoritative-lane-committee vote closing an incarnation at an
 /// exact globally merged frontier.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneDrainVoteV1")]
 pub struct LaneDrainVoteV1 {
     /// Common drain body signed by the committee member.
     pub body: LaneDrainCertificateBodyV1,
@@ -6407,6 +6412,184 @@ mod tests {
             payload.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::InvalidAdmissionIntent)
         );
+    }
+    #[test]
+    fn autonomous_payload_and_new_view_frames_bind_their_exact_owners() {
+        use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1 as check;
+        let keys = [
+            checked_bls_keypair(71),
+            checked_bls_keypair(72),
+            checked_bls_keypair(73),
+            checked_bls_keypair(74),
+        ];
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keys);
+        payload
+            .validate(network_id, epoch)
+            .expect("authenticated four-validator payload");
+        check(
+            &payload,
+            "iroha_core::lane_consensus::LaneExecutablePayloadV1",
+        );
+        let body = LaneBlockNewViewBodyV1::for_transition(
+            &payload.origin_proposal,
+            &payload,
+            1,
+            network_id,
+            epoch,
+        )
+        .expect("exact next-view body");
+        check(&body, "iroha_core::lane_consensus::LaneBlockNewViewBodyV1");
+        let body_frame = norito::encode_canonical(&body).expect("NewView body frame");
+        let mut expected_preimage = b"iroha:nexus:lane-new-view:v1".to_vec();
+        expected_preimage.extend_from_slice(&body_frame);
+        assert_eq!(
+            body.signature_preimage()
+                .expect("NewView signature preimage"),
+            expected_preimage
+        );
+        assert!(matches!(
+            norito::decode_canonical::<LaneExecutablePayloadV1>(&body_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let payload_frame = norito::encode_canonical(&payload).expect("payload frame");
+        assert!(matches!(
+            norito::decode_canonical::<LaneBlockNewViewBodyV1>(&payload_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
+    #[test]
+    fn executable_payload_preimage_frames_match_hash_and_producer_signature() {
+        fn check<T: norito::NoritoSerialize>(value: &T, name: &str) -> Vec<u8> {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            let frame = norito::encode_canonical(value).expect("encode preimage owner");
+            let view =
+                norito::core::from_bytes_view(&frame).expect("preimage envelope and checksum");
+            assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
+            assert!(norito::core::from_bytes_view(&frame[..frame.len() - 1]).is_err());
+            let mut trailing = frame.clone();
+            trailing.push(0);
+            assert!(norito::core::from_bytes_view(&trailing).is_err());
+            assert!(matches!(
+                norito::decode_canonical::<LaneExecutablePayloadV1>(&frame),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            frame
+        }
+        let keys = [
+            checked_bls_keypair(71),
+            checked_bls_keypair(72),
+            checked_bls_keypair(73),
+            checked_bls_keypair(74),
+        ];
+        let (network_id, epoch, payload) = autonomous_payload_fixture(&keys);
+        payload
+            .validate(network_id, epoch)
+            .expect("authenticated payload fixture");
+        let descriptor = &payload.origin_proposal.descriptor;
+        let mut preimage = LaneExecutablePayloadPreimage {
+            purpose: "nexus:lane-executable-payload:v2".to_owned(),
+            version: payload.version,
+            network_id,
+            epoch,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            previous_lane_block_height: descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+            lane_block_height: descriptor.lane_block_height,
+            accepted_candidate_indices: descriptor.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+            validator_set_hash_version: descriptor.validator_set_hash_version,
+            validator_set_hash: descriptor.validator_set_hash,
+            validator_set: descriptor.validator_set.clone(),
+            validator_count: descriptor.validator_count,
+            min_quorum: descriptor.min_quorum,
+            qc_mode_tag: descriptor.qc_mode_tag.clone(),
+            entrypoints: payload.entrypoints.clone(),
+            reservation_keys: payload.reservation_keys.clone(),
+            routing_plans: payload.routing_plans.clone(),
+            native_amx_receipts: payload.native_amx_receipts.clone(),
+        };
+        let hash_frame = check(
+            &preimage,
+            "iroha_core::lane_consensus::LaneExecutablePayloadPreimage",
+        );
+        assert_eq!(Hash::new(&hash_frame), payload.payload_hash);
+        preimage.reservation_keys[0].queue_plan_admission_binding_hash =
+            Hash::new(b"substituted admission binding");
+        assert_ne!(
+            Hash::new(norito::encode_canonical(&preimage).expect("encode changed reservation")),
+            payload.payload_hash
+        );
+        let mut signature_preimage = LaneExecutablePayloadSignaturePreimage {
+            purpose: "nexus:lane-executable-payload-signature:v2".to_owned(),
+            version: payload.version,
+            network_id,
+            epoch,
+            origin_proposal_hash: payload.origin_proposal.proposal_hash,
+            origin_descriptor_hash: descriptor.descriptor_hash,
+            origin_lane_block_view: descriptor.lane_block_view,
+            payload_hash: payload.payload_hash,
+            producer: payload.producer.clone(),
+        };
+        let signature_frame = check(
+            &signature_preimage,
+            "iroha_core::lane_consensus::LaneExecutablePayloadSignaturePreimage",
+        );
+        assert_eq!(
+            signature_frame,
+            payload
+                .producer_signature_preimage()
+                .expect("producer preimage")
+        );
+        let signature =
+            Signature::try_from_bytes(&payload.producer_signature).expect("producer signature");
+        signature
+            .verify(payload.producer.public_key(), &signature_frame)
+            .expect("exact preimage is signed");
+        signature_preimage.origin_proposal_hash = Hash::new(b"substituted origin proposal");
+        let changed =
+            norito::encode_canonical(&signature_preimage).expect("changed signature preimage");
+        assert!(
+            signature
+                .verify(payload.producer.public_key(), &changed)
+                .is_err()
+        );
+        assert_ne!(&hash_frame[6..22], &signature_frame[6..22]);
+    }
+
+    #[test]
+    fn lane_drain_vote_frame_preserves_authenticated_frontier() {
+        let keys = [
+            checked_bls_keypair(111),
+            checked_bls_keypair(112),
+            checked_bls_keypair(113),
+            checked_bls_keypair(114),
+        ];
+        let (body, _) = lane_drain_fixture(&keys);
+        let vote = LaneDrainVoteV1::new_signed(body, peer(&keys[0]), keys[0].private_key())
+            .expect("valid drain vote");
+        vote.validate_ingress()
+            .expect("drain signature and PoP verify");
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &vote,
+            "iroha_core::lane_consensus::LaneDrainVoteV1",
+        );
+        let frame = norito::encode_canonical(&vote).expect("drain vote frame");
+        assert!(matches!(
+            norito::decode_canonical::<LaneBlockNewViewBodyV1>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut changed = vote;
+        changed.body.final_frontier.lane_block_descriptor_hash =
+            Some(Hash::new(b"substituted drain frontier"));
+        assert!(matches!(
+            changed.validate_ingress(),
+            Err(LaneDrainCertificateError::InvalidVoteSignature)
+        ));
     }
     #[test]
     fn autonomous_payload_v2_is_hint_neutral_and_rejects_other_versions() {

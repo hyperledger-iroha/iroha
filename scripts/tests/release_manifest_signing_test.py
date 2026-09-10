@@ -169,7 +169,7 @@ def _native_verifier(
     forbidden_input_paths: dict[str, Path] | None = None,
     require_sanitized_environment: bool = False,
 ) -> tuple[Path, str, Path]:
-    verifier = tmp_path / "sorafs-validate"
+    verifier = tmp_path / "iroha"
     invocation_log = tmp_path / "native-verifier-invocations.log"
     mutation = ""
     if mutate_source_during_execution:
@@ -217,6 +217,9 @@ def _native_verifier(
         f"expected_signature = bytes.fromhex({TEST_SIGNATURE.hex()!r})\n"
         f"invocation_log = Path({str(invocation_log)!r})\n"
         "args = sys.argv[1:]\n"
+        "if args[:3] != ['app', 'sorafs', 'toolkit']:\n"
+        "    raise SystemExit(4)\n"
+        "args = args[3:]\n"
         "if len(args) != 9 or args[0] != 'release-manifest':\n"
         "    raise SystemExit(4)\n"
         "options = dict(zip(args[1::2], args[2::2]))\n"
@@ -247,7 +250,7 @@ def _native_verifier(
 def _native_verifier_with_timed_ovn_audit(
     tmp_path: Path,
 ) -> tuple[Path, str, Path]:
-    verifier = tmp_path / "sorafs-validate"
+    verifier = tmp_path / "iroha"
     invocation_log = tmp_path / "native-verifier-invocations.log"
     _write_executable(
         verifier,
@@ -259,6 +262,9 @@ def _native_verifier_with_timed_ovn_audit(
         f"expected_signature = bytes.fromhex({TEST_SIGNATURE.hex()!r})\n"
         f"invocation_log = Path({str(invocation_log)!r})\n"
         "args = sys.argv[1:]\n"
+        "if args[:3] != ['app', 'sorafs', 'toolkit']:\n"
+        "    raise SystemExit(4)\n"
+        "args = args[3:]\n"
         "if args and args[0] == 'timed-ovn-release-audit':\n"
         "    if len(args) != 15:\n"
         "        raise SystemExit(4)\n"
@@ -1733,6 +1739,9 @@ def test_external_tool_invocations_have_exact_argv_environment_and_fd_contract(
     verifier_argv, verifier_kwargs = calls[0]
     assert verifier_argv == [
         str(verifier),
+        "app",
+        "sorafs",
+        "toolkit",
         "release-manifest",
         "--manifest",
         str(manifest),

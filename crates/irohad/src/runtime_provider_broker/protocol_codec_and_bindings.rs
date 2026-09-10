@@ -313,19 +313,22 @@ fn validate_billing_publication_receipt_shape(
     Ok(())
 }
 define_broker_wire_struct!(owned ProviderIngestSourceMusubiArchiveWireV1 { network_id: iroha_data_model::NetworkId, observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1, binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1, });
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::ProviderIngestSourceFetchRequestWireV1"
+)]
 struct ProviderIngestSourceFetchRequestWireV1 {
     authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
     source_provider_ids: Vec<[u8; 32]>,
     musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
 }
-define_broker_wire_struct!(owned ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestCarPlanWireV1"; ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
 define_broker_wire_struct!(copy ProviderIngestChunkProfileWireV1 { min_size: u64, target_size: u64, max_size: u64, break_mask: u64, });
 define_broker_wire_struct!(copy ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], });
 define_broker_wire_struct!(owned ProviderIngestFilePlanWireV1 { path: Vec<String>, first_chunk: u64, chunk_count: u64, size: u64, });
-define_broker_wire_struct!(owned ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
-define_broker_wire_struct!(owned ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
-define_broker_wire_struct!(copy ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestSourceHeaderWireV1"; ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestSourceChunkWireV1"; ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
+define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::ProviderIngestSourceTrailerWireV1"; ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BrokerError {
     Unavailable,
@@ -675,9 +678,10 @@ fn source_retained_memory_bytes(plan: &sorafs_car::CarBuildPlan) -> Result<usize
         .ok_or(BrokerError::Protocol)
 }
 fn acquire_source_retained_memory(
+    pool: &Arc<DecodeResourcePoolV1>,
     plan: &sorafs_car::CarBuildPlan,
 ) -> Result<DecodeResourcePoolPermitV1, BrokerError> {
-    shared_decode_resource_pool().try_acquire(source_retained_memory_bytes(plan)?)
+    pool.try_acquire(source_retained_memory_bytes(plan)?)
 }
 fn source_plan_to_wire(
     plan: &sorafs_car::CarBuildPlan,
@@ -996,10 +1000,24 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    decode_canonical_with_policy_from(bytes, limit, policy, shared_decode_resource_pool())
+}
+// Keep standalone defaults and selected connection decodes on the same narrow
+// boundary; an enclosing operation already owns its reservation and counters.
+fn decode_canonical_with_policy_from<T>(
+    bytes: &[u8],
+    limit: usize,
+    policy: DecodeResourcePolicyV1,
+    pool: Arc<DecodeResourcePoolV1>,
+) -> Result<T, BrokerError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
     if let Some(admission) = current_decode_resource_admission() {
         return decode_canonical_with_admission(bytes, limit, &admission);
     }
-    let admission = DecodeResourceAdmissionV1::acquire(None, policy)?;
+    let admission = DecodeResourceAdmissionV1::acquire_from(pool, None, policy)?;
     admission.reserve_raw_frame(bytes.len(), limit)?;
     let _scope = admission.enter();
     decode_canonical_with_admission(bytes, limit, &admission)
@@ -1037,6 +1055,7 @@ fn encode_frame<T: NoritoSerialize>(
     };
     encode_canonical(&frame, limit).map(ScrubbedBytes::new)
 }
+#[cfg(test)]
 fn decode_frame<T>(bytes: &[u8], expected_kind: u8, limit: usize) -> Result<T, BrokerError>
 where
     T: NoritoSerialize,
@@ -1075,10 +1094,31 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    decode_frame_with_policy_from(
+        bytes,
+        expected_kind,
+        limit,
+        policy,
+        shared_decode_resource_pool(),
+    )
+}
+// Preserve an enclosing operation's exact admission; otherwise charge only
+// this decode to the process that owns the authenticated connection.
+fn decode_frame_with_policy_from<T>(
+    bytes: &[u8],
+    expected_kind: u8,
+    limit: usize,
+    policy: DecodeResourcePolicyV1,
+    pool: Arc<DecodeResourcePoolV1>,
+) -> Result<T, BrokerError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
     if let Some(admission) = current_decode_resource_admission() {
         return decode_frame_with_admission(bytes, expected_kind, limit, &admission);
     }
-    let admission = DecodeResourceAdmissionV1::acquire(None, policy)?;
+    let admission = DecodeResourceAdmissionV1::acquire_from(pool, None, policy)?;
     admission.reserve_raw_frame(bytes.len(), limit)?;
     let _scope = admission.enter();
     decode_frame_with_admission(bytes, expected_kind, limit, &admission)
@@ -1238,8 +1278,9 @@ fn read_operation_request_frame<R: std::io::Read>(
 fn read_operation_request_frame_with_budget<R: std::io::Read>(
     reader: &mut R,
     inbound_budget: std::sync::Arc<tokio::sync::Semaphore>,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<(u16, u16, ScrubbedBytes, Arc<DecodeResourceAdmissionV1>), BrokerError> {
-    read_operation_request_frame_inner(reader, Some(inbound_budget), None)
+    read_operation_request_frame_inner(reader, Some(inbound_budget), Some(decode_pool))
 }
 fn catalog_digest(
     chain_id: &str,

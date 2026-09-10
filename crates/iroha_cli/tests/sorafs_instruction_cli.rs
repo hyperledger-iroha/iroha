@@ -1,11 +1,7 @@
-//! Integration coverage for SoraFS capacity transaction stdin construction.
-#![cfg(feature = "cli")]
+//! Executable coverage for canonical offline SoraFS instruction preparation.
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
-use iroha_data_model::{
-    isi::{Instruction, sorafs::RegisterCapacityDeclaration},
-    prelude::InstructionBox,
-};
+use iroha_data_model::{isi::sorafs::RegisterCapacityDeclaration, prelude::InstructionBox};
 use norito::{
     decode_from_bytes,
     json::{self, Value},
@@ -161,7 +157,8 @@ fn tx_stdin_builder_rejects_redundant_replication_epoch_options() {
             option.to_owned(),
         ]);
         assert!(
-            stderr.contains("unknown option") && stderr.contains(option.split('=').next().unwrap()),
+            stderr.contains("unexpected argument")
+                && stderr.contains(option.split('=').next().unwrap()),
             "payload timestamps are authoritative and {option} must be rejected: {stderr}"
         );
     }
@@ -180,7 +177,7 @@ fn tx_stdin_builder_rejects_noncanonical_musubi_archive_id_hex() {
             format!("--musubi-archive-id-hex={value}"),
         ]);
         assert!(
-            stderr.contains("musubi_archive_id_hex"),
+            stderr.contains("--musubi-archive-id-hex"),
             "stderr should name rejected Musubi archive id {value}, got: {stderr}"
         );
     }
@@ -194,6 +191,14 @@ fn tx_stdin_builder_emits_completion_instruction() {
         "--provider-id-hex=6666666666666666666666666666666666666666666666666666666666666666"
             .to_owned(),
         "--completion-epoch=777".to_owned(),
+        "--expected-owner=sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T".to_owned(),
+        "--assignment-revision=3".to_owned(),
+        format!("--signer-policy-id-hex={}", "33".repeat(32)),
+        "--signer-policy-revision=2".to_owned(),
+        format!("--signer-policy-predecessor-digest-hex={}", "44".repeat(32)),
+        format!("--signer-policy-digest-hex={}", "55".repeat(32)),
+        "--finalized-height=19".to_owned(),
+        format!("--finalized-block-hash-hex={}", "66".repeat(32)),
     ]);
     let instruction = decode_single_instruction(payload);
     let completion = instruction
@@ -261,7 +266,7 @@ fn tx_stdin_builder_rejects_noncanonical_order_id_hex() {
             "--completion-epoch=777".to_owned(),
         ]);
         assert!(
-            stderr.contains("order_id_hex"),
+            stderr.contains("--order-id-hex"),
             "stderr should name rejected order_id_hex {value}, got: {stderr}"
         );
     }
@@ -296,22 +301,32 @@ fn tx_stdin_builder_rejects_duplicate_options() {
     ] {
         let stderr = run_builder_failure(args.into_iter().map(str::to_owned));
         assert!(
-            stderr.contains("duplicate") && stderr.contains(expected),
+            stderr.contains("cannot be used multiple times") && stderr.contains(expected),
             "stderr should reject duplicate {expected}, got: {stderr}"
         );
     }
 }
+fn instruction_command() -> assert_cmd::Command {
+    let mut command = cargo_bin_cmd!("iroha");
+    command.args(["app", "sorafs", "toolkit", "instruction"]);
+    command
+}
+
 fn run_builder(args: impl IntoIterator<Item = String>) -> Value {
-    let mut cmd = cargo_bin_cmd!("sorafs_tx_stdin_builder");
+    let mut cmd = instruction_command();
     cmd.args(args);
     let output = cmd.assert().success().get_output().stdout.clone();
     json::from_slice(&output).expect("parse tx stdin json")
 }
 fn run_builder_failure(args: impl IntoIterator<Item = String>) -> String {
-    let mut cmd = cargo_bin_cmd!("sorafs_tx_stdin_builder");
+    let mut cmd = instruction_command();
     cmd.args(args);
-    let output = cmd.assert().failure().get_output().stderr.clone();
-    String::from_utf8(output).expect("stderr should be utf8")
+    let assertion = cmd.assert().failure();
+    assert!(
+        assertion.get_output().stdout.is_empty(),
+        "failed preparation must emit no instruction"
+    );
+    String::from_utf8(assertion.get_output().stderr.clone()).expect("stderr should be utf8")
 }
 fn decode_single_instruction(payload: Value) -> InstructionBox {
     let entries = payload.as_array().expect("tx stdin array");
@@ -381,4 +396,83 @@ fn sample_replication_order() -> ReplicationOrderV1 {
             value: "ton-indexer".to_owned(),
         }],
     }
+}
+
+#[test]
+fn instruction_output_is_config_free_and_exact_canonical_json() {
+    let directory = tempdir().expect("empty working directory");
+    let output = instruction_command()
+        .current_dir(directory.path())
+        .args([
+            "expire-order",
+            &format!("--order-id-hex={}", "55".repeat(32)),
+            "--expiration-epoch=778",
+        ])
+        .output()
+        .expect("run local instruction preparation");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let expected =
+        InstructionBox::from(iroha_data_model::isi::sorafs::ExpireReplicationOrder::new(
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x55; 32]),
+            778,
+        ));
+    let payload = Value::Array(vec![Value::String(
+        BASE64_STD.encode(to_bytes(&expected).expect("canonical instruction")),
+    )]);
+    let rendered = format!("{}\n", json::to_string(&payload).expect("canonical JSON"));
+    assert_eq!(output.stdout, rendered.as_bytes());
+    assert_eq!(
+        fs::read_dir(directory.path())
+            .expect("inspect working directory")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn instruction_help_lists_the_exact_operation_options_without_config() {
+    let directory = tempdir().expect("empty working directory");
+    for (operation, required) in [
+        ("capacity-declaration", "--summary"),
+        ("replication-order", "--musubi-archive-id-hex"),
+        ("complete-order", "--signer-policy-predecessor-digest-hex"),
+        ("expire-order", "--expiration-epoch"),
+    ] {
+        let output = instruction_command()
+            .current_dir(directory.path())
+            .args([operation, "--help"])
+            .output()
+            .expect("read operation help");
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stderr.is_empty());
+        let help = String::from_utf8(output.stdout).expect("UTF-8 help");
+        assert!(help.contains("iroha app sorafs toolkit instruction"));
+        assert!(help.contains(required), "{operation}: {help}");
+    }
+}
+
+#[test]
+fn completion_without_its_authority_context_is_rejected_before_output() {
+    let output = instruction_command()
+        .args([
+            "complete-order",
+            &format!("--order-id-hex={}", "55".repeat(32)),
+            &format!("--provider-id-hex={}", "66".repeat(32)),
+            "--completion-epoch=777",
+        ])
+        .output()
+        .expect("reject incomplete completion");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("required arguments") && stderr.contains("--expected-owner"));
+    let error: Value = json::from_slice(&output.stderr).expect("canonical CLI error JSON");
+    assert_eq!(error["error"]["kind"].as_str(), Some("input"));
+    assert_eq!(error["error"]["exit_code"].as_u64(), Some(4));
 }

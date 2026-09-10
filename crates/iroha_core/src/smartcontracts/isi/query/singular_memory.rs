@@ -3,7 +3,7 @@ use super::Error;
 use norito::core::{
     DecodeFlagsGuard, Encoder, NoritoDeserialize, NoritoSerialize, SerializePayload,
 };
-use std::{cell::Cell, marker::PhantomData, ops::Deref};
+use std::{cell::Cell, ops::Deref};
 /// Dynamic source/output ceilings for one singular query executed by a server-owned memory lane.
 ///
 /// The frame ceiling bounds the canonical transient used instead of an unmetered deep clone. The
@@ -96,8 +96,8 @@ where
 /// Own a sequence of borrowed producer values without first accumulating
 /// clones in an intermediate `Vec`.
 ///
-/// The borrowed wrapper advertises the exact `Vec<T>` schema and writes each
-/// element directly. The only source-sized allocation is therefore the
+/// The borrowed sequence writes each element directly. The output frame owns
+/// the exact `Vec<T>` identity. The only source-sized allocation is therefore the
 /// admitted canonical frame, followed by the limit-checked decoded result.
 pub(crate) fn own_singular_query_values<'a, T, I>(values: I) -> Result<Vec<T>, Error>
 where
@@ -109,10 +109,7 @@ where
         return Ok(values.cloned().collect());
     };
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let borrowed = BorrowedSequence::<I, T> {
-        values,
-        marker: PhantomData,
-    };
+    let borrowed = BorrowedSequence { values };
     bounded_roundtrip::<_, Vec<T>>(&borrowed, limits)
 }
 /// Materialize a struct directly from borrowed fields in declaration order.
@@ -133,19 +130,20 @@ where
         return Ok(fallback());
     };
     let _canonical_flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let borrowed = BorrowedSingularStruct::<T, N>::new(fields);
+    let borrowed = BorrowedSingularStruct::<N>::new(fields);
     bounded_roundtrip::<_, T>(&borrowed, limits)
 }
 fn bounded_roundtrip<S, T>(source: &S, limits: SingularQueryOutputLimits) -> Result<T, Error>
 where
-    S: NoritoSerialize,
+    S: SerializePayload,
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let max_frame_bytes =
         usize::try_from(limits.max_frame_bytes).map_err(|_| Error::CapacityLimit)?;
-    let bytes = norito::core::to_bytes_bounded(source, max_frame_bytes)
-        .map_err(|_| Error::CapacityLimit)?;
+    let bytes =
+        norito::core::to_bytes_bounded(&SingularQueryFrame::<T>::new(source), max_frame_bytes)
+            .map_err(|_| Error::CapacityLimit)?;
     norito::decode_from_bytes_with_limits::<T>(
         &bytes,
         decode_limits(bytes.len(), limits.max_allocated_bytes)?,
@@ -167,7 +165,7 @@ where
 /// while the source builder remains resident.
 pub(crate) fn own_singular_query_serialized_source<S, T>(source: S) -> Result<T, Error>
 where
-    S: NoritoSerialize,
+    S: SerializePayload,
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
@@ -184,14 +182,15 @@ fn bounded_roundtrip_owned_as<S, T>(
     limits: SingularQueryOutputLimits,
 ) -> Result<T, Error>
 where
-    S: NoritoSerialize,
+    S: SerializePayload,
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     let max_frame_bytes =
         usize::try_from(limits.max_frame_bytes).map_err(|_| Error::CapacityLimit)?;
-    let bytes = norito::core::to_bytes_bounded(&source, max_frame_bytes)
-        .map_err(|_| Error::CapacityLimit)?;
+    let bytes =
+        norito::core::to_bytes_bounded(&SingularQueryFrame::<T>::new(&source), max_frame_bytes)
+            .map_err(|_| Error::CapacityLimit)?;
     // The admitted frame now owns the source's complete representation. Drop
     // the producer value before allocating its decoded replacement so the
     // final corridor owns either source D or decode D, never both.
@@ -202,9 +201,41 @@ where
     )
     .map_err(|_| Error::CapacityLimit)
 }
-struct BorrowedSequence<I, T> {
+/// Internal frame for a wire-equivalent query source. Only the owned output selects its header.
+struct SingularQueryFrame<'a, T> {
+    source: &'a dyn SerializePayload,
+    // A zero-length array preserves the output alignment without storing or constructing it.
+    _alignment: [T; 0],
+}
+impl<'a, T> SingularQueryFrame<'a, T> {
+    fn new(source: &'a dyn SerializePayload) -> Self {
+        Self {
+            source,
+            _alignment: [],
+        }
+    }
+}
+impl<T: norito::NoritoSchema> norito::NoritoSchema for SingularQueryFrame<'_, T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_core::smartcontracts::isi::query::singular_memory::SingularQueryFrame",
+            &[T::nominal_name()],
+        )
+    }
+    fn frame_name() -> String {
+        T::frame_name()
+    }
+}
+impl<T> SerializePayload for SingularQueryFrame<'_, T> {
+    fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
+        self.source.serialize(writer)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.source.encoded_len_exact()
+    }
+}
+struct BorrowedSequence<I> {
     values: I,
-    marker: PhantomData<T>,
 }
 /// Borrowed wire-equivalent of `Option<T>` for a singular projection field.
 pub(crate) struct BorrowedSingularOption<'a, T>(Option<&'a T>);
@@ -215,12 +246,7 @@ impl<'a, T> BorrowedSingularOption<'a, T> {
         Self(value)
     }
 }
-impl<T: NoritoSerialize> NoritoSerialize for BorrowedSingularOption<'_, T> {
-    fn schema_hash() -> [u8; 16] {
-        Option::<T>::schema_hash()
-    }
-}
-impl<T: NoritoSerialize> SerializePayload for BorrowedSingularOption<'_, T> {
+impl<T: SerializePayload> SerializePayload for BorrowedSingularOption<'_, T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         match self.0 {
             Some(value) => {
@@ -246,32 +272,17 @@ impl<T: NoritoSerialize> SerializePayload for BorrowedSingularOption<'_, T> {
     }
 }
 /// Borrowed wire-equivalent of a derived struct in declaration order.
-pub(crate) struct BorrowedSingularStruct<'a, T, const N: usize> {
+pub(crate) struct BorrowedSingularStruct<'a, const N: usize> {
     fields: [&'a dyn SerializePayload; N],
-    marker: PhantomData<T>,
 }
-impl<'a, T, const N: usize> BorrowedSingularStruct<'a, T, N> {
+impl<'a, const N: usize> BorrowedSingularStruct<'a, N> {
     /// Construct a borrowed derived-struct representation.
     #[must_use]
     pub(crate) const fn new(fields: [&'a dyn SerializePayload; N]) -> Self {
-        Self {
-            fields,
-            marker: PhantomData,
-        }
+        Self { fields }
     }
 }
-impl<T, const N: usize> NoritoSerialize for BorrowedSingularStruct<'_, T, N>
-where
-    T: NoritoSerialize,
-{
-    fn schema_hash() -> [u8; 16] {
-        T::schema_hash()
-    }
-}
-impl<T, const N: usize> SerializePayload for BorrowedSingularStruct<'_, T, N>
-where
-    T: NoritoSerialize,
-{
+impl<const N: usize> SerializePayload for BorrowedSingularStruct<'_, N> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -295,18 +306,9 @@ where
         })
     }
 }
-impl<'a, I, T> NoritoSerialize for BorrowedSequence<I, T>
+impl<'a, I, T> SerializePayload for BorrowedSequence<I>
 where
-    T: NoritoSerialize + 'a,
-    I: Clone + Iterator<Item = &'a T>,
-{
-    fn schema_hash() -> [u8; 16] {
-        Vec::<T>::schema_hash()
-    }
-}
-impl<'a, I, T> SerializePayload for BorrowedSequence<I, T>
-where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
     I: Clone + Iterator<Item = &'a T>,
 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -329,6 +331,7 @@ where
         })
     }
 }
+
 /// Return the currently admitted complete-frame ceiling, capped by a producer protocol maximum.
 pub(crate) fn singular_query_frame_limit(protocol_max: usize) -> usize {
     ACTIVE_LIMITS.get().map_or(protocol_max, |limits| {
@@ -949,6 +952,8 @@ mod tests {
         static ENCODE_ERROR_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
         static DECODE_ERROR_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha.core.test.singular-query.drop-before-decode")]
     struct DropBeforeDecodeProbe {
         source: bool,
         marker: u8,
@@ -961,7 +966,6 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for DropBeforeDecodeProbe {}
     impl SerializePayload for DropBeforeDecodeProbe {
         fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             SerializePayload::serialize(&self.marker, encoder)
@@ -970,7 +974,6 @@ mod tests {
             Some(1)
         }
     }
-    impl NoritoDeserialize<'_> for DropBeforeDecodeProbe {}
     impl<'de> DeserializePayload<'de> for DropBeforeDecodeProbe {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("drop-before-decode probe")
@@ -989,24 +992,26 @@ mod tests {
             })
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha.core.test.singular-query.encode-error")]
     struct EncodeErrorDropProbe;
     impl Drop for EncodeErrorDropProbe {
         fn drop(&mut self) {
             ENCODE_ERROR_SOURCE_DROPPED.set(true);
         }
     }
-    impl NoritoSerialize for EncodeErrorDropProbe {}
     impl SerializePayload for EncodeErrorDropProbe {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             Err(norito::core::Error::LengthMismatch)
         }
     }
-    impl NoritoDeserialize<'_> for EncodeErrorDropProbe {}
     impl<'de> DeserializePayload<'de> for EncodeErrorDropProbe {
         fn deserialize(_archived: &'de norito::core::Archived<Self>) -> Self {
             Self
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha.core.test.singular-query.decode-error")]
     struct DecodeErrorDropProbe {
         source: bool,
     }
@@ -1017,13 +1022,11 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for DecodeErrorDropProbe {}
     impl SerializePayload for DecodeErrorDropProbe {
         fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
             SerializePayload::serialize(&1_u8, encoder)
         }
     }
-    impl NoritoDeserialize<'_> for DecodeErrorDropProbe {}
     impl<'de> DeserializePayload<'de> for DecodeErrorDropProbe {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("decode-error probe")
@@ -1281,3 +1284,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "singular_memory_frame_tests.rs"]
+mod frame_tests;

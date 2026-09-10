@@ -436,6 +436,8 @@ pub enum ConsensusKeyStatus {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::consensus::ConsensusKeyRecord")]
 pub struct ConsensusKeyRecord {
     /// Identifier of the key (role + name).
     pub id: ConsensusKeyId,
@@ -833,7 +835,9 @@ pub struct GlobalThresholdBeaconPartialSignatureV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1")]
 pub struct GlobalThresholdBeaconKeySessionV1 {
     /// Fixed protocol version; must equal [`GLOBAL_THRESHOLD_BEACON_VERSION_V1`].
     pub version: u16,
@@ -906,7 +910,9 @@ pub struct GlobalThresholdBeaconChainAnchorV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1")]
 pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     /// Fixed protocol version; must equal [`GLOBAL_THRESHOLD_BEACON_VERSION_V1`].
     pub version: u16,
@@ -1170,6 +1176,28 @@ mod tests {
             replaces: None,
             status: ConsensusKeyStatus::Active,
         };
+
+        assert_eq!(
+            <ConsensusKeyRecord as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::consensus::ConsensusKeyRecord"
+        );
+        let response = vec![record.clone()];
+        let bytes = norito::encode_canonical(&response).expect("consensus key list frame");
+        let decoded: Vec<ConsensusKeyRecord> =
+            norito::decode_canonical(&bytes).expect("key list roundtrip");
+        assert_eq!(decoded, response);
+        let mut wrong_owner = bytes.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<Vec<ConsensusKeyRecord>>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<Vec<ConsensusKeyRecord>>(&bytes[..bytes.len() - 1]).is_err()
+        );
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<Vec<ConsensusKeyRecord>>(&trailing).is_err());
         assert!(!record.is_live_at(9, 0, 0));
         assert!(record.is_live_at(10, 0, 0));
         assert!(record.is_live_at(19, 0, 0));

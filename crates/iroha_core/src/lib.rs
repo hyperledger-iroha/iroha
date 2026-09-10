@@ -740,7 +740,7 @@ fn inbound_consensus_v2_decode_limits(
 }
 fn inbound_sumeragi_enum_field(framed: &[u8]) -> Result<(u32, &[u8], u8), norito::core::Error> {
     let view = norito::core::from_bytes_view(framed)?;
-    if view.schema() != <BlockMessage as norito::NoritoSerialize>::schema_hash() {
+    if view.schema() != norito::schema::identity::frame_hash::<BlockMessage>() {
         return Err(norito::core::Error::SchemaMismatch);
     }
     let align = norito::core::archived_payload_align::<BlockMessage>();
@@ -837,7 +837,9 @@ pub type Peers = UniqueVec<PeerId>;
 /// Type of `Sender<EventBox>` which should be used for channels of `Event` messages.
 pub type EventsSender = broadcast::Sender<EventBox>;
 /// Network message envelope exchanged between peers.
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::NetworkMessage")]
+#[norito(decode_from_slice)]
 pub enum NetworkMessage {
     /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
     #[codec(index = 0)]
@@ -905,25 +907,6 @@ impl NetworkMessage {
                 | Self::ToriiProxyResponse(_)
                 | Self::QueuePlanAdmissionPublication(_)
         )
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use std::borrow::Cow;
-        let min_size = norito::core::archived_payload_size::<Self>();
-        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-            let mut padded = Vec::with_capacity(min_size);
-            padded.extend_from_slice(bytes);
-            padded.resize(min_size, 0);
-            Cow::Owned(padded)
-        } else {
-            Cow::Borrowed(bytes)
-        };
-        let archived = norito::core::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-        let _guard = norito::core::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-        let value =
-            <Self as norito::core::DeserializePayload>::try_deserialize(archived.archived())?;
-        Ok((value, bytes.len()))
     }
 }
 // Encode/Decode are derived above for `NetworkMessage`.
@@ -1331,6 +1314,8 @@ mod event_ordering_tests;
 #[path = "../tests/execute_trigger_events.rs"]
 mod execute_trigger_events_tests;
 #[cfg(test)]
+mod frame_identity_tests;
+#[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]
 mod isi_gas_fees_tests;
 #[cfg(test)]
@@ -1338,6 +1323,8 @@ mod isi_gas_fees_tests;
 mod ivm_corehost_axt_tests;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 mod kagemusha_v1_test_fixtures;
+#[cfg(test)]
+mod network_payload_tests;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
 mod overlay_chunking_tests;
@@ -2368,7 +2355,6 @@ mod tests {
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
         #[derive(Encode)]
-        #[norito(schema_name = "iroha_core::NetworkMessage")]
         enum BoxToriiProxyCarrier {
             #[codec(index = 13)]
             Request(Box<ToriiProxyRequestV1>),
@@ -2393,8 +2379,19 @@ mod tests {
                 response_format: ToriiProxyResponseFormatV1::Json,
             }),
         };
-        let boxed = ncore::to_bytes(&BoxToriiProxyCarrier::Request(Box::new(request.clone())))
-            .expect("encode Box proxy carrier");
+        // This payload-only fixture varies ownership under the actual network frame.
+        let (boxed_payload, boxed_flags) = norito::codec::encode_with_header_flags(
+            &BoxToriiProxyCarrier::Request(Box::new(request.clone())),
+        );
+        let boxed =
+            ncore::frame_bare_with_header_flags::<NetworkMessage>(&boxed_payload, boxed_flags)
+                .expect("frame Box proxy carrier with the live owner");
+        let boxed_view = ncore::from_bytes_view(&boxed).expect("valid Box carrier frame/checksum");
+        assert_eq!(
+            boxed_view.schema(),
+            norito::schema::identity::frame_hash::<NetworkMessage>()
+        );
+        assert_eq!(boxed_view.as_bytes(), boxed_payload);
         let shared = ncore::to_bytes(&NetworkMessage::ToriiProxyRequest(Arc::new(request)))
             .expect("encode Arc proxy carrier");
         assert_eq!(

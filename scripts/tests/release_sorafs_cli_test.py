@@ -59,11 +59,14 @@ def write_inputs(tmp_path: Path) -> tuple[Path, Path, Path, str, Path]:
     )
     invocation_log = tmp_path / "native-verifier-invocations.log"
     verifier = write_executable(
-        tmp_path / "sorafs-validate",
+        tmp_path / "iroha",
         "import sys\n"
         "from pathlib import Path\n"
         f"log = Path({str(invocation_log)!r})\n"
         "args = sys.argv[1:]\n"
+        "if args[:3] != ['app', 'sorafs', 'toolkit']:\n"
+        "    raise SystemExit(4)\n"
+        "args = args[3:]\n"
         "if len(args) != 9 or args[0] != 'release-manifest':\n"
         "    raise SystemExit(4)\n"
         "options = dict(zip(args[1::2], args[2::2]))\n"
@@ -131,7 +134,7 @@ def test_release_wrapper_signs_and_verifies_with_pinned_native_validator(
     assert summary["signer_fingerprint_sha256"] == TEST_FINGERPRINT
     assert summary["signature_verified"] is True
     assert summary["native_verifier_sha256"] == hashlib.sha256(
-        (tmp_path / "sorafs-validate").read_bytes()
+        (tmp_path / "iroha").read_bytes()
     ).hexdigest()
     for output in (signature, public_key, receipt):
         assert output.stat().st_mode & 0o077 == 0

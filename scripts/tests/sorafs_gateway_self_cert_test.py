@@ -86,11 +86,14 @@ def write_release_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, str]:
     public_key.chmod(0o600)
     native_log = tmp_path / "native-verifier-invocations.log"
     verifier = write_executable(
-        tmp_path / "sorafs-validate",
+        tmp_path / "iroha",
         "import sys\n"
         "from pathlib import Path\n"
         f"log = Path({str(native_log)!r})\n"
         "args = sys.argv[1:]\n"
+        "if args[:3] != ['app', 'sorafs', 'toolkit']:\n"
+        "    raise SystemExit(4)\n"
+        "args = args[3:]\n"
         "if len(args) != 9 or args[0] != 'release-manifest':\n"
         "    raise SystemExit(4)\n"
         "options = dict(zip(args[1::2], args[2::2]))\n"

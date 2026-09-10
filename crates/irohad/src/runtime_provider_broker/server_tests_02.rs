@@ -606,7 +606,7 @@ fn moderation_transaction_signer_test_payload() -> TransactionPayload {
 fn moderation_transaction_signer_test_state(
     signer: Arc<dyn test_moderation_runtime::ModerationSignedTransactionSignerV1>,
 ) -> BrokerServerStateV1 {
-    prepare_server_state(
+    prepare_test_server_state(
         &moderation_transaction_signer_test_catalog(),
         RuntimeProviderBrokerBackendsV1::new().with_moderation_transaction_signer(signer),
     )
@@ -726,13 +726,13 @@ fn moderation_handoff_state(
         }
         _ => panic!("slot is not a moderation handoff boundary"),
     };
-    prepare_server_state(&delivery_catalog(slot), backends)
+    prepare_test_server_state(&delivery_catalog(slot), backends)
         .expect("prepare exact moderation handoff broker state")
 }
 fn moderation_panel_state(
     boundary: Arc<dyn test_moderation_runtime::ModerationDurablePanelNotificationBoundaryV1>,
 ) -> BrokerServerStateV1 {
-    prepare_server_state(
+    prepare_test_server_state(
         &delivery_catalog(IrohaRuntimeProviderSlotV1::ModerationPanelNotification),
         RuntimeProviderBrokerBackendsV1::new().with_moderation_panel_notification(boundary),
     )
@@ -1575,14 +1575,14 @@ fn request_auth_backends() -> RuntimeProviderBrokerBackendsV1 {
 fn proof_native_signer_test_state(
     signer: Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>,
 ) -> BrokerServerStateV1 {
-    prepare_server_state(
+    prepare_test_server_state(
         &signer_catalog(),
         RuntimeProviderBrokerBackendsV1::new().with_proof_outcome_transaction_signer(signer),
     )
     .expect("prepare exact proof-outcome signer broker state")
 }
 fn request_auth_server_test_state() -> BrokerServerStateV1 {
-    prepare_server_state(&request_auth_catalog(), request_auth_backends())
+    prepare_test_server_state(&request_auth_catalog(), request_auth_backends())
         .expect("prepare exact request-auth broker state")
 }
 fn canonical_request_auth_test_request(
@@ -1608,7 +1608,7 @@ fn canonical_request_auth_test_request(
 fn checkpoint_state(
     store: Arc<dyn node::GovernanceDagSealedCheckpointStore>,
 ) -> BrokerServerStateV1 {
-    prepare_server_state(
+    prepare_test_server_state(
         &checkpoint_catalog(),
         RuntimeProviderBrokerBackendsV1::new().with_governance_dag_checkpoint_store(store),
     )
@@ -1617,7 +1617,7 @@ fn checkpoint_state(
 fn moderation_state(
     key_wrapper: Arc<dyn node::ModerationQuarantineKeyWrapper>,
 ) -> BrokerServerStateV1 {
-    prepare_server_state(
+    prepare_test_server_state(
         &moderation_catalog(),
         RuntimeProviderBrokerBackendsV1::new().with_moderation_quarantine_key_wrapper(key_wrapper),
     )
@@ -1762,6 +1762,7 @@ fn singleton_state(
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> BrokerServerStateV1 {
     BrokerServerStateV1 {
+        decode_pool: new_test_process_pool(),
         chain_id: chain_id.to_owned(),
         network_id: network_id(),
         catalog: vec![binding],
@@ -2620,20 +2621,20 @@ fn start_broker(
 ) -> (
     tempfile::TempDir,
     std::path::PathBuf,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
     let directory = tempfile::tempdir().expect(diagnostics[0]);
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect(diagnostics[1]);
     let path = directory.path().join("runtime-provider-broker-v1.sock");
-    let policy = EndpointPolicy::for_test(path.clone());
+    let policy = BrokerTestEndpoint::for_test(path.clone());
     let server_policy = policy.clone();
     let shutdown = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
     let server_shutdown = Arc::clone(&shutdown);
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let server = thread::spawn(move || {
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &bindings,
             backends,
             &server_policy,
@@ -2650,7 +2651,7 @@ fn start_broker(
 fn start_test_server() -> (
     tempfile::TempDir,
     std::path::PathBuf,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
@@ -2668,7 +2669,7 @@ fn start_test_server() -> (
 }
 fn start_request_auth_test_server() -> (
     tempfile::TempDir,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
@@ -2690,7 +2691,7 @@ fn start_signer(
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> (
     tempfile::TempDir,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
@@ -2709,7 +2710,7 @@ fn start_signer(
 }
 fn start_native_signer_test_server() -> (
     tempfile::TempDir,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
@@ -2720,7 +2721,7 @@ fn start_source_test_server(
     bindings: IrohaRuntimeProviderBindingsV1,
 ) -> (
     tempfile::TempDir,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
@@ -2740,7 +2741,7 @@ fn start_source_test_server(
     (directory, policy, shutdown, server)
 }
 fn connect_test_source(
-    policy: &EndpointPolicy,
+    policy: &BrokerTestEndpoint,
     bindings: &IrohaRuntimeProviderBindingsV1,
 ) -> Arc<ProviderIngestBrokerAuthenticatedSource> {
     let requested_catalog = bindings
@@ -2748,7 +2749,7 @@ fn connect_test_source(
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project source test catalog");
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = connect_test_process(
         policy,
         bindings.chain_id(),
         *bindings.network_id(),
@@ -2768,7 +2769,7 @@ fn connect_test_source(
         .expect("source observation");
     Arc::new(ProviderIngestBrokerAuthenticatedSource {
         session,
-        endpoint: policy.clone(),
+        endpoint: EndpointPolicy::clone(policy),
         chain_id: bindings.chain_id().to_owned(),
         requested_catalog,
         binding,
@@ -2776,10 +2777,10 @@ fn connect_test_source(
         source_provider_ids: observation.provider_ingest_source_provider_ids.clone(),
     })
 }
-fn connect_test_server_session(policy: &EndpointPolicy) -> Arc<BrokerSession> {
+fn connect_test_server_session(policy: &BrokerTestEndpoint) -> Arc<BrokerSession> {
     let binding = signer_binding_for_server();
     let (session, _) =
-        BrokerSession::connect(policy, "server-test-chain", network_id(), vec![binding])
+        connect_test_process(policy, "server-test-chain", network_id(), vec![binding])
             .expect("connect authenticated broker server session");
     session
 }

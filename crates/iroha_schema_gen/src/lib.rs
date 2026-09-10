@@ -41,6 +41,8 @@ macro_rules! schema_types {
             // Block stream
             BlockMessage,
             BlockSubscriptionRequest,
+            // Durable cross-service DA spool envelope.
+            iroha_data_model::da::ingest::StoredDaReceipt,
             iroha_data_model::fastpq::TransferTranscript,
             iroha_data_model::fastpq::TransferTranscriptBundle,
             iroha_data_model::fastpq::FastpqTransitionBatch,
@@ -179,10 +181,7 @@ pub mod complete_data_model {
 #[cfg(test)]
 mod tests {
     use super::{IntoSchema, complete_data_model::*};
-    use iroha_schema::MetaMapEntry;
-    fn is_const_generic(generic: &str) -> bool {
-        generic.parse::<usize>().is_ok()
-    }
+    use iroha_schema::{MetaMap, Metadata};
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {
@@ -203,28 +202,51 @@ mod tests {
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigCancel);
         map
     }
-    // For `PhantomData` wrapped types schemas aren't expanded recursively.
-    // This test ensures that schemas for those types are present as well.
-    fn find_missing_type_params(type_names: &HashSet<String>) -> HashMap<&str, Vec<&str>> {
-        let mut missing_schemas = HashMap::<&str, _>::new();
-        for type_name in type_names {
-            let (Some(start), Some(end)) = (type_name.find('<'), type_name.rfind('>')) else {
-                continue;
+    // Stored metadata edges determine schema closure. Nominal type parameters
+    // can be phantom (HashOf<T>) or fully represented by leaf metadata (Compact<T>).
+    fn find_missing_schema_references(schemas: &MetaMap) -> BTreeMap<&str, Vec<core::any::TypeId>> {
+        let registered: HashSet<_> = schemas.iter().map(|(id, _)| *id).collect();
+        let mut missing = BTreeMap::new();
+        // Iterating registered nodes once also handles cycles without recursion.
+        for (_, entry) in schemas.iter() {
+            let references: Vec<_> = match &entry.metadata {
+                Metadata::Struct(fields) => {
+                    fields.declarations.iter().map(|field| field.ty).collect()
+                }
+                Metadata::Tuple(fields) => fields.types.clone(),
+                Metadata::Enum(variants) => variants
+                    .variants
+                    .iter()
+                    .filter_map(|variant| variant.ty)
+                    .collect(),
+                Metadata::FixedPoint(fixed) => vec![fixed.base],
+                Metadata::Array(array) => vec![array.ty],
+                Metadata::Vec(vector) => vec![vector.ty],
+                Metadata::Map(map) => vec![map.key, map.value],
+                Metadata::Option(inner) => vec![*inner],
+                Metadata::Result(result) => vec![result.ok, result.err],
+                Metadata::Bitmap(bitmap) => vec![bitmap.repr],
+                Metadata::Int(_) | Metadata::Float(_) | Metadata::String | Metadata::Bool => {
+                    Vec::new()
+                }
             };
-            assert!(start < end, "Invalid type name: {type_name}");
-            for generic in type_name.split(", ") {
-                if !is_const_generic(generic) {
-                    continue;
-                }
-                if !type_names.contains(generic) {
-                    missing_schemas
-                        .entry(type_name)
-                        .or_insert_with(Vec::new)
-                        .push(generic);
-                }
+            let absent: Vec<_> = references
+                .into_iter()
+                .filter(|id| !registered.contains(id))
+                .collect();
+            if !absent.is_empty() {
+                missing.insert(entry.type_id.as_str(), absent);
             }
         }
-        missing_schemas
+        missing
+    }
+    #[test]
+    fn stored_da_receipt_schema_includes_its_receipt_payload() {
+        use iroha_data_model::da::ingest::{DaIngestReceipt, StoredDaReceipt};
+
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<StoredDaReceipt>());
+        assert!(schemas.contains_key::<DaIngestReceipt>());
     }
     #[test]
     fn no_extra_or_missing_schemas() {
@@ -247,14 +269,201 @@ mod tests {
     }
     #[test]
     fn no_missing_referenced_types() {
-        let type_names = super::build_schemas()
-            .into_iter()
-            .map(|(_, MetaMapEntry { type_id, .. })| type_id)
-            .collect();
-        let missing_schemas = find_missing_type_params(&type_names);
+        let schemas = super::build_schemas();
+        let missing_schemas = find_missing_schema_references(&schemas);
         assert!(
             missing_schemas.is_empty(),
             "Missing schemas: \n{missing_schemas:#?}"
+        );
+    }
+    #[derive(IntoSchema)]
+    struct ClosureRoot;
+
+    #[derive(IntoSchema)]
+    struct ClosurePeer;
+
+    #[test]
+    fn metadata_closure_checks_every_stored_reference_slot() {
+        use core::any::TypeId;
+        use iroha_schema::{
+            ArrayMeta, BitmapMeta, Declaration, EnumMeta, EnumVariant, FixedMeta, MapMeta,
+            NamedFieldsMeta, ResultMeta, UnnamedFieldsMeta, VecMeta,
+        };
+        let byte = TypeId::of::<u8>();
+        let word = TypeId::of::<u16>();
+        let cases = [
+            (
+                Metadata::Struct(NamedFieldsMeta {
+                    declarations: vec![
+                        Declaration {
+                            name: "first".into(),
+                            ty: byte,
+                        },
+                        Declaration {
+                            name: "second".into(),
+                            ty: word,
+                        },
+                    ],
+                }),
+                vec![byte, word],
+            ),
+            (
+                Metadata::Tuple(UnnamedFieldsMeta {
+                    types: vec![byte, word],
+                }),
+                vec![byte, word],
+            ),
+            (
+                Metadata::Enum(EnumMeta {
+                    variants: vec![
+                        EnumVariant {
+                            tag: "First".into(),
+                            discriminant: 0,
+                            ty: Some(byte),
+                        },
+                        EnumVariant {
+                            tag: "Unit".into(),
+                            discriminant: 1,
+                            ty: None,
+                        },
+                        EnumVariant {
+                            tag: "Second".into(),
+                            discriminant: 2,
+                            ty: Some(word),
+                        },
+                    ],
+                }),
+                vec![byte, word],
+            ),
+            (
+                Metadata::FixedPoint(FixedMeta {
+                    base: byte,
+                    decimal_places: 4,
+                }),
+                vec![byte],
+            ),
+            (Metadata::Array(ArrayMeta { ty: byte, len: 32 }), vec![byte]),
+            (Metadata::Vec(VecMeta { ty: byte }), vec![byte]),
+            (
+                Metadata::Map(MapMeta {
+                    key: byte,
+                    value: word,
+                }),
+                vec![byte, word],
+            ),
+            (Metadata::Option(byte), vec![byte]),
+            (
+                Metadata::Result(ResultMeta {
+                    ok: byte,
+                    err: word,
+                }),
+                vec![byte, word],
+            ),
+            (
+                Metadata::Bitmap(BitmapMeta {
+                    repr: byte,
+                    masks: Vec::new(),
+                }),
+                vec![byte],
+            ),
+        ];
+        let owner = <ClosureRoot as iroha_schema::TypeId>::id();
+        for (metadata, expected) in cases {
+            let mut schemas = MetaMap::new();
+            schemas.insert::<ClosureRoot>(metadata);
+            let missing = find_missing_schema_references(&schemas);
+            assert_eq!(missing.len(), 1);
+            assert_eq!(missing.get(owner.as_str()), Some(&expected));
+            u8::update_schema_map(&mut schemas);
+            u16::update_schema_map(&mut schemas);
+            assert!(find_missing_schema_references(&schemas).is_empty());
+            // Each slot must be checked independently, including map values and errors.
+            for missing_id in expected {
+                let mut incomplete = schemas.clone();
+                if missing_id == byte {
+                    assert!(incomplete.remove::<u8>());
+                } else {
+                    assert_eq!(missing_id, word);
+                    assert!(incomplete.remove::<u16>());
+                }
+                let missing = find_missing_schema_references(&incomplete);
+                assert_eq!(missing.len(), 1);
+                assert_eq!(missing.get(owner.as_str()), Some(&vec![missing_id]));
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_leaves_and_unit_payloads_have_no_stored_edges() {
+        use iroha_schema::{EnumMeta, EnumVariant, FloatMode, IntMode, UnnamedFieldsMeta};
+        for metadata in [
+            Metadata::Int(IntMode::FixedWidth),
+            Metadata::Int(IntMode::Compact),
+            Metadata::Float(FloatMode::Binary32),
+            Metadata::Float(FloatMode::Binary64),
+            Metadata::String,
+            Metadata::Bool,
+            Metadata::Tuple(UnnamedFieldsMeta { types: Vec::new() }),
+            Metadata::Enum(EnumMeta {
+                variants: vec![EnumVariant {
+                    tag: "Unit".into(),
+                    discriminant: 0,
+                    ty: None,
+                }],
+            }),
+        ] {
+            let mut schemas = MetaMap::new();
+            schemas.insert::<ClosureRoot>(metadata);
+            assert!(find_missing_schema_references(&schemas).is_empty());
+        }
+        let compact = Compact::<u32>::schema();
+        assert!(!compact.contains_key::<u32>());
+        assert!(find_missing_schema_references(&compact).is_empty());
+    }
+
+    #[test]
+    fn metadata_closure_handles_cycles_and_reports_dangling_edges() {
+        use core::any::TypeId;
+        use iroha_schema::UnnamedFieldsMeta;
+        let mut schemas = MetaMap::new();
+        schemas.insert::<ClosureRoot>(Metadata::Option(TypeId::of::<ClosurePeer>()));
+        schemas.insert::<ClosurePeer>(Metadata::Tuple(UnnamedFieldsMeta {
+            types: vec![TypeId::of::<ClosureRoot>()],
+        }));
+        assert!(find_missing_schema_references(&schemas).is_empty());
+        assert!(schemas.remove::<ClosurePeer>());
+        let missing = find_missing_schema_references(&schemas);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(
+            missing.get(<ClosureRoot as iroha_schema::TypeId>::id().as_str()),
+            Some(&vec![TypeId::of::<ClosurePeer>()])
+        );
+    }
+
+    #[derive(iroha_schema::TypeId)]
+    struct PhantomReferent;
+
+    impl IntoSchema for PhantomReferent {
+        fn type_name() -> String {
+            "PhantomReferent".to_owned()
+        }
+
+        fn update_schema_map(_: &mut MetaMap) {
+            panic!("schema closure must not expand a phantom hash referent");
+        }
+    }
+
+    #[test]
+    fn metadata_closure_checks_hash_storage_without_its_phantom_referent() {
+        let mut schemas = HashOf::<PhantomReferent>::schema();
+        assert!(!schemas.contains_key::<PhantomReferent>());
+        assert!(find_missing_schema_references(&schemas).is_empty());
+        assert!(schemas.remove::<Hash>());
+        let missing = find_missing_schema_references(&schemas);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(
+            missing.get(<HashOf<PhantomReferent> as iroha_schema::TypeId>::id().as_str()),
+            Some(&vec![core::any::TypeId::of::<Hash>()])
         );
     }
     #[test]

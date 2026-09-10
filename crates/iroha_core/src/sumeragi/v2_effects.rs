@@ -3705,21 +3705,22 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
         batch: &RetainedEffectBatch,
     ) -> bool {
-        attestation.mode() == LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
-            && self
-                .pending_lifecycle_output_admissions
-                .values()
-                .next()
-                .is_some_and(|pending_output| {
-                    batch.effects.len() == 1
-                        && batch.effects.front().is_some_and(|owned| {
-                            attestation.exactly_matches_retransmit_apply(&owned.effect)
-                                && pending_output.exactly_precedes_periodic_retransmit_apply(
-                                    &owned.effect,
-                                    &owned.ownership,
-                                )
-                        })
-                })
+        // Delayed durable admission can move the output after Apply while
+        // retaining the same exact periodic Broadcast/Apply runtime pair.
+        // Authenticate the pair through its effect ownership in either mode.
+        self.pending_lifecycle_output_admissions
+            .values()
+            .next()
+            .is_some_and(|pending_output| {
+                batch.effects.len() == 1
+                    && batch.effects.front().is_some_and(|owned| {
+                        attestation.exactly_matches_retransmit_apply(&owned.effect)
+                            && pending_output.exactly_precedes_periodic_retransmit_apply(
+                                &owned.effect,
+                                &owned.ownership,
+                            )
+                    })
+            })
     }
 
     /// Return whether one typed Decision Apply can enter its terminal worker barrier.
@@ -3753,7 +3754,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                                 )
                             }),
                         LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. } => {
-                            self.retained_effect_batch.is_none()
+                            self.retained_effect_batch.as_ref().is_none_or(|batch| {
+                                self.lifecycle_decision_apply_successor_batch_is_exact(
+                                    attestation,
+                                    batch,
+                                )
+                            })
                         }
                     }
             }
@@ -3788,12 +3794,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        if matches!(
-            attestation.mode(),
-            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-        ) {
-            return Ok(false);
-        }
         let remains_exact =
             self.lifecycle_decision_apply_runtime_predecessor_remains_exact(attestation)?;
         if self.parked_effect_batch.is_some() && !remains_exact {
@@ -3816,12 +3816,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        if !matches!(
-            attestation.mode(),
-            LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
-        ) {
-            return Ok(false);
-        }
         let census_is_exact = self.lifecycle_decision_apply_successor_census_is_exact(attestation);
         let retained_is_apply = self.retained_effect_batch.as_ref().is_some_and(|batch| {
             self.lifecycle_decision_apply_successor_batch_is_exact(attestation, batch)

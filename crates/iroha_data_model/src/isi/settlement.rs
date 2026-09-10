@@ -43,6 +43,8 @@ mod model {
     #[getset(get = "pub")]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::settlement::model::SettlementId")]
     pub struct SettlementId {
         /// Logical identifier chosen by upstream trade/collateral workflows.
         pub name: Name,

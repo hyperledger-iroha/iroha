@@ -162,6 +162,17 @@ fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
     );
     let intent: RuntimeDagProducerPublishIntentV1 =
         norito::decode_from_bytes(&intent_record.payload).expect("decode digest-only intent");
+    assert_eq!(
+        assert_declared_governance_frame(
+            &intent,
+            "sorafs_node::governance::RuntimeDagProducerPublishIntentV1"
+        ),
+        intent_record.payload
+    );
+    assert_declared_governance_frame(
+        &intent.checkpoint,
+        "sorafs_node::governance::RuntimeDagProducerCheckpointV1",
+    );
     let root_guard =
         GovernanceFilesystemRootGuard::capture_writer(temp.path()).expect("retain producer root");
     let staged = load_runtime_dag_producer_staged_transaction(temp.path(), &root_guard, &intent)
@@ -174,6 +185,13 @@ fn runtime_dag_producer_intent_is_digest_only_and_stage_tamper_fails_closed() {
         .expect("open typed staging store");
     let (mut state, snapshot) =
         load_runtime_dag_staging_state_v1(&staging_store).expect("load typed staging state");
+    assert_eq!(
+        assert_declared_governance_frame(
+            &state,
+            "sorafs_node::governance::RuntimeDagProducerStagingStateV1"
+        ),
+        snapshot.payload()
+    );
     state
         .staged
         .as_mut()
@@ -932,6 +950,32 @@ fn runtime_dag_transition_archive_and_persistence_ignore_caller_layout() {
         summary.archive_digest,
     );
     let transition = &archive.body.transitions[0];
+    assert_declared_governance_frame(
+        &transition.body,
+        "sorafs_node::governance::RuntimeDagQualificationTransitionBodyV1",
+    );
+    assert_declared_governance_frame(
+        transition,
+        "sorafs_node::governance::RuntimeDagQualificationTransitionV1",
+    );
+    assert_declared_governance_frame(
+        &archive.body,
+        "sorafs_node::governance::RuntimeDagQualificationArchiveBodyV1",
+    );
+    assert_declared_governance_frame(
+        &archive,
+        "sorafs_node::governance::RuntimeDagQualificationArchiveV1",
+    );
+    let signing_material = RuntimeDagKeyTransitionSigningPayloadV1 {
+        version: GOVERNANCE_RUNTIME_DAG_KEY_TRANSITION_VERSION_V1,
+        outgoing_segment_revision: transition.body.generation,
+        incoming_segment_revision: transition.body.generation + 1,
+        transition_body_digest: runtime_dag_transition_body_digest(&transition.body).unwrap(),
+    };
+    assert_declared_governance_frame(
+        &signing_material,
+        "sorafs_node::governance::RuntimeDagKeyTransitionSigningPayloadV1",
+    );
     let hash_frame = |domain: &[u8], bytes: &[u8]| {
         let mut hash = blake3::Hasher::new();
         hash.update(domain);
@@ -972,6 +1016,13 @@ fn runtime_dag_transition_archive_and_persistence_ignore_caller_layout() {
         load_runtime_dag_qualification_state_v1(&qualification_store).unwrap();
     let state_bytes = norito::encode_canonical(&state).unwrap();
     assert_eq!(snapshot.payload(), state_bytes);
+    assert_eq!(
+        assert_declared_governance_frame(
+            &state,
+            "sorafs_node::governance::RuntimeDagQualificationStateV1"
+        ),
+        state_bytes
+    );
     let mut alternate_frames = 0;
     for flags in governance_caller_layouts() {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
@@ -1129,6 +1180,13 @@ fn runtime_dag_audit_rejects_substituted_generated_at_in_committed_state() {
         .expect("open committed runtime DAG state");
     let (mut committed, snapshot) =
         load_runtime_dag_committed_state_v1(&store).expect("load committed runtime DAG state");
+    assert_eq!(
+        assert_declared_governance_frame(
+            &committed,
+            "sorafs_node::governance::RuntimeDagCommittedStateV1"
+        ),
+        snapshot.payload()
+    );
     let mut index = runtime_index(temp.path());
     let head_generated_at = index
         .get("head_generated_at")

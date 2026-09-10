@@ -19740,7 +19740,8 @@ struct AppealFinanceDepositExpectation {
 }
 const APPEAL_FINANCE_SETTLEMENT_OUTBOX_CONTEXT_VERSION_V1: u8 = 1;
 const APPEAL_FINANCE_DEPOSIT_OUTBOX_CONTEXT_VERSION_V1: u8 = 1;
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceSettlementOutboxContextV1")]
 struct AppealFinanceSettlementOutboxContextV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -19784,7 +19785,8 @@ impl AppealFinanceSettlementSnapshotV1 {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceDepositOutboxContextV1")]
 struct AppealFinanceDepositOutboxContextV1 {
     version: u8,
     policy_digest: [u8; 32],

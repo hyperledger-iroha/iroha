@@ -6,6 +6,50 @@ struct RetiredModerationArchiveQualifyRequestWireV1 {
     chain_id: String,
 }
 #[test]
+fn moderation_provider_slots_match_current_signature_domains_and_inverse() {
+    use sorafs_node::moderation_orchestrator::{
+        MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_SLOT_V1 as ARCHIVE_SLOT,
+        MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1 as ATTESTOR_SLOT,
+    };
+    assert_eq!(ARCHIVE_SLOT, 54);
+    assert_eq!(ATTESTOR_SLOT, 51);
+    for (wire_id, role) in [
+        (
+            ARCHIVE_SLOT,
+            IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
+        ),
+        (
+            ATTESTOR_SLOT,
+            IrohaRuntimeProviderSlotV1::ModerationCheckpointStore,
+        ),
+    ] {
+        assert_eq!(role.wire_id(), wire_id);
+        assert_eq!(
+            IrohaRuntimeProviderSlotV1::from_wire_id(wire_id),
+            Some(role)
+        );
+    }
+    let network = server_test_network_id();
+    assert_eq!(
+        validate_moderation_panel_notification_archive_wire_scope(
+            MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+            IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id(),
+            &network,
+            &network,
+        ),
+        Err(BrokerError::BindingMismatch),
+    );
+    assert_eq!(
+        validate_moderation_panel_notification_source_attest_wire_scope(
+            MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+            IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id(),
+            &network,
+            &network,
+        ),
+        Err(BrokerError::BindingMismatch),
+    );
+}
+#[test]
 fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() {
     let checkpoint = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore);
     let statement =
@@ -72,6 +116,36 @@ fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() 
         ),
         Err(BrokerError::BindingMismatch)
     );
+    let mut wrong_attestor = statement.clone();
+    wrong_attestor.attestor_slot =
+        IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
+    let wrong_attestor_payload = encode_canonical(
+        &ModerationPanelNotificationSourceAttestRequestWireV1 {
+            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+            slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
+            network_id: server_test_network_id(),
+            statement: wrong_attestor,
+        },
+        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+    )
+    .expect("encode wrong-role source statement");
+    let wrong_attestor_request = make_operation_request(
+        TEST_SESSION_ID,
+        100,
+        checkpoint.clone(),
+        observation(&checkpoint).metadata_digest,
+        OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+        wrong_attestor_payload,
+    )
+    .expect("seal intentionally wrong-role source statement");
+    assert_eq!(
+        validate_operation_request_for_session(
+            &wrong_attestor_request,
+            "server-test-chain",
+            &server_test_network_id(),
+        ),
+        Err(BrokerError::Rejected),
+    );
     let mut substituted = statement;
     substituted.terminal_set_digest = [0; 32];
     let substituted_payload = encode_canonical(
@@ -104,8 +178,45 @@ fn moderation_source_attestation_pre_dispatch_is_exact_network_and_slot_bound() 
 }
 #[test]
 fn moderation_archive_rejects_same_label_foreign_genesis_and_retired_chain_wire() {
+    fn frame_payload<T: norito::SerializePayload>(value: &T) -> ScrubbedBytes {
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        let payload = ScrubbedBytes::new(payload);
+        ScrubbedBytes::new(
+            norito::core::frame_bare_with_header_flags::<
+                ModerationPanelNotificationArchiveQualifyRequestWireV1,
+            >(&payload, flags)
+            .expect("frame archive qualification under current owner"),
+        )
+    }
     let archive =
         evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive);
+    let current = ModerationPanelNotificationArchiveQualifyRequestWireV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id(),
+        network_id: server_test_network_id(),
+    };
+    let current_payload = frame_payload(&current);
+    assert!(
+        decode_canonical::<ModerationPanelNotificationArchiveQualifyRequestWireV1>(
+            &current_payload,
+            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+        )
+        .is_ok()
+    );
+    let current_request = validated_test_operation(
+        archive.clone(),
+        OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
+        current_payload.to_vec(),
+    );
+    assert_eq!(
+        validate_operation_request_for_session(
+            &current_request,
+            "server-test-chain",
+            &server_test_network_id(),
+        ),
+        Ok(()),
+    );
     let foreign_network = test_network_id(0x16);
     let payload = encode_canonical(
         &ModerationPanelNotificationArchiveQualifyRequestWireV1 {
@@ -116,11 +227,15 @@ fn moderation_archive_rejects_same_label_foreign_genesis_and_retired_chain_wire(
         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
     )
     .expect("encode foreign-network qualification");
-    let request = validated_test_operation(
-        archive,
+    let request = make_operation_request(
+        TEST_SESSION_ID,
+        98,
+        archive.clone(),
+        observation(&archive).metadata_digest,
         OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
         payload,
-    );
+    )
+    .expect("seal deliberately foreign-network qualification without validating it");
     assert_eq!(
         validate_operation_request_for_session(
             &request,
@@ -130,15 +245,15 @@ fn moderation_archive_rejects_same_label_foreign_genesis_and_retired_chain_wire(
         Err(BrokerError::BindingMismatch),
         "an identical display label must not admit a different genesis"
     );
-    let legacy = encode_canonical(
-        &RetiredModerationArchiveQualifyRequestWireV1 {
-            version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
-            slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id(),
-            chain_id: "server-test-chain".to_owned(),
-        },
-        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-    )
-    .expect("encode retired label-based qualification");
+    let legacy = frame_payload(&RetiredModerationArchiveQualifyRequestWireV1 {
+        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
+        slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive.wire_id(),
+        chain_id: "server-test-chain".to_owned(),
+    });
+    let error =
+        norito::decode_canonical::<ModerationPanelNotificationArchiveQualifyRequestWireV1>(&legacy)
+            .expect_err("retired chain label must fail under the current network-bound owner");
+    assert!(!matches!(error, norito::Error::SchemaMismatch));
     assert!(
         decode_canonical::<ModerationPanelNotificationArchiveQualifyRequestWireV1>(
             &legacy,

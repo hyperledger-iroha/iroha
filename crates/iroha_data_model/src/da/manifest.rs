@@ -146,6 +146,8 @@ impl ChunkCommitment {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::manifest::DaManifestV1")]
 pub struct DaManifestV1 {
     /// Manifest format version. Currently always 1.
     pub version: u16,

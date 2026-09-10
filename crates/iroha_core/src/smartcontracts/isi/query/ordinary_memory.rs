@@ -16,7 +16,7 @@ use iroha_data_model::{
     state_path::StatePath,
 };
 use mv::storage::StorageReadOnly as _;
-use norito::core::{DecodeFlagsGuard, NoritoSerialize};
+use norito::core::{DecodeFlagsGuard, SerializePayload};
 use std::{
     fmt,
     str::FromStr,
@@ -993,7 +993,7 @@ pub(super) fn preflight_server_singular_source_materialization(
     budget: QueryExecutionBudget,
     singular_output_lane_active: bool,
 ) -> Result<u64, Error> {
-    fn charge<T: NoritoSerialize>(value: &T, remaining: &mut u64) -> Result<(), Error> {
+    fn charge<T: SerializePayload>(value: &T, remaining: &mut u64) -> Result<(), Error> {
         let resident_frame_limit =
             super::singular_query_frame_limit(usize::try_from(*remaining).unwrap_or(usize::MAX));
         let resident_frame_limit = u64::try_from(resident_frame_limit).unwrap_or(u64::MAX);

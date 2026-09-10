@@ -154,6 +154,7 @@ pub(in crate::sumeragi) enum LifecycleDecisionApplySuccessorOutputModeV1 {
     /// Broadcast and Apply are the two effects of one retained periodic batch.
     SameBatchSuffix,
     /// Broadcast predates Apply in the runtime but was admitted after it.
+    /// Its exact paired periodic Apply suffix may still be retained by the executor.
     DelayedAdmissionPeriodicRetransmit { runtime_ordinal: u128 },
 }
 

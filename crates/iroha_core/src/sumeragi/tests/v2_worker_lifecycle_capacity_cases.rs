@@ -731,6 +731,22 @@ impl LifecyclePlannerIoFixture {
         commitment: wire::ExecutionCommitment,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> usize {
+        self.execute_held_lifecycle_validate_result_fixture(
+            Ok::<_, String>(commitment),
+            output_guard,
+        )
+    }
+
+    /// Execute the real held worker with one controlled semantic validation result.
+    /// Missing-sidecar tests retain the actual body, dispatch key and guarded completion.
+    pub(in crate::sumeragi) fn execute_held_lifecycle_validate_result_fixture<
+        E: super::super::v2_body_store::BodyValidationError,
+    >(
+        &mut self,
+        validation: Result<wire::ExecutionCommitment, E>,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> usize {
+        let mut validation = Some(validation);
         let task = self
             .held_validate
             .take()
@@ -742,7 +758,9 @@ impl LifecyclePlannerIoFixture {
             .dispatch
             .execute(&mut self.body_store, |_| {
                 callbacks = callbacks.saturating_add(1);
-                Ok::<_, String>(commitment)
+                validation
+                    .take()
+                    .expect("the real validator is called exactly once")
             })
             .unwrap_or_else(|(error, _)| panic!("execute held lifecycle Validate: {error}"));
         self.command_rx

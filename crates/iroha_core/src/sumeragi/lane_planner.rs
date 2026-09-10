@@ -2221,7 +2221,10 @@ impl AutonomousLaneReservationSlotPlanError {
     }
 }
 
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::lane_planner::AutonomousLaneReservationSlotIdentityV1"
+)]
 struct AutonomousLaneReservationSlotIdentityV1 {
     identity_version: u16,
     network_id: iroha_data_model::NetworkId,
@@ -2240,7 +2243,10 @@ struct AutonomousLaneReservationSlotIdentityV1 {
     min_quorum: u32,
     qc_mode_tag: String,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::lane_planner::AutonomousLaneReservationOwnerIdentityV1"
+)]
 struct AutonomousLaneReservationOwnerIdentityV1 {
     identity_version: u16,
     proposal_identity_hash: Hash,

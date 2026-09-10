@@ -8,11 +8,14 @@ use http_body_util::BodyExt as _;
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii::utils::response_format_tests::DummyPayload")]
 struct DummyPayload {
     value: u32,
 }
-#[derive(norito::derive::NoritoSerialize)]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::utils::response_format_tests::LegacyJsonSerializerMustNotRun")]
 struct LegacyJsonSerializerMustNotRun;
 impl norito::json::JsonSerialize for LegacyJsonSerializerMustNotRun {
     fn json_serialize(&self, _out: &mut String) {
@@ -22,6 +25,10 @@ impl norito::json::JsonSerialize for LegacyJsonSerializerMustNotRun {
 #[tokio::test]
 async fn respond_with_format_produces_norito_bytes() {
     let payload = DummyPayload { value: 42 };
+    let expected_frame = crate::frame_test_support::assert_current_frame(
+        &payload,
+        "iroha_torii::utils::response_format_tests::DummyPayload",
+    );
     let (parts, body) = respond_with_format(payload.clone(), ResponseFormat::Norito).into_parts();
     assert_eq!(
         parts.headers.get(CONTENT_TYPE),
@@ -32,6 +39,7 @@ async fn respond_with_format_produces_norito_bytes() {
         .await
         .expect("collect Norito body")
         .to_bytes();
+    assert_eq!(bytes.as_ref(), expected_frame.as_slice());
     let decoded: DummyPayload = norito::decode_from_bytes(&bytes).expect("decode Norito body");
     assert_eq!(decoded, payload);
 }

@@ -1406,7 +1406,10 @@ fn sample_privacy_share_dto(app: &SharedAppState) -> RecordSoranetPrivacyShareDt
 fn privacy_event_dto_native_norito_roundtrip() {
     let mut expected = sample_privacy_event_dto();
     expected.source = Some("relay-a".to_owned());
-    let encoded = norito::to_bytes(&expected).expect("encode privacy event request as Norito");
+    let encoded = crate::frame_test_support::assert_current_frame(
+        &expected,
+        "iroha_torii::routing::RecordSoranetPrivacyEventDto",
+    );
     let decoded: RecordSoranetPrivacyEventDto =
         norito::decode_from_bytes(&encoded).expect("decode privacy event request from Norito");
     assert_eq!(decoded.event, expected.event);
@@ -1418,7 +1421,10 @@ fn privacy_share_dto_native_norito_roundtrip() {
     let app = mk_app_state_for_tests();
     let mut expected = sample_privacy_share_dto(&app);
     expected.forwarded_by = Some("collector-a".to_owned());
-    let encoded = norito::to_bytes(&expected).expect("encode privacy share request as Norito");
+    let encoded = crate::frame_test_support::assert_current_frame(
+        &expected,
+        "iroha_torii::routing::RecordSoranetPrivacyShareDto",
+    );
     let decoded: RecordSoranetPrivacyShareDto =
         norito::decode_from_bytes(&encoded).expect("decode privacy share request from Norito");
     assert_eq!(decoded.share, expected.share);
@@ -1973,9 +1979,11 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     );
     assert_eq!(caps.signed_transaction_schema_hash_hex.len(), 32);
     assert_eq!(
-            caps.signed_transaction_schema_hash_hex,
-            hex::encode(<iroha_data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
-        );
+        caps.signed_transaction_schema_hash_hex,
+        hex::encode(norito::schema::identity::frame_hash::<
+            iroha_data_model::transaction::SignedTransaction,
+        >())
+    );
     assert!(caps.crypto.sm.acceleration.scalar);
     assert!(caps.query.aggregate.v1);
     assert!(caps.query.aggregate.exact_results);
@@ -2107,6 +2115,11 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
+    let canonical = crate::frame_test_support::assert_current_frame(
+        &checkpoint,
+        "iroha_torii::runtime::NodeProjectionCheckpointResponse",
+    );
+    assert_eq!(canonical.as_slice(), body.as_ref());
     assert_eq!(checkpoint.indexed_height, 55);
     assert_eq!(
         checkpoint.indexed_block_hash_hex,
@@ -2143,6 +2156,11 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     let body = torii_body_bytes(response, "body").await;
     let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
+    let canonical = crate::frame_test_support::assert_current_frame(
+        &catalog,
+        "iroha_torii::runtime::NodeProjectionShardCatalogResponse",
+    );
+    assert_eq!(canonical.as_slice(), body.as_ref());
     assert_eq!(catalog.resource, "accounts");
     assert_eq!(catalog.limit, 32);
     assert_eq!(catalog.offset, 0);

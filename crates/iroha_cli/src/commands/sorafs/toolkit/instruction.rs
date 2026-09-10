@@ -1,3 +1,9 @@
+//! Offline SoraFS instruction preparation for `iroha ledger transaction stdin`.
+//!
+//! Typed command options feed the canonical instruction builders. This capability
+//! writes one instruction array without client configuration, signing, network
+//! access or transaction submission.
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_data_model::{
     account::AccountId,
@@ -23,62 +29,118 @@ use norito::{
     to_bytes,
 };
 use sorafs_manifest::capacity::{CapacityDeclarationV1, ReplicationOrderV1};
-use std::{env, fs, process, str::FromStr};
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        process::exit(1);
-    }
-}
-fn run() -> Result<(), String> {
-    let mut args = env::args().skip(1);
-    let Some(command) = args.next() else {
-        return Err(usage());
-    };
-    match command.as_str() {
-        "capacity-declaration" => run_capacity_declaration(args),
-        "replication-order" => run_replication_order(args),
-        "complete-order" => run_complete_order(args),
-        "expire-order" => run_expire_order(args),
-        "help" | "--help" | "-h" => {
-            println!("{}", usage());
-            Ok(())
-        }
-        other => Err(format!("unknown subcommand `{other}`\n\n{}", usage())),
-    }
-}
-fn usage() -> String {
-    r#"usage: sorafs_tx_stdin_builder <subcommand> [options]
+use std::{
+    fs,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    str::FromStr,
+};
 
-Subcommands:
-  capacity-declaration  Convert a canonical declaration summary into `iroha ledger transaction stdin` JSON.
-  replication-order     Convert a canonical replication-order summary into `iroha ledger transaction stdin` JSON.
-  complete-order                Emit a completion instruction for an existing replication order.
-  expire-order                  Emit a deadline-bound expiration instruction for a pending replication order.
-
-Options:
-  capacity-declaration --summary=<path>
-  replication-order --summary=<path> [--musubi-archive-id-hex=<64-lowercase-hex>]
-  complete-order --order-id-hex=<64-hex> --provider-id-hex=<64-hex> --completion-epoch=<positive-u64> \
---expected-owner=<account-id> --assignment-revision=<positive-u64> \
---signer-policy-id-hex=<64-hex> --signer-policy-revision=<positive-u64> \
---signer-policy-predecessor-digest-hex=<64-hex; required after revision 1> \
---signer-policy-digest-hex=<64-hex> --finalized-height=<positive-u64> \
---finalized-block-hash-hex=<64-hex>
-  expire-order --order-id-hex=<64-hex> --expiration-epoch=<positive-u64>
-"#
-    .to_owned()
+/// Prepare one canonical SoraFS instruction as transaction-stdin JSON.
+#[derive(Debug, clap::Subcommand)]
+pub enum Command {
+    /// Convert a canonical capacity-declaration summary into an instruction.
+    CapacityDeclaration(CapacityDeclarationArgs),
+    /// Convert a canonical replication-order summary into an instruction.
+    ReplicationOrder(ReplicationOrderArgs),
+    /// Bind a completion to its authority, assignment and finalized anchor.
+    CompleteOrder(CompleteOrderArgs),
+    /// Expire a pending replication order at an explicit epoch.
+    ExpireOrder(ExpireOrderArgs),
 }
-fn run_capacity_declaration(args: impl Iterator<Item = String>) -> Result<(), String> {
-    let mut summary_path = None;
-    for arg in args {
-        let (key, value) = split_option(&arg)?;
-        match key {
-            "--summary" => set_once(&mut summary_path, value.to_owned(), key)?,
-            _ => return Err(format!("unknown option `{key}`")),
+
+/// A canonical capacity declaration and its registration metadata.
+#[derive(Debug, clap::Args)]
+pub struct CapacityDeclarationArgs {
+    /// JSON summary containing declaration_b64 and registered_epoch.
+    #[arg(long, value_name = "PATH")]
+    summary: PathBuf,
+}
+
+/// A canonical replication order and optional Musubi archive binding.
+#[derive(Debug, clap::Args)]
+pub struct ReplicationOrderArgs {
+    /// JSON summary containing replication_order_b64.
+    #[arg(long, value_name = "PATH")]
+    summary: PathBuf,
+    /// Nonzero archive ID in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    musubi_archive_id_hex: Option<[u8; 32]>,
+}
+
+/// The complete authority and finalized context for a replication completion.
+#[derive(Debug, clap::Args)]
+pub struct CompleteOrderArgs {
+    /// Nonzero order ID in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    order_id_hex: [u8; 32],
+    /// Nonzero provider ID in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    provider_id_hex: [u8; 32],
+    /// Completion epoch as a positive canonical unsigned decimal integer.
+    #[arg(long, value_parser = parse_positive_u64)]
+    completion_epoch: NonZeroU64,
+    /// Exact canonical I105 account ID of the expected owner.
+    #[arg(long, value_name = "ACCOUNT_ID", value_parser = parse_canonical_owner)]
+    expected_owner: AccountId,
+    /// Positive canonical assignment revision.
+    #[arg(long, value_parser = parse_positive_u64)]
+    assignment_revision: NonZeroU64,
+    /// Nonzero signer policy ID in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    signer_policy_id_hex: [u8; 32],
+    /// Positive canonical signer policy revision.
+    #[arg(long, value_parser = parse_positive_u64)]
+    signer_policy_revision: NonZeroU64,
+    /// Nonzero predecessor digest; required after revision 1 and forbidden at 1.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    signer_policy_predecessor_digest_hex: Option<[u8; 32]>,
+    /// Nonzero signer policy digest in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    signer_policy_digest_hex: [u8; 32],
+    /// Positive canonical finalized block height.
+    #[arg(long, value_parser = parse_positive_u64)]
+    finalized_height: NonZeroU64,
+    /// Nonzero finalized block hash in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    finalized_block_hash_hex: [u8; 32],
+}
+
+/// A pending replication order and its explicit expiration epoch.
+#[derive(Debug, clap::Args)]
+pub struct ExpireOrderArgs {
+    /// Nonzero order ID in exactly 64 lowercase hex characters.
+    #[arg(long, value_name = "HEX", value_parser = parse_nonzero_digest)]
+    order_id_hex: [u8; 32],
+    /// Expiration epoch as a positive canonical unsigned decimal integer.
+    #[arg(long, value_parser = parse_positive_u64)]
+    expiration_epoch: NonZeroU64,
+}
+
+impl Command {
+    /// Run local instruction preparation, preserving clean stdout and status.
+    pub(super) fn run(self) -> ExitCode {
+        let result = match self {
+            Self::CapacityDeclaration(args) => run_capacity_declaration(args),
+            Self::ReplicationOrder(args) => run_replication_order(args),
+            Self::CompleteOrder(args) => {
+                complete_order_instruction(args).and_then(print_instruction_json)
+            }
+            Self::ExpireOrder(args) => print_instruction_json(expire_order_instruction(args)),
+        };
+        match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::from(1)
+            }
         }
     }
-    let summary = read_json_map(summary_path.as_deref(), "declaration summary")?;
+}
+
+fn run_capacity_declaration(args: CapacityDeclarationArgs) -> Result<(), String> {
+    let summary = read_json_map(&args.summary, "declaration summary")?;
     for redundant in ["valid_from_epoch", "valid_until_epoch"] {
         if summary.contains_key(redundant) {
             return Err(format!(
@@ -111,22 +173,9 @@ fn run_capacity_declaration(args: impl Iterator<Item = String>) -> Result<(), St
         record,
     )))
 }
-fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), String> {
-    let mut summary_path = None;
-    let mut musubi_archive = None;
-    for arg in args {
-        let (key, value) = split_option(&arg)?;
-        match key {
-            "--summary" => set_once(&mut summary_path, value.to_owned(), key)?,
-            "--musubi-archive-id-hex" => set_once(
-                &mut musubi_archive,
-                ArchiveId::new(parse_hex_32(value, "musubi_archive_id_hex")?),
-                key,
-            )?,
-            _ => return Err(format!("unknown option `{key}`")),
-        }
-    }
-    let summary = read_json_map(summary_path.as_deref(), "replication order summary")?;
+fn run_replication_order(args: ReplicationOrderArgs) -> Result<(), String> {
+    let musubi_archive = args.musubi_archive_id_hex.map(ArchiveId::new);
+    let summary = read_json_map(&args.summary, "replication order summary")?;
     let order_b64 = require_string(&summary, "replication_order_b64")?;
     let order_bytes = BASE64_STD
         .decode(order_b64.as_bytes())
@@ -155,91 +204,13 @@ fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), Strin
     };
     print_instruction_json(InstructionBox::from(instruction))
 }
-fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> {
-    print_instruction_json(complete_order_instruction(args)?)
-}
-fn complete_order_instruction(
-    args: impl Iterator<Item = String>,
-) -> Result<InstructionBox, String> {
-    let mut order_id_hex = None;
-    let mut provider_id_hex = None;
-    let mut completion_epoch = None;
-    let mut expected_owner = None;
-    let mut assignment_revision = None;
-    let mut signer_policy_id_hex = None;
-    let mut signer_policy_revision = None;
-    let mut signer_policy_predecessor_digest_hex = None;
-    let mut signer_policy_digest_hex = None;
-    let mut finalized_height = None;
-    let mut finalized_block_hash_hex = None;
-    for arg in args {
-        let (key, value) = split_option(&arg)?;
-        match key {
-            "--order-id-hex" => set_once(&mut order_id_hex, value.to_owned(), key)?,
-            "--provider-id-hex" => set_once(&mut provider_id_hex, value.to_owned(), key)?,
-            "--completion-epoch" => set_once(&mut completion_epoch, parse_u64(value, key)?, key)?,
-            "--expected-owner" => {
-                let parsed = AccountId::parse_encoded(value)
-                    .map_err(|error| format!("invalid `--expected-owner` account ID: {error}"))?;
-                if parsed.to_string() != value {
-                    return Err(
-                        "`--expected-owner` must be an exact canonical I105 account ID".to_owned(),
-                    );
-                }
-                let owner = parsed;
-                set_once(&mut expected_owner, owner, key)?;
-            }
-            "--assignment-revision" => {
-                set_once(&mut assignment_revision, parse_u64(value, key)?, key)?;
-            }
-            "--signer-policy-id-hex" => {
-                set_once(&mut signer_policy_id_hex, value.to_owned(), key)?;
-            }
-            "--signer-policy-revision" => {
-                set_once(&mut signer_policy_revision, parse_u64(value, key)?, key)?;
-            }
-            "--signer-policy-predecessor-digest-hex" => {
-                set_once(
-                    &mut signer_policy_predecessor_digest_hex,
-                    value.to_owned(),
-                    key,
-                )?;
-            }
-            "--signer-policy-digest-hex" => {
-                set_once(&mut signer_policy_digest_hex, value.to_owned(), key)?;
-            }
-            "--finalized-height" => {
-                set_once(&mut finalized_height, parse_u64(value, key)?, key)?;
-            }
-            "--finalized-block-hash-hex" => {
-                set_once(&mut finalized_block_hash_hex, value.to_owned(), key)?;
-            }
-            _ => return Err(format!("unknown option `{key}`")),
-        }
-    }
-    let order_id_hex = order_id_hex.ok_or_else(|| "missing `--order-id-hex=<hex>`".to_owned())?;
-    let order_id = parse_hex_32(&order_id_hex, "order_id_hex")?;
-    let provider_id_hex =
-        provider_id_hex.ok_or_else(|| "missing `--provider-id-hex=<hex>`".to_owned())?;
-    let provider_id = parse_hex_32(&provider_id_hex, "provider_id_hex")?;
-    let completion_epoch = require_positive(completion_epoch, "--completion-epoch")?;
-    let expected_owner =
-        expected_owner.ok_or_else(|| "missing `--expected-owner=<account-id>`".to_owned())?;
-    let assignment_revision = require_positive(assignment_revision, "--assignment-revision")?;
-    let signer_policy_id_hex = signer_policy_id_hex
-        .ok_or_else(|| "missing `--signer-policy-id-hex=<64-hex>`".to_owned())?;
-    let signer_policy_revision =
-        require_positive(signer_policy_revision, "--signer-policy-revision")?;
-    let signer_policy_digest_hex = signer_policy_digest_hex
-        .ok_or_else(|| "missing `--signer-policy-digest-hex=<64-hex>`".to_owned())?;
-    let finalized_height = require_positive(finalized_height, "--finalized-height")?;
-    let finalized_block_hash_hex = finalized_block_hash_hex
-        .ok_or_else(|| "missing `--finalized-block-hash-hex=<64-hex>`".to_owned())?;
+fn complete_order_instruction(args: CompleteOrderArgs) -> Result<InstructionBox, String> {
+    let signer_policy_revision = args.signer_policy_revision.get();
     let signer_policy = ProviderIngestCompletionSignerPolicyV1 {
-        policy_id: parse_hex_32(&signer_policy_id_hex, "signer_policy_id_hex")?,
+        policy_id: args.signer_policy_id_hex,
         revision: signer_policy_revision,
         predecessor_digest: if signer_policy_revision == 1 {
-            if signer_policy_predecessor_digest_hex.is_some() {
+            if args.signer_policy_predecessor_digest_hex.is_some() {
                 return Err(
                     "`--signer-policy-predecessor-digest-hex` is forbidden at revision 1"
                         .to_owned(),
@@ -247,79 +218,60 @@ fn complete_order_instruction(
             }
             None
         } else {
-            let predecessor_hex = signer_policy_predecessor_digest_hex.ok_or_else(|| {
+            Some(args.signer_policy_predecessor_digest_hex.ok_or_else(|| {
                 "missing `--signer-policy-predecessor-digest-hex=<64-hex>`".to_owned()
-            })?;
-            Some(parse_hex_32(
-                &predecessor_hex,
-                "signer_policy_predecessor_digest_hex",
-            )?)
+            })?)
         },
-        policy_digest: parse_hex_32(&signer_policy_digest_hex, "signer_policy_digest_hex")?,
+        policy_digest: args.signer_policy_digest_hex,
     };
     let expected_authority =
-        ProviderIngestCompletionAuthorityV1::new(expected_owner, signer_policy);
+        ProviderIngestCompletionAuthorityV1::new(args.expected_owner, signer_policy);
     let finalized_anchor = ProviderIngestFinalizedAnchorV1 {
-        height: finalized_height,
-        block_hash: parse_hex_32(&finalized_block_hash_hex, "finalized_block_hash_hex")?,
+        height: args.finalized_height.get(),
+        block_hash: args.finalized_block_hash_hex,
     };
     if !expected_authority.is_valid() || !finalized_anchor.is_valid() {
         return Err("completion authority and finalized anchor must be canonical".to_owned());
     }
     Ok(InstructionBox::from(CompleteReplicationOrder::new(
-        ReplicationOrderId::new(order_id),
-        ProviderId::new(provider_id),
-        completion_epoch,
+        ReplicationOrderId::new(args.order_id_hex),
+        ProviderId::new(args.provider_id_hex),
+        args.completion_epoch.get(),
         expected_authority,
-        assignment_revision,
+        args.assignment_revision.get(),
         finalized_anchor,
     )))
 }
-fn run_expire_order(args: impl Iterator<Item = String>) -> Result<(), String> {
-    print_instruction_json(expire_order_instruction(args)?)
+
+fn expire_order_instruction(args: ExpireOrderArgs) -> InstructionBox {
+    InstructionBox::from(ExpireReplicationOrder::new(
+        ReplicationOrderId::new(args.order_id_hex),
+        args.expiration_epoch.get(),
+    ))
 }
-fn expire_order_instruction(args: impl Iterator<Item = String>) -> Result<InstructionBox, String> {
-    let mut order_id_hex = None;
-    let mut expiration_epoch = None;
-    for arg in args {
-        let (key, value) = split_option(&arg)?;
-        match key {
-            "--order-id-hex" => set_once(&mut order_id_hex, value.to_owned(), key)?,
-            "--expiration-epoch" => {
-                let epoch = parse_u64(value, key)?;
-                if epoch == 0 {
-                    return Err("`--expiration-epoch` must be greater than zero".to_owned());
-                }
-                set_once(&mut expiration_epoch, epoch, key)?;
-            }
-            _ => return Err(format!("unknown option `{key}`")),
-        }
+
+fn parse_nonzero_digest(value: &str) -> Result<[u8; 32], String> {
+    parse_hex_32(value, "hex value")
+}
+
+fn parse_positive_u64(value: &str) -> Result<NonZeroU64, String> {
+    NonZeroU64::new(parse_u64(value, "value")?)
+        .ok_or_else(|| "value must be greater than zero".to_owned())
+}
+
+fn parse_canonical_owner(value: &str) -> Result<AccountId, String> {
+    let parsed = AccountId::parse_encoded(value)
+        .map_err(|error| format!("invalid `--expected-owner` account ID: {error}"))?;
+    if parsed.to_string() != value {
+        return Err("`--expected-owner` must be an exact canonical I105 account ID".to_owned());
     }
-    let order_id_hex = order_id_hex.ok_or_else(|| "missing `--order-id-hex=<hex>`".to_owned())?;
-    let order_id = parse_hex_32(&order_id_hex, "order_id_hex")?;
-    let expiration_epoch =
-        expiration_epoch.ok_or_else(|| "missing `--expiration-epoch=<positive-u64>`".to_owned())?;
-    Ok(InstructionBox::from(ExpireReplicationOrder::new(
-        ReplicationOrderId::new(order_id),
-        expiration_epoch,
-    )))
+    Ok(parsed)
 }
-fn split_option(arg: &str) -> Result<(&str, &str), String> {
-    arg.split_once('=')
-        .ok_or_else(|| format!("expected `--key=value`, got `{arg}`"))
-}
-fn set_once<T>(slot: &mut Option<T>, value: T, key: &str) -> Result<(), String> {
-    if slot.is_some() {
-        Err(format!("duplicate `{key}` option"))
-    } else {
-        *slot = Some(value);
-        Ok(())
-    }
-}
-fn read_json_map(path: Option<&str>, label: &str) -> Result<Map, String> {
-    let path = path.ok_or_else(|| format!("missing `--summary=<path>` for {label}"))?;
-    let bytes =
-        fs::read(path).map_err(|err| format!("failed to read `{path}` for {label}: {err}"))?;
+
+fn read_json_map(path: &Path, label: &str) -> Result<Map, String> {
+    let bytes = fs::read(path)
+        .map_err(|err| format!("failed to read `{}` for {label}: {err}", path.display()))?;
+    let path = path.display();
     let value: Value = json::from_slice(&bytes)
         .map_err(|err| format!("failed to parse JSON `{path}` for {label}: {err}"))?;
     value
@@ -342,13 +294,6 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
     value
         .parse::<u64>()
         .map_err(|err| format!("invalid `{label}` value `{value}`: {err}"))
-}
-fn require_positive(value: Option<u64>, label: &str) -> Result<u64, String> {
-    let value = value.ok_or_else(|| format!("missing `{label}=<positive-u64>`"))?;
-    if value == 0 {
-        return Err(format!("`{label}` must be greater than zero"));
-    }
-    Ok(value)
 }
 fn parse_hex_32(value: &str, label: &str) -> Result<[u8; 32], String> {
     require_lowercase_fixed_hex(value, label, 64)?;
@@ -427,6 +372,45 @@ fn print_instruction_json(instruction: InstructionBox) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser as _;
+
+    #[derive(clap::Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        command: Command,
+    }
+
+    fn parse_command(
+        operation: &str,
+        args: impl Iterator<Item = String>,
+    ) -> Result<Command, String> {
+        TestCli::try_parse_from(
+            ["instruction".to_owned(), operation.to_owned()]
+                .into_iter()
+                .chain(args),
+        )
+        .map(|cli| cli.command)
+        .map_err(|error| error.to_string())
+    }
+
+    fn parse_complete_instruction(
+        args: impl Iterator<Item = String>,
+    ) -> Result<InstructionBox, String> {
+        let Command::CompleteOrder(args) = parse_command("complete-order", args)? else {
+            unreachable!("selected complete-order")
+        };
+        complete_order_instruction(args)
+    }
+
+    fn parse_expire_instruction(
+        args: impl Iterator<Item = String>,
+    ) -> Result<InstructionBox, String> {
+        let Command::ExpireOrder(args) = parse_command("expire-order", args)? else {
+            unreachable!("selected expire-order")
+        };
+        Ok(expire_order_instruction(args))
+    }
+
     const OWNER_I105: &str = "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T";
     #[test]
     fn parse_u64_rejects_noncanonical_epoch_tokens() {
@@ -473,18 +457,36 @@ mod tests {
         }
     }
     #[test]
-    fn set_once_rejects_duplicate_options() {
-        let mut slot = None;
-        set_once(&mut slot, 580_u64, "--issued-epoch").expect("first value");
-        let err =
-            set_once(&mut slot, 581_u64, "--issued-epoch").expect_err("duplicate option must fail");
-        assert!(err.contains("duplicate `--issued-epoch` option"));
-        assert_eq!(slot, Some(580));
+    fn typed_options_reject_duplicate_values() {
+        use clap::CommandFactory as _;
+        TestCli::command().debug_assert();
+        let order = format!("--order-id-hex={}", "55".repeat(32));
+        let Command::ExpireOrder(first) = parse_command(
+            "expire-order",
+            [order.clone(), "--expiration-epoch=580".to_owned()].into_iter(),
+        )
+        .expect("first value") else {
+            unreachable!("selected expire-order")
+        };
+        let err = parse_command(
+            "expire-order",
+            [
+                order,
+                "--expiration-epoch=580".to_owned(),
+                "--expiration-epoch=581".to_owned(),
+            ]
+            .into_iter(),
+        )
+        .expect_err("duplicate option must fail");
+        assert!(
+            err.contains("cannot be used multiple times") && err.contains("--expiration-epoch")
+        );
+        assert_eq!(first.expiration_epoch.get(), 580);
     }
     #[test]
     fn expire_order_builds_canonical_instruction_and_rejects_bad_epochs() {
         let order_id = "5555555555555555555555555555555555555555555555555555555555555555";
-        let actual = expire_order_instruction(
+        let actual = parse_expire_instruction(
             [
                 format!("--order-id-hex={order_id}"),
                 "--expiration-epoch=91".to_owned(),
@@ -513,7 +515,7 @@ mod tests {
             ],
         ] {
             assert!(
-                expire_order_instruction(args.into_iter()).is_err(),
+                parse_expire_instruction(args.into_iter()).is_err(),
                 "invalid expiration arguments must fail"
             );
         }
@@ -534,7 +536,7 @@ mod tests {
             format!("--finalized-block-hash-hex={}", "66".repeat(32)),
         ];
         let actual =
-            complete_order_instruction(args.clone().into_iter()).expect("build exact completion");
+            parse_complete_instruction(args.clone().into_iter()).expect("build exact completion");
         let owner = AccountId::parse_encoded(OWNER_I105).expect("fixture owner");
         let expected = InstructionBox::from(CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
@@ -567,7 +569,7 @@ mod tests {
             let mut invalid = args.clone();
             invalid[3] = format!("--expected-owner={noncanonical_owner}");
             assert!(
-                complete_order_instruction(invalid.into_iter()).is_err(),
+                parse_complete_instruction(invalid.into_iter()).is_err(),
                 "noncanonical expected owner must fail"
             );
         }
@@ -587,13 +589,16 @@ mod tests {
         ];
         let mut missing_predecessor = base.clone();
         missing_predecessor.push("--signer-policy-revision=2".to_owned());
-        assert!(complete_order_instruction(missing_predecessor.into_iter()).is_err());
+        assert!(parse_complete_instruction(missing_predecessor.into_iter()).is_err());
+        let mut initial_policy = base.clone();
+        initial_policy.push("--signer-policy-revision=1".to_owned());
+        assert!(parse_complete_instruction(initial_policy.into_iter()).is_ok());
         let mut forbidden_predecessor = base;
         forbidden_predecessor.push("--signer-policy-revision=1".to_owned());
         forbidden_predecessor.push(format!(
             "--signer-policy-predecessor-digest-hex={}",
             "44".repeat(32)
         ));
-        assert!(complete_order_instruction(forbidden_predecessor.into_iter()).is_err());
+        assert!(parse_complete_instruction(forbidden_predecessor.into_iter()).is_err());
     }
 }

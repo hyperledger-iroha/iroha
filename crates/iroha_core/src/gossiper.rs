@@ -37,7 +37,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -3012,7 +3012,7 @@ fn len_prefixed_field_payload(bytes: &[u8], offset: usize) -> Result<(&[u8], usi
 }
 fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
@@ -3026,7 +3026,7 @@ fn decode_bounded_len_prefixed_sequence<T>(
     offset: usize,
 ) -> Result<(Vec<T>, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (sequence_len, _) = ncore::inspect_seq_len_slice(payload)?;
@@ -3054,7 +3054,6 @@ fn decode_transaction_gossip_payload(
         offset,
     ))
 }
-impl NoritoSerialize for TransactionGossip {}
 impl SerializePayload for TransactionGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
@@ -3080,7 +3079,6 @@ impl SerializePayload for TransactionGossip {
         gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
     }
 }
-impl NoritoDeserialize<'_> for TransactionGossip {}
 impl<'a> DeserializePayload<'a> for TransactionGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode transaction gossip")
@@ -3267,7 +3265,7 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
         });
     }
     let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
-    if schema != <T as NoritoSerialize>::schema_hash().as_slice() {
+    if schema != norito::schema::identity::frame_hash::<T>().as_slice() {
         return Err(ncore::Error::SchemaMismatch);
     }
     let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
@@ -3511,7 +3509,6 @@ impl From<SignedTransaction> for GossipTransaction {
         }
     }
 }
-impl NoritoSerialize for GossipTransaction {}
 impl SerializePayload for GossipTransaction {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
@@ -3532,7 +3529,6 @@ impl SerializePayload for GossipTransaction {
             .checked_add(certificate_len)
     }
 }
-impl NoritoDeserialize<'_> for GossipTransaction {}
 impl<'a> DeserializePayload<'a> for GossipTransaction {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode gossip transaction")
@@ -3622,7 +3618,7 @@ fn gossip_vec_payload_len_exact<'a>(
 }
 fn gossip_encoded_vec_payload_len_exact<'a, T>(items: impl Iterator<Item = &'a T>) -> Option<usize>
 where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
 {
     let mut count = 0usize;
     let mut total = 0usize;
@@ -3773,6 +3769,8 @@ fn partition_gossip_batch(
         encoded_len: exact_len,
     }
 }
+#[cfg(test)]
+mod payload_codec_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

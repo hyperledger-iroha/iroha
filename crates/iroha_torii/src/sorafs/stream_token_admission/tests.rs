@@ -642,3 +642,86 @@ fn lease_deadline_is_exact_and_rejects_early_late_expired_and_overflow_values() 
         Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)
     );
 }
+
+#[test]
+fn stream_token_provider_frames_preserve_admission_acknowledgement_and_replay() {
+    let provider = DurableProvider::new();
+    let request = request(
+        "nonce-current-frames",
+        VALIDATED_AT_MS,
+        VALIDATED_AT_MS / 1_000 + 600,
+        2,
+    );
+    let request_frame = crate::frame_test_support::assert_current_frame(
+        &request,
+        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRequestV1",
+    );
+    let decoded_request: StreamTokenGatewayAdmissionRequestV1 =
+        norito::decode_canonical(&request_frame).expect("decode provider request");
+    decoded_request.validate().expect("valid decoded request");
+    let result = provider
+        .admit(&decoded_request)
+        .expect("atomic provider admission");
+    let result_frame = crate::frame_test_support::assert_current_frame(
+        &result,
+        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionResultV1",
+    );
+    let decoded_result: StreamTokenGatewayAdmissionResultV1 =
+        norito::decode_canonical(&result_frame).expect("decode admission result");
+    decoded_result
+        .validate_for_request(&request, qualification())
+        .expect("exact result binding");
+    let record_frame = crate::frame_test_support::assert_current_frame(
+        &decoded_result.record,
+        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRecordV1",
+    );
+    let record: StreamTokenGatewayAdmissionRecordV1 =
+        norito::decode_canonical(&record_frame).expect("decode callback record");
+    record
+        .validate_for_request(&request, qualification())
+        .expect("exact callback binding");
+    let readback = provider.pending(8).expect("oldest pending prefix");
+    let readback_frame = crate::frame_test_support::assert_current_frame(
+        &readback,
+        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionReadbackV1",
+    );
+    let decoded_readback: StreamTokenGatewayAdmissionReadbackV1 =
+        norito::decode_canonical(&readback_frame).expect("decode pending prefix");
+    decoded_readback
+        .validate(8, qualification())
+        .expect("exact contiguous prefix");
+    assert_eq!(decoded_readback.records, vec![record]);
+    let acknowledged = provider
+        .acknowledge(record)
+        .expect("acknowledge exact callback");
+    assert_eq!(acknowledged, StreamTokenGatewayAdmissionAckV1::Acknowledged);
+    crate::frame_test_support::assert_current_frame(
+        &acknowledged,
+        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1",
+    );
+    let replay_ack = provider
+        .acknowledge(record)
+        .expect("exact acknowledgement replay");
+    assert_eq!(replay_ack, StreamTokenGatewayAdmissionAckV1::ExactReplay);
+    crate::frame_test_support::assert_current_frame(
+        &replay_ack,
+        "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1",
+    );
+    let replay = provider
+        .admit(&decoded_request)
+        .expect("exact admitted request replay");
+    replay
+        .validate_for_request(&decoded_request, qualification())
+        .expect("valid replay binding");
+    assert!(matches!(
+        replay.delivery_state,
+        StreamTokenGatewayAdmissionDeliveryStateV1::AcknowledgedExactReplay {
+            acknowledged_through_sequence: 1
+        }
+    ));
+    assert!(matches!(
+        norito::decode_canonical::<StreamTokenGatewayAdmissionRecordV1>(&result_frame),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert_eq!(provider.acknowledged_through(), 1);
+}

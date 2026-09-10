@@ -18,8 +18,9 @@ from scripts.tests.sorafs_release_contract_support import (
     release_module,
 )
 
-from scripts.tests.sorafs_hedging_billing_freshness_contract import (
-    assert_shipped_hedging_billing_freshness_contract,
+from scripts.tests.sorafs_hedging_billing_service_contract import (
+    assert_shipped_hedging_billing_service_surface_is_exact_and_authenticated,
+    assert_unimplemented_hedging_billing_cli_matcher_has_negative_controls,
 )
 from scripts.tests.sorafs_proof_stream_contract_support import (
     assert_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections,
@@ -234,10 +235,10 @@ SORAFS_REFERENCE_FFI_RS = (
     REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "reference_ffi.rs"
 )
 SORAFS_VALIDATE_RS = (
-    REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "bin" / "sorafs-validate.rs"
+    REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs" / "toolkit" / "validation.rs"
 )
 SORAFS_VALIDATE_CLI_TEST_RS = (
-    REPO_ROOT / "crates" / "sorafs_manifest" / "tests" / "sorafs_validate_cli.rs"
+    REPO_ROOT / "crates" / "iroha_cli" / "tests" / "sorafs_validate_cli.rs"
 )
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
@@ -253,21 +254,6 @@ TORII_SORAFS_GATEWAY_COMPLIANCE_API_RS = (
 TORII_SORAFS_POP_API_RS = (
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "pop_api.rs"
 )
-TORII_SORAFS_HEDGING_BILLING_API_RS = (
-    REPO_ROOT
-    / "crates"
-    / "iroha_torii"
-    / "src"
-    / "sorafs"
-    / "hedging_billing_api.rs"
-)
-TORII_SHARED_SORAFS_HEDGING_BILLING_API_RS = (
-    REPO_ROOT
-    / "crates"
-    / "iroha_torii_shared"
-    / "src"
-    / "sorafs_hedging_billing_api.rs"
-)
 # Route/schema contract checks use the package-local runtime authority. Keep the
 # Rust source separate so source-policy scans still cover the static loader.
 TORII_OPENAPI_SOURCE_RS = (
@@ -280,12 +266,6 @@ TORII_ROUTE_CATALOG_RS = (
     REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs"
 )
 TORII_SORAFS_POP_ROUTE_CATALOG_RS = TORII_ROUTE_CATALOG_RS.with_name("route_catalog") / "sorafs_pop.rs"
-IROHAD_SORAFS_HEDGING_BILLING_RUNTIME_RS = (
-    REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_hedging_billing_runtime.rs"
-)
-SORAFS_HEDGING_BILLING_SERVICE_RS = (
-    REPO_ROOT / "crates" / "sorafs_node" / "src" / "hedging_billing_service.rs"
-)
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
 IROHA_P2P_PEER_RS = REPO_ROOT / "crates" / "iroha_p2p" / "src" / "peer.rs"
 IROHA_CRYPTO_SORANET_POW_RS = (
@@ -1790,7 +1770,7 @@ def test_active_sorafs_todo_scan_discovers_path_named_sources() -> None:
     }
 
     assert Path("crates/iroha_data_model/src/sorafs_uri.rs") in discovered
-    assert Path("crates/sorafs_manifest/src/bin/sorafs-validate.rs") in discovered
+    assert Path("crates/iroha_cli/src/commands/sorafs/toolkit/validation.rs") in discovered
     assert (
         Path("IrohaSwift/Sources/IrohaSwift/SorafsReferenceValidators.swift")
         in discovered
@@ -6557,7 +6537,7 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     for fixture in fixtures:
         assert fixture["norito_path"].endswith(f"{fixture['name']}.to")
         assert fixture["json_path"].endswith(f"{fixture['name']}.json")
-        assert fixture["validation_command"].startswith("sorafs-validate hedging ")
+        assert fixture["validation_command"].startswith("iroha app sorafs toolkit validate hedging ")
         assert fixture["norito_path"] in fixture["validation_command"]
 
 
@@ -7535,9 +7515,9 @@ def test_moderation_panel_runner_plan_envelope_is_schema_closed() -> None:
 
 
 def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> None:
-    packager = read(SCRIPTS_DIR / "package_sorafs_validate_release.sh")
+    packager = read(SCRIPTS_DIR / "package_iroha_cli_release.sh")
     packager_test = read(
-        SCRIPTS_DIR / "tests" / "package_sorafs_validate_release_test.py"
+        SCRIPTS_DIR / "tests" / "package_iroha_cli_release_test.py"
     )
 
     assert "require_option_value()" in packager
@@ -7545,7 +7525,7 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert "validate_existing_file_path()" in packager
     assert "validate_existing_executable_file_path()" in packager
     assert "prepare_output_directory_path()" in packager
-    assert 'validate_existing_executable_file_path "sorafs-validate binary"' in packager
+    assert 'validate_existing_executable_file_path "iroha binary"' in packager
     assert 'validate_existing_file_path "SoraFS reference FFI header"' in packager
     assert 'prepare_output_directory_path "release output directory"' in packager
     assert packager.count("scripts/copy_release_file.py") == 2
@@ -7557,7 +7537,7 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert packager.count("scripts/write_release_checksum.py") == 3
     assert "canonical_json_bytes" in packager
     assert "exclusive_write_bytes" in packager
-    assert '"commit": os.environ["SORAFS_VALIDATE_PACKAGE_COMMIT"]' in packager
+    assert '"commit": os.environ["IROHA_CLI_PACKAGE_COMMIT"]' in packager
     assert "--source-commit" in packager
     assert "--source-date-epoch" in packager
     assert "--skip-smoke" not in packager
@@ -8288,7 +8268,7 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate and "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate and "def _validate_version_map(" in candidate_packager and "canonical SemVer" in candidate_packager and all(name in candidate_packager_test for name in ("test_candidate_packager_rejects_version_map_mismatch_without_outputs", "test_candidate_packager_rejects_noncanonical_semver_without_outputs"))
     assert "scripts/tests/build_sorafs_foundational_prerequisite_test.py" in release_gate and "scripts/tests/check_sorafs_production_promotion_bundle_test.py" in release_gate and all(path in release_workflow for path in (".gitignore", "Cargo.lock", "ci/source_file_budget.json", "scripts/check_source_file_budget.py", "scripts/tests/sorafs_foundational_receipt_test_support.py", "crates/iroha/src/client/repair.rs", "scripts/check_sorafs_release_version_map.py", "scripts/tests/check_sorafs_release_version_map_test.py", "crates/irohad/Cargo.toml", "crates/irohad/src/lib.rs", "crates/irohad/src/main.rs", "crates/irohad/src/sorafs_provider_ingest_runtime.rs", "crates/irohad/src/sorafs_provider_ingest_runtime/**", "crates/sorafs_node/**", "crates/iroha_config/**", "crates/iroha_crypto/**", "crates/iroha_data_model/**", "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py", "scripts/check_sorafs_production_promotion_bundle.py", "scripts/tests/check_sorafs_production_promotion_bundle_test.py")) and all(marker in release_gate for marker in ("cargo_lock_sha256()", 'expected_cargo_lock_sha256="$(cargo_lock_sha256)"', 'if [[ "$(cargo_lock_sha256)" != "${expected_cargo_lock_sha256}" ]]')) and "mod quarantine_restart;" in provider_ingest_parent and re.search(r'#\[tokio::test\]\s*(?:#\[expect\(\s*clippy::too_many_lines,\s*reason\s*=\s*"[^"]*"\s*\)\]\s*)?async fn post_admission_quarantine_survives_restart_with_shared_chunks\(\)', provider_ingest_test) and all(marker in provider_ingest_contract for marker in ("_assert_quarantine_restart_contract", "test_quarantine_restart_proof_is_connected_and_preserves_recovery_invariants", "test_quarantine_contract_rejects_weakened_or_disconnected_proof", "test_quarantine_contract_ignores_layout_but_rejects_comment_and_module_substitutes"))
     assert "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate and "def _validate_version_map(" in manifest and "canonical SemVer" in manifest and all(name in manifest_test for name in ("test_manifest_rejects_embedded_version_map_mismatch", "test_manifest_rejects_noncanonical_semver"))
-    assert "scripts/tests/package_sorafs_validate_release_test.py" in release_gate
+    assert "scripts/tests/package_iroha_cli_release_test.py" in release_gate
     assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
     required = (
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_release_http_clients_do_not_follow_redirects", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented", "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs",
@@ -8376,11 +8356,11 @@ def test_sorafs_operator_helpers_do_not_reintroduce_plain_file_io() -> None:
         SCRIPTS_DIR / "check_sorafs_hedging_fixture_manifest.py",
         SCRIPTS_DIR / "sorafs_evidence_paths.py",
         SCRIPTS_DIR / "package_sorafs_cli_candidate.py",
-        SCRIPTS_DIR / "package_sorafs_validate_release.sh",
+        SCRIPTS_DIR / "package_iroha_cli_release.sh",
     }
     allowed_tarfile_open = {
         SCRIPTS_DIR / "package_sorafs_cli_candidate.py",
-        SCRIPTS_DIR / "package_sorafs_validate_release.sh",
+        SCRIPTS_DIR / "package_iroha_cli_release.sh",
     }
     offenders: list[str] = []
 
@@ -14992,7 +14972,7 @@ def test_pop_credentials_docs_match_stock_broker_and_open_deployment_backend() -
         "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, external software-signer interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine independently administered software-signing backend and deployment evidence remain open.",
         "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open.",
         "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted provider-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a qualified deployment-owned key-wrapper/witness backend and operator client remain open.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `iroha app sorafs toolkit validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open.",
         "`V1-BLOCK-POP-RUNTIME-01` blocks production completion and promotion, not the standard-daemon source integration.",
         "Operators without that qualified deployment backend must leave `sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
         "Resolve `V1-BLOCK-POP-RUNTIME-01` by packaging and supervising the genuine deployment-owned backend through the shipped broker launcher; do not add a plaintext/manual, configuration-key, environment, unqualified in-process, or process-clock fallback. A qualified deployment-owned provider is not a fallback.",
@@ -15852,7 +15832,7 @@ def test_pop_credentials_production_service_exposes_exact_canonical_v1_surface()
 
 def test_pop_credentials_cli_surface_matcher_has_negative_controls() -> None:
     shipped_local_subcommands = (
-        "sorafs-validate pop",
+        "iroha app sorafs toolkit validate pop",
         "pop-credential",
         "pop-root",
         "pop-revocations",
@@ -18398,7 +18378,7 @@ def test_cli_sdk_distribution_surface_matcher_has_negative_controls() -> None:
     )
     shipped_local_subcommands = (
         "sorafs",
-        "sorafs-validate",
+        "iroha",
         "release_sorafs_cli",
         "check_sorafs_cli_release",
         "sorafs-gateway-self-cert",
@@ -18505,8 +18485,8 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     required_validator_open = (
         "Remaining SF-9b work is live auditor rollout evidence, production archive handoff, and any richer proof-bundle inspection commands required by operators.",
         "The SF-9 validator/reporting release claim is tied to the same fail-closed gate used by the scheduler plan:",
-        "The validator-specific evidence must prove `sorafs-validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, and the exact `archive_backend` value (`sql` or `parquet`).",
-        "Add proof-bundle fetch/show/offline replay commands if operators need them beyond `sorafs-validate por`.",
+        "The validator-specific evidence must prove `iroha app sorafs toolkit validate por` challenge/proof replay, challenge/proof binding, exact sample coverage, deadline policy, Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded status/export/report route latency, weekly report generation, archive-retention policy, governance archive handoff, and the exact `archive_backend` value (`sql` or `parquet`).",
+        "Add proof-bundle fetch/show/offline replay commands if operators need them beyond `iroha app sorafs toolkit validate por`.",
         "Archive live auditor, drand, VRF, report, and export evidence before treating SF-9 as fully released, and require that evidence to pass the SF-9 gate.",
     )
     missing_scheduler = [
@@ -19003,7 +18983,7 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "status",
         "export",
         "report",
-        "sorafs-validate",
+        "iroha",
         "sorafs_cli",
         "por-rollout",
         "por-proof-bundle-canary",
@@ -19949,7 +19929,7 @@ def test_repair_live_operator_surface_matcher_has_negative_controls() -> None:
         "escalate",
         "inspect",
         "dry-run",
-        "sorafs-validate",
+        "iroha",
         "repair-auditor-roster-canary",
         "repair-worker-lifecycle-canary",
         "repair-promotion-canary",
@@ -20056,7 +20036,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Signed-manifest policy, key, hardware backend, positive revisions, and finalized operation anchors are derived only from a freshly verified native hardware receipt. Governance approval separately requires policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
-        "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
+        "Archive live operator smoke evidence for the published `iroha` archives and cookbook replay before declaring SF-11 fully released",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -20351,8 +20331,8 @@ UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_CLI_SUBCOMMANDS = (
     "reference-sdk-package-publication",
     "reference-sdk-release-promote",
     "reference-sdk-promote",
-    "sorafs-validate-publish",
-    "sorafs-validate-release-promote",
+    "iroha-publish",
+    "iroha-release-promote",
     "published-archive-smoke",
     "downstream-bindings-publish",
     "release-manifest-publish",
@@ -20369,8 +20349,8 @@ UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_NESTED_CLI_COMMANDS = (
     "reference-sdk package-publication",
     "reference-sdk release-promote",
     "reference-sdk promote",
-    "sorafs-validate publish",
-    "sorafs-validate release-promote",
+    "iroha app sorafs toolkit publish",
+    "iroha app sorafs toolkit release-promote",
     "published-archive smoke",
     "downstream-bindings publish",
     "release-manifest publish",
@@ -20410,7 +20390,7 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         "/v1/sorafs/validate/published-archives-canary",
     )
     shipped_local_subcommands = (
-        "sorafs-validate",
+        "iroha",
         "advert",
         "admission",
         "order",
@@ -20422,25 +20402,25 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         "bundle",
         "governance",
         "sign",
-        "package_sorafs_validate_release",
+        "package_iroha_cli_release",
         "reference-sdk-release-canary",
         "reference-sdk-release-promote-canary",
-        "sorafs-validate-release-promote-canary",
+        "iroha-release-promote-canary",
         "release-manifest-publish-evidence",
-        "sorafs-validate advert",
-        "sorafs-validate admission",
-        "sorafs-validate order",
-        "sorafs-validate orderbook",
-        "sorafs-validate por",
-        "sorafs-validate pdp",
-        "sorafs-validate potr",
-        "sorafs-validate repair",
-        "sorafs-validate bundle",
-        "sorafs-validate governance",
-        "sorafs-validate sign",
+        "iroha app sorafs toolkit validate advert",
+        "iroha app sorafs toolkit validate admission",
+        "iroha app sorafs toolkit validate order",
+        "iroha app sorafs toolkit validate orderbook",
+        "iroha app sorafs toolkit validate por",
+        "iroha app sorafs toolkit validate pdp",
+        "iroha app sorafs toolkit validate potr",
+        "iroha app sorafs toolkit validate repair",
+        "iroha app sorafs toolkit validate bundle",
+        "iroha app sorafs toolkit validate governance",
+        "iroha app sorafs toolkit sign",
         "reference-sdk release-canary",
         "reference-sdk release-promote-canary",
-        "sorafs-validate release-promote-canary",
+        "iroha app sorafs toolkit release-promote-canary",
         "published-archive smoke-canary",
         "downstream-bindings publish-evidence",
         "release-manifest publish-evidence",
@@ -20462,11 +20442,11 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         == []
     )
     assert unshipped_reference_sdk_distribution_cli_matches(
-        '"reference-sdk-publish" `reference-sdk-live-smoke` "sorafs-validate-publish"'
+        '"reference-sdk-publish" `reference-sdk-live-smoke` "iroha-publish"'
     ) == [
         "reference-sdk-publish",
         "reference-sdk-live-smoke",
-        "sorafs-validate-publish",
+        "iroha-publish",
     ]
     assert unshipped_reference_sdk_distribution_cli_matches(
         "`iroha sorafs reference-sdk publish` "
@@ -20479,8 +20459,8 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         '"reference-sdk package-publication" '
         "`reference-sdk release-promote` "
         '"reference-sdk promote" '
-        "`sorafs-validate publish` "
-        '"sorafs-validate release-promote" '
+        "`iroha app sorafs toolkit publish` "
+        '"iroha app sorafs toolkit release-promote" '
         "`published-archive smoke` "
         '"downstream-bindings publish" '
         "`release-manifest publish`"
@@ -20495,8 +20475,8 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         "reference-sdk package-publication",
         "reference-sdk release-promote",
         "reference-sdk promote",
-        "sorafs-validate publish",
-        "sorafs-validate release-promote",
+        "iroha app sorafs toolkit publish",
+        "iroha app sorafs toolkit release-promote",
         "published-archive smoke",
         "downstream-bindings publish",
         "release-manifest publish",
@@ -20965,7 +20945,7 @@ def test_reserved_pdp_provider_surface_matcher_has_negative_controls() -> None:
         "stream",
         "proof stream --proof-kind=pdp",
         "sorafs_cli",
-        "sorafs-validate",
+        "iroha",
         "pdp",
         "pdp-rollout",
         "pdp-provider-transport-canary",
@@ -22858,349 +22838,12 @@ def test_hedging_canary_builder_is_checked_in() -> None:
     assert "payload-free SFM-5 hedging/billing canary builder" in docs
 
 
-SHIPPED_HEDGING_BILLING_ROUTES = (
-    ("/v1/sorafs/billing/status", "get"),
-    ("/v1/sorafs/billing/statements", "get"),
-    ("/v1/sorafs/billing/statements/{statement_id}", "get"),
-    (
-        "/v1/sorafs/billing/statements/{statement_id}/acknowledgements",
-        "post",
-    ),
-    ("/v1/sorafs/billing/reconciliation", "get"),
-    ("/v1/sorafs/hedging/exposure", "get"),
-    ("/v1/sorafs/hedging/intents", "get"),
-)
-
-UNIMPLEMENTED_HEDGING_BILLING_CLI_SUBCOMMANDS = (
-    "hedgingd",
-    "billingd",
-    "hedging-daemon",
-    "billing-daemon",
-    "price-feed-collector",
-    "collector-service",
-    "hedge-execute",
-    "exposure-status",
-    "statement-publish",
-    "statement-ack",
-    "billing-api",
-    "hedging-status",
-)
-
-UNIMPLEMENTED_HEDGING_BILLING_NESTED_CLI_COMMANDS = (
-    "hedging daemon",
-    "hedging price-feed-collector",
-    "hedging collector-service",
-    "hedging hedge-execute",
-    "hedging exposure-status",
-    "hedging status",
-    "billing daemon",
-    "billing statement-publish",
-    "billing statement-ack",
-    "billing api",
-)
-
-
-def unimplemented_hedging_billing_cli_matches(source: str) -> list[str]:
-    hyphenated_matches = [
-        subcommand
-        for subcommand in UNIMPLEMENTED_HEDGING_BILLING_CLI_SUBCOMMANDS
-        if f'"{subcommand}"' in source or f"`{subcommand}`" in source
-    ]
-    nested_matches = [
-        command
-        for command in UNIMPLEMENTED_HEDGING_BILLING_NESTED_CLI_COMMANDS
-        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
-    ]
-    return hyphenated_matches + nested_matches
-
-
 def test_unimplemented_hedging_billing_cli_matcher_has_negative_controls() -> None:
-    shipped_local_subcommands = (
-        "hedging",
-        "billing",
-        "sorafs-validate",
-        "feed",
-        "reference-price",
-        "billing-cycle",
-        "statement-publication",
-        "metrics-alerts",
-        "hedging-canary",
-        "billing-cycle-canary",
-        "statement-publish-canary",
-        "sorafs-validate hedging",
-        "sorafs-validate billing",
-        "hedging feed",
-        "hedging reference-price",
-        "hedging metrics-alerts",
-        "hedging status-canary",
-        "billing billing-cycle",
-        "billing statement-publication",
-        "billing statement-publish-canary",
-        "billing statement-ack-evidence",
-    )
-
-    assert unimplemented_hedging_billing_cli_matches(
-        '"hedgingd" `price-feed-collector` "statement-publish" "billing-api"'
-    ) == [
-        "hedgingd",
-        "price-feed-collector",
-        "statement-publish",
-        "billing-api",
-    ]
-    assert unimplemented_hedging_billing_cli_matches(
-        "`sorafs hedging daemon` "
-        '"sorafs hedging price-feed-collector" '
-        "`billing statement-publish` "
-        '"billing api --listen :8080"'
-    ) == [
-        "hedging daemon",
-        "hedging price-feed-collector",
-        "billing statement-publish",
-        "billing api",
-    ]
-    assert unimplemented_hedging_billing_cli_matches(
-        " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
-    ) == []
+    assert_unimplemented_hedging_billing_cli_matcher_has_negative_controls()
 
 
 def test_shipped_hedging_billing_service_surface_is_exact_and_authenticated() -> None:
-    irohad_main = REPO_ROOT / "crates" / "irohad" / "src" / "main.rs"
-    route_sources = (
-        TORII_SORAFS_HEDGING_BILLING_API_RS,
-        TORII_OPENAPI_RS,
-        TORII_ROUTE_CATALOG_RS,
-    )
-    for source_path in route_sources:
-        source = read(source_path)
-        missing = [
-            route
-            for route, _method in SHIPPED_HEDGING_BILLING_ROUTES
-            if route not in source
-        ]
-        assert missing == [], source_path
-
-    torii = read(TORII_LIB_RS)
-    daemon = read(irohad_main)
-    for required in (
-        "HedgingBillingRuntimeApiV1",
-        "with_sorafs_hedging_billing_runtime",
-        "sorafs_hedging_billing_runtime",
-    ):
-        assert required in torii
-        assert required in daemon
-
-    api_source = read(TORII_SORAFS_HEDGING_BILLING_API_RS)
-    client_source = read(IROHA_CLIENT_RS)
-    acknowledgement_wire_source = read(
-        TORII_SHARED_SORAFS_HEDGING_BILLING_API_RS
-    )
-    service_source = read(SORAFS_HEDGING_BILLING_SERVICE_RS)
-    runtime_source = read(IROHAD_SORAFS_HEDGING_BILLING_RUNTIME_RS)
-    route_catalog_source = read(TORII_ROUTE_CATALOG_RS)
-
-    status_handler = api_source[
-        api_source.index("async fn billing_status_inner(") : api_source.index(
-            "pub(crate) async fn handle_get_sorafs_billing_statements"
-        )
-    ]
-    assert "require_canonical_auth" in status_handler
-    assert "runtime.daemon_status()" in status_handler
-    assert "require_billing_manager" not in status_handler
-
-    assert_shipped_hedging_billing_freshness_contract(
-        service_source=service_source,
-        runtime_source=runtime_source,
-    )
-
-    assert "struct BillingAcknowledgementProofBodyV1" not in api_source
-    assert "struct SorafsBillingAcknowledgementProof" not in client_source
-    for required_wire_contract in (
-        "pub struct BillingAcknowledgementProofV1",
-        'schema_name = "iroha.torii.v1.sorafs.billing.acknowledgement_proof"',
-        '"fe75acabe03d788012f2e7c556319997"',
-        "pub request_nonce: [u8; 32]",
-        "pub authentication_proof: Vec<u8>",
-        "impl fmt::Debug for BillingAcknowledgementProofV1",
-        '"[REDACTED]"',
-    ):
-        assert required_wire_contract in acknowledgement_wire_source
-    assert (
-        "BillingAcknowledgementProofV1 as BillingAcknowledgementProofBodyV1"
-        in api_source
-    )
-    assert (
-        "BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof"
-        in client_source
-    )
-    acknowledgement_decoder = api_source[
-        api_source.index(
-            "fn decode_acknowledgement_proof("
-        ) : api_source.index("fn server_time_unix(")
-    ]
-    assert "request.request_nonce == [0; 32]" in acknowledgement_decoder
-    assert "request_nonce: proof.request_nonce" in api_source
-    assert "acknowledgement_http_binding_digest" not in api_source
-
-    acknowledgement_api = service_source[
-        service_source.index(
-            "pub fn api_acknowledge_statement("
-        ) : service_source.index("pub fn api_exposure_page(")
-    ]
-    assert "request.request_nonce == [0; 32]" in acknowledgement_api
-    digest_call = re.search(
-        r"billing_statement_acknowledgement_request_digest_v1\((.*?)\)\?;",
-        acknowledgement_api,
-        re.S,
-    )
-    assert digest_call is not None
-    digest_call_arguments = digest_call.group(1)
-    for required_argument in (
-        "request.statement_id",
-        "&request.owner_account_id",
-        "request.request_nonce",
-    ):
-        assert required_argument in digest_call_arguments
-    assert "authentication_proof" not in digest_call_arguments
-
-    digest_function = service_source[
-        service_source.index(
-            "pub fn billing_statement_acknowledgement_request_digest_v1("
-        ) : service_source.index("fn projection_close_start(")
-    ]
-    for required_preimage in (
-        "hasher.update(&statement_id)",
-        "hasher.update(owner_account_id)",
-        "hasher.update(&request_nonce)",
-    ):
-        assert required_preimage in digest_function
-    assert "request_nonce == [0; 32]" in digest_function
-    assert "authentication_proof" not in digest_function
-
-    method_guard = api_source[
-        api_source.index("fn require_method(") : api_source.index(
-            "fn runtime_error_response("
-        )
-    ]
-    assert api_source.count("require_method(&method, Method::GET)") == 5
-    assert "actual == &expected" in method_guard
-    assert "Method::HEAD" not in method_guard
-    sorafs_catalog_start = route_catalog_source.index("pub mod sorafs {")
-    public_get_start = route_catalog_source.index(
-        "    const fn public_get(", sorafs_catalog_start
-    )
-    public_post_start = route_catalog_source.index(
-        "    const fn public_post(", public_get_start
-    )
-    public_get_catalog = route_catalog_source[
-        public_get_start:public_post_start
-    ]
-    assert ".with_implicit_head(" not in public_get_catalog
-
-    expected_routes = dict(SHIPPED_HEDGING_BILLING_ROUTES)
-    for spec_path in (
-        REPO_ROOT / "artifacts" / "openapi" / "torii.json",
-        REPO_ROOT
-        / "artifacts"
-        / "openapi"
-        / "versions"
-        / "current"
-        / "torii.json",
-    ):
-        spec = json.loads(read(spec_path))
-        paths = spec["paths"]
-        observed = {
-            route: method
-            for route, method in expected_routes.items()
-            if route in paths and method in paths[route]
-        }
-        assert observed == expected_routes
-        exposed_family = {
-            route
-            for route in paths
-            if route.startswith("/v1/sorafs/billing/")
-            or route.startswith("/v1/sorafs/hedging/")
-        }
-        assert exposed_family == set(expected_routes)
-
-        schemas = spec["components"]["schemas"]
-        bytes32_schema = schemas["HedgingBillingBytes32V1"]
-        assert bytes32_schema["type"] == "string"
-        assert bytes32_schema["minLength"] == 64
-        assert bytes32_schema["maxLength"] == 64
-        assert bytes32_schema["pattern"] == "^[0-9A-F]{64}$"
-
-        acknowledgement_schema = schemas["BillingAcknowledgementProofBodyV1"]
-        assert set(acknowledgement_schema["required"]) == {
-            "request_nonce",
-            "authentication_proof",
-        }
-        assert (
-            acknowledgement_schema["properties"]["request_nonce"]["$ref"]
-            == "#/components/schemas/HedgingBillingBytes32V1"
-        )
-        assert "non-zero" in acknowledgement_schema["properties"][
-            "request_nonce"
-        ]["description"].lower()
-        assert (
-            acknowledgement_schema["properties"]["authentication_proof"][
-                "writeOnly"
-            ]
-            is True
-        )
-
-        status_schema = schemas["HedgingBillingDaemonStatusV1"]
-        assert {
-            "anchor",
-            "last_tick_fresh",
-            "finalized_projection_ready",
-            "finalized_head_height",
-            "finalized_lag_blocks",
-            "ready",
-        } <= set(status_schema["required"])
-        assert (
-            status_schema["properties"]["anchor"]["$ref"]
-            == "#/components/schemas/HedgingBillingProjectionAnchorV1"
-        )
-
-        for route, method in expected_routes.items():
-            operation = paths[route][method]
-            header_names = {
-                parameter.get("name")
-                for parameter in operation.get("parameters", [])
-                if parameter.get("in") == "header"
-            }
-            assert {
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce",
-                "X-Iroha-Witness",
-            } <= header_names, (spec_path, route)
-            responses = operation.get("responses", {})
-            assert {"200", "401"} <= set(responses), (spec_path, route)
-            if route == "/v1/sorafs/billing/status":
-                assert "bootstrap" in operation.get("description", "").lower()
-                assert "403" not in responses, (spec_path, route)
-            if route in {
-                "/v1/sorafs/billing/reconciliation",
-                "/v1/sorafs/hedging/exposure",
-                "/v1/sorafs/hedging/intents",
-            }:
-                assert "403" in responses, (spec_path, route)
-            success_headers = responses["200"].get("headers", {})
-            assert (
-                success_headers.get("Cache-Control", {})
-                .get("schema", {})
-                .get("const")
-                == "private, no-store"
-            ), (spec_path, route)
-
-    unexpected_cli: dict[str, list[str]] = {}
-    for source_path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
-        matched = unimplemented_hedging_billing_cli_matches(read(source_path))
-        if matched:
-            unexpected_cli[str(source_path.relative_to(REPO_ROOT))] = matched
-    assert unexpected_cli == {}
+    assert_shipped_hedging_billing_service_surface_is_exact_and_authenticated()
 
 
 def test_evidence_viewer_runtime_services_are_documented_as_shipped_code() -> None:
@@ -28655,7 +28298,7 @@ def test_sorafs_proto_release_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/fixtures/sdk-smoke-evidence",
     )
     shipped_local_subcommands = (
-        "sorafs-validate",
+        "iroha",
         "advert",
         "admission",
         "order",

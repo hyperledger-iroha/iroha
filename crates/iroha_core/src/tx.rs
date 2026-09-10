@@ -431,7 +431,8 @@ pub(crate) fn commit_faucet_claim_consumption(
             .insert(path.clone(), record.clone());
     }
 }
-#[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
+#[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tx::PendingSealedTransactionCommitment")]
 struct PendingSealedTransactionCommitment {
     payload: SealedTransactionCommitmentPayload,
     commit_height: u64,
@@ -1393,10 +1394,10 @@ impl<'tx> AcceptedTransaction<'tx> {
         let remainder = norito::core::Header::SIZE % align;
         if remainder == 0 { 0 } else { align - remainder }
     }
-    fn bare_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
+    fn bare_encoded_len<T: norito::SerializePayload>(value: &T) -> usize {
         norito::codec::Encode::encode(value).len()
     }
-    fn framed_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
+    fn framed_encoded_len<T: norito::SerializePayload>(value: &T) -> usize {
         norito::core::Header::SIZE
             .saturating_add(Self::framed_padding_for::<T>())
             .saturating_add(Self::bare_encoded_len(value))
@@ -1527,8 +1528,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<usize, norito::core::Error> {
         const EXTERNAL_ENTRYPOINT_TAG: u32 = 0;
         let view = norito::core::from_bytes_view(framed)?;
-        if view.schema() != <TransactionEntrypoint as norito::core::NoritoSerialize>::schema_hash()
-        {
+        if view.schema() != norito::schema::identity::frame_hash::<TransactionEntrypoint>() {
             return Err(norito::core::Error::SchemaMismatch);
         }
         let payload = view.as_bytes();
@@ -7979,7 +7979,7 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "entrypoint-len".into())])
         .sign(keypair.private_key());
-        let signed_expected_len = norito::to_bytes(&signed)
+        let signed_expected_len = norito::encode_canonical(&signed)
             .expect("signed transaction encodes")
             .len();
         assert_eq!(
@@ -8002,19 +8002,32 @@ pub mod tests {
             instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
             authority,
         };
-        let time_expected_len = norito::to_bytes(&time_entrypoint)
-            .expect("time entrypoint encodes")
-            .len();
+        // Time is a payload-only variant. Its accounting includes the existing
+        // framing overhead without declaring a standalone Time frame owner.
+        let time_accounted_len = AcceptedTransaction::framed_encoded_len(&time_entrypoint);
+        let time = TransactionEntrypoint::Time(time_entrypoint.clone());
+        let time_frame = norito::encode_canonical(&time).expect("canonical Time entrypoint frame");
         assert_eq!(
-            AcceptedTransaction::framed_encoded_len(&time_entrypoint),
-            time_expected_len
+            norito::decode_canonical::<TransactionEntrypoint>(&time_frame)
+                .expect("current Time entrypoint roundtrip"),
+            time,
         );
         assert_eq!(
-            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(TransactionEntrypoint::Time(
-                time_entrypoint
-            )))
-            .encoded_len(),
-            time_expected_len
+            AcceptedTransaction::framed_encoded_len(&time),
+            time_frame.len()
+        );
+        let view = norito::core::from_bytes_view(&time_frame).expect("Time frame envelope");
+        let (time_payload_len, prefix_len) =
+            norito::core::read_len_from_slice_with_flags(&view.as_bytes()[4..], view.flags())
+                .expect("Time variant field length");
+        assert_eq!(4 + prefix_len + time_payload_len, view.as_bytes().len());
+        assert_eq!(
+            AcceptedTransaction::bare_encoded_len(&time_entrypoint),
+            time_payload_len
+        );
+        assert_eq!(
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(time)).encoded_len(),
+            time_accounted_len,
         );
     }
     #[test]
@@ -8111,6 +8124,55 @@ pub mod tests {
             actual.single_ed25519_key.is_some(),
             expected.single_ed25519_key.is_some()
         );
+    }
+    #[test]
+    fn signed_length_from_entrypoint_frame_checks_owner_tag_and_bounds() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "external frame length".into())])
+        .sign(keypair.private_key());
+        let signed_frame = norito::encode_canonical(&signed).expect("signed frame");
+        let frame = norito::encode_canonical(&TransactionEntrypoint::External(signed))
+            .expect("external entrypoint frame");
+        let length = AcceptedTransaction::signed_encoded_len_from_external_entrypoint_frame;
+        assert_eq!(
+            length(&frame).expect("exact external frame length"),
+            signed_frame.len()
+        );
+        assert!(matches!(
+            length(&signed_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(length(&frame[..norito::core::Header::SIZE - 1]).is_err());
+        assert!(length(&frame[..frame.len() - 1]).is_err());
+        let view = norito::core::from_bytes_view(&frame).expect("valid external frame envelope");
+        let payload = view.as_bytes();
+        let truncated_child = norito::core::frame_bare_with_header_flags::<TransactionEntrypoint>(
+            &payload[..payload.len() - 1],
+            view.flags(),
+        )
+        .expect("frame truncated child with valid current-owner envelope and checksum");
+        norito::core::from_bytes_view(&truncated_child)
+            .expect("truncated child still has a valid frame envelope");
+        assert!(matches!(
+            length(&truncated_child),
+            Err(norito::Error::LengthMismatch)
+        ));
+        let time = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
+            id: "signed-length-time-trigger".parse().expect("trigger id"),
+            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
+            authority,
+        });
+        let time_frame = norito::encode_canonical(&time).expect("current non-external frame");
+        assert!(matches!(
+            length(&time_frame),
+            Err(norito::Error::Message(message))
+                if message == "gossip entrypoint frame does not contain an external signed transaction"
+        ));
     }
     #[test]
     fn signed_encoded_len_for_limit_uses_cached_canonical_bytes() {
@@ -12548,6 +12610,46 @@ pub mod tests {
             commit_height: 1,
             commit_index: 0,
         };
+        let frame = norito::encode_canonical(&record).expect("current pending commitment frame");
+        assert_eq!(
+            <PendingSealedTransactionCommitment as norito::NoritoSchema>::nominal_name(),
+            "iroha_core::tx::PendingSealedTransactionCommitment",
+        );
+        assert_eq!(
+            <PendingSealedTransactionCommitment as norito::NoritoSchema>::frame_name(),
+            "iroha_core::tx::PendingSealedTransactionCommitment",
+        );
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<PendingSealedTransactionCommitment>()
+        );
+        let decoded = norito::decode_canonical::<PendingSealedTransactionCommitment>(&frame)
+            .expect("current pending commitment roundtrip");
+        assert_eq!(decoded.payload, record.payload);
+        assert_eq!(
+            (decoded.commit_height, decoded.commit_index),
+            (record.commit_height, record.commit_index)
+        );
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("re-encode commitment"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22]
+            .copy_from_slice(&norito::schema::identity::frame_hash::<TransactionEntrypoint>());
+        assert!(matches!(
+            norito::decode_canonical::<PendingSealedTransactionCommitment>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<PendingSealedTransactionCommitment>(
+                &frame[..frame.len() - 1]
+            )
+            .is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<PendingSealedTransactionCommitment>(&trailing).is_err());
         let state = State::new_for_testing(
             World::default(),
             Kura::blank_kura_for_testing(),

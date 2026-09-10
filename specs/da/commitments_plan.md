@@ -113,11 +113,21 @@ until Torii threads real bundles through.
    receipt log seeds cursors on restart so replayed receipts are still ordered
    deterministically. Receipt recovery streams the directory one artifact at a
    time, retains only one compact high-water record per bounded `(lane, epoch)`
-   window, and proves sequence coverage with a constant-size summary. Historical
-   duplicate acknowledgements load their deterministic receipt path directly;
+   window, and proves sequence coverage with a constant-size summary. Independent
+   artifact-validation failures retain only the lexicographically earliest failing
+   path and its error; no recovered index or cursor advancement is published after
+   any scan failure. Directory I/O, capacity, and duplicate-conflict diagnostics
+   retain their own error semantics. Excluded scopes are archived and pruned before
+   this recovery scan. Historical duplicate acknowledgements load their deterministic receipt path directly;
    they are never kept as an unbounded in-memory receipt map. V1 rejects a
    receipt above 64 KiB, a manifest above 2 MiB, or a PDP commitment above its
    canonical 16 KiB limit before decoding the artifact.
+   Publication validates and syncs one owner-only, direct single-link temporary
+   artifact and atomically renames it into place without replacement. The final
+   name is never exposed with a second hard link. Concurrent identical publishers
+   converge only after exact bounded byte and direct-file checks; conflicting
+   bytes and hostile links reject. The parent directory is synced before success.
+   A platform or filesystem without atomic no-replace rename fails closed.
 2. Block assembly loads receipts from the spool, drops stale/already-sealed
    entries using the committed cursor snapshot, and enforces contiguity per
    `(lane, epoch)`. If a reachable receipt lacks a matching commitment or the

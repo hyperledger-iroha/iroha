@@ -53,7 +53,10 @@ fn membership_request_requires_presentation_binding_in_json_and_norito() {
     let decoded = norito::json::from_json::<PopMembershipRequestV1>(&json)
         .expect("decode bound request JSON");
     assert_eq!(decoded.presentation_binding_digest_hex, "33".repeat(32));
-    let wire = norito::to_bytes(&request).expect("encode bound request Norito");
+    let wire = crate::frame_test_support::assert_current_frame(
+        &request,
+        "iroha_torii::sorafs::pop_api::PopMembershipRequestV1",
+    );
     let decoded = norito::decode_from_bytes::<PopMembershipRequestV1>(&wire)
         .expect("decode bound request Norito");
     assert_eq!(decoded.presentation_binding_digest_hex, "33".repeat(32));
@@ -93,7 +96,10 @@ fn verify_request_requires_presentation_binding_in_json_and_norito() {
     let decoded = norito::json::from_json::<PopVerifyMembershipRequestV1>(&json)
         .expect("decode bound request JSON");
     assert_eq!(decoded.presentation_binding_digest_hex, "33".repeat(32));
-    let wire = norito::to_bytes(&request).expect("encode bound request Norito");
+    let wire = crate::frame_test_support::assert_current_frame(
+        &request,
+        "iroha_torii::sorafs::pop_api::PopVerifyMembershipRequestV1",
+    );
     let decoded = norito::decode_from_bytes::<PopVerifyMembershipRequestV1>(&wire)
         .expect("decode bound request Norito");
     assert_eq!(decoded.presentation_binding_digest_hex, "33".repeat(32));

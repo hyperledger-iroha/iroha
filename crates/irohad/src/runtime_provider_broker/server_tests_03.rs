@@ -20,12 +20,12 @@ fn moderation_delivery_bindings_backends_and_startup_identity_are_exact() {
             "moderation delivery boundaries reject native signer aliases"
         );
         assert!(matches!(
-            prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+            prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
             Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
         ));
         match slot {
             IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff => {
-                prepare_server_state(
+                prepare_test_server_state(
                     &catalog,
                     RuntimeProviderBrokerBackendsV1::new().with_moderation_settlement_handoff(
                         Arc::new(ServerTestModerationHandoffBoundary::exact(Kind::Settlement)),
@@ -34,7 +34,7 @@ fn moderation_delivery_bindings_backends_and_startup_identity_are_exact() {
                 .expect("accept exact settlement handoff boundary");
             }
             IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff => {
-                prepare_server_state(
+                prepare_test_server_state(
                     &catalog,
                     RuntimeProviderBrokerBackendsV1::new().with_moderation_publication_handoff(
                         Arc::new(ServerTestModerationHandoffBoundary::exact(
@@ -45,7 +45,7 @@ fn moderation_delivery_bindings_backends_and_startup_identity_are_exact() {
                 .expect("accept exact publication handoff boundary");
             }
             IrohaRuntimeProviderSlotV1::ModerationPanelNotification => {
-                prepare_server_state(
+                prepare_test_server_state(
                     &catalog,
                     RuntimeProviderBrokerBackendsV1::new().with_moderation_panel_notification(
                         Arc::new(ServerTestModerationPanelBoundary::exact()),
@@ -59,7 +59,7 @@ fn moderation_delivery_bindings_backends_and_startup_identity_are_exact() {
     let settlement_catalog =
         delivery_catalog(IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff);
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &settlement_catalog,
             RuntimeProviderBrokerBackendsV1::new().with_moderation_publication_handoff(Arc::new(
                 ServerTestModerationHandoffBoundary::exact(Kind::Publication),
@@ -74,7 +74,7 @@ fn moderation_delivery_bindings_backends_and_startup_identity_are_exact() {
             .with_mode(ServerTestModerationDeliveryMode::DriftOnSecondQualification),
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &settlement_catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_moderation_settlement_handoff(Arc::new(boundary)),
@@ -90,7 +90,7 @@ fn moderation_delivery_bindings_backends_and_startup_identity_are_exact() {
             .with_mode(ServerTestModerationDeliveryMode::DriftOnSecondQualification),
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &panel_catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_moderation_panel_notification(Arc::new(boundary)),
@@ -292,12 +292,28 @@ fn moderation_delivery_server_enforces_replay_failures_receipts_and_post_drift()
         2
     );
     let mut conflicting_handoff = handoff_request.handoff.clone();
-    conflicting_handoff.outcome_digest = [0x99; 32];
+    // Preserve the canonical identity while changing the retained payload so the
+    // conflict reaches the durable boundary's exact-byte replay check.
+    conflicting_handoff.finalized_cursor.event_index += 1;
+    conflicting_handoff.source_event_witness.event_index =
+        conflicting_handoff.finalized_cursor.event_index;
+    assert_eq!(
+        conflicting_handoff.finalized_cursor,
+        conflicting_handoff.source_event_witness.cursor()
+    );
+    assert_eq!(
+        conflicting_handoff.handoff_id,
+        conflicting_handoff.canonical_id()
+    );
     let conflicting_request = ModerationDurableHandoffRequestV1 {
         canonical_handoff: norito::to_bytes(&conflicting_handoff)
             .expect("encode conflicting handoff"),
         handoff: conflicting_handoff,
     };
+    assert_ne!(
+        conflicting_request.canonical_handoff,
+        handoff_request.canonical_handoff
+    );
     assert_eq!(
         dispatch_moderation_delivery(
             &handoff_state,
@@ -405,13 +421,34 @@ fn moderation_delivery_server_enforces_replay_failures_receipts_and_post_drift()
             12,
             OPERATION_MODERATION_PANEL_NOTIFICATION_DELIVER_ONCE_V1,
             encode_canonical(
-                &moderation_panel_notification_request_to_wire(&conflicting_panel)
-                    .expect("project conflicting panel notification"),
+                // Inject the conflicting canonical frame directly: the public
+                // projector already rejects its inconsistent notification ID.
+                &ModerationDurablePanelNotificationRequestWireV1 {
+                    notification: conflicting_panel.notification.clone(),
+                    canonical_notification: conflicting_panel.canonical_notification.clone(),
+                    lease_expires_at_unix_ms: conflicting_panel.lease_expires_at_unix_ms,
+                    attempt: conflicting_panel.attempt,
+                    attempt_limit: conflicting_panel.attempt_limit,
+                },
                 MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
             )
             .expect("encode conflicting panel notification frame"),
         ),
         Err(BrokerError::Rejected)
+    );
+    assert_eq!(
+        panel_boundary.delivery_calls.load(Ordering::Relaxed),
+        2,
+        "a conflicting notification identity is rejected before provider use"
+    );
+    // The durable boundary independently enforces exact-byte replay even for
+    // a caller that has not passed through the broker's identity validation.
+    assert_eq!(
+        test_moderation_runtime::ModerationDurablePanelNotificationBoundaryV1::deliver_once(
+            panel_boundary.as_ref(),
+            &conflicting_panel,
+        ),
+        Err(test_moderation::ModerationPanelNotificationFailureV1::Permanent)
     );
     assert_eq!(panel_boundary.delivery_calls.load(Ordering::Relaxed), 3);
     for (mode, expected) in [
@@ -492,7 +529,8 @@ fn moderation_delivery_round_trips_and_poisons_after_ambiguous_results() {
             _ => unreachable!(),
         };
         let (_directory, policy, shutdown, server) = start_signer(catalog.clone(), backends);
-        let dependencies = resolve(&catalog, &policy).expect("resolve moderation handoff proxy");
+        let dependencies =
+            resolve_test_process(&catalog, &policy).expect("resolve moderation handoff proxy");
         {
             let boundary = match slot {
                 IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff => dependencies
@@ -540,7 +578,8 @@ fn moderation_delivery_round_trips_and_poisons_after_ambiguous_results() {
             ServerTestModerationPanelBoundary::exact(),
         )),
     );
-    let dependencies = resolve(&panel_catalog, &policy).expect("resolve panel-notification proxy");
+    let dependencies =
+        resolve_test_process(&panel_catalog, &policy).expect("resolve panel-notification proxy");
     {
         let boundary = dependencies
             .sorafs_moderation_panel_notification
@@ -576,8 +615,8 @@ fn moderation_delivery_round_trips_and_poisons_after_ambiguous_results() {
                 .with_mode(ServerTestModerationDeliveryMode::DriftAfterDelivery),
         )),
     );
-    let dependencies =
-        resolve(&handoff_catalog, &policy).expect("resolve drifting moderation handoff proxy");
+    let dependencies = resolve_test_process(&handoff_catalog, &policy)
+        .expect("resolve drifting moderation handoff proxy");
     {
         let boundary = dependencies
             .sorafs_moderation_settlement_handoff
@@ -610,7 +649,7 @@ fn moderation_delivery_round_trips_and_poisons_after_ambiguous_results() {
         )),
     );
     let dependencies =
-        resolve(&panel_catalog, &policy).expect("resolve invalid-receipt panel proxy");
+        resolve_test_process(&panel_catalog, &policy).expect("resolve invalid-receipt panel proxy");
     {
         let boundary = dependencies
             .sorafs_moderation_panel_notification
@@ -916,7 +955,7 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
 fn moderation_quarantine_server_binds_key_identity_and_revalidates_operations() {
     let catalog = moderation_catalog();
     assert!(matches!(
-        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     for backend in [
@@ -927,7 +966,7 @@ fn moderation_quarantine_server_binds_key_identity_and_revalidates_operations() 
             .with_active_key_id("software://sorafs/moderation/test/quarantine-key"),
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_moderation_quarantine_key_wrapper(Arc::new(backend)),
@@ -1333,6 +1372,7 @@ fn sensitive_broker_payload_is_scrubbed_before_request_ownership_on_early_errors
     let binding = token_signer_binding();
     let (stream, peer) = UnixStream::pair().expect("create isolated broker stream pair");
     let session = Arc::new(BrokerSession {
+        decode_pool: new_test_process_pool(),
         connection: Mutex::new(BrokerConnection {
             stream,
             session_id: TEST_SESSION_ID,
@@ -1416,11 +1456,11 @@ fn sensitive_broker_payload_is_scrubbed_before_request_ownership_on_early_errors
 fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {
     let catalog = reputation_retention_server_test_catalog();
     assert!(matches!(
-        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain"),
             RuntimeProviderBrokerBackendsV1::new()
                 .with_reputation_finalized_archive_retention_authority(Arc::new(
@@ -1444,7 +1484,7 @@ fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {
         },
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_reputation_finalized_archive_retention_authority(Arc::new(backend,)),
@@ -1452,7 +1492,7 @@ fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
     }
-    let state = prepare_server_state(
+    let state = prepare_test_server_state(
         &catalog,
         RuntimeProviderBrokerBackendsV1::new()
             .with_reputation_finalized_archive_retention_authority(Arc::new(
@@ -1543,7 +1583,7 @@ fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {
 fn governance_checkpoint_server_requires_exact_backend_identity_and_policy() {
     let catalog = checkpoint_catalog();
     assert!(matches!(
-        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     for backend in [
@@ -1556,7 +1596,7 @@ fn governance_checkpoint_server_requires_exact_backend_identity_and_policy() {
             .with_policy_digest([0x72; 32]),
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_governance_dag_checkpoint_store(Arc::new(backend)),
@@ -1564,7 +1604,7 @@ fn governance_checkpoint_server_requires_exact_backend_identity_and_policy() {
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
     }
-    prepare_server_state(
+    prepare_test_server_state(
         &catalog,
         RuntimeProviderBrokerBackendsV1::new().with_governance_dag_checkpoint_store(Arc::new(
             LaxGovernanceCheckpointStore::new(SERVER_TEST_CHECKPOINT_HANDLE, 7),
@@ -2408,6 +2448,66 @@ fn fenced_privacy_nested_payload_charges_full_broker_admission() {
         "the full server validation/dispatch/response path remains within inventory"
     );
 }
+#[test]
+fn fenced_privacy_preflight_uses_selected_process_and_preserves_active_operation() {
+    let request = fenced_request();
+    let wire = FencedPrivacyPublicationRequestWireV1::from_request(&request);
+    let pool = new_test_process_pool();
+    assert_eq!(
+        wire.to_request_from_pool(Arc::clone(&pool))
+            .expect("selected-process preflight"),
+        request
+    );
+    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    let full = pool
+        .try_acquire(pool.max_bytes)
+        .expect("fill selected process cap");
+    assert_eq!(
+        wire.to_request_from_pool(Arc::clone(&pool)),
+        Err(BrokerError::Unavailable),
+        "selected-process exhaustion cannot fall back to a different pool"
+    );
+    let outer_pool = new_test_process_pool();
+    let outer = DecodeResourceAdmissionV1::acquire_operation_from(
+        Arc::clone(&outer_pool),
+        OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1,
+    )
+    .expect("reserve existing publication operation");
+    {
+        let _scope = outer.enter();
+        assert_eq!(wire.to_request_from_pool(Arc::clone(&pool)), Ok(request));
+        assert!(Arc::ptr_eq(
+            &current_decode_resource_admission().expect("active operation remains installed"),
+            &outer,
+        ));
+    }
+    drop(outer);
+    assert_eq!(outer_pool.used_bytes.load(Ordering::Acquire), 0);
+    let unrelated = DecodeResourceAdmissionV1::acquire_operation_from(
+        Arc::clone(&outer_pool),
+        OPERATION_QUALIFY_V1,
+    )
+    .expect("reserve unrelated operation");
+    {
+        let _scope = unrelated.enter();
+        assert_eq!(
+            wire.to_request_from_pool(Arc::clone(&pool)),
+            Err(BrokerError::Protocol),
+            "a different active operation cannot replace its identity with a fresh reservation"
+        );
+    }
+    drop(unrelated);
+    drop(full);
+    let mut malformed = wire;
+    malformed.version = malformed.version.wrapping_add(1);
+    assert_eq!(
+        malformed.to_request_from_pool(Arc::clone(&pool)),
+        Err(BrokerError::Rejected)
+    );
+    assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
+    assert_eq!(outer_pool.used_bytes.load(Ordering::Acquire), 0);
+}
+
 #[test]
 fn fenced_privacy_publisher_operation_is_canonical_bounded_and_read_back() {
     assert!(operation_is_known(

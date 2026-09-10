@@ -8,7 +8,11 @@ use crate::da::{LaneEpoch, ReplayFingerprint};
 use blake3::Hasher as Blake3Hasher;
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
-    da::{commitment::DaCommitmentRecord, ingest::DaIngestReceipt, types::StorageTicketId},
+    da::{
+        commitment::DaCommitmentRecord,
+        ingest::{DaIngestReceipt, StoredDaReceipt},
+        types::StorageTicketId,
+    },
     nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
@@ -17,15 +21,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use thiserror::Error;
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
-)]
-struct StoredDaReceipt {
-    version: u16,
-    sequence: u64,
-    receipt: DaIngestReceipt,
-}
-const STORED_RECEIPT_VERSION: u16 = 1;
 /// Receipt entry captured from the spool.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DaReceiptEntry {
@@ -737,7 +732,7 @@ fn decode_receipt(
             source,
         }
     })?;
-    if stored.version != STORED_RECEIPT_VERSION {
+    if stored.version != StoredDaReceipt::VERSION {
         return Err(DaReceiptSpoolError::UnsupportedVersion {
             path: path.to_path_buf(),
             version: stored.version,
@@ -1301,10 +1296,14 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &stored,
+            "iroha_torii::da::persistence::StoredDaReceipt",
+        );
         let bytes = to_bytes(&stored).expect("encode");
         let path = dir.path().join(receipt_file_name(&receipt, 3, [0x99; 32]));
         std::fs::write(&path, bytes).expect("write");
@@ -1320,7 +1319,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1361,7 +1360,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1471,7 +1470,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION + 1,
+            version: StoredDaReceipt::VERSION + 1,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1482,7 +1481,7 @@ mod tests {
             matches!(
                 load_receipt_entries(dir.path()),
                 Err(DaReceiptSpoolError::UnsupportedVersion { version, .. })
-                    if version == STORED_RECEIPT_VERSION + 1
+                    if version == StoredDaReceipt::VERSION + 1
             ),
             "unsupported receipt versions must reject the whole spool load"
         );
@@ -1492,7 +1491,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1512,7 +1511,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1532,7 +1531,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1556,7 +1555,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1593,7 +1592,7 @@ mod tests {
         second.storage_ticket = StorageTicketId::new([0xE1; 32]);
         for (receipt, fingerprint) in [(&first, [0x77; 32]), (&second, [0x78; 32])] {
             let stored = StoredDaReceipt {
-                version: STORED_RECEIPT_VERSION,
+                version: StoredDaReceipt::VERSION,
                 sequence: 3,
                 receipt: receipt.clone(),
             };
@@ -1617,7 +1616,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1640,7 +1639,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };
@@ -1688,7 +1687,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let receipt = sample_receipt(1, 2, 3);
         let stored = StoredDaReceipt {
-            version: STORED_RECEIPT_VERSION,
+            version: StoredDaReceipt::VERSION,
             sequence: 3,
             receipt: receipt.clone(),
         };

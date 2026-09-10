@@ -406,6 +406,19 @@ fn appeal_finance_settlement_context_is_canonical_and_rotation_safe() {
         outcome: verdict.to_string(),
         panel_size,
     };
+    crate::frame_test_support::assert_current_frame(
+        &context,
+        "iroha_torii::sorafs::api::AppealFinanceSettlementOutboxContextV1",
+    );
+    let deposit_context = AppealFinanceDepositOutboxContextV1 {
+        version: APPEAL_FINANCE_DEPOSIT_OUTBOX_CONTEXT_VERSION_V1,
+        policy_digest: policy.policy_digest,
+        expected: expected.clone(),
+    };
+    crate::frame_test_support::assert_current_frame(
+        &deposit_context,
+        "iroha_torii::sorafs::api::AppealFinanceDepositOutboxContextV1",
+    );
     let encoded = norito::to_bytes(&context).expect("encode settlement context");
     assert_eq!(
         decode_appeal_finance_outbox_context(&encoded),

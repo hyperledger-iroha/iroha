@@ -38,6 +38,16 @@ fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
         persisted.sequences.insert(provider_id, 11);
         let network_id = test_network_id(0x61);
         persist_vrf_state(&path, &network_id, &persisted).expect("persist admitted-era state");
+        let bytes = read_secure_state(&path, 64 * 1024, "provider VRF")
+            .expect("read actual VRF state file")
+            .expect("persisted VRF state");
+        let snapshot: VrfStateSnapshotV1 =
+            norito::decode_canonical(&bytes).expect("decode actual VRF snapshot root");
+        let canonical = crate::frame_test_support::assert_current_frame(
+            &snapshot,
+            "iroha_torii::sorafs::por::VrfStateSnapshotV1",
+        );
+        assert_eq!(canonical, bytes);
         let restored = load_vrf_state(
             &path,
             16,

@@ -75,6 +75,8 @@ struct CachedResolverPageV1 {
     response: MusubiResolverIndexPageV1,
 }
 /// Complete coherent set of pages consumed by one successful graph collection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::registry_cache::ResolverIndexCacheSnapshotV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ResolverIndexCacheSnapshotV1 {
     network_id: NetworkId,
@@ -266,6 +268,8 @@ impl CommittedResolverSnapshotV1 {
     }
 }
 /// Strict first-release cache catalog.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::registry_cache::ResolverIndexCacheCatalogV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct ResolverIndexCacheCatalogV1 {
     schema: String,
@@ -953,6 +957,24 @@ fn validate_private_directory(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn captured_resolver_cache_frames_preserve_existing_fixture_bytes() {
+        let snapshot = image("apps.sora", 10, 10);
+        snapshot
+            .validate()
+            .expect("canonical existing snapshot fixture");
+        let catalog = ResolverIndexCacheCatalogV1::default();
+        catalog.validate().expect("canonical empty catalog");
+        super::persistence_frame_fixture::assert_captured(
+            "musubi::registry_cache::ResolverIndexCacheSnapshotV1",
+            Some(&snapshot),
+        );
+        super::persistence_frame_fixture::assert_captured(
+            "musubi::registry_cache::ResolverIndexCacheCatalogV1",
+            Some(&catalog),
+        );
+    }
+
     use super::*;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     use crate::{
@@ -1371,3 +1393,7 @@ exports = []
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_frame_fixture.rs"]
+mod persistence_frame_fixture;

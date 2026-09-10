@@ -73,6 +73,8 @@ use std::{collections::BTreeSet, sync::Arc};
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for drafting a Ministry agenda proposal submission transaction.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::gov::MinistryAgendaProposalDraftDto")]
 pub struct MinistryAgendaProposalDraftDto {
     /// Agenda proposal payload that will be submitted on-chain.
     pub proposal: AgendaProposalV1,
@@ -112,6 +114,8 @@ pub enum MinistryAgendaProposalDraftOutcome {
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for submitting a plain (non-ZK) quadratic ballot.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::gov::PlainBallotDto")]
 pub struct PlainBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
@@ -127,7 +131,6 @@ pub struct PlainBallotDto {
     /// One of: "Aye" | "Nay" | "Abstain"
     pub direction: String,
 }
-impl norito::core::NoritoSerialize for PlainBallotDto {}
 impl norito::core::SerializePayload for PlainBallotDto {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let value = norito::json::to_value(self)
@@ -137,7 +140,6 @@ impl norito::core::SerializePayload for PlainBallotDto {
         <String as norito::core::SerializePayload>::serialize(&json, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for PlainBallotDto {}
 impl<'de> norito::core::DeserializePayload<'de> for PlainBallotDto {
     fn try_deserialize(
         archived: &'de norito::core::Archived<PlainBallotDto>,
@@ -335,6 +337,8 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for submitting a ZK ballot using BallotProof-style fields.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::gov::ZkBallotV1Dto")]
 pub struct ZkBallotV1Dto {
     /// Authority submitting the ballot (AccountId string)
     pub authority: String,
@@ -367,6 +371,8 @@ pub struct ZkBallotV1Dto {
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body that carries a BallotProof directly along with transaction context.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::gov::ZkBallotV1BallotProofDto")]
 pub struct ZkBallotV1BallotProofDto {
     pub authority: String,
     /// Exact genesis-derived network to build the transaction skeleton for.
@@ -1471,6 +1477,8 @@ pub fn handle_gov_parliament_tle_release_context_read(
 /// Strict citizen registration draft request.
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::gov::CitizenDraftRequestV1")]
 pub struct CitizenDraftRequestV1 {
     /// Request layout version.
     pub version: u16,
@@ -2002,6 +2010,8 @@ fn integer_sqrt_u128(n: u128) -> u128 {
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for applying protected namespaces parameter.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::gov::ProtectedNamespacesDto")]
 pub struct ProtectedNamespacesDto {
     /// Namespaces to protect (e.g., `["apps", "system"]`).
     pub namespaces: Vec<String>,

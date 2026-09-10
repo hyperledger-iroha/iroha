@@ -2340,7 +2340,8 @@ struct FencedPrivacyAuthoritativeHeadSyncV1 {
     authoritative_head: Option<FencedTransparencyTargetHeadV1>,
     ancestry_proof_digest: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::FencedPrivacyStateV1")]
 struct FencedPrivacyStateV1 {
     version: u8,
     pending: Option<FencedPrivacyPendingRequestV1>,
@@ -2358,7 +2359,8 @@ struct RuntimeDagProviderBindingV1 {
     publisher_peer_id: Vec<u8>,
     publisher_public_key: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagQualificationTransitionBodyV1")]
 struct RuntimeDagQualificationTransitionBodyV1 {
     version: u8,
     root_digest: [u8; 32],
@@ -2375,7 +2377,8 @@ struct RuntimeDagQualificationTransitionBodyV1 {
     archive_generation: u64,
     archive_digest: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagKeyTransitionSigningPayloadV1")]
 struct RuntimeDagKeyTransitionSigningPayloadV1 {
     version: u8,
     outgoing_segment_revision: u64,
@@ -2391,7 +2394,8 @@ struct RuntimeDagKeyTransitionEnvelopeV1 {
     outgoing_signature: [u8; 64],
     incoming_signature: [u8; 64],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagQualificationTransitionV1")]
 struct RuntimeDagQualificationTransitionV1 {
     body: RuntimeDagQualificationTransitionBodyV1,
     key_transition: RuntimeDagKeyTransitionEnvelopeV1,
@@ -2406,12 +2410,14 @@ struct RuntimeDagQualificationHistoryV1 {
     archive_tail_transition_digest: [u8; 32],
     transitions: Vec<RuntimeDagQualificationTransitionV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagQualificationStateV1")]
 struct RuntimeDagQualificationStateV1 {
     version: u8,
     history: Option<RuntimeDagQualificationHistoryV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagQualificationArchiveBodyV1")]
 struct RuntimeDagQualificationArchiveBodyV1 {
     version: u8,
     root_digest: [u8; 32],
@@ -2424,7 +2430,8 @@ struct RuntimeDagQualificationArchiveBodyV1 {
     signer: RuntimeDagProviderBindingV1,
     transitions: Vec<RuntimeDagQualificationTransitionV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagQualificationArchiveV1")]
 struct RuntimeDagQualificationArchiveV1 {
     body: RuntimeDagQualificationArchiveBodyV1,
     signature: [u8; 64],
@@ -2444,7 +2451,8 @@ impl RuntimeDagQualificationSummary {
         archive_digest: [0; 32],
     };
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagProducerCheckpointV1")]
 pub(crate) struct RuntimeDagProducerCheckpointV1 {
     pub(crate) version: u8,
     pub(crate) root_digest: [u8; 32],
@@ -2470,7 +2478,8 @@ struct RuntimeDagProducerStagedArtifactV1 {
     byte_len: u64,
     blake3: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagProducerPublishIntentV1")]
 struct RuntimeDagProducerPublishIntentV1 {
     version: u8,
     checkpoint: RuntimeDagProducerCheckpointV1,
@@ -2491,12 +2500,14 @@ struct RuntimeDagProducerStagedEnvelopeV1 {
     intent: RuntimeDagProducerPublishIntentV1,
     transaction: RuntimeDagProducerStagedTransactionV1,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagProducerStagingStateV1")]
 struct RuntimeDagProducerStagingStateV1 {
     version: u8,
     staged: Option<RuntimeDagProducerStagedEnvelopeV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagCommittedStateV1")]
 struct RuntimeDagCommittedStateV1 {
     version: u8,
     head_bytes: Option<Vec<u8>>,

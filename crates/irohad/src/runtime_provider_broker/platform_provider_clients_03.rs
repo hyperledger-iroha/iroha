@@ -247,15 +247,18 @@ impl ProviderIngestBrokerCompletionSigner {
                 false,
             )
             .map_err(provider_ingest_signer_error)?;
-        let result = self
-            .session
-            .decode_result::<ProviderIngestSignResultWireV1>(&result)
-            .map_err(provider_ingest_signer_error)?;
-        let signed = decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
-            &result.signed_transaction,
-            max_signed,
-        )
-        .map_err(provider_ingest_signer_error)?;
+        let signed = {
+            let _scope = result.enter_decode_admission();
+            let decoded = self
+                .session
+                .decode_result::<ProviderIngestSignResultWireV1>(&result)
+                .map_err(provider_ingest_signer_error)?;
+            decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
+                &decoded.signed_transaction,
+                max_signed,
+            )
+            .map_err(provider_ingest_signer_error)?
+        };
         self.live_resolver_state()
             .map_err(provider_ingest_signer_error)?;
         if signed.payload() != transaction_payload {
@@ -1476,6 +1479,7 @@ impl sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1
                 true,
             )
             .map_err(|_| ReputationBrokerProvider::request_failure(request.idempotency_key))?;
+        let _scope = result.enter_decode_admission();
         let wire = self
             .provider
             .session
@@ -2747,7 +2751,8 @@ impl ParliamentTleBrokerPartialReleaseSigner {
         &self,
         session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
         expected_participant_index: u16,
-    ) -> Result<iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1, BrokerError> {
+    ) -> Result<iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1, BrokerError>
+    {
         retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
             live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
             let request_payload = encode_canonical(
@@ -2888,13 +2893,21 @@ fn registry_error(error: BrokerError) -> IrohaRuntimeProviderRegistryErrorV1 {
     }
 }
 /// Resolve supported bindings through an explicitly selected endpoint.
+pub(super) fn resolve(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint: &EndpointPolicy,
+) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
+    resolve_with_decode_pool(bindings, endpoint, shared_decode_resource_pool())
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the fixed V1 provider-resolution matrix is exhaustive"
 )]
-pub(super) fn resolve(
+fn resolve_with_decode_pool(
     bindings: &IrohaRuntimeProviderBindingsV1,
     endpoint: &EndpointPolicy,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
     let requested_catalog = bindings
         .iter()
@@ -2919,6 +2932,7 @@ pub(super) fn resolve(
         bindings.chain_id(),
         *bindings.network_id(),
         requested_catalog.clone(),
+        decode_pool,
     )
     .map_err(registry_error)?;
     let mut dependencies = IrohaRuntimeDeps::default();

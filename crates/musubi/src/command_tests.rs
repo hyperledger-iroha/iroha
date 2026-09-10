@@ -1,9 +1,11 @@
 // Test body included from command.rs to keep the production source budget bounded.
-use std::{
-    io::{Read as _, Write as _},
-    net::TcpListener,
-    thread,
-    time::Duration,
+use super::*;
+#[cfg(unix)]
+use crate::package::PackageCar;
+use crate::{
+    lockfile::LockedRootV1,
+    output::{OUTPUT_SCHEMA, OUTPUT_VERSION},
+    publish::{PublicationAmxSubmissionV1, PublicationFinalCheckpointV1},
 };
 use clap::CommandFactory as _;
 use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
@@ -21,7 +23,6 @@ use iroha_data_model::{
     },
     nexus::DataSpaceId,
 };
-use tempfile::TempDir;
 #[cfg(unix)]
 use iroha_data_model::{
     musubi::{MUSUBI_REGISTRY_VERSION_V1, MusubiPublicationV1, MusubiVerificationLockV1},
@@ -29,20 +30,21 @@ use iroha_data_model::{
 };
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use super::*;
-#[cfg(unix)]
-use crate::package::PackageCar;
-use crate::{
-    lockfile::LockedRootV1,
-    output::{OUTPUT_SCHEMA, OUTPUT_VERSION},
-    publish::{PublicationAmxSubmissionV1, PublicationFinalCheckpointV1},
-};
+use std::{io::Write as _, net::TcpListener, thread, time::Duration};
+use tempfile::TempDir;
 fn test_network_id(byte: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         [byte; Hash::LENGTH],
     )))
 }
 fn authenticated_registry_config(torii_url: &str, chain_discriminant: u16) -> String {
+    authenticated_registry_config_for_network(torii_url, chain_discriminant, test_network_id(0x31))
+}
+fn authenticated_registry_config_for_network(
+    torii_url: &str,
+    chain_discriminant: u16,
+    network_id: NetworkId,
+) -> String {
     let signer =
         KeyPair::try_from_seed(vec![0x5B; 32], Algorithm::Ed25519).expect("registry signer");
     format!(
@@ -53,14 +55,24 @@ torii_url = "{torii_url}"
 torii_request_timeout_ms = 2000
 
 [account]
+domain = "packages.universal"
 chain_discriminant = {chain_discriminant}
 public_key = "{}"
 private_key = "{}"
 "#,
-        test_network_id(0x31),
+        network_id,
         signer.public_key(),
         ExposedPrivateKey(signer.private_key().clone()),
     )
+}
+/// Create a retention reader bound to the fixture network before receiving a batch.
+fn retention_registry_reader(torii_url: &str) -> RegistryReadClientV1 {
+    let config = authenticated_registry_config_for_network(torii_url, 753, test_network_id(0x81));
+    RegistryReadClientV1::load_from_config_bytes(
+        Path::new("command-retention-reader-test.toml"),
+        config.as_bytes(),
+    )
+    .expect("authenticated registry client on the retention fixture network")
 }
 #[test]
 fn resolver_search_limit_has_a_resource_corridor_diagnostic() {
@@ -279,6 +291,7 @@ fn write_poisoned_recovery_config(root: &Path) -> PathBuf {
 torii_request_timeout_ms = 1
 
 [account]
+domain = "packages.universal"
 chain_discriminant = 753
 public_key = "deliberately-not-a-key"
 private_key = "deliberately-not-a-key"
@@ -622,12 +635,7 @@ fn cache_prune_dry_run_reports_without_mutating() {
     let (torii_url, server) = serve_json_sequence(vec![
         norito::json::to_vec(&page).expect("retention response JSON"),
     ]);
-    let registry = RegistryReadClientV1::new_for_test(
-        torii_url.parse().expect("loopback URL"),
-        Duration::from_secs(2),
-        753,
-    )
-    .expect("authenticated registry client");
+    let registry = retention_registry_reader(&torii_url);
     let result = prune_cache_targets(&cache, &[archive_id], &registry, true)
         .expect("dry-run retention proof");
     assert_eq!(result.message, "would prune 1 cached archive(s)");
@@ -671,12 +679,7 @@ fn cache_prune_live_fails_closed_without_touching_any_candidate() {
     let (torii_url, server) = serve_json_sequence(vec![
         norito::json::to_vec(&page).expect("retention response JSON"),
     ]);
-    let registry = RegistryReadClientV1::new_for_test(
-        torii_url.parse().expect("loopback URL"),
-        Duration::from_secs(2),
-        753,
-    )
-    .expect("authenticated registry client");
+    let registry = retention_registry_reader(&torii_url);
     let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
         Err(error) => error,
         Ok(_) => panic!("non-empty live prune must fail closed"),
@@ -743,12 +746,7 @@ fn cache_prune_rejects_cross_batch_deployment_drift_before_mutation() {
         norito::json::to_vec(&second).expect("second retention batch JSON"),
     ];
     let (torii_url, server) = serve_json_sequence(responses);
-    let registry = RegistryReadClientV1::new_for_test(
-        torii_url.parse().expect("loopback URL"),
-        Duration::from_secs(2),
-        753,
-    )
-    .expect("authenticated registry client");
+    let registry = retention_registry_reader(&torii_url);
     let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
         Err(error) => error,
         Ok(_) => panic!("deployment drift must fail closed"),
@@ -1242,9 +1240,10 @@ fn owner_list_is_authenticated_and_includes_pending_invitations() {
     };
     let directory = MusubiOrderedPackagePageV1 {
         query: MusubiOrderedPrefixQueryV1 {
-            prefix: MusubiOrderedPrefixV1::new("apps.sora/").expect("namespace prefix"),
+            prefix: MusubiOrderedPrefixV1::new(&selector.to_string())
+                .expect("exact selector prefix"),
             page: MusubiPageRequestV1 {
-                limit: 1,
+                limit: 2,
                 cursor: None,
             },
         },
@@ -1291,7 +1290,7 @@ fn owner_list_is_authenticated_and_includes_pending_invitations() {
         query: MusubiPackagePageQueryV1 {
             package,
             page: MusubiPageRequestV1 {
-                limit: 50,
+                limit: u32::try_from(MUSUBI_MAX_PAGE_SIZE_V1).expect("canonical page bound"),
                 cursor: None,
             },
         },
@@ -1299,6 +1298,12 @@ fn owner_list_is_authenticated_and_includes_pending_invitations() {
         next_cursor: None,
         snapshot,
     };
+    directory
+        .validate_for(&directory.query)
+        .expect("canonical exact-selector directory fixture");
+    maintainers
+        .validate_for(&maintainers.query)
+        .expect("canonical complete maintainer-page fixture");
     let responses = {
         let _chain_discriminant = ChainDiscriminantGuard::enter(753);
         vec![
@@ -1309,8 +1314,11 @@ fn owner_list_is_authenticated_and_includes_pending_invitations() {
     let (torii_url, server) = serve_json_sequence(responses);
     let temporary = TempDir::new().expect("temporary config directory");
     let config = temporary.path().join("client.toml");
-    fs::write(&config, authenticated_registry_config(&torii_url, 753))
-        .expect("write authenticated config");
+    fs::write(
+        &config,
+        authenticated_registry_config_for_network(&torii_url, 753, test_network_id(9)),
+    )
+    .expect("write authenticated config");
     let invocation = invoke([
         OsString::from("musubi"),
         OsString::from("--format"),

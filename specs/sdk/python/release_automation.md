@@ -62,7 +62,7 @@ harness removes `dist/` on exit.
      --signature release_manifest.json.sig \
      --public-key release_manifest.json.pub \
      --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
-     --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+     --release-manifest-verifier /opt/iroha/bin/iroha \
      --trusted-release-manifest-verifier-sha256 \
        "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
    ```

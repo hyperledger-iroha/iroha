@@ -25,6 +25,13 @@ use std::{
     path::{Path, PathBuf},
 };
 use tempfile::tempdir;
+
+fn validator_command() -> assert_cmd::Command {
+    let mut command = cargo_bin_cmd!("iroha");
+    command.args(["app", "sorafs", "toolkit"]);
+    command
+}
+
 fn workspace_fixture(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -36,7 +43,7 @@ fn run_release_manifest_verify(
     fingerprint: &str,
     signature: &Path,
 ) -> std::process::Output {
-    cargo_bin_cmd!("sorafs-validate")
+    validator_command()
         .args([
             "release-manifest",
             "--manifest",
@@ -49,7 +56,7 @@ fn run_release_manifest_verify(
             signature.to_str().expect("signature path is utf-8"),
         ])
         .output()
-        .expect("run sorafs-validate release-manifest")
+        .expect("run iroha app sorafs toolkit release-manifest")
 }
 fn run_release_manifest_development_sign(
     manifest: &Path,
@@ -59,7 +66,7 @@ fn run_release_manifest_development_sign(
     signature_out: &Path,
     development_gate: bool,
 ) -> std::process::Output {
-    let mut command = cargo_bin_cmd!("sorafs-validate");
+    let mut command = validator_command();
     command.args([
         "release-manifest",
         "--manifest",
@@ -80,7 +87,7 @@ fn run_release_manifest_development_sign(
     }
     command
         .output()
-        .expect("run sorafs-validate release-manifest development signing")
+        .expect("run iroha app sorafs toolkit release-manifest development signing")
 }
 fn assert_release_manifest_failure(output: &std::process::Output, exit_code: i32, message: &str) {
     assert_eq!(
@@ -106,7 +113,7 @@ fn run_timed_ovn_release_audit(
     audit_evidence_archive: &Path,
     trusted_reviewer_public_key: &Path,
 ) -> std::process::Output {
-    cargo_bin_cmd!("sorafs-validate")
+    validator_command()
         .args([
             "timed-ovn-release-audit",
             "--audit-manifest",
@@ -137,7 +144,7 @@ fn run_timed_ovn_release_audit(
                 .expect("trusted reviewer public-key path is utf-8"),
         ])
         .output()
-        .expect("run sorafs-validate timed-ovn-release-audit")
+        .expect("run iroha app sorafs toolkit timed-ovn-release-audit")
 }
 fn potr_receipt() -> PotrReceiptV1 {
     let receipt = PotrReceiptV1 {
@@ -296,8 +303,9 @@ fn governance_dag_head(blocks: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
 #[test]
 fn sorafs_validate_advert_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "advert",
             "--input",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -309,7 +317,7 @@ fn sorafs_validate_advert_accepts_committed_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -331,8 +339,9 @@ fn sorafs_validate_advert_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "advert",
             "--input",
             input.to_str().expect("temp path is utf-8"),
@@ -344,7 +353,7 @@ fn sorafs_validate_advert_rejects_malformed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -360,8 +369,9 @@ fn sorafs_validate_advert_rejects_malformed_norito() {
 #[test]
 fn sorafs_validate_admission_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "admission",
             "--input",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -371,7 +381,7 @@ fn sorafs_validate_admission_accepts_committed_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -392,8 +402,9 @@ fn sorafs_validate_admission_accepts_committed_fixture() {
 fn sorafs_validate_admission_accepts_committed_renewal_fixture() {
     let envelope = workspace_fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to");
     let renewal = workspace_fixture("fixtures/sorafs_manifest/provider_admission/renewal_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "admission",
             "--input",
             envelope.to_str().expect("fixture path is utf-8"),
@@ -405,7 +416,7 @@ fn sorafs_validate_admission_accepts_committed_renewal_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -428,8 +439,9 @@ fn sorafs_validate_admission_accepts_committed_revocation_fixture() {
     let envelope = workspace_fixture("fixtures/sorafs_manifest/provider_admission/envelope_v1.to");
     let revocation =
         workspace_fixture("fixtures/sorafs_manifest/provider_admission/revocation_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "admission",
             "--input",
             envelope.to_str().expect("fixture path is utf-8"),
@@ -441,7 +453,7 @@ fn sorafs_validate_admission_accepts_committed_revocation_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -464,8 +476,9 @@ fn sorafs_validate_admission_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad-envelope.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "admission",
             "--input",
             input.to_str().expect("temp path is utf-8"),
@@ -475,7 +488,7 @@ fn sorafs_validate_admission_rejects_malformed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -491,8 +504,9 @@ fn sorafs_validate_admission_rejects_malformed_norito() {
 #[test]
 fn sorafs_validate_order_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/replication_order/order_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "order",
             "--order",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -502,7 +516,7 @@ fn sorafs_validate_order_accepts_committed_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -524,8 +538,9 @@ fn sorafs_validate_order_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad-order.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "order",
             "--order",
             input.to_str().expect("temp path is utf-8"),
@@ -535,7 +550,7 @@ fn sorafs_validate_order_rejects_malformed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -551,8 +566,9 @@ fn sorafs_validate_order_rejects_malformed_norito() {
 #[test]
 fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "orderbook",
             "--kind",
             "settlement-receipt",
@@ -564,7 +580,7 @@ fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -591,7 +607,7 @@ fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
         .verifying_key()
         .to_bytes()
         .to_vec();
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
             "sign",
             "--kind",
@@ -610,7 +626,7 @@ fn sorafs_validate_sign_orderbook_writes_verified_order_payload() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate sign orderbook");
+        .expect("run iroha app sorafs toolkit sign orderbook");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -646,8 +662,9 @@ fn sorafs_validate_pdp_accepts_committed_fixtures() {
     let commitment = workspace_fixture("fixtures/sorafs_manifest/pdp/commitment_v1.to");
     let challenge = workspace_fixture("fixtures/sorafs_manifest/pdp/challenge_v1.to");
     let proof = workspace_fixture("fixtures/sorafs_manifest/pdp/proof_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "pdp",
             "--commitment",
             commitment.to_str().expect("fixture path is utf-8"),
@@ -661,7 +678,7 @@ fn sorafs_validate_pdp_accepts_committed_fixtures() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -700,8 +717,9 @@ fn sorafs_validate_pdp_rejects_negative_proof_fixture() {
     let challenge = workspace_fixture("fixtures/sorafs_manifest/pdp/challenge_v1.to");
     let proof =
         workspace_fixture("fixtures/sorafs_manifest/pdp/negative/missing_signature_proof_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "pdp",
             "--challenge",
             challenge.to_str().expect("fixture path is utf-8"),
@@ -713,7 +731,7 @@ fn sorafs_validate_pdp_rejects_negative_proof_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -730,8 +748,9 @@ fn sorafs_validate_pdp_rejects_negative_proof_fixture() {
 fn sorafs_validate_por_accepts_committed_fixtures() {
     let challenge = workspace_fixture("fixtures/sorafs_manifest/por/challenge_v1.to");
     let proof = workspace_fixture("fixtures/sorafs_manifest/por/proof_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "por",
             "--challenge",
             challenge.to_str().expect("fixture path is utf-8"),
@@ -743,7 +762,7 @@ fn sorafs_validate_por_accepts_committed_fixtures() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -766,8 +785,9 @@ fn sorafs_validate_por_rejects_malformed_challenge() {
     let challenge = temp.path().join("bad-challenge.to");
     fs::write(&challenge, b"not norito").expect("write malformed payload");
     let proof = workspace_fixture("fixtures/sorafs_manifest/por/proof_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "por",
             "--challenge",
             challenge.to_str().expect("temp path is utf-8"),
@@ -779,7 +799,7 @@ fn sorafs_validate_por_rejects_malformed_challenge() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -801,8 +821,9 @@ fn sorafs_validate_potr_accepts_generated_receipt() {
         norito::to_bytes(&potr_receipt()).expect("encode receipt"),
     )
     .expect("write receipt");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "potr",
             "--receipt",
             input.to_str().expect("temp path is utf-8"),
@@ -814,7 +835,7 @@ fn sorafs_validate_potr_accepts_generated_receipt() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -834,8 +855,9 @@ fn sorafs_validate_potr_accepts_generated_receipt() {
 #[test]
 fn sorafs_validate_potr_accepts_committed_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/potr/receipt_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "potr",
             "--receipt",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -847,7 +869,7 @@ fn sorafs_validate_potr_accepts_committed_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -873,8 +895,9 @@ fn sorafs_validate_potr_rejects_profile_mismatch() {
         norito::to_bytes(&potr_receipt()).expect("encode receipt"),
     )
     .expect("write receipt");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "potr",
             "--receipt",
             input.to_str().expect("temp path is utf-8"),
@@ -886,7 +909,7 @@ fn sorafs_validate_potr_rejects_profile_mismatch() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -908,8 +931,9 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
         norito::to_bytes(&repair_task_record()).expect("encode repair task"),
     )
     .expect("write repair task");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "repair",
             "--kind",
             "task",
@@ -921,7 +945,7 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -941,8 +965,9 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
 #[test]
 fn sorafs_validate_repair_accepts_committed_task_fixture() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/repair/task_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "repair",
             "--kind",
             "task",
@@ -954,7 +979,7 @@ fn sorafs_validate_repair_accepts_committed_task_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -976,8 +1001,9 @@ fn sorafs_validate_repair_rejects_malformed_norito() {
     let temp = tempdir().expect("tempdir");
     let input = temp.path().join("bad-repair-task.to");
     fs::write(&input, b"not norito").expect("write malformed payload");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "repair",
             "--kind",
             "task",
@@ -989,7 +1015,7 @@ fn sorafs_validate_repair_rejects_malformed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -1005,8 +1031,9 @@ fn sorafs_validate_repair_rejects_malformed_norito() {
 #[test]
 fn sorafs_validate_bundle_accepts_committed_fixture_root() {
     let bundle = workspace_fixture("fixtures/sorafs_manifest");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "bundle",
             "--bundle",
             bundle.to_str().expect("fixture path is utf-8"),
@@ -1018,7 +1045,7 @@ fn sorafs_validate_bundle_accepts_committed_fixture_root() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1113,8 +1140,9 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
         norito::to_bytes(&receipt).expect("encode receipt"),
     )
     .expect("write receipt");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "bundle",
             "--bundle",
             temp.path().to_str().expect("temp path is utf-8"),
@@ -1126,7 +1154,7 @@ fn sorafs_validate_bundle_rejects_manifest_mismatch() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -1146,8 +1174,9 @@ fn sorafs_validate_governance_accepts_committed_fixture() {
         norito::decode_from_bytes(&fs::read(&fixture).expect("read governance node fixture"))
             .expect("decode governance node fixture");
     let expected_cid = format!("hex:{}", hex::encode(&node.node_cid));
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "governance",
             "--node",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -1159,7 +1188,7 @@ fn sorafs_validate_governance_accepts_committed_fixture() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1180,8 +1209,9 @@ fn sorafs_validate_governance_accepts_committed_fixture() {
 #[test]
 fn sorafs_validate_governance_rejects_cid_mismatch() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "governance",
             "--node",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -1193,7 +1223,7 @@ fn sorafs_validate_governance_rejects_cid_mismatch() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -1209,8 +1239,9 @@ fn sorafs_validate_governance_rejects_cid_mismatch() {
 #[test]
 fn sorafs_validate_governance_rejects_missing_node_cid() {
     let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "governance",
             "--node",
             fixture.to_str().expect("fixture path is utf-8"),
@@ -1220,7 +1251,7 @@ fn sorafs_validate_governance_rejects_missing_node_cid() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate");
+        .expect("run iroha app sorafs toolkit");
     assert_eq!(output.status.code(), Some(4));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1244,8 +1275,9 @@ fn sorafs_validate_governance_dag_block_accepts_signed_block() {
     )
     .expect("write governance DAG block");
     let expected_cid = format!("hex:{}", hex::encode(&block.block_cid));
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "governance",
             "--block",
             block_path.to_str().expect("block path is utf-8"),
@@ -1257,7 +1289,7 @@ fn sorafs_validate_governance_dag_block_accepts_signed_block() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate governance block");
+        .expect("run iroha app sorafs toolkit governance block");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1281,8 +1313,9 @@ fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
         norito::to_bytes(&block).expect("encode governance DAG block"),
     )
     .expect("write governance DAG block");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "governance",
             "--block",
             block_path.to_str().expect("block path is utf-8"),
@@ -1294,7 +1327,7 @@ fn sorafs_validate_governance_dag_block_rejects_cid_mismatch() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate governance block");
+        .expect("run iroha app sorafs toolkit governance block");
     assert_eq!(output.status.code(), Some(2));
     let outcome: Value = norito::json::from_slice(&output.stdout).expect("parse outcome json");
     assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
@@ -1337,8 +1370,9 @@ fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
         norito::to_bytes(&blocks[1]).expect("encode governance DAG block"),
     )
     .expect("write governance DAG block 1");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
+            "validate",
             "governance",
             "--head",
             head_path.to_str().expect("head path is utf-8"),
@@ -1352,7 +1386,7 @@ fn sorafs_validate_governance_dag_head_accepts_signed_chain() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate governance head");
+        .expect("run iroha app sorafs toolkit governance head");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1372,7 +1406,7 @@ fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("signed-advert.to");
     let key_hex = "a5".repeat(32);
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
             "sign",
             "--kind",
@@ -1391,7 +1425,7 @@ fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate sign");
+        .expect("run iroha app sorafs toolkit sign");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1405,8 +1439,9 @@ fn sorafs_validate_sign_advert_writes_valid_signed_norito() {
         outcome.get("code").and_then(Value::as_str),
         Some("SFS-OK-000")
     );
-    let validate_output = cargo_bin_cmd!("sorafs-validate")
+    let validate_output = validator_command()
         .args([
+            "validate",
             "advert",
             "--input",
             output_path.to_str().expect("output path is utf-8"),
@@ -1437,7 +1472,7 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
     let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
     let canonical_key = "a5".repeat(32);
     let run_case = |output_path: &Path, key_hex: &str, now: &str, generated_at: &str| {
-        cargo_bin_cmd!("sorafs-validate")
+        validator_command()
             .args([
                 "sign",
                 "--kind",
@@ -1456,7 +1491,7 @@ fn sorafs_validate_sign_advert_rejects_noncanonical_operator_inputs_before_outpu
                 "json",
             ])
             .output()
-            .expect("run sorafs-validate sign")
+            .expect("run iroha app sorafs toolkit sign")
     };
     for (key_hex, now, generated_at, expected) in [
         (
@@ -1544,7 +1579,7 @@ fn sorafs_validate_sign_order_writes_valid_signed_norito() {
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("signed-order.to");
     let key_hex = "a7".repeat(32);
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
             "sign",
             "--kind",
@@ -1561,7 +1596,7 @@ fn sorafs_validate_sign_order_writes_valid_signed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate sign order");
+        .expect("run iroha app sorafs toolkit sign order");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1585,8 +1620,9 @@ fn sorafs_validate_sign_order_writes_valid_signed_norito() {
     signed_order
         .verify_signature()
         .expect("signed replication order verifies");
-    let validate_output = cargo_bin_cmd!("sorafs-validate")
+    let validate_output = validator_command()
         .args([
+            "validate",
             "order",
             "--signed-order",
             output_path.to_str().expect("output path is utf-8"),
@@ -1616,7 +1652,7 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("signed-governance-node.to");
     let key_hex = "a6".repeat(32);
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
             "sign",
             "--kind",
@@ -1633,7 +1669,7 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
             "json",
         ])
         .output()
-        .expect("run sorafs-validate sign governance");
+        .expect("run iroha app sorafs toolkit sign governance");
     assert!(
         output.status.success(),
         "stderr: {}\nstdout: {}",
@@ -1658,8 +1694,9 @@ fn sorafs_validate_sign_governance_writes_valid_signed_norito() {
         .verify_publisher_signature()
         .expect("signed governance node verifies");
     let expected_cid = format!("hex:{}", hex::encode(&signed_node.node_cid));
-    let validate_output = cargo_bin_cmd!("sorafs-validate")
+    let validate_output = validator_command()
         .args([
+            "validate",
             "governance",
             "--node",
             output_path.to_str().expect("output path is utf-8"),
@@ -1792,7 +1829,7 @@ fn sorafs_validate_timed_ovn_release_audit_binds_every_official_artifact() {
 
 #[test]
 fn sorafs_validate_timed_ovn_release_audit_requires_the_complete_input_set() {
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
             "timed-ovn-release-audit",
             "--audit-manifest",
@@ -1810,7 +1847,7 @@ fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
     let manifest = root.join("release.manifest.json");
     let public_key = root.join("release-public.key");
     let signature = root.join("release-manifest.sig");
-    let manifest_bytes = br#"{"package":"sorafs-validate","schema_version":1}"#;
+    let manifest_bytes = br#"{"package":"iroha","schema_version":1}"#;
     let signing_key = SigningKey::from_bytes(&[0x61; 32]);
     let public_key_bytes = signing_key.verifying_key().to_bytes();
     fs::write(&manifest, manifest_bytes).expect("write release manifest");
@@ -1829,11 +1866,8 @@ fn sorafs_validate_release_manifest_verifies_strict_raw_ed25519() {
         String::from_utf8_lossy(&output.stdout)
             .contains("release manifest Ed25519 signature verified")
     );
-    fs::write(
-        &manifest,
-        br#"{"package":"sorafs-validate","schema_version":2}"#,
-    )
-    .expect("tamper release manifest");
+    fs::write(&manifest, br#"{"package":"iroha","schema_version":2}"#)
+        .expect("tamper release manifest");
     let tampered =
         run_release_manifest_verify(&manifest, &public_key, fingerprint.as_str(), &signature);
     assert_eq!(tampered.status.code(), Some(2));
@@ -1980,7 +2014,7 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
     #[cfg(unix)]
     fs::set_permissions(&seed_path, fs::Permissions::from_mode(0o600)).expect("secure raw seed");
     fs::write(&public_key, public_key_bytes).expect("write raw public key");
-    let output = cargo_bin_cmd!("sorafs-validate")
+    let output = validator_command()
         .args([
             "release-manifest",
             "--manifest",
@@ -2010,7 +2044,7 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
         .verifying_key()
         .verify_strict(manifest_bytes, &Signature::from_bytes(&signature))
         .expect("generated release signature verifies");
-    let clobber = cargo_bin_cmd!("sorafs-validate")
+    let clobber = validator_command()
         .args([
             "release-manifest",
             "--manifest",
@@ -2030,7 +2064,7 @@ fn sorafs_validate_release_manifest_development_signing_is_explicit_and_no_clobb
     assert_eq!(clobber.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&clobber.stderr).contains("must not already exist"));
     let missing_gate_out = root.join("ungated.sig");
-    let missing_gate = cargo_bin_cmd!("sorafs-validate")
+    let missing_gate = validator_command()
         .args([
             "release-manifest",
             "--manifest",
@@ -2145,4 +2179,87 @@ fn sorafs_validate_release_manifest_rejects_unsafe_paths_and_permissions() {
     );
     assert_release_manifest_failure(&unsafe_seed, 2, "owner-only 0400 or 0600");
     assert!(!unsafe_out.exists());
+}
+
+#[test]
+fn canonical_validator_is_config_free_and_has_clean_report_streams() {
+    let directory = tempdir().unwrap();
+    let fixture = workspace_fixture("fixtures/sorafs_manifest/provider_admission/advert_v1.to");
+    for format in ["json", "table", "yaml"] {
+        let output = validator_command()
+            .current_dir(directory.path())
+            .args([
+                "validate",
+                "advert",
+                "--input",
+                fixture.to_str().unwrap(),
+                "--now",
+                "120",
+                "--generated-at",
+                "123",
+                "--format",
+                format,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "local artifact tooling must not emit startup chatter"
+        );
+        assert!(!output.stdout.is_empty());
+        if format == "json" {
+            let outcome: Value = norito::json::from_slice(&output.stdout).unwrap();
+            assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Ok"));
+        }
+    }
+    assert!(!directory.path().join("client.toml").exists());
+}
+
+#[test]
+fn canonical_validator_rejects_irrelevant_globals_before_config_or_input_access() {
+    let directory = tempdir().unwrap();
+    for globals in [
+        vec!["--config", "missing-client.toml"],
+        vec!["--operator-private-key-file", "/missing-key"],
+        vec!["--verbose"],
+        vec!["--input"],
+    ] {
+        let output = cargo_bin_cmd!("iroha")
+            .current_dir(directory.path())
+            .args(globals)
+            .args([
+                "app",
+                "sorafs",
+                "toolkit",
+                "validate",
+                "advert",
+                "--input",
+                "missing-advert.to",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(4));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("credential-free local tooling"));
+    }
+}
+
+#[test]
+fn canonical_validator_uses_only_the_toolkit_validate_namespace() {
+    let output = validator_command()
+        .args(["validate", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("advert"));
+    assert!(help.contains("governance"));
+    let retired = validator_command().arg("advert").output().unwrap();
+    assert_eq!(retired.status.code(), Some(4));
 }

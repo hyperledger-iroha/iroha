@@ -62,7 +62,9 @@ pub(crate) fn canonical_receipt_digest_v1(
     Encode,
     JsonDeserialize,
     JsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementPoolKeyV1")]
 pub(crate) struct PrivateSettlementPoolKeyV1 {
     route: PrivateSettlementRouteV1,
     pool_id: PrivacyPoolIdV1,
@@ -93,7 +95,9 @@ impl PrivateSettlementPoolKeyV1 {
     Encode,
     JsonDeserialize,
     JsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementRootKeyV1")]
 pub(crate) struct PrivateSettlementRootKeyV1 {
     pub(crate) pool: PrivateSettlementPoolKeyV1,
     pub(crate) epoch: u64,
@@ -112,6 +116,10 @@ pub(crate) struct PrivateSettlementRootKeyV1 {
     Encode,
     JsonDeserialize,
     JsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementNullifierKeyV1"
 )]
 pub(crate) struct PrivateSettlementNullifierKeyV1 {
     pub(crate) pool: PrivateSettlementPoolKeyV1,
@@ -130,6 +138,10 @@ pub(crate) struct PrivateSettlementNullifierKeyV1 {
     Encode,
     JsonDeserialize,
     JsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputKeyV1"
 )]
 pub(crate) struct PrivateSettlementOutputKeyV1 {
     pub(crate) pool: PrivateSettlementPoolKeyV1,
@@ -155,6 +167,10 @@ pub(crate) struct PrivateSettlementOutputKeyV1 {
     JsonSerialize,
 )]
 #[norito(tag = "kind", content = "key", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockKeyV1"
+)]
 pub(crate) enum PrivateSettlementStagedLockKeyV1 {
     /// One exact complete-bundle Prepare registration.
     Bundle(Hash),
@@ -178,6 +194,10 @@ pub(crate) enum PrivateSettlementStagedLockKeyV1 {
 /// Canonical value stored under a private-settlement staged-lock key.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "kind", content = "record", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockRecordV1"
+)]
 pub(crate) enum PrivateSettlementStagedLockRecordV1 {
     /// Complete public all-Prepare barrier and its global registration height.
     Bundle {
@@ -251,7 +271,21 @@ impl_private_settlement_json_key_v1!(
 );
 
 /// Public provenance shared by every state item created by one finalized leg.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    JsonDeserialize,
+    JsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementFinalizationReferenceV1"
+)]
 pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
     pub(crate) bundle_id: Hash,
     pub(crate) receipt_digest: Hash,
@@ -261,6 +295,10 @@ pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "origin", content = "record", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementRootProvenanceV1"
+)]
 pub(crate) enum PrivateSettlementRootProvenanceV1 {
     Governance {
         governance_digest: Hash,
@@ -269,7 +307,20 @@ pub(crate) enum PrivateSettlementRootProvenanceV1 {
     Settlement(PrivateSettlementFinalizationReferenceV1),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    JsonDeserialize,
+    JsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputRecordV1"
+)]
 pub(crate) struct PrivateSettlementOutputRecordV1 {
     pub(crate) reference: PrivateSettlementFinalizationReferenceV1,
     pub(crate) encrypted_output: PrivacyEncryptedOutputV1,
@@ -277,7 +328,10 @@ pub(crate) struct PrivateSettlementOutputRecordV1 {
 
 /// Test/reference aggregate over the production private-settlement planner maps.
 #[cfg(test)]
-#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementGlobalStateV1"
+)]
 pub(crate) struct PrivateSettlementGlobalStateV1 {
     governance: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolGovernanceProjectionV1>,
     pools: BTreeMap<PrivateSettlementPoolKeyV1, PrivateSettlementPoolStateV1>,
@@ -1857,6 +1911,152 @@ pub(crate) mod tests {
         },
         peer::PeerId,
     };
+
+    /// Verify one declared owner frame, reconstruction, and strict malformed-frame rejection.
+    pub(crate) fn assert_private_settlement_frame_v1<T>(value: &T, nominal: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), nominal);
+        let frame = norito::encode_canonical(value).expect("declared owner frame encodes");
+        assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&frame).expect("declared owner frame decodes");
+        assert!(
+            decoded == *value,
+            "owner frame must preserve every payload field"
+        );
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("owner re-encodes"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<T>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+    }
+
+    #[test]
+    fn global_state_frame_owners_roundtrip_with_exact_declared_roots() {
+        let (state, receipt, _) = fixture();
+        let delta = &receipt.legs[0].delta;
+        let pool = PrivateSettlementPoolKeyV1::new(delta.route, delta.pool_id).expect("pool key");
+        let root = PrivateSettlementRootKeyV1 {
+            pool,
+            epoch: delta.old_epoch,
+            root: delta.old_root,
+        };
+        let nullifier = PrivateSettlementNullifierKeyV1 {
+            pool,
+            nullifier: delta.nullifiers[0],
+        };
+        let output = PrivateSettlementOutputKeyV1 {
+            pool,
+            commitment: delta.output_commitments[0],
+        };
+        let reference = PrivateSettlementFinalizationReferenceV1 {
+            bundle_id: receipt.manifest.bundle_id,
+            receipt_digest: canonical_receipt_digest_v1(&receipt).expect("receipt digest"),
+            leg_ordinal: 0,
+            finalized_height: 20,
+        };
+        macro_rules! check {
+            ($owner:ident, $value:expr) => {
+                assert_private_settlement_frame_v1::<$owner>(
+                    &$value,
+                    concat!(
+                        "iroha_core::private_settlement::global_state::",
+                        stringify!($owner)
+                    ),
+                );
+            };
+        }
+        check!(PrivateSettlementPoolKeyV1, pool);
+        check!(PrivateSettlementRootKeyV1, root);
+        check!(PrivateSettlementNullifierKeyV1, nullifier);
+        check!(PrivateSettlementOutputKeyV1, output);
+        check!(
+            PrivateSettlementStagedLockKeyV1,
+            PrivateSettlementStagedLockKeyV1::PoolHead {
+                pool,
+                epoch: root.epoch,
+                root: root.root,
+            }
+        );
+        check!(
+            PrivateSettlementStagedLockRecordV1,
+            PrivateSettlementStagedLockRecordV1::Resource {
+                bundle_id: reference.bundle_id,
+                prepared_bundle_digest: Hash::new(b"prepared bundle"),
+                leg_ordinal: 0,
+            }
+        );
+        check!(PrivateSettlementFinalizationReferenceV1, reference);
+        check!(
+            PrivateSettlementRootProvenanceV1,
+            PrivateSettlementRootProvenanceV1::Settlement(reference)
+        );
+        check!(
+            PrivateSettlementOutputRecordV1,
+            PrivateSettlementOutputRecordV1 {
+                reference,
+                encrypted_output: delta.encrypted_outputs[0].clone(),
+            }
+        );
+        check!(PrivateSettlementGlobalStateV1, state);
+    }
+
+    #[test]
+    fn private_settlement_json_keys_require_the_exact_owner_and_uppercase_frame() {
+        fn check<T>(value: T)
+        where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
+        {
+            let bytes = norito::to_bytes(&value).expect("key frame");
+            let uppercase = hex::encode_upper(&bytes);
+            let decoded: T =
+                decode_private_settlement_storage_key_v1(&uppercase).expect("exact key");
+            assert!(decoded == value);
+            let mut encoded = String::new();
+            encode_private_settlement_storage_key_v1(&value, &mut encoded);
+            assert_eq!(encoded, format!("\"{uppercase}\""));
+            assert!(
+                decode_private_settlement_storage_key_v1::<T>(&uppercase.to_lowercase()).is_err()
+            );
+            assert!(
+                decode_private_settlement_storage_key_v1::<T>(&format!("{uppercase}00")).is_err()
+            );
+            let mut wrong_owner = bytes;
+            wrong_owner[6] ^= 1;
+            assert!(
+                decode_private_settlement_storage_key_v1::<T>(&hex::encode_upper(wrong_owner))
+                    .is_err()
+            );
+        }
+        let (state, receipt, _) = fixture();
+        let pool = *state.pools.keys().next().expect("governed pool");
+        let root = *state.roots.keys().next().expect("governed root");
+        let delta = &receipt.legs[0].delta;
+        check(pool);
+        check(root);
+        check(PrivateSettlementNullifierKeyV1 {
+            pool,
+            nullifier: delta.nullifiers[0],
+        });
+        check(PrivateSettlementOutputKeyV1 {
+            pool,
+            commitment: delta.output_commitments[0],
+        });
+        check(PrivateSettlementStagedLockKeyV1::Bundle(
+            receipt.manifest.bundle_id,
+        ));
+    }
 
     fn certificate(
         manifest: &iroha_data_model::nexus::AtomicPrivateSettlementV1,

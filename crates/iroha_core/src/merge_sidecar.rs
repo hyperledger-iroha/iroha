@@ -1674,6 +1674,8 @@ struct MergeSidecarLifecyclePayloadV3 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecycleSnapshotV3")]
 struct MergeSidecarLifecycleSnapshotV3 {
     payload: MergeSidecarLifecyclePayloadV3,
     payload_hash: HashOf<MergeSidecarLifecyclePayloadV3>,
@@ -1692,6 +1694,8 @@ impl MergeSidecarLifecycleSnapshotV3 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecycleRootHighWaterV3")]
 struct MergeSidecarLifecycleRootHighWaterV3 {
     version: u8,
     root_generation: u64,
@@ -8841,7 +8845,8 @@ impl MergeSidecarTransport {
     }
 }
 /// Exact context in which a local merge signature is permitted.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSigningContextV1")]
 pub(crate) struct MergeSigningContextV1 {
     /// Merge epoch being signed.
     pub(crate) epoch_id: u64,
@@ -8856,6 +8861,8 @@ pub(crate) struct MergeSigningContextV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSigningGuardRecordV2")]
 struct MergeSigningGuardRecordV2 {
     version: u8,
     context: MergeSigningContextV1,
@@ -8866,6 +8873,8 @@ struct MergeSigningGuardRecordV2 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSigningHighWaterV2")]
 struct MergeSigningHighWaterV2 {
     version: u8,
     committed_epoch: u64,
@@ -9560,6 +9569,130 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::merge::{MergeQuorumCertificate, MergeSignerProof};
+
+    #[test]
+    fn lifecycle_and_signing_frames_keep_exact_owners_and_candidate_binding() {
+        use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1 as check;
+
+        let temp = tempfile::tempdir().expect("temporary owner-frame lifecycle root");
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let mut server = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open current owner-frame lifecycle journal");
+        server
+            .admit_server_request(&requester, &request, None, &request.responder, now)
+            .expect("persist one valid lifecycle request");
+        let (snapshot, root) = read_lifecycle_pair(&server);
+        assert!(snapshot.integrity_is_valid());
+        assert!(root.matches(&snapshot));
+        check(
+            &snapshot,
+            "iroha_core::merge_sidecar::MergeSidecarLifecycleSnapshotV3",
+        );
+        check(
+            &root,
+            "iroha_core::merge_sidecar::MergeSidecarLifecycleRootHighWaterV3",
+        );
+        let context = MergeSigningContextV1 {
+            epoch_id: 4,
+            view: 2,
+            carrier_height: 9,
+            parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"owner-frame-parent-9")),
+            validator_set_hash: HashOf::new(&vec![peer(b"owner-frame-validator")]),
+        };
+        let candidate = signing_candidate(&context, b"owner-frame-candidate");
+        let candidate_bytes = candidate.canonical_bytes();
+        let record = MergeSigningGuardRecordV2 {
+            version: SIGNING_GUARD_VERSION,
+            context: context.clone(),
+            message_digest: Hash::new(b"owner-frame-signing-message"),
+            candidate_hash: candidate.canonical_hash(),
+            candidate_encoded_len: candidate_bytes.len() as u64,
+            candidate_bytes,
+        };
+        let high_water = MergeSigningHighWaterV2 {
+            version: SIGNING_GUARD_VERSION,
+            committed_epoch: context.epoch_id,
+            committed_carrier_height: context.carrier_height,
+        };
+        check(&context, "iroha_core::merge_sidecar::MergeSigningContextV1");
+        check(
+            &record,
+            "iroha_core::merge_sidecar::MergeSigningGuardRecordV2",
+        );
+        check(
+            &high_water,
+            "iroha_core::merge_sidecar::MergeSigningHighWaterV2",
+        );
+        assert_eq!(
+            MergeSigningGuard::decode_record_candidate(&record)
+                .expect("production decoder accepts the exact candidate binding"),
+            candidate
+        );
+        let mut substituted = record.clone();
+        substituted.candidate_hash = Hash::new(b"substituted-owner-frame-candidate");
+        assert!(MergeSigningGuard::decode_record_candidate(&substituted).is_err());
+        let snapshot_frame = norito::encode_canonical(&snapshot).expect("encode snapshot owner");
+        assert!(matches!(
+            norito::decode_canonical::<MergeSidecarLifecycleRootHighWaterV3>(&snapshot_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let signing_frame = norito::encode_canonical(&record).expect("encode signing record owner");
+        assert!(matches!(
+            norito::decode_canonical::<MergeSigningHighWaterV2>(&signing_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
+    fn frame_unsupported_lifecycle_payload<T: norito::SerializePayload>(
+        current: &MergeSidecarLifecycleSnapshotV3,
+        unsupported: &T,
+    ) -> Vec<u8> {
+        // Unsupported fixtures have only a payload codec. Their adversarial bytes
+        // use the actual V3 owner's envelope to exercise payload rejection.
+        let (current_payload, current_flags, payload, flags) = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (current_payload, current_flags) = norito::codec::encode_with_header_flags(current);
+            let (payload, flags) = norito::codec::encode_with_header_flags(unsupported);
+            (current_payload, current_flags, payload, flags)
+        };
+        let current_frame = norito::core::frame_bare_with_header_flags::<
+            MergeSidecarLifecycleSnapshotV3,
+        >(&current_payload, current_flags)
+        .expect("frame current lifecycle payload");
+        assert_eq!(
+            current_frame,
+            norito::encode_canonical(current).expect("encode current owner")
+        );
+        assert_eq!(
+            &norito::decode_canonical::<MergeSidecarLifecycleSnapshotV3>(&current_frame)
+                .expect("current payload roundtrips through the same framing method"),
+            current
+        );
+        let frame = norito::core::frame_bare_with_header_flags::<MergeSidecarLifecycleSnapshotV3>(
+            &payload, flags,
+        )
+        .expect("frame unsupported payload under current lifecycle owner");
+        let view = norito::core::from_bytes_view(&frame)
+            .expect("unsupported payload has a valid frame envelope and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<MergeSidecarLifecycleSnapshotV3>()
+        );
+        assert_eq!(view.as_bytes(), payload.as_slice());
+        let error = norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV3>(&frame)
+            .expect_err("unsupported layout must fail the production owner's payload decoder");
+        assert!(
+            !matches!(error, norito::Error::SchemaMismatch),
+            "unsupported payload must reach validation beyond owner identity"
+        );
+        frame
+    }
+
     #[test]
     fn runtime_limit_constructors_reject_degenerate_and_overflowing_geometry() {
         use iroha_config::parameters::defaults::sumeragi as defaults;
@@ -14976,10 +15109,10 @@ mod tests {
             .admit_server_request(&requester, &request, None, &responder, now)
             .expect("admit one current request");
         server.cancel_unmaterialized_server_request(&requester, &request);
-        let current = server
+        let current_snapshot = server
             .lifecycle_snapshot()
-            .expect("capture current lifecycle payload")
-            .payload;
+            .expect("capture current lifecycle payload");
+        let current = current_snapshot.payload.clone();
         let legacy = UnsupportedMergeSidecarLifecycleSnapshotV1::new(
             UnsupportedMergeSidecarLifecyclePayloadV1 {
                 version: 1,
@@ -14991,7 +15124,7 @@ mod tests {
                 server_request_gates: current.server_request_gates,
             },
         );
-        let legacy_bytes = norito::to_bytes(&legacy).expect("encode legacy V1 fixture");
+        let legacy_bytes = frame_unsupported_lifecycle_payload(&current_snapshot, &legacy);
         let journal = server
             .lifecycle_journal
             .as_ref()
@@ -15028,10 +15161,10 @@ mod tests {
         let server =
             MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
                 .expect("open current lifecycle journal");
-        let current = server
+        let current_snapshot = server
             .lifecycle_snapshot()
-            .expect("capture current lifecycle payload")
-            .payload;
+            .expect("capture current lifecycle payload");
+        let current = current_snapshot.payload.clone();
         let legacy = UnsupportedMergeSidecarLifecycleSnapshotV2::new(
             UnsupportedMergeSidecarLifecyclePayloadV2 {
                 version: 2,
@@ -15044,7 +15177,7 @@ mod tests {
                 server_request_gates: current.server_request_gates,
             },
         );
-        let legacy_bytes = norito::to_bytes(&legacy).expect("encode legacy V2 fixture");
+        let legacy_bytes = frame_unsupported_lifecycle_payload(&current_snapshot, &legacy);
         let journal = server
             .lifecycle_journal
             .as_ref()

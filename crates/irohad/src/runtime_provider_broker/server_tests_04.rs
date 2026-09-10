@@ -12,12 +12,12 @@ use crate::runtime_provider_broker::api::{
 };
 
 fn read_consensus_signer_operation(
-    stream: &mut UnixStream,
+    stream: &mut BrokerTestStream,
     session_network_id: &NetworkId,
 ) -> OperationRequestV1 {
     // The fake broker represents a separate process, so its decode admission
     // must not compete with the in-process client for one process-local pool.
-    let decode_pool = Arc::new(DecodeResourcePoolV1::new(MAX_BROKER_SHARED_DECODE_BYTES_V1));
+    let decode_pool = Arc::clone(&stream.decode_pool);
     let (announced_slot, announced_operation, frame, admission) =
         read_operation_request_frame_inner(stream, None, Some(decode_pool))
             .expect("read fake consensus-signer operation");
@@ -36,7 +36,7 @@ fn read_consensus_signer_operation(
 }
 
 fn expect_and_answer_consensus_signer_qualification(
-    stream: &mut UnixStream,
+    stream: &mut BrokerTestStream,
     expected_request_id: u64,
     revision: u64,
     policy_digest: [u8; 32],
@@ -94,15 +94,6 @@ fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
 }
 #[test]
 fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact() {
-    thread::Builder::new()
-        .name("fenced-privacy-head-reader-operation".to_owned())
-        .stack_size(8 * 1024 * 1024)
-        .spawn(fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact_inner)
-        .expect("spawn fenced privacy head-reader test thread")
-        .join()
-        .expect("join fenced privacy head-reader test thread");
-}
-fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact_inner() {
     assert!(operation_is_known(
         OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1
     ));
@@ -707,13 +698,13 @@ fn reputation_runtime_bindings_and_observations_are_exactly_slot_shaped() {
             "{slot:?}"
         );
         assert!(matches!(
-            prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+            prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
             Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
         ));
-        prepare_server_state(&catalog, reputation_backends(slot))
+        prepare_test_server_state(&catalog, reputation_backends(slot))
             .unwrap_or_else(|error| panic!("accept exact {slot:?} backend: {error:?}"));
         assert!(matches!(
-            prepare_server_state(&catalog, reputation_runtime_substituted_backends(slot),),
+            prepare_test_server_state(&catalog, reputation_runtime_substituted_backends(slot),),
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
         let mut zero_revision = binding.clone();
@@ -762,7 +753,7 @@ fn reputation_checkpoint_load_is_bounded_and_slot_exact() {
     }
     let slot = IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint;
     let catalog = reputation_catalog(slot);
-    let state = prepare_server_state(&catalog, reputation_backends(slot))
+    let state = prepare_test_server_state(&catalog, reputation_backends(slot))
         .expect("prepare exact reputation checkpoint backend");
     let binding = state.catalog[0].clone();
     let mut wrong_profile = binding.clone();
@@ -946,7 +937,7 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
     )
     .expect("encode supports-authority request");
-    let journal_state = prepare_server_state(
+    let journal_state = prepare_test_server_state(
         &reputation_catalog(IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter),
         reputation_backends(IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter),
     )
@@ -976,7 +967,7 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         decode_canonical::<bool>(&supports_result, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,)
             .expect("decode supports-authority result")
     );
-    let drifting_journal_state = prepare_server_state(
+    let drifting_journal_state = prepare_test_server_state(
         &reputation_catalog(IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter),
         RuntimeProviderBrokerBackendsV1::new().with_reputation_journal_transaction_submitter(
             Arc::new(ServerTestReputationJournalSubmitter::drifting_after_operation()),
@@ -1055,7 +1046,7 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         Err(BrokerError::Rejected)
     );
     let threshold_backend = Arc::new(ServerTestReputationThresholdSigner::exact());
-    let threshold_state = prepare_server_state(
+    let threshold_state = prepare_test_server_state(
         &reputation_catalog(IrohaRuntimeProviderSlotV1::ReputationThresholdSigner),
         RuntimeProviderBrokerBackendsV1::new()
             .with_reputation_threshold_signer(threshold_backend.clone()),
@@ -1142,7 +1133,7 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         ],
         "reconciliation retries preserve the exact operation key"
     );
-    let drifting_threshold_state = prepare_server_state(
+    let drifting_threshold_state = prepare_test_server_state(
         &reputation_catalog(IrohaRuntimeProviderSlotV1::ReputationThresholdSigner),
         RuntimeProviderBrokerBackendsV1::new().with_reputation_threshold_signer(Arc::new(
             ServerTestReputationThresholdSigner::drifting_after_operation(),
@@ -1162,7 +1153,7 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         "post-dispatch qualification drift is an ambiguous mutation"
     );
     let governance_backend = Arc::new(ServerTestReputationGovernanceDag::exact());
-    let governance_state = prepare_server_state(
+    let governance_state = prepare_test_server_state(
         &reputation_catalog(IrohaRuntimeProviderSlotV1::ReputationGovernanceDag),
         RuntimeProviderBrokerBackendsV1::new()
             .with_reputation_governance_dag(governance_backend.clone()),
@@ -1205,7 +1196,7 @@ fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
         ],
         "publication reconciliation preserves the exact operation key"
     );
-    let drifting_governance_state = prepare_server_state(
+    let drifting_governance_state = prepare_test_server_state(
         &reputation_catalog(IrohaRuntimeProviderSlotV1::ReputationGovernanceDag),
         RuntimeProviderBrokerBackendsV1::new().with_reputation_governance_dag(Arc::new(
             ServerTestReputationGovernanceDag::drifting_after_operation(),
@@ -1722,7 +1713,7 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
     let publication = Arc::new(ServerTestModerationHandoffBoundary::exact(
         test_moderation::ModerationTerminalHandoffKindV1::Publication,
     ));
-    let state = prepare_server_state(
+    let state = prepare_test_server_state(
         &catalog,
         RuntimeProviderBrokerBackendsV1::new()
             .with_moderation_publication_handoff(publication.clone())
@@ -1800,15 +1791,19 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
     );
     validate_operation_request_for_session(&install, "server-test-chain", &fixture.network_id)
         .expect("validate exact archive install");
-    let install_result =
-        dispatch_server_operation(&state, &install).expect("install genuine archive fixture");
-    validate_operation_result(&install, STATUS_OK_V1, &install_result, &state.network_id)
-        .expect("validate exact archive install result");
-    let install_result = decode_canonical::<ModerationPanelNotificationArchiveInstallResultWireV1>(
-        &install_result,
-        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-    )
-    .expect("decode archive install result");
+    let install_result = {
+        let install_result =
+            dispatch_server_operation(&state, &install).expect("install genuine archive fixture");
+        let _scope = install_result.enter_decode_admission();
+        validate_operation_result(&install, STATUS_OK_V1, &install_result, &state.network_id)
+            .expect("validate exact archive install result");
+        decode_canonical::<ModerationPanelNotificationArchiveInstallResultWireV1>(
+            &install_result,
+            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+        )
+        .expect("decode archive install result")
+    };
+    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
     assert_eq!(install_result.signature, fixture.archive_signature);
     assert_eq!(archive.install_calls.load(Ordering::Acquire), 1);
     let read = operation_for_slot(
@@ -1826,13 +1821,18 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("encode exact archive read"),
     );
-    let readback = dispatch_server_operation(&state, &read).expect("read genuine archive fixture");
-    let readback = decode_canonical::<Option<ModerationPanelNotificationArchiveReadbackWireV1>>(
-        &readback,
-        MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
-    )
-    .expect("decode exact archive readback")
-    .expect("installed fixture must be readable");
+    let readback = {
+        let readback =
+            dispatch_server_operation(&state, &read).expect("read genuine archive fixture");
+        let _scope = readback.enter_decode_admission();
+        decode_canonical::<Option<ModerationPanelNotificationArchiveReadbackWireV1>>(
+            &readback,
+            MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
+        )
+        .expect("decode exact archive readback")
+        .expect("installed fixture must be readable")
+    };
+    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
     assert_eq!(
         readback.canonical_artifact.as_slice(),
         fixture.canonical_artifact.as_slice()
@@ -1885,13 +1885,17 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         )
         .expect("encode exact source attestation"),
     );
-    let attest_result =
-        dispatch_server_operation(&state, &attest).expect("attest genuine terminal set");
-    let attest_result = decode_canonical::<ModerationPanelNotificationSourceAttestResultWireV1>(
-        &attest_result,
-        MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-    )
-    .expect("decode exact source attestation result");
+    let attest_result = {
+        let attest_result =
+            dispatch_server_operation(&state, &attest).expect("attest genuine terminal set");
+        let _scope = attest_result.enter_decode_admission();
+        decode_canonical::<ModerationPanelNotificationSourceAttestResultWireV1>(
+            &attest_result,
+            MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+        )
+        .expect("decode exact source attestation result")
+    };
+    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
     assert_eq!(
         attest_result.statement_digest,
         fixture.validation.source_attestation_digest
@@ -1958,21 +1962,24 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         &fixture.network_id,
     )
     .expect("validate empty archive-head readback request");
-    let empty_head_read_result = dispatch_server_operation(&state, &empty_head_read)
-        .expect("read empty public archive head");
-    validate_operation_result(
-        &empty_head_read,
-        STATUS_OK_V1,
-        &empty_head_read_result,
-        &state.network_id,
-    )
-    .expect("validate empty archive-head readback result");
-    let empty_head_read_result =
+    let empty_head_read_result = {
+        let empty_head_read_result = dispatch_server_operation(&state, &empty_head_read)
+            .expect("read empty public archive head");
+        let _scope = empty_head_read_result.enter_decode_admission();
+        validate_operation_result(
+            &empty_head_read,
+            STATUS_OK_V1,
+            &empty_head_read_result,
+            &state.network_id,
+        )
+        .expect("validate empty archive-head readback result");
         decode_canonical::<ModerationPanelNotificationArchiveHeadReadResultWireV1>(
             &empty_head_read_result,
             MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
         )
-        .expect("decode empty archive-head readback");
+        .expect("decode empty archive-head readback")
+    };
+    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
     assert_eq!(
         empty_head_read_result.version,
         MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
@@ -2091,14 +2098,19 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
     );
     validate_operation_request_for_session(&publish, "server-test-chain", &fixture.network_id)
         .expect("validate genuine archive-head publication");
-    let publish_result =
-        dispatch_server_operation(&state, &publish).expect("publish genuine signed archive head");
-    validate_operation_result(&publish, STATUS_OK_V1, &publish_result, &state.network_id)
-        .expect("validate dedicated archive-head result");
-    let publish_result = decode_canonical::<
-        ModerationPanelNotificationArchiveHeadPublishResultWireV1,
-    >(&publish_result, MAX_MODERATION_HANDOFF_FRAME_BYTES_V1)
-    .expect("decode archive-head publication result");
+    let publish_result = {
+        let publish_result = dispatch_server_operation(&state, &publish)
+            .expect("publish genuine signed archive head");
+        let _scope = publish_result.enter_decode_admission();
+        validate_operation_result(&publish, STATUS_OK_V1, &publish_result, &state.network_id)
+            .expect("validate dedicated archive-head result");
+        decode_canonical::<ModerationPanelNotificationArchiveHeadPublishResultWireV1>(
+            &publish_result,
+            MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
+        )
+        .expect("decode archive-head publication result")
+    };
+    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
     assert_eq!(publish_result.operation_id, fixture.validation.operation_id);
     assert_eq!(publish_result.head_digest, fixture.validation.head_digest);
     assert_eq!(
@@ -2119,21 +2131,24 @@ fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
         &fixture.network_id,
     )
     .expect("validate published archive-head readback request");
-    let published_head_read_result = dispatch_server_operation(&state, &published_head_read)
-        .expect("read exact public archive head");
-    validate_operation_result(
-        &published_head_read,
-        STATUS_OK_V1,
-        &published_head_read_result,
-        &state.network_id,
-    )
-    .expect("validate published archive-head readback result");
-    let published_head_read_result =
+    let published_head_read_result = {
+        let published_head_read_result = dispatch_server_operation(&state, &published_head_read)
+            .expect("read exact public archive head");
+        let _scope = published_head_read_result.enter_decode_admission();
+        validate_operation_result(
+            &published_head_read,
+            STATUS_OK_V1,
+            &published_head_read_result,
+            &state.network_id,
+        )
+        .expect("validate published archive-head readback result");
         decode_canonical::<ModerationPanelNotificationArchiveHeadReadResultWireV1>(
             &published_head_read_result,
             MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
         )
-        .expect("decode published archive-head readback");
+        .expect("decode published archive-head readback")
+    };
+    assert_eq!(state.decode_pool.used_bytes.load(Ordering::Acquire), 0);
     assert_eq!(
         published_head_read_result.canonical_head.as_deref(),
         Some(fixture.canonical_signed_head.as_slice())
@@ -2153,7 +2168,8 @@ fn evidence_transparency_ambiguity_reconnects_for_readback_without_replay() {
         RuntimeProviderBrokerBackendsV1::new()
             .with_evidence_viewer_transparency_publisher(backend.clone()),
     );
-    let dependencies = resolve(&catalog, &policy).expect("resolve transparency-publisher proxy");
+    let dependencies =
+        resolve_test_process(&catalog, &policy).expect("resolve transparency-publisher proxy");
     let publisher = dependencies
         .sorafs_evidence_viewer_transparency_publisher
         .as_ref()
@@ -2382,10 +2398,10 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
     validate_observation(&beacon_binding, &observation(&beacon_binding))
         .expect("accept metadata-free beacon signer observation");
     assert!(matches!(
-        prepare_server_state(&beacon_catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&beacon_catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
-    prepare_server_state(
+    prepare_test_server_state(
         &beacon_catalog,
         RuntimeProviderBrokerBackendsV1::new().with_global_beacon_partial_signer(Arc::new(
             TestGlobalBeaconBrokerBackendV1 {
@@ -2414,7 +2430,7 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
         },
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &beacon_catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_global_beacon_partial_signer(Arc::new(backend)),
@@ -2457,7 +2473,7 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
         );
     }
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &tle_catalog,
             RuntimeProviderBrokerBackendsV1::new().with_global_beacon_partial_signer(Arc::new(
                 TestGlobalBeaconBrokerBackendV1 {
@@ -2468,7 +2484,7 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
         ),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
-    prepare_server_state(
+    prepare_test_server_state(
         &tle_catalog,
         RuntimeProviderBrokerBackendsV1::new().with_parliament_tle_partial_release_signer(
             Arc::new(TestParliamentTleBrokerBackendV1 {
@@ -2484,7 +2500,7 @@ fn consensus_signer_broker_startup_is_exact_and_fail_closed() {
         ConsensusSignerProviderQualificationV1::new(revision, digest, true),
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &tle_catalog,
                 RuntimeProviderBrokerBackendsV1::new().with_parliament_tle_partial_release_signer(
                     Arc::new(TestParliamentTleBrokerBackendV1 {
@@ -2576,8 +2592,8 @@ fn global_beacon_partial_signer_round_trips_over_authenticated_broker() {
     let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
     let (_directory, policy, shutdown, server) =
         start_signer(fixture.catalog.clone(), fixture.backends);
-    let dependencies =
-        resolve(&fixture.catalog, &policy).expect("resolve global-beacon broker proxy");
+    let dependencies = resolve_test_process(&fixture.catalog, &policy)
+        .expect("resolve global-beacon broker proxy");
     let signer = dependencies
         .sumeragi_global_beacon_partial_signer
         .as_ref()
@@ -2621,8 +2637,8 @@ fn maximum_committee_global_beacon_proxy_round_trips_on_ordinary_stack() {
     assert_eq!(fixture.session.record().threshold, 11);
     let (_directory, policy, shutdown, server) =
         start_signer(fixture.catalog.clone(), fixture.backends);
-    let dependencies =
-        resolve(&fixture.catalog, &policy).expect("resolve maximum-committee beacon proxy");
+    let dependencies = resolve_test_process(&fixture.catalog, &policy)
+        .expect("resolve maximum-committee beacon proxy");
     let signer = dependencies
         .sumeragi_global_beacon_partial_signer
         .as_ref()
@@ -2681,8 +2697,8 @@ fn transient_beacon_qualification_reconnects_without_signer_replay() {
             .with_global_beacon_partial_signer(backend.clone());
         let (_directory, policy, shutdown, server) =
             start_signer(fixture.catalog.clone(), backends);
-        let dependencies =
-            resolve(&fixture.catalog, &policy).expect("resolve transient beacon broker proxy");
+        let dependencies = resolve_test_process(&fixture.catalog, &policy)
+            .expect("resolve transient beacon broker proxy");
         let signer = dependencies
             .sumeragi_global_beacon_partial_signer
             .as_ref()
@@ -2734,7 +2750,8 @@ fn global_beacon_partial_signer_reconnects_after_broker_restart() {
     let catalog = fixture.catalog.clone();
     let session = fixture.session.clone();
     let (_directory, policy, shutdown, server) = start_signer(fixture.catalog, fixture.backends);
-    let dependencies = resolve(&catalog, &policy).expect("resolve retained beacon broker proxy");
+    let dependencies =
+        resolve_test_process(&catalog, &policy).expect("resolve retained beacon broker proxy");
     let signer = dependencies
         .sumeragi_global_beacon_partial_signer
         .as_ref()
@@ -2752,7 +2769,7 @@ fn global_beacon_partial_signer_reconnects_after_broker_restart() {
     let server_lifecycle = Arc::clone(&replacement_lifecycle);
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let replacement_server = thread::spawn(move || {
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &replacement.catalog,
             replacement.backends,
             &replacement_policy,
@@ -2823,7 +2840,8 @@ fn invalid_beacon_partial_permanently_poisons_without_reconnect_or_replay() {
         }),
     );
     let (_directory, policy, shutdown, server) = start_signer(catalog.clone(), backends);
-    let dependencies = resolve(&catalog, &policy).expect("resolve invalid beacon broker proxy");
+    let dependencies =
+        resolve_test_process(&catalog, &policy).expect("resolve invalid beacon broker proxy");
     let signer = dependencies
         .sumeragi_global_beacon_partial_signer
         .as_ref()
@@ -2931,8 +2949,8 @@ fn correlated_malformed_beacon_response_is_rejected_by_typed_proxy() {
             &operation_response(&sign, STATUS_OK_V1, malformed),
         );
     });
-    let dependencies =
-        resolve(&catalog, &policy).expect("resolve proxy through correlated fake beacon broker");
+    let dependencies = resolve_test_process(&catalog, &policy)
+        .expect("resolve proxy through correlated fake beacon broker");
     let signer = dependencies
         .sumeragi_global_beacon_partial_signer
         .as_ref()
@@ -2984,7 +3002,7 @@ fn parliament_tle_capability_attestation_round_trips_over_authenticated_broker()
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project exact TLE broker catalog");
-    let (client, observations) = BrokerSession::connect(
+    let (client, observations) = connect_test_process(
         &policy,
         fixture.catalog.chain_id(),
         *fixture.catalog.network_id(),
@@ -3109,7 +3127,7 @@ fn parliament_tle_capability_typed_proxy_requalifies_before_and_after_lookup() {
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project exact-capability TLE catalog");
-    let (broker_session, observations) = BrokerSession::connect(
+    let (broker_session, observations) = connect_test_process(
         &policy,
         catalog.chain_id(),
         *catalog.network_id(),
@@ -3139,7 +3157,7 @@ fn parliament_tle_partial_release_round_trips_over_authenticated_broker() {
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project exact TLE broker catalog");
-    let (client, observations) = BrokerSession::connect(
+    let (client, observations) = connect_test_process(
         &policy,
         fixture.catalog.chain_id(),
         *fixture.catalog.network_id(),
@@ -3193,7 +3211,7 @@ fn maximum_committee_parliament_tle_proxy_round_trips_on_ordinary_stack() {
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project maximum-committee TLE broker catalog");
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = connect_test_process(
         &policy,
         fixture.catalog.chain_id(),
         *fixture.catalog.network_id(),
@@ -3316,7 +3334,7 @@ fn correlated_malformed_tle_response_is_rejected_by_typed_proxy() {
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project malformed-response TLE catalog");
-    let (broker_session, observations) = BrokerSession::connect(
+    let (broker_session, observations) = connect_test_process(
         &policy,
         catalog.chain_id(),
         *catalog.network_id(),
@@ -3442,7 +3460,7 @@ fn assert_invalid_tle_capability_result_is_rejected(fault: ParliamentTleCapabili
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project mismatched-capability TLE catalog");
-    let (broker_session, observations) = BrokerSession::connect(
+    let (broker_session, observations) = connect_test_process(
         &policy,
         catalog.chain_id(),
         *catalog.network_id(),
@@ -3511,7 +3529,7 @@ fn parliament_tle_partial_release_reconnects_after_broker_restart() {
         .map(ProviderBindingWireV1::try_from_binding)
         .collect::<Result<Vec<_>, _>>()
         .expect("project exact retained TLE broker catalog");
-    let (client, observations) = BrokerSession::connect(
+    let (client, observations) = connect_test_process(
         &policy,
         catalog.chain_id(),
         *catalog.network_id(),
@@ -3531,7 +3549,7 @@ fn parliament_tle_partial_release_reconnects_after_broker_restart() {
     let server_lifecycle = Arc::clone(&replacement_lifecycle);
     let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
     let replacement_server = thread::spawn(move || {
-        serve_with_policy_and_lifecycle(
+        serve_test_process_with_lifecycle(
             &replacement.catalog,
             replacement.backends,
             &replacement_policy,

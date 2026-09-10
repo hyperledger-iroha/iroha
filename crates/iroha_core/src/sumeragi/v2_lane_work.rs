@@ -21835,6 +21835,39 @@ pub(super) mod tests {
             record_capacity,
         );
     }
+    /// Missing authenticated sidecar and its exact durable successor context.
+    pub(in crate::sumeragi) fn missing_lifecycle_sidecar_fixture_for_test() -> (
+        V2LaneWorkAdapter,
+        Vec<KeyPair>,
+        super::super::v2::VerifiedHeightContext,
+        CertifiedMergeLedgerReference,
+        Arc<Kura>,
+    ) {
+        let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+        let (parent, receipt) = adapter
+            .kura
+            .v2_finality_artifact_with_receipt(1)
+            .expect("read authenticated fixture parent")
+            .expect("the durable parent is present");
+        let pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let verified = super::super::v2::VerifiedHeightContext::successor(
+            adapter.context.clone(),
+            pops,
+            &parent,
+            &receipt,
+            &parent.validator_set_pops,
+        )
+        .expect("authenticate the exact lane-work successor context");
+        let reference = missing_sidecar_reference(&adapter, &keys, 0);
+        let kura = Arc::clone(&adapter.kura);
+        (adapter, keys, verified, reference, kura)
+    }
+
     fn missing_sidecar_reference(
         adapter: &V2LaneWorkAdapter,
         keys: &[KeyPair],

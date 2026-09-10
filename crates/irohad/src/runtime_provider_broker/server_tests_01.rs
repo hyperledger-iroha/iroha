@@ -273,7 +273,10 @@ impl test_evidence_transparency::EvidenceViewerTransparencyPublisherV1
         )
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::NestedDecodeBudgetProbeV1"
+)]
 struct NestedDecodeBudgetProbeV1 {
     first: Vec<u8>,
     second: Vec<u8>,
@@ -625,7 +628,7 @@ fn provider_checkpoint_maximal_phase_sequence_fits_without_allocation() {
 }
 #[test]
 fn compact_server_sequence_exceeds_live_peak_but_fits_cumulative_cap() {
-    let state = prepare_server_state(&server_test_catalog(), server_test_backends())
+    let state = prepare_test_server_state(&server_test_catalog(), server_test_backends())
         .expect("prepare governance signer server state");
     let payload = valid_governance_sign_request_payload();
     let request = make_operation_request(
@@ -704,7 +707,30 @@ fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
         first: vec![0xA5; 64],
         second: vec![0x5A; 64],
     };
-    let bomb_bytes = norito::to_bytes(&bomb).expect("encode allocation bomb");
+    let bomb_bytes = norito::encode_canonical(&bomb).expect("encode allocation bomb");
+    let canonical = norito::decode_canonical::<NestedDecodeBudgetProbeV1>(&bomb_bytes)
+        .expect("decode canonical allocation probe before applying a broker budget");
+    assert!(canonical == bomb);
+    // Frame decoding and the owned vector values both consume allocation.
+    // A ceiling alone is insufficient: zero headroom clamps the budget to wire length.
+    let generous_policy =
+        DecodeResourcePolicyV1::new((1024, 1024), (1024, 1024), (0, 1024), 8, (4096, 4096));
+    let generous_pool = Arc::new(DecodeResourcePoolV1::new(4096));
+    let generous_admission =
+        DecodeResourceAdmissionV1::acquire_from(generous_pool, None, generous_policy)
+            .expect("acquire valid allocation-probe admission");
+    generous_admission
+        .reserve_raw_frame(bomb_bytes.len(), 1024)
+        .expect("reserve valid allocation-probe wire bytes");
+    let generous_scope = generous_admission.enter();
+    let decoded = decode_canonical_with_policy::<NestedDecodeBudgetProbeV1>(
+        &bomb_bytes,
+        1024,
+        generous_policy,
+    )
+    .expect("the exact same frame must decode before imposing the allocation ceiling");
+    assert!(decoded == bomb);
+    drop(generous_scope);
     let allocation_policy =
         DecodeResourcePolicyV1::new((1024, 1024), (1024, 32), (0, 0), 8, (4096, 4096));
     let allocation_pool = Arc::new(DecodeResourcePoolV1::new(4096));
@@ -724,10 +750,21 @@ fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
         Err(BrokerError::Protocol)
     );
     drop(allocation_scope);
+    assert!(matches!(
+        norito::decode_canonical_with_limits::<NestedDecodeBudgetProbeV1>(
+            &bomb_bytes,
+            norito::core::DecodeLimits::new(1024, 1024, 1024, 32, 8),
+        ),
+        Err(norito::Error::TotalAllocationExceeded { limit: 32, .. })
+    ));
     let nested = vec![vec![vec![0xA5_u8]]];
-    let nested_bytes = norito::to_bytes(&nested).expect("encode deep value");
+    let nested_bytes = norito::encode_canonical(&nested).expect("encode deep value");
+    let decoded_nested = norito::decode_canonical::<Vec<Vec<Vec<u8>>>>(&nested_bytes)
+        .expect("decode nested frame before imposing the depth ceiling");
+    assert!(decoded_nested == nested);
+    // Keep the allocation allowance sufficient so this probe isolates nesting depth.
     let depth_policy =
-        DecodeResourcePolicyV1::new((1024, 1024), (1024, 1024), (0, 0), 1, (4096, 4096));
+        DecodeResourcePolicyV1::new((1024, 1024), (1024, 1024), (0, 1024), 1, (4096, 4096));
     let depth_pool = Arc::new(DecodeResourcePoolV1::new(4096));
     let depth_admission = DecodeResourceAdmissionV1::acquire_from(depth_pool, None, depth_policy)
         .expect("acquire depth admission");
@@ -740,7 +777,18 @@ fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
         Err(BrokerError::Protocol)
     );
     drop(depth_scope);
-    let mut trailing = norito::to_bytes(&7_u64).expect("encode canonical integer");
+    assert!(matches!(
+        norito::decode_canonical_with_limits::<Vec<Vec<Vec<u8>>>>(
+            &nested_bytes,
+            norito::core::DecodeLimits::new(1024, 1024, 1024, 1024, 1),
+        ),
+        Err(norito::Error::NestingDepthExceeded { limit: 1, .. })
+    ));
+    let mut trailing = norito::encode_canonical(&7_u64).expect("encode canonical integer");
+    assert_eq!(
+        decode_canonical_with_policy::<u64>(&trailing, trailing.len(), CONTROL_DECODE_POLICY_V1,),
+        Ok(7)
+    );
     trailing.push(0);
     assert_eq!(
         decode_canonical_with_policy::<u64>(&trailing, trailing.len(), CONTROL_DECODE_POLICY_V1,),
@@ -771,6 +819,16 @@ fn operation_policies_decode_actual_request_and_response_frames() {
             MAX_OPERATION_FRAME_BYTES_V1,
         )
         .expect("encode sign result"),
+    );
+    assert_broker_frame_owner(
+        &request,
+        "irohad::runtime_provider_broker::protocol::OperationRequestV1",
+        MAX_OPERATION_FRAME_BYTES_V1,
+    );
+    assert_broker_frame_owner(
+        &response,
+        "irohad::runtime_provider_broker::protocol::OperationResponseV1",
+        MAX_OPERATION_FRAME_BYTES_V1,
     );
     let limit = operation_frame_limit(OPERATION_SIGN_V1);
     let policy = operation_decode_policy(OPERATION_SIGN_V1);
@@ -1351,8 +1409,11 @@ struct PorReplayArchiveChallengeStateFixtureV1 {
     proof_digest: Option<[u8; 32]>,
     proof_submitted_at: Option<u64>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1")]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::PorReplayArchiveRecordFixtureV1",
+    frame = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1"
+)]
 struct PorReplayArchiveRecordFixtureV1 {
     finalized: PorReplayArchiveFinalizedStateFixtureV1,
 }
@@ -1362,6 +1423,7 @@ struct PorReplayArchiveFinalizedStateFixtureV1 {
     verdict: sorafs_manifest::por::AuditVerdictV1,
     stats: node::PorVerdictStats,
     repair_task_id: Option<[u8; 32]>,
+    repair_handoff_acknowledged: bool,
     reputation_sequence: u64,
     reputation_terminal: iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1,
 }

@@ -131,7 +131,7 @@ fn start_native_signer_server(
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> (
     tempfile::TempDir,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
@@ -235,6 +235,7 @@ fn por_replay_archive_record_fixture() -> node::PorFinalizedReplayArchiveRecordV
                 failed_samples: 0,
             },
             repair_task_id: None,
+            repair_handoff_acknowledged: true,
             reputation_sequence: 1,
             reputation_terminal: PorTerminalOutcomeV1 {
                 challenge_id,

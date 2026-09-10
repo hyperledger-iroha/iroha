@@ -1141,6 +1141,8 @@ mod event;
 pub mod explorer;
 #[cfg(feature = "app_api")]
 pub mod filter;
+#[cfg(test)]
+mod frame_test_support;
 #[cfg(feature = "app_api")]
 pub(crate) mod generic_query;
 #[cfg(feature = "app_api")]
@@ -12676,6 +12678,8 @@ async fn handler_gov_unlock_stats(
     norito::derive::NoritoDeserialize,
 )]
 /// Full canonical account state exposed only through the trusted internal read boundary.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::InternalAccountReadResponse")]
 struct InternalAccountReadResponse {
     /// Canonical domainless account identifier.
     id: AccountId,
@@ -19149,6 +19153,8 @@ mod zk_ivm_request_dto_json_tests {
     Eq,
 )]
 /// Response body returned by `POST /v1/zk/ivm/prove` and `DELETE /v1/zk/ivm/prove/{job_id}`.
+#[derive(norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobCreatedDto")]
 pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
@@ -24488,7 +24494,7 @@ mod torii_proxy_session_id_tests {
 type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV1);
 /// Borrowed wire-equivalent of [`OwnedToriiProxyRequestIdPreimage`].
 ///
-/// Each tuple field keeps the historical length prefix, but the potentially
+/// Each tuple field keeps the canonical length prefix, but the potentially
 /// large request arm is streamed directly instead of being cloned merely to
 /// derive its request id.
 #[cfg(feature = "connect")]
@@ -24500,9 +24506,12 @@ struct BorrowedToriiProxyRequestIdPreimage<'a> {
     request: &'a ToriiProxyRequestKindV1,
 }
 #[cfg(feature = "connect")]
-impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <OwnedToriiProxyRequestIdPreimage as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for BorrowedToriiProxyRequestIdPreimage<'_> {
+    fn nominal_name() -> String {
+        "iroha_torii::BorrowedToriiProxyRequestIdPreimage<'_>".into()
+    }
+    fn frame_name() -> String {
+        <OwnedToriiProxyRequestIdPreimage as norito::NoritoSchema>::frame_name()
     }
 }
 #[cfg(feature = "connect")]
@@ -25886,7 +25895,7 @@ impl CanonicalFanoutBatchRef<'_> {
         }
     }
     fn values_encoded_len_exact(self) -> Option<usize> {
-        fn sequence<T: norito::core::NoritoSerialize>(values: &[T]) -> Option<usize> {
+        fn sequence<T: norito::core::SerializePayload>(values: &[T]) -> Option<usize> {
             let mut total = norito::core::seq_len_prefix_len(values.len());
             for value in values {
                 let item_len = value.encoded_len_exact()?;
@@ -25903,7 +25912,7 @@ impl CanonicalFanoutBatchRef<'_> {
         self,
         writer: &mut norito::core::Encoder<'_>,
     ) -> Result<(), norito::core::Error> {
-        fn sequence<T: norito::core::NoritoSerialize>(
+        fn sequence<T: norito::core::SerializePayload>(
             values: &[T],
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
@@ -25922,7 +25931,6 @@ impl CanonicalFanoutBatchRef<'_> {
         }
     }
 }
-impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutBatchRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.discriminant(), writer)?;
@@ -25939,7 +25947,6 @@ impl norito::core::SerializePayload for CanonicalFanoutBatchRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutValuesRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutValuesRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutValuesRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize_values(writer)
@@ -25953,7 +25960,6 @@ impl norito::core::SerializePayload for CanonicalFanoutValuesRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutOneColumnRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutOneColumnRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_seq_len(writer, 1)?;
@@ -25969,7 +25975,6 @@ impl norito::core::SerializePayload for CanonicalFanoutOneColumnRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutBatchTupleRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutBatchTupleRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutBatchTupleRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_len_prefixed(writer, &CanonicalFanoutOneColumnRef(self.0))
@@ -25989,7 +25994,6 @@ struct CanonicalFanoutOutputRef<'a> {
     has_more: &'a bool,
     continue_cursor: &'a Option<iroha_data_model::query::parameters::ForwardCursor>,
 }
-impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutOutputRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_len_prefixed(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
@@ -26061,9 +26065,12 @@ impl BoundedCanonicalIterableFanoutResponse {
         }
     }
 }
-impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
-    fn schema_hash() -> [u8; 16] {
-        <iroha_data_model::query::QueryResponse as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for BoundedCanonicalIterableFanoutResponse {
+    fn nominal_name() -> String {
+        "iroha_torii::BoundedCanonicalIterableFanoutResponse".into()
+    }
+    fn frame_name() -> String {
+        <iroha_data_model::query::QueryResponse as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for BoundedCanonicalIterableFanoutResponse {

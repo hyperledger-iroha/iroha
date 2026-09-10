@@ -7288,9 +7288,9 @@ mod tests {
             (1, 1)
         );
         ledger.validate().expect("ledger validates");
-        let encoded = norito::to_bytes(&ledger).expect("budget ledger encodes");
+        let encoded = norito::codec::encode_adaptive(&ledger);
         let decoded: PrivacyCompositionBudgetLedgerV1 =
-            norito::decode_from_bytes(&encoded).expect("budget ledger decodes");
+            norito::codec::decode_adaptive(&encoded).expect("budget ledger payload decodes");
         assert_eq!(decoded, ledger);
         decoded.validate().expect("restored ledger validates");
         let before = ledger.clone();
@@ -7331,11 +7331,10 @@ mod tests {
             tampered.validate(),
             Err(PrivacyCompositionBudgetError::InvalidChargeChain)
         );
-        let mut truncated =
-            norito::to_bytes(&before).expect("encode valid privacy budget checkpoint");
+        let mut truncated = norito::codec::encode_adaptive(&before);
         truncated.pop();
         assert!(
-            norito::decode_from_bytes::<PrivacyCompositionBudgetLedgerV1>(&truncated).is_err(),
+            norito::codec::decode_adaptive::<PrivacyCompositionBudgetLedgerV1>(&truncated).is_err(),
             "truncated privacy budget checkpoint must fail closed"
         );
     }
@@ -7409,7 +7408,7 @@ mod tests {
         assert_eq!(ledger.head([0xB0; 32]).expect("release head").sequence(), 2);
         ledger.validate().expect("release ledger validates");
         let restored: PrivacyReleaseLedgerV1 =
-            norito::decode_from_bytes(&norito::to_bytes(&ledger).expect("encode release ledger"))
+            norito::codec::decode_adaptive(&norito::codec::encode_adaptive(&ledger))
                 .expect("decode release ledger");
         assert_eq!(restored, ledger);
         assert!(!format!("{:?}", ledger.records[0]).contains(&hex::encode([0x41; 32])));

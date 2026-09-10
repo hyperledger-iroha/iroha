@@ -96,7 +96,10 @@ pub const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1: usize = 256;
 /// Exact staged-lock counts bound by the non-shipping private-settlement
 /// sidecar commitment used in adversarial real-process tests.
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::PrivateSettlementStagedLockCountsV1"
+)]
 pub struct PrivateSettlementStagedLockCountsV1 {
     /// Reserved opaque pool heads.
     pub pool_heads: u64,
@@ -699,7 +702,10 @@ pub enum PrivateSettlementSidecarStoreErrorV1 {
     UnsupportedPlatform,
 }
 
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::DurablePrivateSettlementSidecarV1"
+)]
 struct DurablePrivateSettlementSidecarV1 {
     magic: [u8; 4],
     version: u8,
@@ -715,7 +721,10 @@ struct DurablePrivateSettlementSidecarV1 {
     lifecycle_evidence_digest: Option<Hash>,
 }
 
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::PrivateSettlementRestrictedSidecarWireV1"
+)]
 struct PrivateSettlementRestrictedSidecarWireV1 {
     manifest: AtomicPrivateSettlementV1,
     policy: PrivateSettlementAuditPolicyV1,
@@ -724,7 +733,10 @@ struct PrivateSettlementRestrictedSidecarWireV1 {
     stored_at_height: u64,
 }
 
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::DurablePrivateSettlementProvisionalSidecarV1"
+)]
 struct DurablePrivateSettlementProvisionalSidecarV1 {
     magic: [u8; 4],
     version: u8,
@@ -3829,6 +3841,54 @@ pub(crate) mod tests {
         auditor: AccountId,
         signing: KeyPair,
         hybrid: HybridKeyPair,
+    }
+
+    #[test]
+    fn sidecar_persistence_frames_keep_distinct_owner_roots_and_reject_malformed_bytes() {
+        use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1;
+
+        let fixture = sidecar_fixture();
+        let wire = PrivateSettlementRestrictedSidecarWireV1::from(fixture.sidecar.clone());
+        let durable = DurablePrivateSettlementSidecarV1::new(fixture.sidecar.clone());
+        let provisional = DurablePrivateSettlementProvisionalSidecarV1::new(
+            provisional_material_fixture(&fixture),
+            fixture.sidecar.stored_at_height,
+        );
+        let counts = PrivateSettlementStagedLockCountsV1 {
+            pool_heads: 1,
+            nullifiers: 2,
+            output_commitments: 3,
+            total: 6,
+        };
+        macro_rules! check {
+            ($owner:ident, $value:expr) => {
+                assert_private_settlement_frame_v1::<$owner>(
+                    &$value,
+                    concat!(
+                        "iroha_core::private_settlement::sidecar_store::",
+                        stringify!($owner)
+                    ),
+                );
+            };
+        }
+        check!(PrivateSettlementStagedLockCountsV1, counts);
+        check!(PrivateSettlementRestrictedSidecarWireV1, wire);
+        check!(DurablePrivateSettlementSidecarV1, durable);
+        check!(DurablePrivateSettlementProvisionalSidecarV1, provisional);
+        let wire_frame = norito::encode_canonical(&wire).expect("immutable sidecar frame");
+        assert!(matches!(
+            norito::decode_canonical::<DurablePrivateSettlementSidecarV1>(&wire_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut invalid_lifecycle = durable;
+        invalid_lifecycle.version = 0;
+        let encoded = norito::encode_canonical(&invalid_lifecycle).expect("structural frame");
+        let recovered: DurablePrivateSettlementSidecarV1 = norito::decode_canonical(&encoded)
+            .expect("payload reconstruction preserves validation ownership");
+        assert_eq!(
+            recovered.validate(),
+            Err(PrivateSettlementSidecarStoreErrorV1::Corrupt)
+        );
     }
 
     fn hash(seed: u8) -> Hash {

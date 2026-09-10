@@ -646,10 +646,13 @@ fn install_lane_manifest_registry_for_test(
 }
 /// Test-only wire twin of the private core committee record.
 ///
-/// The explicit schema name keeps its Norito header identical to the record
+/// The explicit frame projection keeps its Norito header identical to the record
 /// decoded by `State`; field order and types intentionally mirror that record.
-#[derive(norito::Encode)]
-#[norito(schema_name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
+#[derive(norito::Encode, norito::derive::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1",
+    frame = "iroha_core::state::AutoscaleLaneCommitteeV1"
+)]
 struct AutoscaleLaneCommitteeFixtureV1 {
     version: u8,
     validator_set_hash_version: u16,

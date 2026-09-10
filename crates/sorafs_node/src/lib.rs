@@ -10,6 +10,8 @@ pub mod capacity;
 pub mod config;
 mod durable_transaction_forwarder;
 pub mod evidence_viewer;
+#[cfg(test)]
+mod frame_test_support;
 mod governance;
 mod governance_rooted_fs;
 pub mod governance_service;
@@ -3692,7 +3694,8 @@ impl Default for GovernanceOutboxRuntime {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::GcStorageIdentityV1")]
 struct GcStorageIdentityV1 {
     total_bytes: u64,
     manifest_count: u64,
@@ -4736,7 +4739,8 @@ struct AdmittedReputationSnapshotV1 {
     encoded_len: u64,
     envelope: SignedReputationSnapshotV1,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::AuxiliaryRuntimeCheckpointV5")]
 struct AuxiliaryRuntimeCheckpointV5 {
     version: u8,
     capacity_runtime: CapacityRuntimeCheckpointV1,

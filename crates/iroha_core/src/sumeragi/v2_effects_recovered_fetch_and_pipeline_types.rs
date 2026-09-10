@@ -768,11 +768,8 @@ impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
                 successor_outputs.installed.is_none(),
                 "preflighted post-Apply output proof retains an empty install slot"
             );
-            match successor_outputs.attestation.mode() {
-                LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => {
-                    let retained = successor_outputs.retained_effect_batch.take().expect(
-                        "preflighted same-batch post-Apply output proof retains its Apply suffix",
-                    );
+            match successor_outputs.retained_effect_batch.take() {
+                Some(retained) => {
                     assert!(
                         retained.effects.len() == 1
                             && retained.effects.front().is_some_and(|owned| {
@@ -783,12 +780,13 @@ impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
                         "preflighted post-Apply output proof retains the same exact Apply suffix"
                     );
                 }
-                LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
-                    ..
-                } => {
+                None => {
                     assert!(
-                        successor_outputs.retained_effect_batch.is_none(),
-                        "delayed-admission post-Apply output cannot consume a retained Apply batch"
+                        matches!(
+                            successor_outputs.attestation.mode(),
+                            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+                        ),
+                        "only delayed output admission may omit the retained periodic Apply suffix"
                     );
                 }
             }
@@ -910,8 +908,7 @@ impl LiveLifecycleValidateSuccessorOwnerV1 {
         self.dispatch_key != candidate.dispatch_key
             && self.apply_is_authorized
             && self.dispatch_key.owner() == candidate.dispatch_key.owner()
-            && self.dispatch_key.lifecycle_ordinal()
-                == candidate.dispatch_key.lifecycle_ordinal()
+            && self.dispatch_key.lifecycle_ordinal() == candidate.dispatch_key.lifecycle_ordinal()
             && self.dispatch_key.slot() == candidate.dispatch_key.slot()
             && self.round == candidate.round
             && self.subject == candidate.subject

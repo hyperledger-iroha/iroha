@@ -221,8 +221,8 @@ Implemented foundations include:
   deterministic node-CID/block-CID derivation, block/head signing payloads,
   parent-chain validation, and signed-head-to-chain binding helpers.
 - Ed25519 and ML-DSA/Dilithium3 publisher-signature verification over canonical Norito signing bytes.
-- `sorafs-validate governance --node <path>`, `--block <path>`, and `--head
-  <path> --block <path>...`, plus `sorafs-validate sign --kind governance`.
+- `iroha app sorafs toolkit validate governance --node <path>`, `--block <path>`, and `--head
+  <path> --block <path>...`, plus `iroha app sorafs toolkit sign --kind governance`.
 - Reference SDK validation for Norito-encoded governance log nodes, governance
   DAG blocks, and signed governance DAG heads. The C FFI surface currently
   exposes governance log-node validation; downstream block/head FFI wrappers
@@ -850,8 +850,8 @@ The rollout evidence scripts have focused Python coverage in:
 - `scripts/tests/run_sorafs_governance_dag_rollout_evidence_test.py`
 
 ## Documentation & Tooling
-- Keep `sorafs-validate governance` as the reference local verifier for `GovernanceLogNodeV1`.
-- Use `sorafs-validate governance --block <block.to>` and `sorafs-validate
+- Keep `iroha app sorafs toolkit validate governance` as the reference local verifier for `GovernanceLogNodeV1`.
+- Use `iroha app sorafs toolkit validate governance --block <block.to>` and `iroha
   governance --head <head.to> --block <block.to>...` for local
   `GovernanceDagBlockV1` and signed-head chain verification.
 - Use `sorafs_cli governance dag list|show|verify|export` for offline local

@@ -17,7 +17,10 @@ pub enum ModerationCheckpointStoreExternalErrorV1 {
     Ambiguous,
 }
 /// One sealed, predecessor-bound moderation checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::checkpoint_store::ModerationCheckpointStoreRecordV1"
+)]
 pub struct ModerationCheckpointStoreRecordV1 {
     /// Record schema version.
     pub version: u16,

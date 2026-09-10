@@ -796,7 +796,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "specs/sorafs/l1_deployment_qualification.md"',
         '- "specs/sorafs_pdp_plan.md"',
         "run: bash ci/check_sorafs_cli_release.sh",
-        "scripts/package_sorafs_validate_release.sh",
+        "scripts/package_iroha_cli_release.sh",
         "scripts/package_sorafs_cli_candidate.py",
         "scripts/tests/package_sorafs_cli_candidate_test.py",
         '- "scripts/tests/build_release_bundle_test.py"',
@@ -832,7 +832,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "fail-build: true",
         'cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli --target "$target"',
         'cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch --target "$target"',
-        'cargo build --locked --release -p sorafs_manifest --bin sorafs-validate --target "$target"',
+        'cargo build --locked --release -p iroha_cli --bin iroha --target "$target"',
         'if [[ "$host_target" != "$target" ]]; then',
         "target: ${{ matrix.target }}",
         '--target "${{ matrix.target }}"',
@@ -847,14 +847,14 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "path: artifacts/release-gate",
         "artifacts/release-gate/artifacts/sorafs-release/sorafs-release.spdx.json",
         "name: Generate platform binary SBOM",
-        "name: Package reference validator and FFI header",
-        "name: Package reference validator and FFI header reproducibly",
-        "sorafs-validate-first.XXXXXX",
-        "sorafs-validate-replay.XXXXXX",
+        "name: Package Iroha CLI and SoraFS FFI header",
+        "name: Package Iroha CLI and SoraFS FFI header reproducibly",
+        "iroha-first.XXXXXX",
+        "iroha-replay.XXXXXX",
         'cmp "${first_out}/${relative}" "${replay_out}/${relative}"',
         "for suffix in .tar.gz.sha256 .manifest.json.sha256; do",
         "cmp candidate-package-first.json candidate-package-replay.json",
-        "artifacts/sorafs-cli/reference-validator",
+        "artifacts/sorafs-cli/iroha-cli",
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json",
         "name: Scan platform binary SBOM",
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}-vulnerabilities.sarif",
@@ -1437,57 +1437,139 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
     return errors
 
 
-def _rust_struct_field_inventory(
+def _pop_broker_source_tokens(source: str) -> list[str] | None:
+    """Read code tokens; comments and literals cannot impersonate declarations."""
+
+    raw_pattern = re.compile(r'(?:br|cr|r)(#{0,255})"')
+    literal_pattern = re.compile(
+        r'''(?:b|c)?"(?:\\.|[^"\\])*"'''
+        r"|(?:b)?'(?:\\(?:u\{[0-9A-Fa-f_]+\}|x[0-9A-Fa-f]{2}|.)|[^'\\])'"
+    )
+    quote_pattern = re.compile(r'(?:b|c)?"')
+    token_pattern = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+|.")
+    tokens: list[str] = []
+    cursor = 0
+    while cursor < len(source):
+        if source[cursor].isspace():
+            cursor += 1
+        elif source.startswith("//", cursor):
+            end = source.find("\n", cursor + 2)
+            cursor = len(source) if end < 0 else end + 1
+        elif source.startswith("/*", cursor):
+            depth = 1
+            cursor += 2
+            while cursor < len(source) and depth:
+                pair = source[cursor : cursor + 2]
+                depth += (pair == "/*") - (pair == "*/")
+                cursor += 2 if pair in ("/*", "*/") else 1
+            if depth:
+                return None
+        else:
+            raw = raw_pattern.match(source, cursor)
+            if raw:
+                terminator = '"' + raw.group(1)
+                end = source.find(terminator, raw.end())
+                if end < 0:
+                    return None
+                end += len(terminator)
+            else:
+                literal = literal_pattern.match(source, cursor)
+                if literal:
+                    end = literal.end()
+                elif quote_pattern.match(source, cursor):
+                    return None
+                else:
+                    token = token_pattern.match(source, cursor)
+                    assert token is not None
+                    end = token.end()
+            tokens.append(source[cursor:end])
+            cursor = end
+    return tokens
+
+
+def _pop_broker_wire_field_inventory(
     source: str, struct_name: str
 ) -> tuple[tuple[str, str], ...] | None:
-    """Return ordered fields from one direct or macro-emitted wire struct."""
+    """Require one canonical, private PoP frame declaration in its owning module."""
 
-    declaration = re.search(
-        rf"(?ms)^\s*(?:pub\(super\)\s+)?struct\s+{re.escape(struct_name)}\s*"
-        r"\{(?P<body>.*?)^\s*\}",
-        source,
-    )
-    if declaration is None:
-        declaration = re.search(
-            (
-                rf"(?ms)^\s*define_broker_wire_struct!\(\s*[A-Za-z_][A-Za-z0-9_]*\s+"
-                rf"(?:pub\(super\)\s+)?{re.escape(struct_name)}\s*"
-                r"\{(?P<body>.*?)\}\s*\);\s*$"
-            ),
-            source,
-        )
-    if declaration is None:
+    modes = {
+        "PopRuntimeOpenResultWireV1": "owned",
+        "PopRecipientOpenRequestWireV1": "move_sensitive",
+        "PopRecipientOpenResultWireV1": "move_sensitive",
+        "PopCredentialRuntimeBindingWireV1": "owned",
+    }
+    tokens = _pop_broker_source_tokens(source)
+    if tokens is None or struct_name not in modes:
+        return None
+    # Validate all delimiters before considering a declaration, including a
+    # malformed duplicate following an otherwise healthy declaration.
+    stack: list[tuple[str, int]] = []
+    closing: dict[int, int] = {}
+    depths: list[int] = []
+    for index, token in enumerate(tokens):
+        depths.append(len(stack))
+        if token in ("(", "[", "{"):
+            stack.append((token, index))
+        elif token in (")", "]", "}"):
+            if not stack or stack[-1][0] != {")": "(", "]": "[", "}": "{"}[token]:
+                return None
+            closing[stack.pop()[1]] = index
+        if token == "struct" and tokens[index + 1 : index + 2] == [struct_name]:
+            return None  # Ordinary structs are not this protocol's owner.
+    if stack:
+        return None
+
+    bodies: list[list[str]] = []
+    for index, token in enumerate(tokens):
+        if token != "define_broker_wire_struct":
+            continue
+        if tokens[index + 1 : index + 2] != ["!"]:
+            continue
+        opening = index + 2
+        if opening not in closing:
+            return None
+        args = tokens[opening + 1 : closing[opening]]
+        body_at = args.index("{") if "{" in args else len(args)
+        owner = f'"irohad::runtime_provider_broker::protocol::primitives::{struct_name}"'
+        if struct_name not in args[:body_at] and owner not in args[:body_at]:
+            continue
+        expected = [
+            modes[struct_name], "frame", owner, ";",
+            "pub", "(", "super", ")", struct_name,
+        ]
+        if (
+            depths[index] != 0
+            or tokens[opening] != "("
+            or args[:body_at] != expected
+            or args[-1:] != ["}"]
+            or tokens[closing[opening] + 1 : closing[opening] + 2] != [";"]
+        ):
+            return None
+        bodies.append(args[body_at + 1 : -1])
+    if len(bodies) != 1:
         return None
 
     fields: list[tuple[str, str]] = []
-    body = declaration.group("body")
-    start = 0
-    depth = 0
-    for index, character in enumerate(body):
-        if character in "<([{":
-            depth += 1
-        elif character in ">)]}":
-            depth -= 1
-        elif character == "," and depth == 0:
-            field_source = body[start:index].strip()
-            start = index + 1
-            if not field_source:
-                continue
-            field = re.fullmatch(
-                r"(?:pub(?:\([^)]*\))?\s+)?"
-                r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?P<type>.+)",
-                field_source,
-                re.DOTALL,
-            )
-            if field is None:
+    field_start = 0
+    brackets: list[str] = []
+    for index, token in enumerate(bodies[0]):
+        if token in ("<", "[", "("):
+            brackets.append(token)
+        elif token in (">", "]", ")"):
+            if not brackets or brackets.pop() != {">": "<", "]": "[", ")": "("}[token]:
                 return None
-            fields.append(
-                (
-                    field.group("name"),
-                    re.sub(r"\s+", "", field.group("type")),
-                )
-            )
-    if body[start:].strip():
+        elif token == "," and not brackets:
+            field = bodies[0][field_start:index]
+            if (
+                len(field) < 7
+                or field[:4] != ["pub", "(", "super", ")"]
+                or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field[4]) is None
+                or field[5] != ":"
+            ):
+                return None
+            fields.append((field[4], "".join(field[6:])))
+            field_start = index + 1
+    if brackets or field_start != len(bodies[0]):
         return None
     return tuple(fields)
 
@@ -1531,7 +1613,7 @@ def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:
         errors.append("PoP broker retired runtime-resolve operation name must remain absent")
 
     for struct_name, expected_fields in POP_BROKER_WIRE_FIELD_INVENTORIES.items():
-        observed_fields = _rust_struct_field_inventory(protocol, struct_name)
+        observed_fields = _pop_broker_wire_field_inventory(protocol, struct_name)
         if observed_fields != expected_fields:
             errors.append(
                 f"PoP broker wire struct {struct_name} fields must be exactly "
@@ -2696,7 +2778,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: source and platform scans must both pin Grype v0.112.0"
             )
         try:
-            package_reference = source.index("name: Package reference validator and FFI header")
+            package_reference = source.index("name: Package Iroha CLI and SoraFS FFI header")
             reproducible_archive = source.index(
                 "name: Rebuild deterministic platform archive and run clean-consumer smoke"
             )
@@ -2727,7 +2809,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: deterministic platform candidate must be built "
                 "exactly twice for byte-identical replay"
             )
-        if source.count("bash scripts/package_sorafs_validate_release.sh") != 2:
+        if source.count("bash scripts/package_iroha_cli_release.sh") != 2:
             errors.append(
                 f"{relative}: deterministic reference-validator package must be "
                 "built exactly twice for byte-identical replay"

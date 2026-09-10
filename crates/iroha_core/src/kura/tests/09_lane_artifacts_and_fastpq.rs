@@ -791,12 +791,14 @@ fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
         txs: Vec::new(),
         proofs: Vec::new(),
     };
-    let mut bytes = norito::to_bytes(&pre_release).expect("encode pre-release sidecar");
-    let schema = <PipelineRecoverySidecar as norito::core::NoritoSerialize>::schema_hash();
-    let schema_start = MAGIC.len() + 2;
-    let schema_end = schema_start + schema.len();
-    assert!(bytes.len() >= Header::SIZE);
-    bytes[schema_start..schema_end].copy_from_slice(&schema);
+    let current = PipelineRecoverySidecar::new(
+        pre_release.height,
+        pre_release.block_hash,
+        pre_release.dag,
+        pre_release.txs.clone(),
+    );
+    let bytes = frame_kura_test_payload(&current, &pre_release);
+    assert_kura_test_payload_rejected::<PipelineRecoverySidecar>(&bytes);
     assert!(
         norito::decode_from_bytes::<PipelineRecoverySidecar>(&bytes).is_err(),
         "first-release decoding must require every current sidecar field"
@@ -847,12 +849,15 @@ fn pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts() {
         reads: vec!["state:alpha".to_owned()],
         writes: vec!["state:beta".to_owned()],
     };
-    let mut bytes = norito::to_bytes(&pre_release).expect("encode pre-release snapshot");
-    let schema = <PipelineTxSnapshot as norito::core::NoritoSerialize>::schema_hash();
-    let schema_start = MAGIC.len() + 2;
-    let schema_end = schema_start + schema.len();
-    assert!(bytes.len() >= Header::SIZE);
-    bytes[schema_start..schema_end].copy_from_slice(&schema);
+    let current = PipelineTxSnapshot {
+        hash: pre_release.hash,
+        reads: pre_release.reads.clone(),
+        writes: pre_release.writes.clone(),
+        read_count: 1,
+        write_count: 1,
+    };
+    let bytes = frame_kura_test_payload(&current, &pre_release);
+    assert_kura_test_payload_rejected::<PipelineTxSnapshot>(&bytes);
     assert!(
         norito::decode_from_bytes::<PipelineTxSnapshot>(&bytes).is_err(),
         "V1 decoding must require explicit read and write counts"

@@ -583,7 +583,8 @@ fn pending_v2_prune_intents_are_rejected_before_mutation() {
         } else {
             stable
         };
-        let bytes = norito::encode_canonical(&legacy).expect("encode V2 prune intent");
+        let bytes = frame_kura_test_payload(&canonical_prune_intent_artifact_fixture(), &legacy);
+        assert_kura_test_payload_rejected::<KuraPruneIntentV3>(&bytes);
         fs::write(&path, &bytes).expect("write V2 prune intent");
         let sentinel = temp_dir.path().join("mutation-sentinel");
         fs::write(&sentinel, b"unchanged").expect("write mutation sentinel");

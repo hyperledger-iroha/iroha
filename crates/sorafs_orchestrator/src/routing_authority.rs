@@ -94,7 +94,10 @@ struct RoutingAuthorityRouteV1 {
     manifest_root_cid: ManifestRootCid,
     provider_ids: Vec<[u8; 32]>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"
+)]
 struct RoutingAuthorityProjectionEnvelopeV1 {
     version: u8,
     finalized_state: FinalizedStateIdentityV1,
@@ -968,6 +971,27 @@ mod tests {
             .expect("second replica projection");
         assert_eq!(first, second);
         assert_eq!(first.canonical_bytes(), second.canonical_bytes());
+        assert_eq!(
+            <RoutingAuthorityProjectionEnvelopeV1 as norito::NoritoSchema>::nominal_name(),
+            "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"
+        );
+        assert_eq!(
+            first.canonical_bytes()[6..22],
+            norito::schema::identity::frame_hash::<RoutingAuthorityProjectionEnvelopeV1>()
+        );
+        let empty = build_test_projection(identity, &[], &[]).expect("empty projection");
+        assert_ne!(
+            first.canonical_bytes(),
+            empty.canonical_bytes(),
+            "completed routes are bound by the production frame"
+        );
+        let advanced = build_test_projection(finalized_identity(11, 8), &[], &[])
+            .expect("advanced projection");
+        assert_ne!(
+            empty.canonical_bytes(),
+            advanced.canonical_bytes(),
+            "finalized identity is bound even with no routes"
+        );
     }
     #[test]
     fn only_approved_manifests_with_completed_orders_grant_authority() {

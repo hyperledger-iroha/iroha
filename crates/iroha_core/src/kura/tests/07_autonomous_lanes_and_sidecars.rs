@@ -763,11 +763,32 @@ fn autonomous_entrypoint_claim_rejects_unknown_state_tag() {
         executable_payload_hash: common.6,
         state: UnknownClaimState::Unknown,
     };
+    let current = AutonomousLaneEntrypointClaimV1 {
+        version: unknown.version,
+        network_id: unknown.network_id,
+        epoch: unknown.epoch,
+        entrypoint_hash: unknown.entrypoint_hash,
+        lane_id: unknown.lane_id,
+        dataspace_id: unknown.dataspace_id,
+        lane_incarnation: unknown.lane_incarnation,
+        proposal_height: unknown.proposal_height,
+        lane_block_height: unknown.lane_block_height,
+        origin_proposal_hash: unknown.origin_proposal_hash,
+        executable_payload_hash: unknown.executable_payload_hash,
+        state: AutonomousLaneEntrypointClaimStateV1::Active,
+    };
+    let bytes = frame_kura_test_payload(&current, &unknown);
+    assert_kura_test_payload_rejected::<AutonomousLaneEntrypointClaimV1>(&bytes);
     fs::write(
         &path,
-        norito::to_bytes(&unknown).expect("encode unknown claim"),
+        norito::encode_canonical(&current).expect("encode active claim"),
     )
-    .expect("write unknown claim");
+    .expect("write active claim control");
+    assert_eq!(
+        Kura::decode_autonomous_lane_entrypoint_claim(&path).expect("read active claim control"),
+        current
+    );
+    fs::write(&path, bytes).expect("write unknown claim under current owner");
     assert!(
         Kura::decode_autonomous_lane_entrypoint_claim(&path).is_err(),
         "unknown claim state tags must fail closed"

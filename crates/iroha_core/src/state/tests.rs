@@ -7790,7 +7790,37 @@ state_test! { sync native_amx_participant_frontier_rejects_legacy_hash_only_layo
     let incarnation = Hash::new(b"legacy-native-frontier-incarnation");
     let_row! { key = State::native_amx_participant_frontier_marker_key(lane_id, dataspace_id, incarnation) .expect("canonical v2 marker key") };
     let_row! { legacy = LegacyNativeAmxParticipantFrontierMarkerV1 { version: 1, lane_id, dataspace_id, lane_incarnation: incarnation, lane_block_height: 42, lane_block_descriptor_hash: Hash::new(b"legacy-native-frontier-descriptor"), participant_proposal_hash: Hash::new(b"legacy-native-frontier-proposal"), participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new( b"legacy-native-frontier-settlement", )), application_block_height: 73, application_block_hash: HashOf::from_untyped_unchecked(Hash::new( b"legacy-native-frontier-application", )), source_count: 1, } };
-    let payload = norito::to_bytes(&legacy).expect("encode legacy marker");
+    // The obsolete record is a malformed payload under the sole current marker owner.
+    fn frame_marker_payload<T: norito::SerializePayload>(value: &T) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        norito::core::frame_bare_with_header_flags::<AppliedNativeAmxParticipantFrontierMarker>(
+            &payload, flags,
+        ).expect("frame marker fixture under the current owner")
+    }
+    let current = AppliedNativeAmxParticipantFrontierMarker {
+        version: 2,
+        lane_id, dataspace_id, lane_incarnation: incarnation,
+        lane_block_height: legacy.lane_block_height,
+        participant_view: 0,
+        previous_lane_block_height: legacy.lane_block_height - 1,
+        previous_lane_block_descriptor_hash: Some(Hash::new(b"native-frontier-predecessor")),
+        lane_block_descriptor_hash: legacy.lane_block_descriptor_hash,
+        participant_proposal_hash: legacy.participant_proposal_hash,
+        participant_settlement_hash: legacy.participant_settlement_hash,
+        application_block_height: legacy.application_block_height,
+        application_block_hash: legacy.application_block_hash,
+        source_count: legacy.source_count,
+    };
+    let positive = frame_marker_payload(&current);
+    assert_eq!(positive, norito::to_bytes(&current).expect("canonical current marker"));
+    assert_eq!(State::decode_exact_native_amx_participant_frontier_marker(&key, &positive).unwrap(), current);
+    let payload = frame_marker_payload(&legacy);
+    let header = norito::core::Header::read(std::io::Cursor::new(&payload)).expect("valid current envelope");
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<AppliedNativeAmxParticipantFrontierMarker>());
+    let payload_error = norito::decode_from_bytes::<AppliedNativeAmxParticipantFrontierMarker>(&payload)
+        .expect_err("missing certified view and predecessor fields are not the current payload");
+    assert!(!matches!(payload_error, norito::Error::SchemaMismatch));
     assert!(matches!(
         State::decode_exact_native_amx_participant_frontier_marker(&key, &payload),
         Err(MergeLedgerCommitError::ExecutionMarkerConflict(_))

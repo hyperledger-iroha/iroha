@@ -40,7 +40,7 @@ By default the script builds the local binaries with Cargo. To use prebuilt
 release binaries instead, set:
 
 ```sh
-SORAFS_VALIDATE_BIN=/path/to/sorafs-validate \
+IROHA_CLI_BIN=/path/to/iroha \
 SORANET_TRUSTLESS_VERIFIER_BIN=/path/to/soranet_trustless_verifier \
 fixtures/documentation/sorafs_reference_sdk/run_reference_sdk_cookbook.sh
 ```

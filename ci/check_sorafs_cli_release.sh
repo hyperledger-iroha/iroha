@@ -66,7 +66,7 @@ echo "[sorafs-release] fmt check (workspace)"
 cargo fmt --all -- --check
 
 echo "[sorafs-release] shell syntax checks"
-bash -n scripts/release_sorafs_cli.sh scripts/package_sorafs_validate_release.sh \
+bash -n scripts/release_sorafs_cli.sh scripts/package_iroha_cli_release.sh \
   scripts/build_canonical_binaries.sh scripts/build_release_bundle.sh scripts/build_release_image.sh \
   configs/sorafs/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1 \
   python/iroha_python/scripts/release_smoke.sh \
@@ -132,7 +132,7 @@ python3 -m pytest -q \
   scripts/tests/build_release_image_test.py \
   scripts/tests/release_feature_graph_test.py \
   scripts/tests/release_prebuilt_provenance_test.py \
-  scripts/tests/package_sorafs_validate_release_test.py \
+  scripts/tests/package_iroha_cli_release_test.py \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_production_readiness_aggregate_gate_is_documented \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs \

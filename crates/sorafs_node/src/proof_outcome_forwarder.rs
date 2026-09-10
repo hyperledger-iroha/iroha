@@ -319,7 +319,8 @@ struct StoredDeadLetterV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1")]
 struct ProofOutcomeOutboxCheckpointV1 {
     version: u8,
     next_sequence: u64,
@@ -1398,7 +1399,8 @@ mod tests {
             iroha_crypto::Hash::new(b"proof-outcome-forwarder-test"),
         ))
     }
-    #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+    #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_node::proof_outcome_forwarder::tests::NestedSourceDepthBomb")]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
     fn external_nested_source_frame(levels: usize) -> Vec<u8> {
         fn field(bytes: &[u8]) -> Vec<u8> {
@@ -1559,12 +1561,12 @@ mod tests {
         archive.validate().expect("maximum bounded PDP archive");
         archive
     }
-    fn replace_norito_schema<T: norito::NoritoSerialize>(bytes: &mut [u8]) {
+    fn replace_norito_schema<T: norito::NoritoSchema>(bytes: &mut [u8]) {
         const SCHEMA_OFFSET: usize = 4 + 1 + 1;
         const SCHEMA_LEN: usize = 16;
         assert!(bytes.len() >= norito::core::Header::SIZE);
         bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN]
-            .copy_from_slice(&<T as norito::NoritoSerialize>::schema_hash());
+            .copy_from_slice(&norito::schema::identity::frame_hash::<T>());
     }
     fn checkpoint_with_corrupt_potr_source(
         receipt_payload: Vec<u8>,
@@ -1705,11 +1707,20 @@ mod tests {
                 .expect("canonical PoTR operation identity")
         );
         let claimed = outbox.claim_for_signing(operation, cursor(1, 1)).unwrap();
+        crate::frame_test_support::assert_current_frame(
+            &claimed.submission,
+            "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1",
+        );
         let transaction = signed_transaction(&claimed, 8);
         let hash = outbox
             .store_signed_transaction(operation, transaction.clone())
             .unwrap();
         assert_eq!(hash, *transaction.hash().as_ref());
+        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint,
+            "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1",
+        );
         assert_eq!(outbox.begin_submission(operation).unwrap(), transaction);
         outbox.mark_submitted(operation).unwrap();
         let pending = outbox.pending(8).unwrap().remove(0);
@@ -1913,10 +1924,18 @@ mod tests {
             ProofOutcomeOutbox::open(allocation_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
+        assert_eq!(
+            <NestedSourceDepthBomb as norito::NoritoSchema>::frame_name(),
+            "sorafs_node::proof_outcome_forwarder::tests::NestedSourceDepthBomb",
+        );
         let mut shallow = NestedSourceDepthBomb(None);
         for depth in 0..4 {
             let _flags = norito::core::DecodeFlagsGuard::enter(0);
             let bytes = external_nested_source_frame(depth);
+            assert_eq!(
+                &bytes[6..22],
+                &norito::schema::identity::frame_hash::<NestedSourceDepthBomb>()
+            );
             assert_eq!(bytes, norito::to_bytes(&shallow).unwrap());
             norito::decode_from_bytes::<NestedSourceDepthBomb>(&bytes)
                 .expect("independent shallow wire must really decode");

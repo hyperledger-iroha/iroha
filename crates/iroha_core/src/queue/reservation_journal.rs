@@ -173,7 +173,10 @@ pub(super) enum ReservationJournalCompactionFault {
     AfterSyncBeforeReplayPublication,
 }
 /// One append-only reservation journal operation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::queue::reservation_journal::LaneQueueReservationJournalFrameV1"
+)]
 enum LaneQueueReservationJournalFrameV1 {
     /// Typed file marker. Every initialized V1 journal begins with exactly this frame.
     Bootstrap {
@@ -5087,6 +5090,35 @@ mod tests {
             barrier: release_barrier(records, release_seed),
             ordered_records: records.to_vec(),
         }
+    }
+    #[test]
+    fn reservation_frame_owners_roundtrip_and_reject_substitution() {
+        fn check<T>(value: &T)
+        where
+            T: norito::NoritoSerialize
+                + for<'de> norito::NoritoDeserialize<'de>
+                + PartialEq
+                + std::fmt::Debug,
+        {
+            let bytes = norito::encode_canonical(value).expect("encode reservation owner");
+            assert_eq!(
+                &norito::decode_from_bytes::<T>(&bytes).expect("decode reservation owner"),
+                value
+            );
+            let mut wrong_owner = bytes.clone();
+            wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<()>());
+            assert!(matches!(
+                norito::decode_from_bytes::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_from_bytes::<T>(&bytes[..bytes.len() - 1]).is_err());
+        }
+        let record = record(17, 3);
+        check(&record.key);
+        check(&record);
+        check(&super::super::LaneQueueReservationGroupIdentityV1::from_key(&record.key));
+        check(&release_barrier(std::slice::from_ref(&record), 7));
+        check(&LaneQueueReservationJournalFrameV1::PutBatch(vec![record]));
     }
     #[test]
     fn durable_frames_ignore_ambient_layout_and_survive_restart() {

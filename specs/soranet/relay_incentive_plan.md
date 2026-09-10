@@ -65,7 +65,11 @@ the roadmap milestone.
 - The engine clamps bandwidth ratios against a governance-set target and exposes the budget approval
   hash so Parliament can trace payouts back to signed approvals.
 - The orchestrator can persist `RelayEpochMetricsV1` snapshots via the optional
-  `RewardConfig::metrics_log_path`, allowing auditors to replay the scoring pipeline deterministically.【crates/sorafs_orchestrator/src/incentives.rs:192】
+  `RewardConfig::metrics_log_path`, allowing auditors to replay the scoring pipeline deterministically.
+  The log concatenates complete canonical Norito frames. The writer fixes the layout independently
+  of caller flags; `read_metrics_log` bounds each frame by its validated header before exact decoding.
+  An incomplete final record, substituted owner, noncanonical frame, or excessive declared size is
+  an error. The reader grows its frame buffer only for bytes actually read.
 
 ## Treasury & XOR Integration
 

@@ -2178,7 +2178,8 @@ impl VerifiedNexusFeeBurn {
         (self.asset_id, self.amount)
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedMergeExecutionBatchMarker")]
 struct AppliedMergeExecutionBatchMarker {
     version: u8,
     epoch_id: u64,
@@ -2187,7 +2188,8 @@ struct AppliedMergeExecutionBatchMarker {
     execution_root: Hash,
     application_write_set_root: Hash,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedMergeLaneExecutionMarker")]
 struct AppliedMergeLaneExecutionMarker {
     version: u8,
     epoch_id: u64,
@@ -2197,7 +2199,8 @@ struct AppliedMergeLaneExecutionMarker {
     lane_execution_hash: Hash,
 }
 /// Replicated exact per-lane frontier used by the two-phase autoscale drain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
 struct AppliedMergeLaneFrontierMarker {
     version: u8,
     lane_id: LaneId,
@@ -2206,10 +2209,184 @@ struct AppliedMergeLaneFrontierMarker {
     lane_block_height: u64,
     lane_block_descriptor_hash: Hash,
 }
+#[cfg(test)]
+mod remaining_state_frame_identity_tests {
+    use super::*;
+    use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1;
+
+    #[test]
+    fn independently_framed_state_records_declare_current_contracts() {
+        fn decoded<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
+            name: &str,
+        ) {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+        }
+        macro_rules! check {
+            ($owner:ident) => {
+                decoded::<$owner>(concat!("iroha_core::state::", stringify!($owner)));
+            };
+        }
+        check!(AppliedNativeAmxParticipantFrontierMarker);
+        check!(AutoscaleLaneCommitteeV1);
+        assert_eq!(
+            <NativeAmxParticipantApplicationDiagnosticIdentity as norito::NoritoSchema>::frame_name(
+            ),
+            "iroha_core::state::NativeAmxParticipantApplicationDiagnosticIdentity"
+        );
+    }
+
+    #[test]
+    fn native_participant_marker_frame_preserves_exact_route_and_predecessor() {
+        let marker = AppliedNativeAmxParticipantFrontierMarker {
+            version: 2,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"native-frame-incarnation"),
+            lane_block_height: 1,
+            participant_view: 3,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Hash::new(b"native-frame-descriptor"),
+            participant_proposal_hash: Hash::new(b"native-frame-proposal"),
+            participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-frame-settlement",
+            )),
+            application_block_height: 8,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-frame-carrier",
+            )),
+            source_count: 2,
+        };
+        assert_private_settlement_frame_v1(
+            &marker,
+            "iroha_core::state::AppliedNativeAmxParticipantFrontierMarker",
+        );
+        let (key, bytes) = State::encode_native_amx_participant_frontier_marker(marker)
+            .expect("encode exact participant marker");
+        assert_eq!(
+            State::decode_exact_native_amx_participant_frontier_marker(&key, &bytes)
+                .expect("exact participant marker validates"),
+            marker
+        );
+        let mut wrong_route = marker;
+        wrong_route.lane_id = LaneId::new(8);
+        let (_, wrong_bytes) = State::encode_native_amx_participant_frontier_marker(wrong_route)
+            .expect("encode another valid route");
+        assert!(
+            State::decode_exact_native_amx_participant_frontier_marker(&key, &wrong_bytes).is_err()
+        );
+        let mut wrong_predecessor = marker;
+        wrong_predecessor.previous_lane_block_height = 1;
+        wrong_predecessor.previous_lane_block_descriptor_hash = Some(Hash::new(b"wrong-parent"));
+        let (_, wrong_bytes) =
+            State::encode_native_amx_participant_frontier_marker(wrong_predecessor)
+                .expect("encode malformed predecessor as a current-owner payload");
+        assert!(
+            State::decode_exact_native_amx_participant_frontier_marker(&key, &wrong_bytes).is_err()
+        );
+        let identity = NativeAmxParticipantApplicationDiagnosticIdentity {
+            lane_id: marker.lane_id,
+            dataspace_id: marker.dataspace_id,
+            lane_incarnation: marker.lane_incarnation,
+            participant_height: marker.lane_block_height,
+            participant_view: marker.participant_view,
+            predecessor_height: marker.previous_lane_block_height,
+            predecessor_descriptor_hash: marker.previous_lane_block_descriptor_hash,
+            descriptor_hash: marker.lane_block_descriptor_hash,
+            proposal_hash: marker.participant_proposal_hash,
+            settlement_hash: marker.participant_settlement_hash,
+            source_count: marker.source_count,
+        };
+        let frame = identity.canonical_bytes();
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<NativeAmxParticipantApplicationDiagnosticIdentity>(
+            )
+        );
+        assert!(matches!(
+            norito::decode_canonical::<AppliedNativeAmxParticipantFrontierMarker>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
+    #[test]
+    fn committee_frame_preserves_validated_shape() {
+        let mut lane = iroha_data_model::nexus::LaneConfig::default();
+        attach_synthetic_autoscale_committee_for_test(&mut lane);
+        let committee = decode_autoscale_lane_committee(&lane)
+            .expect("canonical committee metadata and PoPs validate")
+            .expect("fixture has an exact committee");
+        assert_eq!((committee.validator_count, committee.min_quorum), (4, 3));
+        assert_private_settlement_frame_v1(
+            &committee,
+            "iroha_core::state::AutoscaleLaneCommitteeV1",
+        );
+    }
+}
+#[cfg(test)]
+mod merge_marker_frame_identity_tests {
+    use super::*;
+    use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1;
+
+    #[test]
+    fn merge_application_markers_keep_distinct_frame_owners() {
+        let batch = AppliedMergeExecutionBatchMarker {
+            version: 1,
+            epoch_id: 9,
+            batch_identity_hash: Hash::new(b"frame-owner-batch"),
+            base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"frame-owner-base")),
+            execution_root: Hash::new(b"frame-owner-execution"),
+            application_write_set_root: Hash::new(b"frame-owner-writes"),
+        };
+        let lane = AppliedMergeLaneExecutionMarker {
+            version: batch.version,
+            epoch_id: batch.epoch_id,
+            batch_identity_hash: batch.batch_identity_hash,
+            base_state_hash: batch.base_state_hash,
+            application_write_set_root: batch.application_write_set_root,
+            lane_execution_hash: Hash::new(b"frame-owner-lane"),
+        };
+        let frontier = AppliedMergeLaneFrontierMarker {
+            version: 1,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"frame-owner-incarnation"),
+            lane_block_height: 41,
+            lane_block_descriptor_hash: Hash::new(b"frame-owner-descriptor"),
+        };
+        assert_private_settlement_frame_v1(
+            &batch,
+            "iroha_core::state::AppliedMergeExecutionBatchMarker",
+        );
+        assert_private_settlement_frame_v1(
+            &lane,
+            "iroha_core::state::AppliedMergeLaneExecutionMarker",
+        );
+        assert_private_settlement_frame_v1(
+            &frontier,
+            "iroha_core::state::AppliedMergeLaneFrontierMarker",
+        );
+        // Batch and lane records have the same primitive field sequence. Their
+        // owner envelopes must prevent one replay marker from impersonating the other.
+        let frame = norito::encode_canonical(&batch).expect("batch marker frame");
+        assert!(matches!(
+            norito::decode_canonical::<AppliedMergeLaneExecutionMarker>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let frame = norito::encode_canonical(&lane).expect("lane marker frame");
+        assert!(matches!(
+            norito::decode_canonical::<AppliedMergeExecutionBatchMarker>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+}
 /// One exact lane incarnation that remains responsible for globally admitted
 /// QueuePlan work until its canonical carrier commits the entrypoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationRouteV1")]
 struct QueuePlanPendingObligationRouteV1 {
     version: u16,
     lane_id: LaneId,
@@ -2224,6 +2401,8 @@ struct QueuePlanPendingObligationRouteV1 {
 /// binding whenever the marker is decoded.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationV1")]
 struct QueuePlanPendingObligationV1 {
     version: u16,
     network_id_digest: Hash,
@@ -2239,6 +2418,8 @@ struct QueuePlanPendingObligationV1 {
 /// count/XOR summary and keeps drain/removal exact.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingRouteMemberV1")]
 struct QueuePlanPendingRouteMemberV1 {
     version: u16,
     route: QueuePlanPendingObligationRouteV1,
@@ -2254,6 +2435,8 @@ struct QueuePlanPendingRouteMemberV1 {
 /// protocol-bounded prefix scan.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingSignedAliasMemberV1")]
 struct QueuePlanPendingSignedAliasMemberV1 {
     version: u16,
     network_id_digest: Hash,
@@ -2265,12 +2448,134 @@ struct QueuePlanPendingSignedAliasMemberV1 {
 /// one QueuePlan carrier replay-terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanSignedAliasTerminalV1")]
 struct QueuePlanSignedAliasTerminalV1 {
     version: u16,
     network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     signed_transaction_hash: HashOf<SignedTransaction>,
     binding_hash: Hash,
+}
+#[cfg(test)]
+mod queue_plan_pending_frame_identity_tests {
+    use super::*;
+    use crate::queue::{
+        QueuePlanAdmissionContextV1, QueuePlanRouteIncarnationV1, RouteLeg, RouteLegRole,
+        RoutingDecision, RoutingPlan,
+    };
+
+    #[test]
+    fn pending_and_alias_frames_keep_exact_owners_and_reject_substitution() {
+        fn check<T>(value: &T, nominal: &str)
+        where
+            T: norito::NoritoSerialize
+                + for<'de> norito::NoritoDeserialize<'de>
+                + PartialEq
+                + std::fmt::Debug,
+        {
+            assert_eq!(T::nominal_name(), nominal);
+            assert_eq!(T::frame_name(), nominal);
+            let frame = norito::encode_canonical(value).expect("encode pending owner");
+            assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
+            assert_eq!(
+                &norito::decode_canonical::<T>(&frame).expect("decode pending owner"),
+                value
+            );
+            let mut wrong_owner = frame.clone();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+            let mut trailing = frame;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        }
+
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pending-owner-genesis")),
+        );
+        let signer =
+            iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
+        let validator =
+            iroha_crypto::KeyPair::from_seed(vec![0x72; 32], iroha_crypto::Algorithm::Ed25519);
+        let transaction = TransactionEntrypoint::External(
+            iroha_data_model::transaction::TransactionBuilder::new(
+                network_id,
+                AccountId::new(signer.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(signer.private_key()),
+        );
+        let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5));
+        let plan = RoutingPlan::single(route);
+        let validator_set = vec![iroha_data_model::peer::PeerId::new(
+            validator.public_key().clone(),
+        )];
+        let context = QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: plan.digest(),
+            route_incarnations: vec![QueuePlanRouteIncarnationV1 {
+                leg: RouteLeg::new(route, RouteLegRole::Coordinator),
+                lane_incarnation: Hash::new(b"pending-owner-incarnation"),
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                durability_threshold: 1,
+            }],
+        };
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            &network_id,
+            &transaction,
+            &plan,
+            context,
+            73,
+        )
+        .expect("construct valid pending-owner admission");
+        let obligation = State::queue_plan_pending_obligation_from_binding(&binding)
+            .expect("construct validated pending obligation");
+        let route = obligation.routes[0];
+        let member = State::queue_plan_pending_route_member_from_obligation(&obligation, route)
+            .expect("derive the framed tuple route-member identity");
+        let alias = State::queue_plan_pending_signed_alias_member_from_obligation(&obligation)
+            .expect("external transaction has a signed alias");
+        let terminal = State::queue_plan_terminal_signed_alias_member_from_obligation(&obligation)
+            .expect("external transaction has terminal signed-alias evidence");
+        check(
+            &route,
+            "iroha_core::state::QueuePlanPendingObligationRouteV1",
+        );
+        check(
+            &obligation,
+            "iroha_core::state::QueuePlanPendingObligationV1",
+        );
+        check(&member, "iroha_core::state::QueuePlanPendingRouteMemberV1");
+        check(
+            &alias,
+            "iroha_core::state::QueuePlanPendingSignedAliasMemberV1",
+        );
+        check(
+            &terminal,
+            "iroha_core::state::QueuePlanSignedAliasTerminalV1",
+        );
+        let alias_frame = norito::encode_canonical(&alias).expect("encode pending alias");
+        let terminal_frame = norito::encode_canonical(&terminal).expect("encode terminal alias");
+        assert!(matches!(
+            norito::decode_canonical::<QueuePlanSignedAliasTerminalV1>(&alias_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<QueuePlanPendingSignedAliasMemberV1>(&terminal_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueuePlanPendingRouteMemberState {
@@ -2304,6 +2609,8 @@ impl QueuePlanMarkerStorage for StorageTransaction<'_, '_, StatePath, Vec<u8>> {
 /// Kura application receipt determines whether its effects are published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedNativeAmxParticipantFrontierMarker")]
 pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
     /// Exact marker layout version.
     pub(crate) version: u8,
@@ -2342,7 +2649,8 @@ pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
 /// finally an exact Kura application receipt. Keeping carrier coordinates out
 /// of the identity lets those durable stages coalesce without hiding
 /// same-height participant equivocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::NativeAmxParticipantApplicationDiagnosticIdentity")]
 struct NativeAmxParticipantApplicationDiagnosticIdentity {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -2379,7 +2687,8 @@ impl NativeAmxParticipantApplicationDiagnosticIdentity {
 }
 /// Canonical authority pinned for the full lifetime of one autoscale lane
 /// incarnation.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
 struct AutoscaleLaneCommitteeV1 {
     version: u8,
     validator_set_hash_version: u16,
@@ -9568,7 +9877,8 @@ pub struct WorldView<'world> {
 /// assertion explicit. `replay_markers` counts both finalized receipts and
 /// terminal abort/expiry markers.
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::PrivateSettlementLedgerMapCountsV1")]
 pub struct PrivateSettlementLedgerMapCountsV1 {
     /// Governed opaque pool projections.
     pub governance: u64,
@@ -9880,6 +10190,14 @@ mod private_settlement_ledger_evidence_tests {
             .collect();
         private_settlement_ledger_evidence_commitment_v1(&borrowed, counts)
             .expect("fixture evidence encodes")
+    }
+
+    #[test]
+    fn ledger_count_frame_roundtrips_and_rejects_wrong_owner() {
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &counts(),
+            "iroha_core::state::PrivateSettlementLedgerMapCountsV1",
+        );
     }
 
     #[test]

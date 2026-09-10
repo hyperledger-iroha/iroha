@@ -200,7 +200,10 @@ pub enum JdgSdnLoadError {
     AlreadyInitialised,
 }
 /// Manifest entry describing a committee schedule for a single dataspace.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::jurisdiction::JdgCommitteeManifest")]
 pub struct JdgCommitteeManifest {
     /// Dataspace covered by the manifest.
     pub dataspace: DataSpaceId,
@@ -1475,6 +1478,39 @@ mod tests {
             err,
             JdgCommitteeError::DuplicateMember { committee_id }
                 if committee_id == committee.committee_id
+        ));
+    }
+    #[test]
+    fn committee_manifest_frame_roundtrips_through_schedule_file_reader() {
+        let dataspace = DataSpaceId::new(9);
+        let (committee, _) = committee_with_members(dataspace, 10, 20, 3, 4);
+        let manifest = JdgCommitteeManifest {
+            dataspace,
+            committees: vec![committee.clone()],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &manifest,
+            "iroha_core::jurisdiction::JdgCommitteeManifest",
+        );
+        let file = tempfile::NamedTempFile::new().expect("manifest file");
+        let mut frame = norito::encode_canonical(&vec![manifest]).expect("manifest bundle frame");
+        std::fs::write(file.path(), &frame).expect("write committee bundle");
+        let schedule =
+            JdgCommitteeSchedule::from_path(file.path(), 1).expect("production file reader");
+        assert_eq!(
+            schedule
+                .active_committee(&dataspace, 15)
+                .expect("active committee"),
+            &committee
+        );
+        frame[6] ^= 1;
+        std::fs::write(file.path(), frame).expect("write wrong bundle root");
+        assert!(matches!(
+            JdgCommitteeSchedule::from_path(file.path(), 1),
+            Err(JdgCommitteeLoadError::Decode {
+                source: norito::Error::SchemaMismatch,
+                ..
+            })
         ));
     }
     #[test]

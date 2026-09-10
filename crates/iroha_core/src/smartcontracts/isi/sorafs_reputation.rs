@@ -70,7 +70,19 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     STATE_MAX_BYTES * 2,
     64,
 );
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_reputation::ReputationJournalHeadStateV1"
+)]
 struct ReputationJournalHeadStateV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -4139,6 +4151,37 @@ mod tests {
                 .expect("journal head")
                 .last_sequence,
             2
+        );
+    }
+}
+
+#[cfg(test)]
+mod journal_frame_identity_tests {
+    use super::*;
+
+    #[test]
+    fn reputation_head_frame_roundtrips_through_bounded_storage_codec() {
+        let head = ReputationJournalHeadStateV1 {
+            last_sequence: 5,
+            last_target_block_height: 10,
+            last_event_index: 1,
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &head,
+            "iroha_core::smartcontracts::isi::sorafs_reputation::ReputationJournalHeadStateV1",
+        );
+        let bytes =
+            encode_state(&head, "reputation journal head").expect("production state writer");
+        assert_eq!(
+            decode_state::<ReputationJournalHeadStateV1>(&bytes, "reputation journal head")
+                .expect("bounded production state reader"),
+            head
+        );
+        let mut wrong_owner = bytes;
+        wrong_owner[6] ^= 1;
+        assert!(
+            decode_state::<ReputationJournalHeadStateV1>(&wrong_owner, "reputation journal head")
+                .is_err()
         );
     }
 }

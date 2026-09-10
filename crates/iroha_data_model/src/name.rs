@@ -184,7 +184,13 @@ impl Name {
     /// The manifest pins the normalization algorithm exactly and the baked tables are checked
     /// against a reviewed semantic fingerprint because this output is consensus-visible. Any
     /// intentional data upgrade must also update the fingerprint and regression corpus below.
-    pub(crate) fn normalize(candidate: &str) -> Result<Cow<'_, str>, ParseError> {
+    /// This explicit input conversion does not validate Name syntax. Parse its output to
+    /// validate a Name; parsing and wire decoding still require already-canonical spelling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compiled normalization data does not match the reviewed profile.
+    pub fn normalize(candidate: &str) -> Result<Cow<'_, str>, ParseError> {
         // Use ICU compiled data to apply NFC normalization deterministically
         // across platforms. This preserves compatibility forms but composes
         // canonically equivalent sequences (e.g., "e\u{0301}" -> "é"). The

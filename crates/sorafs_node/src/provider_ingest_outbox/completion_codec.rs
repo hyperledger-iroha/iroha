@@ -2,11 +2,7 @@
 
 use super::{BoxedStoredCompletionDeliveryV1, StoredCompletionDeliveryV1};
 
-impl norito::core::NoritoSerialize for BoxedStoredCompletionDeliveryV1 {
-    fn schema_hash() -> [u8; 16] {
-        <StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+// This wrapper is only nested checkpoint payload; the checkpoint owns the frame.
 
 impl norito::core::SerializePayload for BoxedStoredCompletionDeliveryV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -20,11 +16,6 @@ impl norito::core::SerializePayload for BoxedStoredCompletionDeliveryV1 {
     }
 }
 
-impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1 {
-    fn schema_hash() -> [u8; 16] {
-        <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()
-    }
-}
 impl<'a> norito::core::DeserializePayload<'a> for BoxedStoredCompletionDeliveryV1 {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("boxed provider-ingest completion decode")

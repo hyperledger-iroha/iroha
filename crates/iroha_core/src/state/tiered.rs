@@ -13,7 +13,6 @@ use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_data_model::prelude::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{
-    core::NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -2178,7 +2177,7 @@ impl TieredStateBackend {
     ) -> Result<()>
     where
         K: norito::codec::Encode,
-        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
+        V: json::JsonSerialize + MeasuredBytes,
     {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
@@ -2192,7 +2191,7 @@ impl TieredStateBackend {
         ctx: &mut CollectContext,
     ) -> Result<()>
     where
-        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
+        V: json::JsonSerialize + MeasuredBytes,
     {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);

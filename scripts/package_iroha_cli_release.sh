@@ -3,20 +3,20 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-package_sorafs_validate_release.sh --target <triple> --version <label> \
+package_iroha_cli_release.sh --target <triple> --version <label> \
   --source-commit <hex> --source-date-epoch <epoch> [options]
 
-Builds and packages the SoraFS reference validator binary (`sorafs-validate`)
+Builds and packages the canonical Iroha CLI (`iroha`)
 and checked C FFI header (`sorafs_reference.h`) for release distribution. The
 helper stages a deterministic archive under dist/ without tracking generated
 artifacts.
 
 Options:
   --workspace <path>     Repository root (default: script parent/..).
-  --out-dir <path>       Output directory (default: <workspace>/dist/sorafs-validate-release).
+  --out-dir <path>       Output directory (default: <workspace>/dist/iroha-release).
   --target <triple>      Required reviewed Cargo target triple.
   --profile <name>       Cargo profile to build (default: release).
-  --binary <path>        Prebuilt sorafs-validate binary to package instead of building.
+  --binary <path>        Prebuilt iroha binary to package instead of building.
   --target-dir <path>    Cargo target directory override.
   --version <string>     Required release version label.
   --source-commit <hex>  Required reviewed full source commit.
@@ -223,7 +223,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 workspace="$(abs_path "$workspace")"
-[[ -z "$out_dir" ]] && out_dir="${workspace}/dist/sorafs-validate-release"
+[[ -z "$out_dir" ]] && out_dir="${workspace}/dist/iroha-release"
 if [[ -z "$target" || -z "$version" || -z "$source_commit" ||
       -z "$source_date_epoch_arg" ]]; then
   usage >&2
@@ -254,8 +254,8 @@ EPOCH_PY
 export SOURCE_DATE_EPOCH="$source_date_epoch"
 
 case "$target" in
-  *-windows-*) packaged_binary_name="sorafs-validate.exe" ;;
-  *) packaged_binary_name="sorafs-validate" ;;
+  *-windows-*) packaged_binary_name="iroha.exe" ;;
+  *) packaged_binary_name="iroha" ;;
 esac
 
 case "$profile" in
@@ -270,23 +270,23 @@ case "$profile" in
 esac
 
 if [[ -z "$binary_path" ]]; then
-  build_cmd=(cargo build --locked -p sorafs_manifest --bin sorafs-validate "${build_profile_args[@]}")
+  build_cmd=(cargo build --locked -p iroha_cli --bin iroha "${build_profile_args[@]}")
   if [[ -n "$target" ]]; then
     build_cmd+=(--target "$target")
   fi
   if [[ -n "$target_dir" ]]; then
     build_cmd+=(--target-dir "$target_dir")
   fi
-  echo "Building sorafs-validate (${profile}, ${target})..."
+  echo "Building iroha (${profile}, ${target})..."
   (cd "$workspace" && "${build_cmd[@]}")
   cargo_target_dir="${target_dir:-${workspace}/target}"
   binary_path="${cargo_target_dir}/${target}/${profile_dir}/${packaged_binary_name}"
 fi
 
 binary_path="$(abs_path "$binary_path")"
-validate_existing_executable_file_path "sorafs-validate binary" "$binary_path"
+validate_existing_executable_file_path "iroha binary" "$binary_path"
 
-package_name="sorafs-validate-${version}-${target}"
+package_name="iroha-${version}-${target}"
 stage_dir="${out_dir}/${package_name}"
 archive_path="${out_dir}/${package_name}.tar.gz"
 manifest_path="${out_dir}/${package_name}.manifest.json"
@@ -327,7 +327,7 @@ python3 "${workspace}/scripts/capture_release_command.py" \
   --output "${stage_dir}/HELP.txt" \
   --executable-root "$stage_dir" \
   --executable-relative "$packaged_binary_name" \
-  -- --help
+  -- app sorafs toolkit --help
 
 python3 "${workspace}/scripts/capture_release_command.py" \
   --output "${stage_dir}/smoke.advert.json" \
@@ -338,7 +338,7 @@ python3 "${workspace}/scripts/capture_release_command.py" \
   --expected-generated-at 123 \
   --required-telemetry-tag sorafs.reference.advert \
   --required-telemetry-tag sorafs.reference.code.SFS-OK-000 \
-  -- advert \
+  -- app sorafs toolkit validate advert \
     --input "${workspace}/fixtures/sorafs_manifest/provider_admission/advert_v1.to" \
     --now 120 \
     --generated-at 123 \
@@ -353,7 +353,7 @@ python3 "${workspace}/scripts/capture_release_command.py" \
   --required-telemetry-tag sorafs.reference.bundle \
   --required-telemetry-tag sorafs.reference.pdp \
   --required-telemetry-tag sorafs.reference.code.SFS-PDP-DIAG-000 \
-  -- bundle \
+  -- app sorafs toolkit validate bundle \
     --bundle "${workspace}/fixtures/sorafs_manifest" \
     --now 120 \
     --generated-at 123 \
@@ -402,16 +402,16 @@ archive_sha="$(
     --listed-name "$(basename "$archive_path")"
 )"
 
-export SORAFS_VALIDATE_PACKAGE_VERSION="$version"
-export SORAFS_VALIDATE_PACKAGE_TARGET="$target"
-export SORAFS_VALIDATE_PACKAGE_PROFILE="$profile"
-export SORAFS_VALIDATE_PACKAGE_COMMIT="$source_commit"
-SORAFS_VALIDATE_PACKAGE_ARCHIVE="$(basename "$archive_path")"
-export SORAFS_VALIDATE_PACKAGE_ARCHIVE
-export SORAFS_VALIDATE_PACKAGE_ARCHIVE_SHA="$archive_sha"
-export SORAFS_VALIDATE_PACKAGE_BINARY="$packaged_binary_name"
-export SORAFS_VALIDATE_PACKAGE_STAGE_INVENTORY="$stage_inventory_json"
-export SORAFS_VALIDATE_PACKAGE_SOURCE_DATE_EPOCH="$source_date_epoch"
+export IROHA_CLI_PACKAGE_VERSION="$version"
+export IROHA_CLI_PACKAGE_TARGET="$target"
+export IROHA_CLI_PACKAGE_PROFILE="$profile"
+export IROHA_CLI_PACKAGE_COMMIT="$source_commit"
+IROHA_CLI_PACKAGE_ARCHIVE="$(basename "$archive_path")"
+export IROHA_CLI_PACKAGE_ARCHIVE
+export IROHA_CLI_PACKAGE_ARCHIVE_SHA="$archive_sha"
+export IROHA_CLI_PACKAGE_BINARY="$packaged_binary_name"
+export IROHA_CLI_PACKAGE_STAGE_INVENTORY="$stage_inventory_json"
+export IROHA_CLI_PACKAGE_SOURCE_DATE_EPOCH="$source_date_epoch"
 python3 - "${workspace}/scripts" "$manifest_path" <<'PY'
 import json
 import os
@@ -427,36 +427,36 @@ from release_artifact_contract import (  # noqa: E402
 )
 
 manifest_path = Path(sys.argv[2])
-inventory = json.loads(os.environ["SORAFS_VALIDATE_PACKAGE_STAGE_INVENTORY"])
+inventory = json.loads(os.environ["IROHA_CLI_PACKAGE_STAGE_INVENTORY"])
 stage_files = [
     {"path": path, "sha256": inventory[path]} for path in sorted(inventory)
 ]
 smoke_checks = [
     {
-        "command": "sorafs-validate advert",
+        "command": "iroha app sorafs toolkit validate advert",
         "output": "smoke.advert.json",
         "sha256": inventory["smoke.advert.json"],
     },
     {
-        "command": "sorafs-validate bundle",
+        "command": "iroha app sorafs toolkit validate bundle",
         "output": "smoke.bundle.json",
         "sha256": inventory["smoke.bundle.json"],
     },
 ]
 
 epoch = parse_source_date_epoch(
-    os.environ["SORAFS_VALIDATE_PACKAGE_SOURCE_DATE_EPOCH"]
+    os.environ["IROHA_CLI_PACKAGE_SOURCE_DATE_EPOCH"]
 )
-binary = os.environ["SORAFS_VALIDATE_PACKAGE_BINARY"]
+binary = os.environ["IROHA_CLI_PACKAGE_BINARY"]
 manifest = {
     "schema_version": 1,
-    "package": "sorafs-validate",
-    "version": os.environ["SORAFS_VALIDATE_PACKAGE_VERSION"],
-    "commit": os.environ["SORAFS_VALIDATE_PACKAGE_COMMIT"],
-    "target": os.environ["SORAFS_VALIDATE_PACKAGE_TARGET"],
-    "profile": os.environ["SORAFS_VALIDATE_PACKAGE_PROFILE"],
-    "archive": os.environ["SORAFS_VALIDATE_PACKAGE_ARCHIVE"],
-    "archive_sha256": os.environ["SORAFS_VALIDATE_PACKAGE_ARCHIVE_SHA"],
+    "package": "iroha",
+    "version": os.environ["IROHA_CLI_PACKAGE_VERSION"],
+    "commit": os.environ["IROHA_CLI_PACKAGE_COMMIT"],
+    "target": os.environ["IROHA_CLI_PACKAGE_TARGET"],
+    "profile": os.environ["IROHA_CLI_PACKAGE_PROFILE"],
+    "archive": os.environ["IROHA_CLI_PACKAGE_ARCHIVE"],
+    "archive_sha256": os.environ["IROHA_CLI_PACKAGE_ARCHIVE_SHA"],
     "source_date_epoch": epoch,
     "built_at": format_source_date_epoch(epoch),
     "binary": binary,

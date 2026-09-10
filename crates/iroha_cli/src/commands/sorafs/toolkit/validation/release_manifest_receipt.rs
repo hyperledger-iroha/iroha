@@ -11,64 +11,44 @@ use sorafs_manifest::signer::{
         verify_release_manifest_evidence_v1,
     },
 };
-use std::{collections::BTreeMap, path::Path, process::ExitCode};
+use std::{path::Path, process::ExitCode};
 
-const OPTIONS: [&str; 12] = [
-    "--manifest",
-    "--signature",
-    "--public-key",
-    "--public-key-fingerprint",
-    "--signer-policy",
-    "--signer-policy-sha256",
-    "--custody-trust",
-    "--custody-trust-sha256",
-    "--completed-operation-state",
-    "--operation-receipt",
-    "--now-unix-ms",
-    "--format",
-];
-
-fn parse(args: &[String]) -> Result<BTreeMap<String, String>, CliError> {
-    let mut parsed = BTreeMap::new();
-    let mut index = 0;
-    while index < args.len() {
-        let (name, value) = if let Some((name, value)) = args[index].split_once('=') {
-            (name, value)
-        } else {
-            let name = args[index].as_str();
-            index += 1;
-            let value = args.get(index).ok_or_else(|| {
-                CliError::Config("release-manifest-receipt option requires a value".into())
-            })?;
-            (name, value.as_str())
-        };
-        if !OPTIONS.contains(&name)
-            || value.is_empty()
-            || value.starts_with("--")
-            || parsed.insert(name.to_owned(), value.to_owned()).is_some()
-        {
-            return Err(CliError::Config(
-                "invalid or duplicate release-manifest-receipt option".into(),
-            ));
-        }
-        index += 1;
-    }
-    if OPTIONS[..OPTIONS.len() - 1]
-        .iter()
-        .any(|name| !parsed.contains_key(*name))
-        || parsed
-            .get("--format")
-            .is_some_and(|format| format != "json")
-    {
-        return Err(CliError::Config(
-            "release-manifest-receipt requires all independent source paths, policy/trust/key pins and --now-unix-ms; only JSON output is supported".into()));
-    }
-    Ok(parsed)
+/// Independently pinned release receipt verification inputs.
+#[derive(clap::Args, Debug)]
+pub struct Args {
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    manifest: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    signature: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    public_key: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    public_key_fingerprint: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    signer_policy: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    signer_policy_sha256: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    custody_trust: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    custody_trust_sha256: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    completed_operation_state: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    operation_receipt: String,
+    #[arg(long, value_parser = super::args::parse_nonempty_text)]
+    now_unix_ms: String,
+    #[arg(long, default_value = "json", value_parser = ["json"])]
+    format: String,
 }
 
-pub(super) fn run(args: &[String]) -> Result<ExitCode, CliError> {
-    let args = parse(args)?;
-    let now_text = &args["--now-unix-ms"];
+pub(crate) fn run(args: Args) -> Result<ExitCode, CliError> {
+    if args.format != "json" {
+        return Err(CliError::Config(
+            "release-manifest-receipt supports only JSON output".into(),
+        ));
+    }
+    let now_text = &args.now_unix_ms;
     let now_unix_ms = now_text.parse::<u64>().map_err(|_| {
         CliError::Config(
             "release-manifest-receipt requires a canonical positive trusted Unix millisecond time"
@@ -81,35 +61,42 @@ pub(super) fn run(args: &[String]) -> Result<ExitCode, CliError> {
         ));
     }
     let expected = SignerReleaseEvidenceExpectedV1 {
-        policy_sha256: parse_release_fingerprint(&args["--signer-policy-sha256"])?,
-        trust_sha256: parse_release_fingerprint(&args["--custody-trust-sha256"])?,
-        public_key_fingerprint_sha256: parse_release_fingerprint(
-            &args["--public-key-fingerprint"],
-        )?,
+        policy_sha256: parse_release_fingerprint(&args.signer_policy_sha256)?,
+        trust_sha256: parse_release_fingerprint(&args.custody_trust_sha256)?,
+        public_key_fingerprint_sha256: parse_release_fingerprint(&args.public_key_fingerprint)?,
         now_unix_ms,
     };
-    let read = |flag: &str, maximum: usize, exact: Option<u64>| {
-        read_release_input(Path::new(&args[flag]), flag, maximum as u64, exact, false)
+    let read = |path: &str, flag: &str, maximum: usize, exact: Option<u64>| {
+        read_release_input(Path::new(path), flag, maximum as u64, exact, false)
     };
-    let manifest = read("--manifest", SIGNER_RELEASE_MANIFEST_MAX_BYTES_V1, None)?;
-    let signature = read("--signature", 64, Some(64))?;
-    let public_key = read("--public-key", 32, Some(32))?;
+    let manifest = read(
+        &args.manifest,
+        "--manifest",
+        SIGNER_RELEASE_MANIFEST_MAX_BYTES_V1,
+        None,
+    )?;
+    let signature = read(&args.signature, "--signature", 64, Some(64))?;
+    let public_key = read(&args.public_key, "--public-key", 32, Some(32))?;
     let policy = read(
+        &args.signer_policy,
         "--signer-policy",
         SIGNER_RELEASE_EVIDENCE_DOCUMENT_MAX_BYTES_V1,
         None,
     )?;
     let trust = read(
+        &args.custody_trust,
         "--custody-trust",
         SIGNER_RELEASE_EVIDENCE_DOCUMENT_MAX_BYTES_V1,
         None,
     )?;
     let state = read(
+        &args.completed_operation_state,
         "--completed-operation-state",
         SIGNER_RELEASE_EVIDENCE_DOCUMENT_MAX_BYTES_V1,
         None,
     )?;
     let receipt = read(
+        &args.operation_receipt,
         "--operation-receipt",
         SIGNER_RELEASE_MANIFEST_RECEIPT_MAX_BYTES_V1,
         None,
@@ -229,6 +216,27 @@ pub(super) fn run(args: &[String]) -> Result<ExitCode, CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const OPTIONS: [&str; 12] = [
+        "--manifest",
+        "--signature",
+        "--public-key",
+        "--public-key-fingerprint",
+        "--signer-policy",
+        "--signer-policy-sha256",
+        "--custody-trust",
+        "--custody-trust-sha256",
+        "--completed-operation-state",
+        "--operation-receipt",
+        "--now-unix-ms",
+        "--format",
+    ];
+
+    fn parse(args: &[String]) -> Result<Args, CliError> {
+        super::super::tests::parse_args(args)
+    }
+    fn run(args: &[String]) -> Result<ExitCode, CliError> {
+        parse(args).and_then(super::run)
+    }
 
     fn all_args() -> Vec<String> {
         OPTIONS[..OPTIONS.len() - 1]

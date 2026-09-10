@@ -19,18 +19,20 @@ impl<'a, T, const N: usize> ToriiBorrowedRoutedReadStruct<'a, T, N> {
         }
     }
 }
-impl<T, const N: usize> norito::core::NoritoSerialize for ToriiBorrowedRoutedReadStruct<'_, T, N>
-where
-    T: norito::core::NoritoSerialize,
-{fn schema_hash() -> [u8; 16] {
-        T::schema_hash()
+impl<T: norito::NoritoSchema, const N: usize> norito::NoritoSchema
+    for ToriiBorrowedRoutedReadStruct<'_, T, N>
+{
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_torii::ToriiBorrowedRoutedReadStruct",
+            &["'_".into(), T::nominal_name(), N.to_string()],
+        )
+    }
+    fn frame_name() -> String {
+        T::frame_name()
     }
 }
-impl<T, const N: usize> norito::core::SerializePayload for ToriiBorrowedRoutedReadStruct<'_, T, N>
-where
-    T: norito::core::NoritoSerialize,
-{
-
+impl<T, const N: usize> norito::core::SerializePayload for ToriiBorrowedRoutedReadStruct<'_, T, N> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() {
             return Err(norito::core::Error::UnsupportedFeature(

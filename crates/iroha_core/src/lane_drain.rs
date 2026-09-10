@@ -71,7 +71,8 @@ impl LaneCommitVoteLockV1 {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneDrainSigningRecordV1")]
 struct LaneDrainSigningRecordV1 {
     version: u8,
     key: LaneDrainSigningKeyV1,
@@ -922,6 +923,22 @@ mod tests {
         let bytes = fs::read(&record_path).expect("read signing record");
         let mut record = norito::decode_from_bytes::<LaneDrainSigningRecordV1>(&bytes)
             .expect("decode canonical signing record");
+        assert_eq!(
+            LaneDrainSigningGuard::read_record(
+                record_path.parent().expect("guard directory"),
+                &record_path
+            )
+            .expect("production reader validates original journal record"),
+            record,
+        );
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::lane_drain::LaneDrainSigningRecordV1",
+        );
+        assert!(matches!(
+            norito::decode_canonical::<LaneDrainCertificateBodyV1>(&bytes),
+            Err(norito::Error::SchemaMismatch),
+        ));
         record
             .highest_commit_vote
             .as_mut()

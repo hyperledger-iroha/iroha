@@ -60,7 +60,8 @@ struct Reservation {
     public_binding: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Record")]
 enum Record {
     Initialize {
         lane: KagemushaLaneIdV1,
@@ -686,4 +687,12 @@ where
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<Record>(
+        "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Record",
+    );
 }

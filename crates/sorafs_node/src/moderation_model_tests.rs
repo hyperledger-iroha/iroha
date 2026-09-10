@@ -1543,6 +1543,10 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         })
         .expect("restore registry at boundary");
     let registry_before = registry.snapshot();
+    crate::frame_test_support::assert_current_frame(
+        &registry_before,
+        "sorafs_node::moderation::ModerationModelRegistrySnapshot",
+    );
     let mut second_repro = repro.clone();
     second_repro.manifest_id = [4; 16];
     assert!(matches!(
@@ -1574,6 +1578,10 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         ModerationQuarantineObjectError::ResourceExhausted { .. }
     ));
     let objects_before = objects.snapshot();
+    crate::frame_test_support::assert_current_frame(
+        &objects_before,
+        "sorafs_node::moderation::ModerationQuarantineObjectSnapshot",
+    );
     assert!(matches!(
         objects
             .restore_snapshot(ModerationQuarantineObjectSnapshot {
@@ -1613,6 +1621,33 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         ModerationEvidenceViewerError::ResourceExhausted { .. }
     ));
     let viewer_before = viewer.snapshot();
+    let report = moderation_evidence_viewer_audit_report_from_snapshot(
+        ModerationEvidenceViewerAuditReportInput {
+            report_scope: "local-frame-boundary".to_owned(),
+            window_start_unix: 1_800_000_000,
+            window_end_unix: 1_800_000_300,
+            generated_at_unix: 1_800_000_301,
+            policy_digest: Some([0xA9; 32]),
+            raw_evidence_included: false,
+            raw_access_logs_included: false,
+            viewer_accounts_included: false,
+            signed_urls_included: false,
+            session_tokens_included: false,
+            response_bodies_included: false,
+        },
+        &viewer_before,
+    )
+    .expect("aggregate audit report from actual accepted session and access");
+    report.validate().expect("current report semantics");
+    assert_eq!(report.access_event_count, 1);
+    crate::frame_test_support::assert_current_frame(
+        &report,
+        "sorafs_node::moderation::ModerationEvidenceViewerAuditReport",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &viewer_before,
+        "sorafs_node::moderation::ModerationEvidenceViewerSnapshot",
+    );
     let mut extra_session = viewer_before.sessions[0].clone();
     extra_session.session_id = [9; 16];
     let mut over_limit_viewer = viewer_before.clone();
@@ -1643,6 +1678,10 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         ModerationScreeningError::ResourceExhausted { .. }
     ));
     let screening_before = screening.snapshot();
+    crate::frame_test_support::assert_current_frame(
+        &screening_before,
+        "sorafs_node::moderation::ModerationScreeningSnapshot",
+    );
     let mut extra_screening = screening_before.screening_records[0].clone();
     extra_screening.record_id = [8; 16];
     let mut over_limit_screening = screening_before.clone();

@@ -854,7 +854,9 @@ fn ready_validate_apply_publishes_at_actor_global_child_coordinates() {
     let handle = std::thread::Builder::new()
         .name("ready-validate-apply-actor-global-child".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, false))
+        .spawn(|| {
+            ready_validate_apply_actor_global_child_fixture(false, false, ObserverApplyCase::None)
+        })
         .expect("spawn Ready Validate Apply actor-global child fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -867,7 +869,9 @@ fn ready_validate_apply_rejects_a_tampered_body_frame_before_publication() {
     let handle = std::thread::Builder::new()
         .name("ready-validate-apply-tampered-body-frame".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(true, false, false))
+        .spawn(|| {
+            ready_validate_apply_actor_global_child_fixture(true, false, ObserverApplyCase::None)
+        })
         .expect("spawn tampered Ready Validate Apply body-frame fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -880,7 +884,9 @@ fn lifecycle_decision_apply_live_recovered_substitution_matrix_is_inert() {
     let handle = std::thread::Builder::new()
         .name("lifecycle-apply-live-recovered-substitution".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, true, false))
+        .spawn(|| {
+            ready_validate_apply_actor_global_child_fixture(false, true, ObserverApplyCase::None)
+        })
         .expect("spawn lifecycle Decision Apply lineage substitution fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -893,11 +899,68 @@ fn observer_apply_defers_missing_pre_apply_commit_qc_to_delayed_successor() {
     let handle = std::thread::Builder::new()
         .name("observer-apply-delayed-successor".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| ready_validate_apply_actor_global_child_fixture(false, false, true))
+        .spawn(|| {
+            ready_validate_apply_actor_global_child_fixture(
+                false,
+                false,
+                ObserverApplyCase::PendingOnly,
+            )
+        })
         .expect("spawn observer Apply parked-predecessor fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn observer_apply_dispatches_after_delayed_commit_qc_with_retained_periodic_apply() {
+    let handle = std::thread::Builder::new()
+        .name("observer-apply-delayed-retained-periodic-suffix".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            ready_validate_apply_actor_global_child_fixture(
+                false,
+                false,
+                ObserverApplyCase::Retained,
+            )
+        })
+        .expect("spawn observer Apply with its actual retained periodic suffix");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn observer_apply_drains_finite_pre_apply_fifo_with_delayed_retained_periodic_apply() {
+    let handle = std::thread::Builder::new()
+        .name("observer-apply-delayed-retained-runtime-fifo".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            for case in [
+                ObserverApplyCase::PendingOnlyWithPredecessors,
+                ObserverApplyCase::RetainedWithPostApplyCommand,
+                ObserverApplyCase::RetainedWithPredecessors,
+            ] {
+                ready_validate_apply_actor_global_child_fixture(false, false, case);
+            }
+        })
+        .expect("spawn delayed Apply with authenticated runtime FIFO predecessors");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObserverApplyCase {
+    None,
+    PendingOnly,
+    Retained,
+    PendingOnlyWithPredecessors,
+    RetainedWithPostApplyCommand,
+    RetainedWithPredecessors,
 }
 
 #[cfg(feature = "bls")]
@@ -918,8 +981,21 @@ fn recovered_decision_apply_finality_retires_authenticated_validate_retry_seal()
 fn ready_validate_apply_actor_global_child_fixture(
     tamper_apply_frame: bool,
     exercise_lineage_matrix: bool,
-    exercise_observer_predecessor: bool,
+    observer_case: ObserverApplyCase,
 ) {
+    let exercise_observer_predecessor = observer_case != ObserverApplyCase::None;
+    let retain_periodic_apply_suffix = matches!(
+        observer_case,
+        ObserverApplyCase::Retained
+            | ObserverApplyCase::RetainedWithPredecessors
+            | ObserverApplyCase::RetainedWithPostApplyCommand
+    );
+    let retain_runtime_predecessors = matches!(
+        observer_case,
+        ObserverApplyCase::PendingOnlyWithPredecessors
+            | ObserverApplyCase::RetainedWithPredecessors
+            | ObserverApplyCase::RetainedWithPostApplyCommand
+    );
     let marker = 0xE0;
     let ReadyDurableValidateFixture {
         fixture,
@@ -1103,17 +1179,6 @@ fn ready_validate_apply_actor_global_child_fixture(
         .expect("claim admitted Validate parent")
         .state = LifecycleState::Claimed(lease.id());
     coordinator.active_lease = Some(lease.clone());
-    let prepared = holder
-        .registry_for_test_mut()
-        .prepare_ready_durable_validate_execution(&lease, slot, &fixture.verified)
-        .expect("prepare exact Ready Validate Apply registry carrier");
-    let preview = prepared
-        .prepare_adapter_preview(&mut adapter)
-        .unwrap_or_else(|_| panic!("join exact Validate carrier to decided adapter preview"));
-    let publication = preview
-        .seal_live_wal_validate_apply()
-        .unwrap_or_else(|_| panic!("seal exact Ready Validate Apply publication"));
-
     let local_prediction = coordinator
         .high_water
         .checked_add(1)
@@ -1126,6 +1191,142 @@ fn ready_validate_apply_actor_global_child_fixture(
         crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
             runtime_ordinals,
         );
+    // The queued cases use the same actor-global source as the future Apply.
+    // Reserve the original periodic turn before minting authentic FIFO owners.
+    let predecessor_message = |sequence: u8| {
+        let signer = u32::from(sequence - 1);
+        let keys = durable_store_keys(marker);
+        let signer_index = usize::try_from(signer).expect("fixture signer index");
+        // Direct votes require an already-registered execution commitment for
+        // this exact subject. Distinct signers retain separate FIFO owners;
+        // the durable Decision keeps these valid votes out of Progress and
+        // makes their eventual reducer turns terminal no-ops.
+        let mut vote = wire::Vote {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: decision.subject,
+            execution_commitment: decision.execution_commitment,
+            signer,
+            signature: Vec::new(),
+        };
+        vote.signature = iroha_crypto::Signature::new(
+            keys[signer_index].private_key(),
+            &vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
+    };
+    let queued_roster_len = fixture.verified.context().roster.len();
+    let queued_source_byte_capacity = 1024 * 1024;
+    let queued_ingress = crate::sumeragi::FairV2Ingress::new(
+        crate::sumeragi::fair_v2_ingress_required_capacity(queued_roster_len, None)
+            .expect("the complete queued fixture roster has bounded message capacity"),
+        crate::sumeragi::fair_v2_ingress_required_byte_capacity(
+            queued_roster_len,
+            None,
+            queued_source_byte_capacity,
+        )
+        .expect("the complete queued fixture roster has bounded byte capacity"),
+        queued_source_byte_capacity,
+        0,
+        0,
+    );
+    queued_ingress
+        .configure_roster(
+            fixture
+                .verified
+                .context()
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>(),
+        )
+        .expect("configure authenticated queued observer ingress");
+    queued_ingress.open().expect("open queued observer ingress");
+    let admit_fair_message = |message: wire::ConsensusMessageV2| {
+        let wire::ConsensusMessageV2Payload::Vote(vote) = &message.payload else {
+            panic!("the queued fixture owns only signed votes");
+        };
+        let peer = fixture.verified.context().roster
+            [usize::try_from(vote.signer).expect("queued vote signer index")]
+        .validator
+        .clone();
+        assert!(matches!(
+            queued_ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    crate::sumeragi::message::BlockMessage::V2(message),
+                    peer,
+                )
+            ),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        queued_ingress
+            .try_recv()
+            .expect("dequeue the exact authenticated predecessor carrier")
+            .take_ingress_ownership()
+            .expect("retain exact fair-ingress ownership")
+    };
+    let mut adapter = Some(adapter);
+    let mut early_runtime = if retain_runtime_predecessors {
+        runtime_ordinals
+            .advance_past(local_prediction)
+            .expect("reserve the earlier periodic runtime turn");
+        let mut runtime =
+            crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+                adapter
+                    .take()
+                    .expect("move the sole adapter into the shared-ordinal runtime"),
+                startup.clone(),
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(10),
+                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+                runtime_ordinals.clone(),
+            )
+            .expect("construct the runtime before publishing Apply")
+            .0;
+        for sequence in 1..=2 {
+            let message = predecessor_message(sequence);
+            let ownership = admit_fair_message(message.clone());
+            runtime
+                .enqueue_network_with_ingress_ownership(message, ownership)
+                .expect("authenticate and mint a real pre-Apply FIFO owner");
+        }
+        assert_eq!(
+            runtime
+                .queue_snapshot(std::time::Instant::now())
+                .normal
+                .depth,
+            2
+        );
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("inspect minted FIFO owners"),
+            Some(5)
+        );
+        Some(runtime)
+    } else {
+        None
+    };
+    let publication_adapter = match early_runtime.as_mut() {
+        Some(runtime) => runtime.driver_mut_for_test(),
+        None => adapter
+            .as_mut()
+            .expect("retain the original direct-adapter fixture"),
+    };
+    let prepared = holder
+        .registry_for_test_mut()
+        .prepare_ready_durable_validate_execution(&lease, slot, &fixture.verified)
+        .expect("prepare exact Ready Validate Apply registry carrier");
+    let preview = prepared
+        .prepare_adapter_preview(publication_adapter)
+        .unwrap_or_else(|_| panic!("join exact Validate carrier to decided adapter preview"));
+    let publication = preview
+        .seal_live_wal_validate_apply()
+        .unwrap_or_else(|_| panic!("seal exact Ready Validate Apply publication"));
+
     runtime_ordinals
         .advance_past(7)
         .expect("advance actor-global ordinals past the local prediction");
@@ -1238,7 +1439,9 @@ fn ready_validate_apply_actor_global_child_fixture(
             child_address,
             tag,
             ledger_directory.path(),
-            adapter,
+            adapter
+                .take()
+                .expect("lineage fixture retains its direct adapter"),
             startup,
             cleanup,
             live_validate_dispatch_key,
@@ -1323,15 +1526,22 @@ fn ready_validate_apply_actor_global_child_fixture(
         adapter_startup: None,
         timeout_supersession_successor: None,
     };
-    let runtime = crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
-        adapter,
-        startup,
-        std::time::Instant::now(),
-        std::time::Duration::from_secs(10),
-        crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-    )
-    .expect("wrap exact live Apply adapter")
-    .0;
+    let runtime = match early_runtime.take() {
+        Some(runtime) => runtime,
+        None => {
+            crate::sumeragi::v2_runtime::SerializedV2Runtime::new(
+                adapter
+                    .take()
+                    .expect("move the original direct-adapter fixture"),
+                startup,
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(10),
+                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            )
+            .expect("wrap exact live Apply adapter")
+            .0
+        }
+    };
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
     let (mut executor, mut planner_io) = owner
@@ -1359,10 +1569,24 @@ fn ready_validate_apply_actor_global_child_fixture(
             true,
         )
         .expect("restore the production-equivalent preliminary Validate-to-Apply owner");
-    assert_eq!(
+    let ordinal_before_reconciliation = runtime_ordinals
+        .next_ordinal_for_test()
+        .expect("observe the shared source before Decision reconciliation");
+    let reconciled_decision = if retain_runtime_predecessors {
+        executor
+            .reconcile_queued_decision_for_delayed_apply_fixture(
+                &mut services,
+                &decision,
+                child_ordinal,
+            )
+            .expect("reconcile exact Decision while retaining two authenticated vote owners")
+    } else {
         executor
             .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services, true)
-            .expect("reconcile exact live Apply Decision into the executor"),
+            .expect("reconcile exact live Apply Decision into the executor")
+    };
+    assert_eq!(
+        reconciled_decision,
         (
             decision.round,
             decision.proposal_round,
@@ -1370,6 +1594,13 @@ fn ready_validate_apply_actor_global_child_fixture(
             decision.execution_commitment,
         )
     );
+    assert_eq!(
+        runtime_ordinals
+            .next_ordinal_for_test()
+            .expect("observe the shared source after Decision reconciliation"),
+        ordinal_before_reconciliation
+    );
+
     assert!(
         executor
             .ready_to_finish_blockers()
@@ -1398,6 +1629,25 @@ fn ready_validate_apply_actor_global_child_fixture(
             .ready_to_finish_blockers()
             .contains(&"durable-validate-retry-seal")
     );
+
+    if observer_case == ObserverApplyCase::RetainedWithPostApplyCommand {
+        let late_ordinal = runtime_ordinals
+            .next_ordinal_for_test()
+            .expect("inspect the authentic late admission ordinal")
+            .expect("late admission remains representable");
+        assert!(late_ordinal >= child_ordinal);
+        let message = predecessor_message(3);
+        let ownership = admit_fair_message(message.clone());
+        executor
+            .enqueue_network_with_ingress_ownership(message, ownership)
+            .expect("authenticate a real FIFO owner after the Apply publication");
+        assert_eq!(
+            runtime_ordinals
+                .next_ordinal_for_test()
+                .expect("late owner was minted"),
+            Some(late_ordinal + 1)
+        );
+    }
 
     let mut observer_output_ordinal = None;
     if exercise_observer_predecessor {
@@ -1474,27 +1724,39 @@ fn ready_validate_apply_actor_global_child_fixture(
             "foreign runtime-owner substitution must fail before delayed admission"
         );
 
-        let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
-        ));
-        let ownership = bind_adapter_effect_batch_ownership(
-            core::slice::from_ref(&broadcast),
-            vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
-                tag,
-                local_prediction,
-            )],
-        )
-        .expect("bind exact pre-Apply periodic CommitQC Broadcast")
-        .pop()
-        .expect("one periodic Broadcast retains one owner");
-        let pending = PendingLifecycleOutputAdmissionV1::seal_exact(broadcast, ownership)
-            .unwrap_or_else(|_| panic!("seal exact pre-Apply periodic output"));
-        assert_eq!(
-            pending.lifecycle_owner().lifecycle_ordinal(),
-            local_prediction
-        );
         let fence = executor.lifecycle_reducer_fence_observation();
-        assert!(executor.install_pending_lifecycle_output_for_test(pending));
+        if retain_periodic_apply_suffix {
+            executor
+                .retain_periodic_commit_qc_apply_suffix_for_test(
+                    tag,
+                    subject,
+                    decision.clone(),
+                    local_prediction,
+                    &mut services,
+                )
+                .expect("retain and drain the actual periodic CommitQC/Apply pair");
+        } else {
+            let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+            ));
+            let ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&broadcast),
+                vec![RuntimeEffectOwnership::periodic_retransmit_for_test(
+                    tag,
+                    local_prediction,
+                )],
+            )
+            .expect("bind exact pre-Apply periodic CommitQC Broadcast")
+            .pop()
+            .expect("one periodic Broadcast retains one owner");
+            let pending = PendingLifecycleOutputAdmissionV1::seal_exact(broadcast, ownership)
+                .unwrap_or_else(|_| panic!("seal exact pre-Apply periodic output"));
+            assert_eq!(
+                pending.lifecycle_owner().lifecycle_ordinal(),
+                local_prediction
+            );
+            assert!(executor.install_pending_lifecycle_output_for_test(pending));
+        }
         assert_eq!(
             owner.classify_completion_ready_work(fence),
             super::super::ProductionCompletionReadyWorkV1::CompletionIo
@@ -1512,23 +1774,29 @@ fn ready_validate_apply_actor_global_child_fixture(
         assert!(!output_guard.restart_required());
 
         let outer_ingress = crate::sumeragi::FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
-        let admission_slice = crate::sumeragi::v2_runner::advance_executor(
-            &outer_ingress,
-            &mut owner,
-            &mut executor,
-            &mut services,
-            Some(child_ordinal),
-            1,
-        )
-        .expect("durably admit the delayed CommitQC and retry Completion");
-        match admission_slice {
-            crate::sumeragi::v2_runner::AdvanceExecutorSliceOutcomeV1::Yielded(yielded) => {
-                assert!(
-                    yielded.requires_completion_retry(),
-                    "delayed admission must immediately hand control back to Apply"
-                );
+        if retain_runtime_predecessors {
+            executor
+                .settle_pending_lifecycle_output_admissions(&mut owner, &mut services)
+                .expect("admit delayed output before inspecting the complete FIFO bound");
+        } else {
+            let admission_slice = crate::sumeragi::v2_runner::advance_executor(
+                &outer_ingress,
+                &mut owner,
+                &mut executor,
+                &mut services,
+                Some(child_ordinal),
+                1,
+            )
+            .expect("durably admit the delayed CommitQC and retry Completion");
+            match admission_slice {
+                crate::sumeragi::v2_runner::AdvanceExecutorSliceOutcomeV1::Yielded(yielded) => {
+                    assert!(
+                        yielded.requires_completion_retry(),
+                        "delayed admission must immediately hand control back to Apply"
+                    );
+                }
+                other => panic!("delayed admission must yield to Completion, got {other:?}"),
             }
-            other => panic!("delayed admission must yield to Completion, got {other:?}"),
         }
         let mut exact_commit_qc_broadcasts =
             owner.coordinator.records.iter().filter(|(_, record)| {
@@ -1593,6 +1861,172 @@ fn ready_validate_apply_actor_global_child_fixture(
             .values_mut()
             .next()
             .expect("delayed output retains one physical slot") = original_output_digest;
+        if retain_periodic_apply_suffix {
+            let attestation = owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    child_ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .expect("attest the delayed output beside its original periodic Apply")
+                .expect("the exact delayed pair retains one successor attestation");
+            assert!(matches!(
+                attestation.mode(),
+                super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+            ));
+            executor.assert_retained_apply_suffix_substitutions_rejected_for_test(&attestation);
+            assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 0);
+            assert_eq!(
+                owner
+                    .coordinator
+                    .ready_index
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![child_ordinal, output_ordinal]
+            );
+            assert!(
+                executor
+                    .ready_to_finish_blockers()
+                    .contains(&"retained-effect-batch")
+            );
+        }
+    }
+
+    if retain_runtime_predecessors {
+        let output_ordinal = observer_output_ordinal.expect("queued case has a delayed output");
+        let attestation = owner
+            .attest_ready_live_decision_apply_runtime_predecessor(
+                child_ordinal,
+                executor.pending_lifecycle_output_admission_census(),
+            )
+            .expect("attest the complete queued delayed-output census")
+            .expect("the queued case retains one exact delayed successor");
+        assert!(matches!(attestation.mode(),
+            super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+        ));
+        let outer_ingress = &queued_ingress;
+        let captured_at = std::time::Instant::now();
+        let before = executor.runtime_queue_snapshot_for_test(captured_at);
+        assert_eq!(
+            before.normal.depth,
+            if observer_case == ObserverApplyCase::RetainedWithPostApplyCommand {
+                3
+            } else {
+                2
+            }
+        );
+        assert_eq!(before.progress.depth, 0);
+        assert_eq!(before.completion.depth, 0);
+        assert_eq!(
+            owner
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                .expect("queued runtime owners keep Apply Ready"),
+            super::super::ProductionCompletionDispatchV1::CapacityUnavailable {
+                protected_live_apply_ordinal: Some(child_ordinal),
+            }
+        );
+        assert_eq!(
+            executor.runtime_queue_snapshot_for_test(captured_at),
+            before
+        );
+        let output = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        );
+        assert_eq!(services.consensus_broadcast_count_for_test(&output), 0);
+        if observer_case != ObserverApplyCase::RetainedWithPredecessors {
+            assert!(
+                !executor
+                    .lifecycle_decision_apply_runtime_predecessor_drain_available(&attestation)
+                    .expect("reject an absent suffix or a real post-Apply FIFO owner")
+            );
+            assert!(
+                !executor
+                    .lifecycle_decision_apply_runtime_predecessor_remains_exact(&attestation)
+                    .expect("the complete predecessor proof remains unavailable")
+            );
+            let outcome = crate::sumeragi::v2_runner::advance_executor(
+                outer_ingress,
+                &mut owner,
+                &mut executor,
+                &mut services,
+                Some(child_ordinal),
+                1,
+            )
+            .expect("a blocked delayed cycle yields without draining unrelated work");
+            assert!(matches!(outcome,
+                crate::sumeragi::v2_runner::AdvanceExecutorSliceOutcomeV1::Yielded(ref yielded)
+                    if yielded.requires_completion_retry()));
+            assert_eq!(
+                executor.runtime_queue_snapshot_for_test(captured_at),
+                before
+            );
+            assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 0);
+            assert_eq!(
+                owner
+                    .coordinator
+                    .ready_index
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                vec![child_ordinal, output_ordinal]
+            );
+            assert!(executor.has_pending_lifecycle_output_admissions());
+            assert_eq!(services.consensus_broadcast_count_for_test(&output), 0);
+            assert!(!executor.status().fail_closed);
+            assert!(!output_guard.restart_required());
+            return;
+        }
+        for remaining in [1, 0] {
+            if remaining == 0 {
+                executor.park_attested_lifecycle_apply_suffix_for_test(&attestation);
+            }
+            assert!(
+                executor
+                    .lifecycle_decision_apply_runtime_predecessor_drain_available(&attestation)
+                    .expect("the exact older FIFO is eligible for one typed predecessor turn")
+            );
+            let outcome = crate::sumeragi::v2_runner::advance_executor(
+                outer_ingress,
+                &mut owner,
+                &mut executor,
+                &mut services,
+                Some(child_ordinal),
+                1,
+            )
+            .expect("drain one authenticated pre-Apply runtime owner");
+            assert!(matches!(outcome,
+                crate::sumeragi::v2_runner::AdvanceExecutorSliceOutcomeV1::Yielded(ref yielded)
+                    if yielded.requires_completion_retry()));
+            assert_eq!(
+                executor
+                    .runtime_queue_snapshot_for_test(captured_at)
+                    .normal
+                    .depth,
+                remaining
+            );
+            let observation = executor
+                .last_runtime_step_observation_for_test()
+                .expect("typed predecessor selection records its runtime owner");
+            assert_eq!(observation.selected(),
+                Some(crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::LifecycleApplyPredecessor));
+            assert_eq!(observation.effect_count(), 0);
+            assert!(
+                executor
+                    .lifecycle_decision_apply_runtime_predecessor_remains_exact(&attestation)
+                    .expect(
+                        "each finite predecessor preserves the exact suffix and remaining queue"
+                    )
+            );
+            assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+            assert!(executor.has_pending_lifecycle_output_admissions());
+            assert_eq!(services.consensus_broadcast_count_for_test(&output), 0);
+            assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 0);
+        }
+        assert!(
+            executor
+                .lifecycle_decision_apply_dispatch_available(Some(&attestation))
+                .expect("an empty predecessor FIFO permits the exact paired Apply")
+        );
     }
 
     planner_io.saturate_consensus_prefix(&services);
@@ -1631,6 +2065,15 @@ fn ready_validate_apply_actor_global_child_fixture(
         }
     );
     assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 1);
+    if retain_periodic_apply_suffix {
+        assert!(
+            !executor
+                .ready_to_finish_blockers()
+                .contains(&"retained-effect-batch")
+        );
+        assert!(executor.has_pending_lifecycle_output_admissions());
+        assert_eq!(owner.registry.registry_for_test().entries.len(), 2);
+    }
     assert_eq!(
         executor.live_lifecycle_decision_apply_key_for_test(),
         Some(barrier_key)

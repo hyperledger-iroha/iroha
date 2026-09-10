@@ -254,6 +254,18 @@ fn ambiguous_checkpoint_commit_is_resolved_only_by_exact_authoritative_readback(
     )
     .expect("open");
     let initialized = assert_initialized_checkpoint(&store, &orchestrator);
+    let framed = crate::frame_test_support::assert_current_frame(
+        &initialized,
+        "sorafs_node::moderation_orchestrator::checkpoint_store::ModerationCheckpointStoreRecordV1",
+    );
+    let decoded: ModerationCheckpointStoreRecordV1 =
+        norito::decode_canonical(&framed).expect("decode authoritative provider record");
+    assert!(decoded.has_valid_provider_envelope(
+        CHECKPOINT_STORE_HANDLE,
+        CHECKPOINT_STORE_QUALIFICATION,
+        orchestrator.config.checkpoint_max_bytes,
+    ));
+    assert_eq!(decoded.revision, initialized.revision);
     store.fail_next_cas(2);
     orchestrator
         .reconcile()

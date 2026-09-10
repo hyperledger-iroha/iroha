@@ -231,7 +231,8 @@ pub struct SccpReplayReplicaCheckpointEntryV1 {
 }
 
 /// Exact checkpoint set returned independently by all three replicas.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1")]
 pub struct SccpReplayReplicaCheckpointSetV1 {
     /// Schema version; final V1 accepts exactly one.
     pub version: u8,
@@ -667,7 +668,8 @@ struct PersistedReplayGenerationV1 {
     entries: Vec<PersistedReplayHeadEntryV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadV1")]
 struct PersistedReplayHeadV1 {
     version: u8,
     // The atomic manifest carries both generations so a crash cannot expose a
@@ -3512,6 +3514,16 @@ mod tests {
 
         let fixture = Fixture::new();
         let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        let checkpoint_set: SccpReplayReplicaCheckpointSetV1 =
+            norito::decode_canonical(&fixture.first_bytes).expect("fixture set");
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint_set,
+            "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &loaded_head(&service).head,
+            "iroha_torii::sccp_replay::PersistedReplayHeadV1",
+        );
         let (served_domain, forest) = service
             .forest(&fixture.accumulator_id)
             .expect("verified forest is served");

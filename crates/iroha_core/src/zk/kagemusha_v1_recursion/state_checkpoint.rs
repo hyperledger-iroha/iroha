@@ -81,8 +81,11 @@ pub(super) struct KagemushaStateCheckpointVerifierMaterialV1<'a> {
     pub(super) artifacts: KagemushaRecursionArtifactsV1,
 }
 
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.core.v1.recursive-state-checkpoint")]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::state_checkpoint::CheckpointWire",
+    frame = "iroha.kagemusha.core.v1.recursive-state-checkpoint"
+)]
 struct CheckpointWire {
     version: u16,
     binding: KagemushaStateCheckpointBindingV1,
@@ -647,6 +650,22 @@ mod tests {
     }
 
     #[test]
+    fn captured_recursive_checkpoint_frame_identity() {
+        let (checkpoint, _, lengths) = fixture();
+        super::super::guard_verifier::frame_identity_tests::check("CheckpointWire", &checkpoint.0);
+        let bytes = checkpoint.encode_with_lengths(lengths).unwrap();
+        assert_eq!(
+            KagemushaRecursiveStateCheckpointV1::decode_with_lengths(
+                &bytes,
+                &checkpoint.0.binding,
+                lengths
+            )
+            .unwrap(),
+            checkpoint
+        );
+    }
+
+    #[test]
     fn checkpoint_schema_is_pinned_and_rejects_another_canonical_type() {
         const SCHEMA: [u8; 16] = [
             0xb1, 0x1b, 0xed, 0x3b, 0x91, 0xe7, 0x58, 0x76, 0xce, 0x1b, 0xa9, 0x1c, 0x30, 0x2d,
@@ -659,12 +678,12 @@ mod tests {
             SCHEMA,
         );
         assert_eq!(
-            <CheckpointWire as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<CheckpointWire>(),
             SCHEMA
         );
         assert_eq!(
-            <CheckpointWire as norito::NoritoDeserialize<'static>>::schema_hash(),
-            SCHEMA
+            <CheckpointWire as norito::NoritoSchema>::frame_name(),
+            "iroha.kagemusha.core.v1.recursive-state-checkpoint"
         );
         let (checkpoint, _, lengths) = fixture();
         let bytes = checkpoint
@@ -673,7 +692,8 @@ mod tests {
         let header = norito::core::Header::read(std::io::Cursor::new(&bytes)).expect("header");
         assert_eq!(header.schema, SCHEMA);
 
-        let other = norito::encode_canonical(&checkpoint.0.binding).expect("other canonical type");
+        // The nested binding is payload-only; an existing primitive is an unrelated real frame.
+        let other = norito::encode_canonical(&0_u8).expect("other canonical type");
         assert_eq!(
             KagemushaRecursiveStateCheckpointV1::decode_with_lengths(
                 &other,
@@ -684,9 +704,7 @@ mod tests {
         );
         // Preserve the complete payload and its checksum, changing only the frame's schema.
         let mut substituted = bytes;
-        substituted[6..22].copy_from_slice(
-            &<KagemushaStateCheckpointBindingV1 as norito::NoritoSerialize>::schema_hash(),
-        );
+        substituted[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<u8>());
         assert_eq!(
             KagemushaRecursiveStateCheckpointV1::decode_with_lengths(
                 &substituted,

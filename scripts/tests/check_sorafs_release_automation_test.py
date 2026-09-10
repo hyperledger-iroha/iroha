@@ -744,12 +744,7 @@ def test_pop_broker_wire_structs_reject_private_recipient_fields(
     )
     source = protocol.read_text(encoding="utf-8")
     declaration = re.search(
-        (
-            rf"(?:struct\s+{re.escape(struct_name)}|"
-            rf"define_broker_wire_struct!\(\s*[A-Za-z_][A-Za-z0-9_]*\s+"
-            rf"(?:pub\(super\)\s+)?{re.escape(struct_name)})\s*\{{"
-        ),
-        source,
+        rf'pub\(super\)\s+{re.escape(struct_name)}\s*\{{', source
     )
     assert declaration is not None
     drifted = (
@@ -783,6 +778,148 @@ def test_pop_broker_wire_structs_reject_field_type_substitution(tmp_path: Path) 
         match="wire struct PopRuntimeOpenResultWireV1 fields must be exactly",
     ):
         automation.validate_release_automation(tmp_path)
+
+
+def _pop_wire_declaration(source: str, struct_name: str) -> str:
+    """Locate the actual owner only to mutate the closed declaration contract."""
+
+    declarations = re.findall(
+        rf'(?m)^define_broker_wire_struct!\([^\n]*\b{re.escape(struct_name)}\s*\{{[^\n]*\}}\);$',
+        source,
+    )
+    assert len(declarations) == 1
+    return declarations[0]
+
+
+@pytest.mark.parametrize("struct_name", sorted(automation.POP_BROKER_WIRE_FIELD_INVENTORIES))
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong_owner", "different_name", "duplicate_owner",
+        "missing_frame", "unknown_mode", "wrong_mode",
+        "public_owner", "public_field", "duplicate", "duplicate_old_header",
+        "duplicate_struct", "missing_semicolon", "missing_delimiter",
+        "mismatched_delimiter", "missing_comma", "empty_type",
+        "extra_field", "duplicate_field", "unsupported_struct", "nested_owner",
+        "comment_decoy", "string_decoy", "raw_string_decoy", "unterminated_comment",
+    ),
+)
+def test_pop_broker_canonical_declaration_rejects_source_mutation(
+    tmp_path: Path, struct_name: str, mutation: str
+) -> None:
+    _copy_workflows(tmp_path)
+    path = tmp_path / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    source = path.read_text(encoding="utf-8")
+    declaration = _pop_wire_declaration(source, struct_name)
+    owner = f'"irohad::runtime_provider_broker::protocol::primitives::{struct_name}"'
+    old_header = declaration.replace(f"frame {owner}; ", "", 1)
+    body = declaration.split(f"pub(super) {struct_name}", 1)[1]
+    direct = f"pub(super) struct {struct_name}{body}"
+    direct = direct.removesuffix(");")
+    first_field = re.search(r'\{\s*(pub\(super\)\s+\w+\s*:[^,]+,)', declaration)
+    assert first_field is not None
+    if mutation == "wrong_owner":
+        replacement = declaration.replace(owner, '"incorrect::WireV1"', 1)
+    elif mutation in ("different_name", "duplicate_owner"):
+        renamed = declaration.replace(
+            f"pub(super) {struct_name}", "pub(super) SubstitutedWireV1", 1
+        )
+        replacement = renamed if mutation == "different_name" else declaration + "\n" + renamed
+    elif mutation == "missing_frame":
+        replacement = old_header
+    elif mutation == "unknown_mode":
+        replacement = declaration.replace("!(", "!(unknown ", 1)
+    elif mutation == "wrong_mode":
+        replacement = re.sub(r'!\(\w+', '!(copy', declaration, count=1)
+    elif mutation == "public_owner":
+        replacement = declaration.replace(f"pub(super) {struct_name}", f"pub {struct_name}", 1)
+    elif mutation == "public_field":
+        replacement = declaration.replace(
+            first_field.group(1), first_field.group(1).replace("pub(super)", "pub", 1), 1
+        )
+    elif mutation == "duplicate":
+        replacement = declaration + "\n" + declaration
+    elif mutation == "duplicate_old_header":
+        replacement = declaration + "\n" + old_header
+    elif mutation == "duplicate_struct":
+        replacement = declaration + "\n" + direct
+    elif mutation == "missing_semicolon":
+        replacement = declaration[:-1]
+    elif mutation == "missing_delimiter":
+        replacement = declaration.removesuffix(");")
+    elif mutation == "mismatched_delimiter":
+        replacement = declaration.replace("}", "]", 1)
+    elif mutation == "missing_comma":
+        replacement = declaration.replace(first_field.group(1), first_field.group(1)[:-1], 1)
+    elif mutation == "empty_type":
+        replacement = declaration.replace(
+            first_field.group(1), first_field.group(1).split(":", 1)[0] + ": ,", 1
+        )
+    elif mutation == "extra_field":
+        replacement = declaration.replace("{", "{ pub(super) recipient_private_key: Vec<u8>,", 1)
+    elif mutation == "duplicate_field":
+        replacement = declaration.replace(first_field.group(1), first_field.group(1) * 2, 1)
+    elif mutation == "unsupported_struct":
+        replacement = direct
+    elif mutation == "nested_owner":
+        replacement = "mod substituted_owner {\n" + declaration + "\n}"
+    elif mutation == "comment_decoy":
+        replacement = "/* " + declaration + " */"
+    elif mutation == "string_decoy":
+        replacement = "const DECOY: &str = " + json.dumps(declaration) + ";"
+    elif mutation == "raw_string_decoy":
+        replacement = 'const DECOY: &str = r###"' + declaration + '"###;'
+    else:
+        assert mutation == "unterminated_comment"
+        replacement = declaration + "\n/* unclosed"
+    assert replacement != declaration
+    path.write_text(source.replace(declaration, replacement, 1), encoding="utf-8")
+    errors = automation._validate_pop_broker_hard_cut_contract(tmp_path)
+    assert any(
+        f"wire struct {struct_name} fields must be exactly" in error for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    "struct_name",
+    [
+        name for name, fields in automation.POP_BROKER_WIRE_FIELD_INVENTORIES.items()
+        if len(fields) > 1
+    ],
+)
+def test_pop_broker_canonical_declaration_rejects_field_reordering(struct_name: str) -> None:
+    source = (
+        REPO_ROOT / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    ).read_text(encoding="utf-8")
+    declaration = _pop_wire_declaration(source, struct_name)
+    fields = re.findall(r"pub\(super\)\s+\w+\s*:[^,]+,", declaration)
+    assert len(fields) >= 2
+    replacement = (
+        declaration.replace(fields[0], "__FIRST_FIELD__", 1)
+        .replace(fields[1], fields[0], 1)
+        .replace("__FIRST_FIELD__", fields[1], 1)
+    )
+    observed = automation._pop_broker_wire_field_inventory(
+        source.replace(declaration, replacement, 1), struct_name
+    )
+    assert observed != automation.POP_BROKER_WIRE_FIELD_INVENTORIES[struct_name]
+
+
+@pytest.mark.parametrize("struct_name", sorted(automation.POP_BROKER_WIRE_FIELD_INVENTORIES))
+def test_pop_broker_canonical_declaration_ignores_trivia_and_noncode_decoys(struct_name: str) -> None:
+    source = (
+        REPO_ROOT / "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs"
+    ).read_text(encoding="utf-8")
+    declaration = _pop_wire_declaration(source, struct_name)
+    formatted = (
+        declaration.replace(" frame ", "\n /* nested /* comment */ trivia */ frame\n")
+        .replace("; pub", ";\n pub")
+    )
+    decoys = "\n// " + declaration + "\n/* " + declaration + ' */\nconst DECOY: &str = r#"' + declaration + '"#;\n'
+    observed = automation._pop_broker_wire_field_inventory(
+        source.replace(declaration, formatted, 1) + decoys, struct_name
+    )
+    assert observed == automation.POP_BROKER_WIRE_FIELD_INVENTORIES[struct_name]
 
 
 def test_pop_runtime_production_source_rejects_private_recipient_material(
@@ -1995,9 +2132,9 @@ def test_validate_release_automation_requires_two_reference_validator_builds(
     _copy_workflows(tmp_path)
     workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
     source = workflow.read_text(encoding="utf-8")
-    first = source.find("bash scripts/package_sorafs_validate_release.sh")
+    first = source.find("bash scripts/package_iroha_cli_release.sh")
     second = source.find(
-        "bash scripts/package_sorafs_validate_release.sh",
+        "bash scripts/package_iroha_cli_release.sh",
         first + 1,
     )
     assert first >= 0 and second > first
@@ -2005,7 +2142,7 @@ def test_validate_release_automation_requires_two_reference_validator_builds(
         source[:second]
         + "bash removed_reference_validator_packager.sh"
         + source[
-            second + len("bash scripts/package_sorafs_validate_release.sh") :
+            second + len("bash scripts/package_iroha_cli_release.sh") :
         ],
         encoding="utf-8",
     )
@@ -2069,12 +2206,12 @@ def test_validate_release_automation_rejects_reference_package_after_platform_sb
     source = workflow.read_text(encoding="utf-8")
     workflow.write_text(
         source.replace(
-            "name: Package reference validator and FFI header",
+            "name: Package Iroha CLI and SoraFS FFI header",
             "name: Temporarily moved reference validator package",
             1,
         ).replace(
             "name: Scan platform binary SBOM",
-            "name: Package reference validator and FFI header\n"
+            "name: Package Iroha CLI and SoraFS FFI header\n"
             "      - name: Scan platform binary SBOM",
             1,
         ),

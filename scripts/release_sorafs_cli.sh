@@ -9,7 +9,7 @@ release_sorafs_cli.sh --manifest <path> [options]
 Signs a canonical aggregate SoraFS release manifest through the reviewed
 `authenticated_external_signer` provider with exact `software` backend, then
 verifies the manifest, raw public key, and 64-byte Ed25519 signature with a
-SHA256-pinned `sorafs-validate release-manifest` binary. A successful run emits
+SHA256-pinned `iroha app sorafs toolkit release-manifest` binary. A successful run emits
 `software-key-qualified`. Iroha exposes no HSM-specific adapter or qualification
 claim; custody behind the authenticated external signer is deployment-owned.
 
@@ -25,7 +25,7 @@ Required:
   --trusted-signing-fingerprint <hex>
       Reviewed SHA256 fingerprint of the raw public key (64 lowercase hex).
   --release-manifest-verifier <path>
-      Reviewed `sorafs-validate` executable.
+      Reviewed `iroha` executable.
   --trusted-release-manifest-verifier-sha256 <hex>
       Reviewed SHA256 digest of that exact executable (64 lowercase hex).
 

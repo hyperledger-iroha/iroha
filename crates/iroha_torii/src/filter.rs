@@ -554,6 +554,33 @@ pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nested_filter_payloads_roundtrip_without_standalone_frame_owners() {
+        fn check<T>(value: &T)
+        where
+            T: norito::SerializePayload + for<'de> norito::DeserializePayload<'de> + PartialEq,
+        {
+            let bytes = norito::codec::encode_adaptive(value);
+            let decoded: T = norito::codec::decode_adaptive(&bytes).expect("nested payload");
+            assert!(&decoded == value);
+            assert!(norito::codec::decode_adaptive::<T>(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(norito::codec::decode_adaptive::<T>(&trailing).is_err());
+        }
+        check(&super::FieldPath("authority".into()));
+        check(&super::Selector(vec![super::FieldPath("authority".into())]));
+        check(&super::Order::Desc);
+        check(&super::SortKey {
+            key: super::FieldPath("timestamp_ms".into()),
+            order: super::Order::Asc,
+        });
+        check(&super::FilterExpr::Exists(super::FieldPath(
+            "metadata.label".into(),
+        )));
+        assert!(norito::codec::decode_adaptive::<super::Order>(&[2]).is_err());
+    }
+
     use super::*;
     use crate::{json_array, json_object, json_value};
     use norito::json;
@@ -677,17 +704,19 @@ mod tests {
     #[test]
     fn filter_expr_binary_wire_roundtrips_and_rejects_noncanonical_json_replay() {
         let expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
-        let bytes = norito::to_bytes(&expr).expect("encode valid FilterExpr");
+        let mut bytes = Vec::new();
+        norito::codec::encode_adaptive_into(&expr, &mut bytes)
+            .expect("encode valid FilterExpr payload");
         assert_eq!(
-            norito::decode_from_bytes::<FilterExpr>(&bytes).expect("decode valid FilterExpr"),
+            norito::codec::decode_adaptive::<FilterExpr>(&bytes)
+                .expect("decode valid FilterExpr payload"),
             expr
         );
         let canonical = json::to_string(&filter_expr_to_value(&expr)).expect("canonical filter");
         let replay = format!(" {canonical}");
-        let (payload, flags) = norito::codec::encode_with_header_flags(&replay);
-        let framed = norito::core::frame_bare_with_header_flags::<FilterExpr>(&payload, flags)
-            .expect("frame replayed FilterExpr string");
-        assert!(norito::decode_from_bytes::<FilterExpr>(&framed).is_err());
+        // FilterExpr is a nested canonical JSON string payload, not a frame owner.
+        let payload = norito::codec::encode_adaptive(&replay);
+        assert!(norito::codec::decode_adaptive::<FilterExpr>(&payload).is_err());
     }
     #[test]
     fn filter_expr_parser_enforces_depth_node_and_membership_budgets() {
@@ -752,7 +781,12 @@ mod tests {
             validate_filter(&programmatic),
             Err(ValidateError::TypeMismatch(field)) if field == "result_ok"
         ));
-        assert!(norito::to_bytes(&programmatic).is_err());
+        let mut payload = Vec::new();
+        assert!(norito::codec::encode_adaptive_into(&programmatic, &mut payload).is_err());
+        assert!(
+            payload.is_empty(),
+            "invalid filter must fail before writing payload bytes"
+        );
     }
     #[test]
     fn reject_unsupported_field_path() {
@@ -1076,13 +1110,11 @@ pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
     let mut membership_values = 0;
     validate_rec(expr, 0, &mut nodes, &mut membership_values)
 }
-impl norito::core::NoritoSerialize for FieldPath {}
 impl norito::core::SerializePayload for FieldPath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <String as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for FieldPath {}
 impl<'de> norito::core::DeserializePayload<'de> for FieldPath {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FieldPath>,
@@ -1096,13 +1128,11 @@ impl<'de> norito::core::DeserializePayload<'de> for FieldPath {
             .expect("FieldPath should deserialize from a valid Norito string")
     }
 }
-impl norito::core::NoritoSerialize for Selector {}
 impl norito::core::SerializePayload for Selector {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <Vec<FieldPath> as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Selector {}
 impl<'de> norito::core::DeserializePayload<'de> for Selector {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Selector>,
@@ -1116,7 +1146,6 @@ impl<'de> norito::core::DeserializePayload<'de> for Selector {
         Self::try_deserialize(archived).expect("Selector should decode from a Norito sequence")
     }
 }
-impl norito::core::NoritoSerialize for Order {}
 impl norito::core::SerializePayload for Order {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let tag = match self {
@@ -1126,7 +1155,6 @@ impl norito::core::SerializePayload for Order {
         <u8 as norito::core::SerializePayload>::serialize(&tag, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Order {}
 impl<'de> norito::core::DeserializePayload<'de> for Order {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Order>,
@@ -1145,14 +1173,12 @@ impl<'de> norito::core::DeserializePayload<'de> for Order {
         Self::try_deserialize(archived).expect("Order should decode from variant tag")
     }
 }
-impl norito::core::NoritoSerialize for SortKey {}
 impl norito::core::SerializePayload for SortKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.key.clone(), self.order);
         <(FieldPath, Order) as norito::core::SerializePayload>::serialize(&payload, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for SortKey {}
 impl<'de> norito::core::DeserializePayload<'de> for SortKey {
     fn try_deserialize(
         archived: &'de norito::core::Archived<SortKey>,
@@ -1168,7 +1194,6 @@ impl<'de> norito::core::DeserializePayload<'de> for SortKey {
         Self::try_deserialize(archived).expect("SortKey should decode from (FieldPath, Order)")
     }
 }
-impl norito::core::NoritoSerialize for FilterExpr {}
 impl norito::core::SerializePayload for FilterExpr {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         validate_filter(self)
@@ -1178,7 +1203,6 @@ impl norito::core::SerializePayload for FilterExpr {
         <String as norito::core::SerializePayload>::serialize(&json, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for FilterExpr {}
 impl<'de> norito::core::DeserializePayload<'de> for FilterExpr {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FilterExpr>,

@@ -818,6 +818,8 @@ impl LaneQueueReservationRoutingMode {
 /// Complete exact identity of one durable lane queue reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationKeyV1")]
 pub struct LaneQueueReservationKeyV1 {
     /// Exact encoded reservation-key schema version.
     pub version: u16,
@@ -925,6 +927,8 @@ impl LaneQueueFifoOrderV1 {
 /// batches.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationRecordV1")]
 pub(crate) struct LaneQueueReservationRecordV1 {
     /// Record format version.
     version: u16,
@@ -951,6 +955,8 @@ impl LaneQueueReservationRecordV1 {
 /// attempt before it can touch a live reservation from a recreated lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseBarrierV1")]
 pub(crate) struct LaneQueueReservationReleaseBarrierV1 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
@@ -1498,6 +1504,8 @@ pub struct LaneQueueReservationReplaySummary {
 /// atomic `PutBatch` frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationGroupIdentityV1")]
 pub(crate) struct LaneQueueReservationGroupIdentityV1 {
     /// Coordinator lane that owns the group.
     pub(crate) lane_id: LaneId,
@@ -22048,9 +22056,20 @@ pub mod tests {
                 .into_iter()
                 .map(|leg| QueuePlanRouteIncarnationV1 {
                     leg,
-                    lane_incarnation: Hash::new(
-                        norito::to_bytes(&leg).expect("encode synthetic context leg"),
-                    ),
+                    lane_incarnation: {
+                        // This synthetic fixture hashes the nested leg payload under one
+                        // explicit layout; the real RoutingPlan owns the durable frame.
+                        let _layout = norito::core::DecodeFlagsGuard::enter(
+                            norito::core::header_flags::COMPACT_LEN,
+                        );
+                        let mut payload = Vec::new();
+                        norito::SerializePayload::serialize(
+                            &leg,
+                            &mut norito::core::Encoder::new(&mut payload),
+                        )
+                        .expect("encode synthetic route-leg payload");
+                        Hash::new(payload)
+                    },
                     validator_set_hash_version:
                         iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validators),
@@ -22059,6 +22078,37 @@ pub mod tests {
                     durability_threshold: 1,
                 })
                 .collect(),
+        }
+    }
+    #[test]
+    fn synthetic_queue_context_leg_identity_ignores_ambient_layout() {
+        let plan = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            vec![RouteLeg::new(
+                RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+                RouteLegRole::Participant,
+            )],
+        );
+        let expected = synthetic_queue_plan_admission_context(&plan);
+        for flags in [0, norito::core::header_flags::PACKED_STRUCT] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(synthetic_queue_plan_admission_context(&plan), expected);
+        }
+        let _layout =
+            norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::COMPACT_LEN);
+        for route in expected.route_incarnations {
+            let mut payload = Vec::new();
+            norito::SerializePayload::serialize(
+                &route.leg,
+                &mut norito::core::Encoder::new(&mut payload),
+            )
+            .expect("encode route-leg payload independently");
+            assert_eq!(
+                norito::core::decode_field_canonical::<RouteLeg>(&payload)
+                    .expect("the synthetic identity commits an exact leg payload"),
+                (route.leg, payload.len())
+            );
+            assert_eq!(route.lane_incarnation, Hash::new(payload));
         }
     }
     fn pending_kagemusha_binding_for_test(

@@ -12,6 +12,8 @@ use super::*;
     norito::derive::NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ledger_state_finality::StateFinalityResponse")]
 pub(super) struct StateFinalityResponse {
     /// Requested one-based committed block height.
     pub(super) height: u64,

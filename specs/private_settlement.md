@@ -706,6 +706,14 @@ digests outside the checkout. Skipped tests, failed runs, reused identities,
 changed bytes, or incomplete evidence invalidate the campaign. Synthetic
 validator tests do not satisfy this prerequisite.
 
+The smoke waits for sponsor-side `Applied` registration, then for every
+validator's replicated reservation plane to match the sponsor's complete
+`1 + 9N` map before requesting Commit certificates. The bounded wait requires
+the exact original peer inventory, an empty replicated baseline and unchanged
+financial state throughout convergence; partial or different maps fail.
+It preserves three-of-four committee-local Prepare semantics and does not
+require a local Prepare copy at a validator that did not answer that phase.
+
 `scripts/private_settlement_release_runner.py execute` requires
 `--smoke-campaign <retained-campaign-directory>` at the exact plan commit. It
 revalidates the campaign and execution source before starting any job and

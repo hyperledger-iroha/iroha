@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign aggregate release manifests and verify them with ``sorafs-validate``.
+"""Sign aggregate release manifests and verify them with ``iroha``.
 
 The production signing command never accepts a private key. It invokes a
 reviewed external signer with two positional arguments:
@@ -12,7 +12,7 @@ owner-private snapshot of the canonical manifest, so path substitution cannot
 select a different executable or signing payload. Verification is delegated to
 the canonical native contract:
 
-    sorafs-validate release-manifest \
+    iroha app sorafs toolkit release-manifest \
       --manifest MANIFEST_PATH \
       --public-key RAW_32_BYTE_PUBLIC_KEY_PATH \
       --public-key-fingerprint REVIEWED_SHA256 \
@@ -56,8 +56,8 @@ MAX_EXECUTABLE_SIZE = 1024 * 1024 * 1024
 TIMED_OVN_AUDIT_MANIFEST_SIZE = 301
 TIMED_OVN_AUDIT_TOTAL_ARTIFACT_SIZE = 1024 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-NATIVE_VERIFIER_PROTOCOL = "sorafs-validate-release-manifest-v1"
-NATIVE_TIMED_OVN_AUDIT_PROTOCOL = "sorafs-validate-timed-ovn-release-audit-v1"
+NATIVE_VERIFIER_PROTOCOL = "iroha-toolkit-release-manifest-v1"
+NATIVE_TIMED_OVN_AUDIT_PROTOCOL = "iroha-toolkit-timed-ovn-release-audit-v1"
 EXTERNAL_TOOL_UID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_UID"
 EXTERNAL_TOOL_GID_ENV = "IROHA_TAIRA_EXTERNAL_TOOL_GID"
 RELEASE_OUTPUT_DIR_FD_SUPPORTED = all(
@@ -671,7 +671,7 @@ def _snapshot_native_verifier(
 
 def _native_snapshot_path(temp_dir: Path, source: Path) -> Path:
     suffix = ".exe" if source.suffix.lower() == ".exe" else ""
-    return temp_dir / f"sorafs-validate-pinned{suffix}"
+    return temp_dir / f"iroha-pinned{suffix}"
 
 
 def _signer_snapshot_path(temp_dir: Path, source: Path) -> Path:
@@ -814,6 +814,9 @@ def _invoke_native_verifier(
         completed = subprocess.run(
             [
                 str(verifier),
+                "app",
+                "sorafs",
+                "toolkit",
                 "release-manifest",
                 "--manifest",
                 str(manifest),
@@ -868,6 +871,9 @@ def _invoke_native_timed_ovn_release_audit(
         completed = subprocess.run(
             [
                 str(verifier),
+                "app",
+                "sorafs",
+                "toolkit",
                 "timed-ovn-release-audit",
                 "--audit-manifest",
                 str(audit_manifest),
@@ -1454,7 +1460,7 @@ def sign_release_manifest(
                 ".exe" if native_verifier.suffix.lower() == ".exe" else ""
             )
             audit_verifier_snapshot = signer_temp / (
-                f"sorafs-validate-timed-ovn-audit-pinned{audit_verifier_suffix}"
+                f"iroha-timed-ovn-audit-pinned{audit_verifier_suffix}"
             )
             audit_verifier_digest, audit_verifier_source_identity = (
                 _snapshot_native_verifier(

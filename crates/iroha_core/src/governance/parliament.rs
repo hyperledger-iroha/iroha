@@ -1028,7 +1028,18 @@ impl ParliamentBallotStateV1 {
 }
 
 /// Deterministic aggregate state for one immutable proposal attempt.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentAttemptStateV1")]
 pub struct ParliamentAttemptStateV1 {
     attempt: GovernanceAttemptV1,
     /// Proposal-wide redraw units consumed before this attempt was created.

@@ -93,7 +93,10 @@ pub(crate) enum KagemushaHistoryNodeBodyV1 {
 }
 
 /// Domain-separated immutable sparse-tree node record.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryNodeRecordV1"
+)]
 pub struct KagemushaHistoryNodeRecordV1 {
     version: u16,
     tree: KagemushaHistoryTreeV1,
@@ -361,7 +364,10 @@ struct KagemushaHistoryNodeWriteV1 {
 }
 
 /// Immutable prepared CAS material stored in the live WAL overlay.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaPreparedHistoryCasV1"
+)]
 pub struct KagemushaPreparedHistoryCasV1 {
     transaction_id: DigestV1,
     attempt_binding_digest: DigestV1,
@@ -369,7 +375,10 @@ pub struct KagemushaPreparedHistoryCasV1 {
     node_writes: Vec<KagemushaHistoryNodeWriteV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaPreparedHistoryCasSubjectV1"
+)]
 struct KagemushaPreparedHistoryCasSubjectV1 {
     version: u16,
     attempt_binding_digest: DigestV1,
@@ -480,7 +489,10 @@ impl KagemushaPreparedHistoryCasV1 {
 }
 
 /// Exact hardware-signed subject selecting the roots of one prepared CAS.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootSelectionSubjectV1"
+)]
 pub(crate) struct KagemushaHistoryRootSelectionSubjectV1 {
     version: u16,
     transaction_id: DigestV1,
@@ -1000,7 +1012,10 @@ pub(crate) enum KagemushaHistoryDualInsertPreparationV1 {
 ///
 /// SHA-256 content addresses and paired Pasta commitments are intentionally carried as distinct
 /// types and fields. Their byte representations are not interchangeable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryProofRootBridgeRequestV1"
+)]
 pub(crate) struct KagemushaHistoryProofRootBridgeRequestV1 {
     transaction_id: DigestV1,
     operation_binding_digest: DigestV1,
@@ -1966,7 +1981,10 @@ impl<T> HistoryMutationPlan<T> {
     }
 }
 
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::HistoryRecoveryOperationV1"
+)]
 enum HistoryRecoveryOperationV1 {
     Prepared(DigestV1),
     Committed(KagemushaHistoryRootSelectionCertificateV1),
@@ -3315,4 +3333,37 @@ mod tests {
             ))
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaHistoryNodeRecordV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryNodeRecordV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaPreparedHistoryCasSubjectV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaPreparedHistoryCasSubjectV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaPreparedHistoryCasV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaPreparedHistoryCasV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaHistoryRootSelectionSubjectV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootSelectionSubjectV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaHistoryProofRootBridgeRequestV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryProofRootBridgeRequestV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<HistoryRecoveryOperationV1>(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::HistoryRecoveryOperationV1",
+    );
 }

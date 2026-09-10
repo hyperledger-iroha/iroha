@@ -84,7 +84,10 @@ impl KagemushaDurableCapacityV1 {
 ///
 /// Cumulative accepted receipts and consumed identities live in authenticated external history
 /// and are never admission limits. This component owns physical-byte conservation only.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaReceiverInboxCapacityV1"
+)]
 pub struct KagemushaReceiverInboxCapacityV1 {
     total_inbox_bytes: u64,
     committed_inbox_bytes: u64,
@@ -444,7 +447,10 @@ impl PreparedPublicProjectionV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparationIdPreimageV1"
+)]
 struct PreparationIdPreimageV1 {
     predecessor_state: KagemushaStateV1,
     successor_state: KagemushaStateV1,
@@ -458,7 +464,10 @@ struct PreparationIdPreimageV1 {
     normalized_guard_statement_digest: DigestV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalJournalCommitmentPreimageV1"
+)]
 struct TerminalJournalCommitmentPreimageV1 {
     preparation_id: DigestV1,
     candidate_envelope_digest: DigestV1,
@@ -467,7 +476,10 @@ struct TerminalJournalCommitmentPreimageV1 {
     journal_revision_after: u128,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalRecoveryCommitmentPreimageV1"
+)]
 struct TerminalRecoveryCommitmentPreimageV1 {
     preparation_id: DigestV1,
     prepared_one_use_authorization_digest: DigestV1,
@@ -476,7 +488,10 @@ struct TerminalRecoveryCommitmentPreimageV1 {
 }
 
 /// Durable sender-local transition intent staged before the hardware commit.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedOutgoingCandidateV1"
+)]
 pub struct PreparedOutgoingCandidateV1 {
     /// State-machine version.
     pub version: u16,
@@ -866,7 +881,10 @@ enum PersistedOutgoingProofAuthorityV1 {
 
 /// Durably verified outgoing proof authority. Hardware may consume the predecessor only after
 /// this exact record, including its canonical candidate digest, is installed.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PersistedOutgoingCandidateV1"
+)]
 pub struct PersistedOutgoingCandidateV1 {
     /// Immutable prepared operation and sealed recovery material.
     pub prepared: PreparedOutgoingCandidateV1,
@@ -1096,7 +1114,10 @@ impl PersistedOutgoingCandidateV1 {
 
 /// Persisted candidate plus the recoverable terminal certificate returned by atomic hardware
 /// commit.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::CommittedOutgoingCandidateV1"
+)]
 pub struct CommittedOutgoingCandidateV1 {
     /// Candidate that was durably verified before the predecessor was consumed.
     pub candidate: PersistedOutgoingCandidateV1,
@@ -1270,7 +1291,10 @@ impl KagemushaOutgoingEnvelopeV1 {
 }
 
 /// Complete terminal retry record installed before terminal bytes are exposed.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::DurableOutgoingEnvelopeV1"
+)]
 pub struct DurableOutgoingEnvelopeV1 {
     /// Private exact-once hardware commit retained for recovery.
     pub committed: CommittedOutgoingCandidateV1,
@@ -1974,7 +1998,10 @@ struct SenderOutboxReservationRecordV1 {
 
 /// Sender-owned working-capacity ledger for live recoverable terminal operations.
 /// Released bindings remain in durable history and telemetry, outside the live admission budget.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaSenderOutboxCapacityV1"
+)]
 pub struct KagemushaSenderOutboxCapacityV1 {
     total_outbox_bytes: u64,
     committed_outbox_bytes: u64,
@@ -2202,7 +2229,10 @@ impl KagemushaSenderOutboxCapacityV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::SenderCapacityMetadataProjectionV1"
+)]
 struct SenderCapacityMetadataProjectionV1 {
     reservations: BTreeMap<DigestV1, SenderOutboxReservationRecordV1>,
     released_envelopes: BTreeMap<DigestV1, DigestV1>,
@@ -2570,4 +2600,49 @@ mod sender_capacity_tests {
             Err(KagemushaStateErrorV1::SnapshotIntegrity)
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaReceiverInboxCapacityV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaReceiverInboxCapacityV1"
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaSenderOutboxCapacityV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaSenderOutboxCapacityV1"
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        PreparedOutgoingCandidateV1,
+    >("iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedOutgoingCandidateV1");
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<PreparationIdPreimageV1>(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparationIdPreimageV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        PersistedOutgoingCandidateV1,
+    >("iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PersistedOutgoingCandidateV1");
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        TerminalJournalCommitmentPreimageV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalJournalCommitmentPreimageV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        TerminalRecoveryCommitmentPreimageV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::TerminalRecoveryCommitmentPreimageV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        CommittedOutgoingCandidateV1,
+    >("iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::CommittedOutgoingCandidateV1");
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<DurableOutgoingEnvelopeV1>(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::DurableOutgoingEnvelopeV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        SenderCapacityMetadataProjectionV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::SenderCapacityMetadataProjectionV1",
+    );
 }

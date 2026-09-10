@@ -67,7 +67,10 @@ impl SoftwareSignerPurposeV1 {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::typed_payload::SoftwareSignerTypedPayloadV1"
+)]
 struct SoftwareSignerTypedPayloadV1 {
     magic: [u8; 8],
     version: u16,
@@ -262,4 +265,32 @@ fn validate_potr_payload(payload: &[u8], expected_provider_id: Option<[u8; 32]>)
         && receipt
             .signing_payload_bytes()
             .is_ok_and(|bytes| bytes == payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn typed_signer_payload_has_one_current_frame_owner() {
+        let value = SoftwareSignerTypedPayloadV1 {
+            magic: TYPED_PAYLOAD_MAGIC_V1,
+            version: SIGNER_PROTOCOL_VERSION_V1,
+            purpose: SoftwareSignerPurposeV1::BillingStatement,
+            message: vec![0x55; 32],
+        };
+        let encoded = crate::frame_test_support::assert_current_frame(
+            &value,
+            "irohad::external_software_signer::typed_payload::SoftwareSignerTypedPayloadV1",
+            "irohad::external_software_signer::typed_payload::SoftwareSignerTypedPayloadV1",
+        );
+        assert!(
+            encoded.as_slice()
+                == encode_typed_signing_payload(
+                    SignerRoleV1::BillingStatement,
+                    value.purpose,
+                    &value.message
+                )
+                .expect("typed encoding")
+        );
+    }
 }

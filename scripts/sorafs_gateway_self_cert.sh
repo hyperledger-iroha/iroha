@@ -175,7 +175,7 @@ sorafs-gateway-attest command), producing a signed attestation envelope, JSON
 report, and human-readable summary.
 Before the harness starts, the script verifies the canonical aggregate release
 manifest with its governed raw Ed25519 key and signature through a SHA256-pinned
-`sorafs-validate release-manifest` binary.
+`iroha app sorafs toolkit release-manifest` binary.
 
 Parameters may be supplied directly via flags or through a key=value config file.
 Command-line flags override config entries.
@@ -196,7 +196,7 @@ Required (flag or config):
   trusted_signing_fingerprint=<hex>
       Reviewed SHA256 fingerprint of the raw public key (64 lowercase hex).
   release_manifest_verifier=<path>
-      Reviewed `sorafs-validate` executable.
+      Reviewed `iroha` executable.
   trusted_release_manifest_verifier_sha256=<hex>
       Reviewed SHA256 digest of that exact executable (64 lowercase hex).
 
@@ -437,7 +437,7 @@ prepare_new_output_file_path \
   "release manifest verification summary" \
   "${verify_summary_path}"
 
-echo "Verifying aggregate release manifest with pinned sorafs-validate..."
+echo "Verifying aggregate release manifest with pinned iroha..."
 verification_json="$(
   python3 "$release_manifest_signing_helper" verify \
     --manifest "$manifest_path" \

@@ -225,7 +225,10 @@ pub fn extract_authority_domains(
     Ok(domains.into_iter().collect())
 }
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::UaidDataspaceBindings")]
 pub struct UaidDataspaceBindings {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountId>>,
 }
@@ -305,7 +308,10 @@ impl UaidDataspaceBindings {
 }
 /// Deterministic mapping from a canonical account id to the dataspaces and domains where it is
 /// visible for routed read queries.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::AccountScopeDirectoryEntry")]
 pub struct AccountScopeDirectoryEntry {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountAliasDomain>>,
 }
@@ -608,6 +614,14 @@ mod tests {
         let decoded: UaidDataspaceBindings =
             json::from_str(&encoded).expect("bindings should deserialize from JSON");
         assert_eq!(decoded, bindings);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &bindings,
+            "iroha_core::nexus::space_directory::UaidDataspaceBindings",
+        );
+        assert!(
+            json::from_str::<AccountScopeDirectoryEntry>(&encoded).is_err(),
+            "UAID membership frame must not be accepted as account scope"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let ambient_encoded = {
@@ -640,6 +654,14 @@ mod tests {
         let decoded: AccountScopeDirectoryEntry =
             json::from_str(&encoded).expect("scope entry should deserialize from JSON");
         assert_eq!(decoded, entry);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &entry,
+            "iroha_core::nexus::space_directory::AccountScopeDirectoryEntry",
+        );
+        assert!(
+            json::from_str::<UaidDataspaceBindings>(&encoded).is_err(),
+            "account scope frame must not be accepted as UAID membership"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let ambient_encoded = {

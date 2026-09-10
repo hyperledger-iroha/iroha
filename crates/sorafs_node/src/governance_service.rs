@@ -984,7 +984,8 @@ struct SignedBlockPrefixArchiveEntryV1 {
     published: PublishedBlockV1,
     signed_block_bytes: Vec<u8>,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::SignedBlockPrefixArchiveV1")]
 struct SignedBlockPrefixArchiveV1 {
     version: u8,
     archive_generation: u64,
@@ -1007,7 +1008,8 @@ struct SignedBlockPrefixArchiveV1 {
     archived_block_count: u64,
     blocks: Vec<SignedBlockPrefixArchiveEntryV1>,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::MirrorIndexStorePayloadV1")]
 struct MirrorIndexStorePayloadV1 {
     version: u8,
     checkpoint_generation: u64,
@@ -1044,7 +1046,8 @@ impl MirrorIndexStorePayloadV1 {
         self.checkpoint_generation == 0
     }
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::CheckpointBodyV1")]
 struct CheckpointBodyV1 {
     version: u8,
     generation: u64,
@@ -1070,7 +1073,8 @@ struct IntentBlockV1 {
     encoded_len: u64,
     ipfs_cid: Option<String>,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::PublishIntentBodyV1")]
 struct PublishIntentBodyV1 {
     version: u8,
     generation: u64,
@@ -1107,7 +1111,8 @@ struct RequestAuthReplayEntryV1 {
     nonce: [u8; 32],
     expires_at_unix_secs: u64,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::RequestAuthReplayStateV1")]
 struct RequestAuthReplayStateV1 {
     version: u8,
     entries: Vec<RequestAuthReplayEntryV1>,

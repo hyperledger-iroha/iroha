@@ -12,6 +12,9 @@ use std::{
 };
 #[path = "protocol/platform/endpoint_recovery.rs"]
 mod endpoint_recovery;
+#[cfg(test)]
+#[path = "protocol/platform/process_admission_fixture.rs"]
+mod process_admission_fixture;
 #[path = "protocol/platform/stream_token_gateway_client.rs"]
 mod stream_token_gateway_client;
 #[cfg(test)]
@@ -46,6 +49,7 @@ fn set_socket_mode(path: &Path) -> io::Result<()> {
     reason = "broker scenario tests keep each ordered protocol transcript together"
 )]
 mod tests {
+    use super::process_admission_fixture::*;
     include!("server_tests_01.rs");
     include!("server_tests_02.rs");
     include!("server_tests_03.rs");
