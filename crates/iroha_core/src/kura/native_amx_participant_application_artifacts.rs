@@ -1,8 +1,7 @@
 /// Per-route Native AMX application leaf and its QC-authenticated Merkle proof.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::NativeAmxParticipantApplicationManifestArtifactV1")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::kura::NativeAmxParticipantApplicationManifestArtifactV1")]
 pub(crate) struct NativeAmxParticipantApplicationManifestArtifactV1 {
     /// Exact durable artifact schema version.
     pub version: u16,
@@ -49,10 +48,9 @@ struct NativeAmxEvidencePruneProtectedLatestV2 {
     identity: NativeAmxParticipantReceiptLatestIndexV2,
     receipt_artifact_hash: HashOf<NativeAmxParticipantApplicationReceiptArtifact>,
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::NativeAmxEvidencePruneIntentV2")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::kura::NativeAmxEvidencePruneIntentV2")]
 struct NativeAmxEvidencePruneIntentV2 {
     version: u8,
     lane_id: LaneId,
@@ -69,10 +67,9 @@ impl NativeAmxEvidencePruneIntentV2 {
     const MANIFEST_KIND: u8 = 1;
     const RECEIPT_KIND: u8 = 2;
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::NativeAmxParticipantApplicationReceiptArtifact")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::kura::NativeAmxParticipantApplicationReceiptArtifact")]
 pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
     /// Exact durable sidecar schema version.
     pub version: u16,
@@ -193,10 +190,9 @@ pub(crate) enum NativeAmxParticipantApplicationEvidenceByteBudgetError {
 /// This independently versioned derived pointer is rebuilt from that
 /// standalone evidence set during startup and lets consensus/drain readers
 /// avoid reverse history scans.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::NativeAmxParticipantReceiptLatestIndexV2")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::kura::NativeAmxParticipantReceiptLatestIndexV2")]
 struct NativeAmxParticipantReceiptLatestIndexV2 {
     version: u8,
     lane_id: LaneId,

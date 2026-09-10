@@ -108,11 +108,10 @@ impl StreamTokenGatewayQuotaRequestV1 {
     }
 }
 /// Complete payload-free input to one external gateway admission transaction.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRequestV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionRequestV1 {
     /// Exact canonical serving context.
     pub context: StreamTokenValidationRequestContextV1,
@@ -179,11 +178,10 @@ impl StreamTokenGatewayAdmissionRequestV1 {
     }
 }
 /// One externally committed, ordered callback row.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRecordV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionRecordV1 {
     /// Authoritative local serving provider.
     pub provider_id: ProviderId,
@@ -368,11 +366,10 @@ pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
     },
 }
 /// Exact atomic result of one deployment-owned admission transaction.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionResultV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionResultV1 {
     /// Byte-identical retained callback and optional lease record.
     pub record: StreamTokenGatewayAdmissionRecordV1,
@@ -404,11 +401,10 @@ impl StreamTokenGatewayAdmissionResultV1 {
     }
 }
 /// Authenticated oldest-pending readback with contiguous sequence proofs.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionReadbackV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionReadbackV1 {
     /// Highest gateway sequence durably acknowledged without a gap.
     pub acknowledged_through_sequence: u64,
@@ -465,11 +461,10 @@ impl StreamTokenGatewayAdmissionReadbackV1 {
     }
 }
 /// Durable acknowledgement result for one external callback row.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StreamTokenGatewayAdmissionAckV1 {
     /// The pending row was durably acknowledged now.
     Acknowledged,

@@ -82,7 +82,6 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     musubi::ArchiveId,
-    name::Name,
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId,
@@ -148,6 +147,7 @@ use iroha_data_model::{
         action::{Action as TriggerAction, Repeats},
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity, XorQuantity},

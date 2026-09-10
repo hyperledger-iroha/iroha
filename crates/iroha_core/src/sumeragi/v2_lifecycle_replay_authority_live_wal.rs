@@ -150,6 +150,36 @@ impl SealedLiveWalPersistedEffectV1 {
             pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
         })
     }
+    /// Retain the actual frame-derived owner for a resolved-result standalone
+    /// vote. This moves the already-sealed pending value; it never reconstructs
+    /// an owner from decoded authority or copies an executable binding.
+    pub(in crate::sumeragi) fn retain_exact_wal_vote_pending(self) -> Result<Self, Self> {
+        if !self.exactly_matches_effect()
+            || !matches!(
+                &self.effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Vote(_),
+                    ..
+                }
+            )
+            || !matches!(&self.pending, LiveWalPersistedPendingV1::PayloadFree(_))
+        {
+            return Err(self);
+        }
+        let Self {
+            effect,
+            replay,
+            pending,
+        } = self;
+        let LiveWalPersistedPendingV1::PayloadFree(pending) = pending else {
+            unreachable!("shape checked")
+        };
+        Ok(Self {
+            effect,
+            replay,
+            pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
+        })
+    }
     /// Recheck the sealed post-append Validate-to-Sign binding without
     /// releasing its effect or pending owner.
     pub(in crate::sumeragi) fn exactly_binds_validate_sign_pending(&self) -> bool {

@@ -45,7 +45,6 @@ use iroha_data_model::{
     domain::DomainId,
     jurisdiction::JdgSignatureScheme,
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
-    name::Name,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorProgramId, LaneCatalog,
         LaneConfig as LaneConfigMetadata, LaneId, LaneSchedulerPolicy, LaneSettlementBufferPolicy,
@@ -65,6 +64,8 @@ use iroha_data_model::{
     taikai::TaikaiAvailabilityClass,
     transaction::FeePaymentIntent,
 };
+#[allow(unused_imports)]
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     addr::SocketAddr,
     numeric::{Numeric, Quantity, XorQuantity},
@@ -8210,7 +8211,7 @@ include!("actual/torii_tx_history.rs");
 #[derive(Debug, Clone)]
 pub struct ToriiRecipientLookup {
     /// Governed FX corridor policy used to authorize retail recipient reads.
-    pub policy_id: iroha_data_model::name::Name,
+    pub policy_id: iroha_model_base::name::Name,
     /// Maximum route/lookup requests accepted per signer each minute.
     pub requests_per_minute: u32,
     /// HTTP request timeout applied to upstream bank Core API calls.

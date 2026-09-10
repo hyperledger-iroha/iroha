@@ -8,7 +8,7 @@ summary: Operator workflow for signed gateway attestations bound to a verified a
 `scripts/sorafs_gateway_self_cert.sh` verifies the candidate’s canonical
 aggregate release manifest before it starts the gateway harness. The manifest
 must be accompanied by the governed raw Ed25519 signature/public-key tuple and
-must verify through an explicitly SHA256-pinned `sorafs-validate` binary. The
+must verify through an explicitly SHA256-pinned `iroha` binary. The
 harness then produces the gateway report, signed Norito attestation, and
 human-readable summary.
 
@@ -26,7 +26,7 @@ flag or through a runtime `key=value` config:
 - `release_manifest_signature`: exactly 64 raw Ed25519 signature bytes.
 - `release_manifest_public_key`: exactly 32 raw Ed25519 public-key bytes.
 - `trusted_signing_fingerprint`: reviewed SHA256 of that raw public key.
-- `release_manifest_verifier`: reviewed `sorafs-validate` executable.
+- `release_manifest_verifier`: reviewed `iroha` executable.
 - `trusted_release_manifest_verifier_sha256`: reviewed SHA256 of that exact
   executable.
 

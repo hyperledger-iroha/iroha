@@ -92,6 +92,7 @@ pub struct GatewayComplianceTrustedSignerV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceTrustPolicyV1 {
     /// Non-zero governance policy identity.
     pub policy_id: [u8; 32],
@@ -336,6 +337,7 @@ pub struct GatewayComplianceSourceAnchorV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceCatalogPayloadV1 {
     /// Schema version.
     pub version: u8,
@@ -497,6 +499,7 @@ pub struct GatewayComplianceCatalogApprovalV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceCatalogV1 {
     /// Unsigned canonical payload.
     pub payload: GatewayComplianceCatalogPayloadV1,
@@ -586,6 +589,7 @@ impl GatewayComplianceCatalogV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceAcknowledgementPayloadV1 {
     /// Schema version.
     pub version: u8,
@@ -691,6 +695,7 @@ impl GatewayComplianceAcknowledgementV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceRollbackPayloadV1 {
     /// Schema version.
     pub version: u8,
@@ -723,6 +728,7 @@ pub struct GatewayComplianceRollbackV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceFeedDocumentV1 {
     /// Schema version.
     pub version: u8,
@@ -953,11 +959,10 @@ pub struct GatewayComplianceFeedTransportIdentityV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("gateway compliance feed transport qualification failed")]
 pub struct GatewayComplianceFeedTransportProbeError;
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedTransportPolicyDigestV1"
 )]
-#[derive(Debug, NoritoSerialize)]
 struct GatewayComplianceFeedTransportPolicyDigestV1 {
     version: u8,
     hosts: Vec<GatewayComplianceFeedTransportHostDigestV1>,
@@ -1344,6 +1349,7 @@ pub struct GatewayComplianceIdempotencyRecordV1 {
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
+
 pub struct GatewayComplianceCheckpointV1 {
     /// Schema version.
     pub version: u8,

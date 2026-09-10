@@ -47,8 +47,8 @@ BASELINE_RUST_LINES = (
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 651_128
-EXPECTED_ASSET_SHA256 = "72532589d1f44c91b6e7d7d575d85f86b24c1334b51d5f9d387638c0a87a7f75"
+EXPECTED_ASSET_LENGTH = 654_913
+EXPECTED_ASSET_SHA256 = "8c96275f4277d2bedec207d7d162e6ac38e298f2ae827e2391843a9d183dec2c"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 HOST_PREIMAGE_SHA256 = {
@@ -104,7 +104,7 @@ NEW_CASE_CONTRACT_COUNTS = {
     "registry_remains_inert_and_scheduler_free": 89,
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 308,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
@@ -114,7 +114,7 @@ MIGRATED_CASE_SHA256 = {
     "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "ea89f570cc169554587f4c5b0750f1f1b39a617b81b55b560f2283108ee9f66b",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "b6afba431c1205460d1601e0dd68f6688a9ca93bce808b88d9ab30733cb81f13",

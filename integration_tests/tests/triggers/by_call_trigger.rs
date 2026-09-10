@@ -23,6 +23,7 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;

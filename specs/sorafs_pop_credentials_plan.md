@@ -291,7 +291,7 @@ registry, juror client, or deployed verifier service.
   detached audit anchors fail closed; valid later root/list rotations cannot
   rewrite or brick an already-admitted appeal. An active emergency registry
   pause still fails closed for pending appeals until governance resumes it.
-- `sorafs_manifest::validate_pop_payload_bytes` and `sorafs-validate pop`
+- `sorafs_manifest::validate_pop_payload_bytes` and `iroha app sorafs toolkit validate pop`
   validate Norito-encoded PoP credentials, commitment roots, revocation lists,
   issued-credential bundles, enrollment requests, renewal requests, and
   membership proofs with stable `ValidationOutcomeV1` diagnostics for CI and
@@ -389,11 +389,11 @@ all accept/reject results are deterministic across supported hardware.
 | Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, external software-signer interface, strict policy binding, issuance/revocation APIs, retry-safe outbox, and standard-daemon broker wiring are shipped; a genuine independently administered software-signing backend and deployment evidence remain open. |
 | Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, durable reconciliation, and broker transaction/read operations are shipped; a deployment-owned committed-state backend and multi-peer evidence remain open. |
 | Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted provider-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, local proof APIs, and broker wallet operations are shipped; a qualified deployment-owned key-wrapper/witness backend and operator client remain open. |
-| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open. |
+| Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `iroha app sorafs toolkit validate pop`, SDK/bridge reference gate, and standard broker adapter are shipped; a genuine runtime backend and reviewed deployment evidence remain open. |
 
 Do not document `sorafs pop sync`, `sorafs pop status`,
 `sorafs pop prove`, or `sorafs pop revoke` as shipped commands until the CLI
-handlers and backing services exist. The standalone `sorafs-validate pop`
+handlers and backing services exist. The local `iroha app sorafs toolkit validate pop`
 reference validator is shipped only for local/CI payload validation.
 
 ## Deployment Backend Blocker Runbook

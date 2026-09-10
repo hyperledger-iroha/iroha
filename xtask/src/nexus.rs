@@ -16,11 +16,11 @@ use iroha_data_model::{
         LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
         LaneVolatilityClass,
     },
-    name::Name,
     nexus::{DataSpaceId, LaneCompliancePolicy, LaneId},
     prelude::{Metadata, NetworkId},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::status::Status;
 use norito::{

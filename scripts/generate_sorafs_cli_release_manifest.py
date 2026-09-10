@@ -65,35 +65,35 @@ def required_candidate_payload_paths(version: str, target: str) -> set[str]:
     """Return the schema-closed release payload required for one native target."""
 
     suffix = TARGET_BINARY_SUFFIXES[target]
-    validator_package = f"sorafs-validate-{version}-{target}"
+    validator_package = f"iroha-{version}-{target}"
     cli_package = f"sorafs-cli-{version}-{target}"
     return {
         f"sorafs_cli{suffix}",
         f"sorafs_fetch{suffix}",
-        f"sorafs-validate{suffix}",
+        f"iroha{suffix}",
         "sorafs_cli.help.txt",
         "sorafs_fetch.help.txt",
-        "sorafs-validate.help.txt",
+        "iroha.help.txt",
         "version-map.toml",
         "ROLLBACK-YANK.md",
         "CHANGELOG.md",
         "LICENSE",
-        f"reference-validator/{validator_package}.sha256",
-        f"reference-validator/{validator_package}.tar.gz",
-        f"reference-validator/{validator_package}.tar.gz.sha256",
-        f"reference-validator/{validator_package}.manifest.json",
-        f"reference-validator/{validator_package}.manifest.json.sha256",
+        f"iroha-cli/{validator_package}.sha256",
+        f"iroha-cli/{validator_package}.tar.gz",
+        f"iroha-cli/{validator_package}.tar.gz.sha256",
+        f"iroha-cli/{validator_package}.manifest.json",
+        f"iroha-cli/{validator_package}.manifest.json.sha256",
         (
-            f"reference-validator/{validator_package}/"
-            f"sorafs-validate{suffix}"
+            f"iroha-cli/{validator_package}/"
+            f"iroha{suffix}"
         ),
-        f"reference-validator/{validator_package}/HELP.txt",
+        f"iroha-cli/{validator_package}/HELP.txt",
         (
-            f"reference-validator/{validator_package}/include/"
+            f"iroha-cli/{validator_package}/include/"
             "sorafs_reference.h"
         ),
-        f"reference-validator/{validator_package}/smoke.advert.json",
-        f"reference-validator/{validator_package}/smoke.bundle.json",
+        f"iroha-cli/{validator_package}/smoke.advert.json",
+        f"iroha-cli/{validator_package}/smoke.bundle.json",
         f"platform-archive/{cli_package}.tar.gz",
         f"platform-archive/{cli_package}.tar.gz.sha256",
         f"platform-archive/{cli_package}.manifest.json",

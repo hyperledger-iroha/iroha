@@ -6,7 +6,6 @@ use hex::ToHex;
 use iroha_core::state::{WorldReadOnly, WorldView};
 use iroha_data_model::{
     metadata::Metadata,
-    name::Name,
     sorafs::{
         capacity::{
             CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
@@ -20,6 +19,7 @@ use iroha_data_model::{
         pricing::ProviderCreditRecord,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{

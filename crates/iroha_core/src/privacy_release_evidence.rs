@@ -195,7 +195,7 @@ pub use iroha_data_model::privacy::{
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, DomainId, Name, NetworkId},
+    prelude::{AccountId, AssetDefinitionId, DomainId, NetworkId},
     privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1,
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
@@ -227,6 +227,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder, TransactionPayload},
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
+use iroha_model_base::name::Name;
 use iroha_zkp_halo2::vega::{
     MAX_VEGA_PROOF_BYTES_V1, VegaMdlProverConfigV1, ZkAmsMaskedProverConfigV1,
     vega_mdl_proof_dimensions_v1,

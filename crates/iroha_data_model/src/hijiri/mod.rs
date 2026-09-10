@@ -8,11 +8,11 @@
 use crate::{
     account::AccountId,
     metadata::Metadata,
-    name::Name,
     parameter::{CustomParameter, CustomParameterId},
 };
 use derive_more::{AsRef, Deref};
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;

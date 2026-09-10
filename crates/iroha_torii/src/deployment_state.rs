@@ -13,10 +13,10 @@ use iroha_core::{
 };
 use iroha_data_model::{
     account::{AccountId, address::chain_discriminant},
-    name::Name,
     nexus::DataSpaceId,
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
 };
+use iroha_model_base::name::Name;
 use mv::storage::StorageReadOnly as _;
 use std::str::FromStr as _;
 fn conversion_error(message: impl Into<String>) -> Error {
@@ -392,10 +392,10 @@ mod tests {
         account::{Account, AccountAddress, AccountId},
         block::{BlockHeader, builder::BlockBuilder},
         metadata::Metadata,
-        name::Name,
         smart_contract::{ContractAddress, ContractAlias},
         sns::{NameControllerV1, NameRecordV1},
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use norito::codec::Encode as _;
     use std::{num::NonZeroU64, sync::Arc};

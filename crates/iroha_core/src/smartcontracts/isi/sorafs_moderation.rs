@@ -70,8 +70,8 @@ use iroha_data_model::{
             sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
         },
     },
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
 #[cfg(test)]
@@ -235,22 +235,36 @@ impl VerifiedModerationChallengeBondMovement {
         )
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_moderation::AppealDepositBindingStateV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
     case_id: String,
     round_id: String,
     intake_digest: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_moderation::AppealProofTokenBindingStateV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealProofTokenBindingStateV1 {
     proof_token_digest: [u8; 32],
     case_id: String,
@@ -268,31 +282,53 @@ struct ModerationSortitionAnchorScheduleEntryV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationSortitionAnchorScheduleV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationSortitionAnchorScheduleV1 {
     version: u16,
     entries: Vec<ModerationSortitionAnchorScheduleEntryV1>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationPersistedEventV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
     event: SorafsModerationLedgerEvent,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationEventJournalHeadV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,

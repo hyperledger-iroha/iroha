@@ -571,6 +571,10 @@ fn reducer_norito_roundtrip_is_deterministic_and_revalidated() {
         .construct_certificate(fixture.state.attempt.id, final_result_height, 60)
         .expect("certificate");
     fixture.state.validate().expect("source state validates");
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &fixture.state,
+        "iroha_core::governance::parliament::ParliamentAttemptStateV1",
+    );
     let bytes = norito::to_bytes(&fixture.state).expect("encode reducer state");
     let decoded = norito::decode_from_bytes::<ParliamentAttemptStateV1>(&bytes)
         .expect("decode reducer state");

@@ -357,9 +357,8 @@ impl NativeAmxDurableSourceClaimV4 {
             .or_insert(participant);
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::native_amx::NativeAmxHeightBindingV2")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxHeightBindingV2 {
     active_height: u64,
     context_id: HeightContextId,
@@ -378,9 +377,8 @@ impl NativeAmxHeightBindingV2 {
         ]))
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningRecordV2")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxSigningRecordV2 {
     version: u8,
     sequence: u32,
@@ -433,9 +431,8 @@ impl NativeAmxSigningRecordV2 {
         ]))
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningAnchorV2")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxSigningAnchorV2 {
     version: u8,
     binding: NativeAmxHeightBindingV2,

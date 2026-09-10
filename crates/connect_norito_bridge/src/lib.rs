@@ -54,7 +54,6 @@ use iroha_data_model::{
         KagemushaRedemptionVoucherV1, validate_kagemusha_complete_exchange_shape_v1,
     },
     metadata::Metadata,
-    name::Name,
     nexus::DataSpaceId,
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
@@ -76,6 +75,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{
     connect as proto, connect_sdk,

@@ -15,6 +15,7 @@ use iroha::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;

@@ -9,12 +9,11 @@ use crate::{
     asset::{AssetBalanceScope, AssetDefinitionId, AssetId},
     domain::DomainId,
     metadata::Metadata,
-    name::Name,
     nexus::{DataSpaceId, LaneId, ShardId},
     peer::PeerId,
-    state_path::StatePath,
 };
 use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::{

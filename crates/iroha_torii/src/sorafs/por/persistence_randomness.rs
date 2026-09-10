@@ -270,9 +270,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ForcedProviderSnapshot {
         norito::core::decode_field_canonical::<ForcedProviderSnapshot>(bytes)
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::sorafs::por::PorCoordinatorSnapshot")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PorCoordinatorSnapshot {
     version: u8,
     status_generation: u64,
@@ -1517,6 +1516,7 @@ const MIN_DRAND_RESPONSE_BYTES: usize = 128;
 #[norito_schema(name = "iroha_torii::sorafs::por::DrandHighWaterStateV1")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+
 struct DrandHighWaterStateV1 {
     version: u8,
     round: u64,

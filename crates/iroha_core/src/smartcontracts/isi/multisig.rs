@@ -18,12 +18,10 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
     },
     metadata::Metadata,
-    name::Name,
     permission::Permission,
     prelude::{Grant, Json, Level, Log, Register, Revoke},
     query::error::{FindError, QueryExecutionFail},
     role::{Role, RoleId},
-    state_path::StatePath,
 };
 use iroha_executor_data_model::isi::multisig::{
     DEFAULT_MULTISIG_TTL_MS, MultisigAccountState, MultisigApprovalOutcomeStatusV1,
@@ -32,6 +30,7 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigProposalTerminalState, MultisigProposalTerminalStatus, MultisigProposalValue,
     MultisigPropose, MultisigRegister, MultisigSpec,
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use mv::storage::StorageReadOnly;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -5911,7 +5910,6 @@ mod tests {
             events::execute_trigger::ExecuteTriggerEventFilter,
             isi::ExecuteTrigger,
             metadata::Metadata,
-            name::Name,
             prelude::Json,
             transaction::Executable,
             trigger::{
@@ -5919,6 +5917,7 @@ mod tests {
                 action::{Action, Repeats},
             },
         };
+        use iroha_model_base::name::Name;
         use ivm::{
             KotodamaCompiler,
             kotodama::compiler::{CompilerMode, CompilerOptions},

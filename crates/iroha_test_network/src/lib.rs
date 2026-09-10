@@ -11772,15 +11772,15 @@ mod tests {
             EnvVarRestore::set("ACCOUNT_PRIVATE_KEY_FILE", "nonexistent-ambient-key-file"),
         ];
         let client = peer.client();
-        assert_eq!(client.client().chain, config::chain_id());
-        assert_eq!(client.client().network_id, network_id);
-        assert_eq!(client.client().account, *ALICE_ID);
+        assert_eq!(client.client().chain(), &config::chain_id());
+        assert_eq!(client.client().network_id(), &network_id);
+        assert_eq!(client.client().account(), &*ALICE_ID);
         assert_eq!(
-            client.client().key_pair.public_key(),
+            client.client().key_pair().public_key(),
             ALICE_KEYPAIR.public_key()
         );
         assert_eq!(
-            client.client().torii_url.as_str(),
+            client.client().endpoint().as_str(),
             format!("http://127.0.0.1:{}/", peer.port_api)
         );
     }

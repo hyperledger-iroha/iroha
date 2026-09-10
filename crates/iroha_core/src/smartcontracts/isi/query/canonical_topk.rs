@@ -774,7 +774,7 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
     let name_wire = exact_length_prefixed_payload(identifier)?;
     let name = exact_length_prefixed_payload(name_wire)?;
     if name.is_empty()
-        || name.len() > iroha_data_model::name::MAX_NAME_BYTES
+        || name.len() > iroha_model_base::name::MAX_NAME_BYTES
         || core::str::from_utf8(name).is_err()
     {
         return Err(malformed());
@@ -801,11 +801,10 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
         |total, bytes| total.checked_add(u64::try_from(bytes).ok()?),
     )
     .ok_or(Error::CapacityLimit)?;
-    let max_field_bytes = sequence
-        .len()
-        .max(identifier.len())
-        .max(name_wire.len())
-        .max(name.len());
+    // Canonical reconstruction checks the complete borrowed enum payload as
+    // well as its nested fields. The exact root span includes the discriminant
+    // and field prefix; every nested field above is contained within it.
+    let max_field_bytes = payload.len();
     let limits = norito::DecodeLimits::new(
         1,
         max_field_bytes,
@@ -1114,7 +1113,7 @@ mod tests {
                 let prefix = format!("decode{index:04x}");
                 let value = format!(
                     "{prefix}{}",
-                    "x".repeat(iroha_data_model::name::MAX_NAME_BYTES - prefix.len())
+                    "x".repeat(iroha_model_base::name::MAX_NAME_BYTES - prefix.len())
                 );
                 value.parse().expect("maximum-width role ID")
             })
@@ -1189,7 +1188,7 @@ mod tests {
     fn canonical_identifier_decode_limits_match_both_real_decoders() {
         let maximum_name = format!(
             "id{}",
-            "x".repeat(iroha_data_model::name::MAX_NAME_BYTES - 2)
+            "x".repeat(iroha_model_base::name::MAX_NAME_BYTES - 2)
         );
         let batches = [
             QueryOutputBatchBox::RoleId(vec![maximum_name.parse().expect("maximum-width role ID")]),
@@ -1232,6 +1231,64 @@ mod tests {
                 .finish(Pagination::default())
                 .expect_err("D - 1 must fail before reserving the output column");
             assert!(matches!(error, Error::CapacityLimit));
+        }
+    }
+    #[test]
+    fn canonical_identifier_field_limit_binds_the_complete_root_payload() {
+        for length in [1, iroha_model_base::name::MAX_NAME_BYTES] {
+            let name = "x".repeat(length);
+            for batch in [
+                QueryOutputBatchBox::RoleId(vec![name.parse().unwrap()]),
+                QueryOutputBatchBox::TriggerId(vec![name.parse().unwrap()]),
+            ] {
+                let frame = norito::encode_canonical(&batch).unwrap();
+                let profile = canonical_id_decode_profile(&frame).unwrap();
+                let header = norito::core::Header::read(Cursor::new(&frame)).unwrap();
+                let payload_bytes = usize::try_from(header.length).unwrap();
+                let limits = profile.limits;
+                assert_eq!(limits.max_field_bytes(), payload_bytes);
+                let decoded = decode_candidate(&frame, limits).expect("exact root span fits");
+                assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+                let short = norito::DecodeLimits::new(
+                    limits.max_sequence_elements(),
+                    payload_bytes - 1,
+                    limits.max_total_elements(),
+                    limits.max_total_allocated_bytes(),
+                    limits.max_nesting_depth(),
+                );
+                assert!(matches!(
+                    norito::decode_from_bytes_with_limits::<QueryOutputBatchBox>(&frame, short),
+                    Err(norito::Error::FieldLengthExceeded { length, limit })
+                        if length == header.length && limit == header.length - 1
+                ));
+            }
+        }
+    }
+    #[test]
+    fn canonical_identifier_decode_profile_rejects_another_frame_identity() {
+        for batch in [
+            QueryOutputBatchBox::RoleId(vec!["owner".parse().unwrap()]),
+            QueryOutputBatchBox::TriggerId(vec!["owner".parse().unwrap()]),
+        ] {
+            let frame = norito::encode_canonical(&batch).unwrap();
+            let view = norito::core::from_bytes_view(&frame).unwrap();
+            assert_eq!(
+                view.schema(),
+                norito::schema::identity::frame_hash::<QueryOutputBatchBox>()
+            );
+            canonical_id_decode_profile(&frame).expect("the canonical identifier frame is valid");
+
+            // Only replace the schema field at its fixed Norito header offset; the
+            // identifier payload, checksum, flags, padding and lengths remain intact.
+            let mut foreign = frame.clone();
+            foreign[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<u8>());
+            let foreign_view = norito::core::from_bytes_view(&foreign).unwrap();
+            assert_eq!(foreign_view.as_bytes(), view.as_bytes());
+            assert!(matches!(
+                canonical_id_decode_profile(&foreign),
+                Err(Error::Conversion(message))
+                    if message == "malformed internally retained canonical identifier frame"
+            ));
         }
     }
     #[test]

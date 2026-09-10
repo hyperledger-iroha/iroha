@@ -4,11 +4,11 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::{AccountAddress, AccountId},
     metadata::Metadata,
-    name,
 };
 use blake3::Hasher;
 use derive_more::Display;
 use iroha_crypto::PublicKey;
+use iroha_model_base::name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

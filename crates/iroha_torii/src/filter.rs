@@ -564,6 +564,33 @@ pub fn filter_expr_to_value(expr: &FilterExpr) -> Value {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nested_filter_payloads_roundtrip_without_standalone_frame_owners() {
+        fn check<T>(value: &T)
+        where
+            T: norito::SerializePayload + for<'de> norito::DeserializePayload<'de> + PartialEq,
+        {
+            let bytes = norito::codec::encode_adaptive(value);
+            let decoded: T = norito::codec::decode_adaptive(&bytes).expect("nested payload");
+            assert!(&decoded == value);
+            assert!(norito::codec::decode_adaptive::<T>(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(norito::codec::decode_adaptive::<T>(&trailing).is_err());
+        }
+        check(&super::FieldPath("authority".into()));
+        check(&super::Selector(vec![super::FieldPath("authority".into())]));
+        check(&super::Order::Desc);
+        check(&super::SortKey {
+            key: super::FieldPath("timestamp_ms".into()),
+            order: super::Order::Asc,
+        });
+        check(&super::FilterExpr::Exists(super::FieldPath(
+            "metadata.label".into(),
+        )));
+        assert!(norito::codec::decode_adaptive::<super::Order>(&[2]).is_err());
+    }
+
     use super::*;
     use crate::{json_array, json_object, json_value};
     use norito::json;
@@ -687,17 +714,19 @@ mod tests {
     #[test]
     fn filter_expr_binary_wire_roundtrips_and_rejects_noncanonical_json_replay() {
         let expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
-        let bytes = norito::to_bytes(&expr).expect("encode valid FilterExpr");
+        let mut bytes = Vec::new();
+        norito::codec::encode_adaptive_into(&expr, &mut bytes)
+            .expect("encode valid FilterExpr payload");
         assert_eq!(
-            norito::decode_from_bytes::<FilterExpr>(&bytes).expect("decode valid FilterExpr"),
+            norito::codec::decode_adaptive::<FilterExpr>(&bytes)
+                .expect("decode valid FilterExpr payload"),
             expr
         );
         let canonical = json::to_string(&filter_expr_to_value(&expr)).expect("canonical filter");
         let replay = format!(" {canonical}");
-        let (payload, flags) = norito::codec::encode_with_header_flags(&replay);
-        let framed = norito::core::frame_bare_with_header_flags::<FilterExpr>(&payload, flags)
-            .expect("frame replayed FilterExpr string");
-        assert!(norito::decode_from_bytes::<FilterExpr>(&framed).is_err());
+        // FilterExpr is a nested canonical JSON string payload, not a frame owner.
+        let payload = norito::codec::encode_adaptive(&replay);
+        assert!(norito::codec::decode_adaptive::<FilterExpr>(&payload).is_err());
     }
     #[test]
     fn filter_expr_parser_enforces_depth_node_and_membership_budgets() {
@@ -762,7 +791,12 @@ mod tests {
             validate_filter(&programmatic),
             Err(ValidateError::TypeMismatch(field)) if field == "result_ok"
         ));
-        assert!(norito::to_bytes(&programmatic).is_err());
+        let mut payload = Vec::new();
+        assert!(norito::codec::encode_adaptive_into(&programmatic, &mut payload).is_err());
+        assert!(
+            payload.is_empty(),
+            "invalid filter must fail before writing payload bytes"
+        );
     }
     #[test]
     fn filter_frame_identity_is_explicit_and_rejects_a_foreign_root() {

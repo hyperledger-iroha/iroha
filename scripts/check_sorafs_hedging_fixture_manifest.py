@@ -202,8 +202,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--validator-bin",
-        default="sorafs-validate",
-        help="sorafs-validate binary used to verify accepted/rejected outcomes.",
+        default="iroha",
+        help="iroha binary used to verify accepted/rejected outcomes.",
     )
     parser.add_argument(
         "--validator-timeout-seconds",
@@ -531,7 +531,7 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
         command = require_string(entry, "validation_command", path, errors)
         if kind in SUPPORTED_KINDS and norito_path is not None:
             expected_command = (
-                f"sorafs-validate hedging --kind {kind} --input {norito_path.as_posix()}"
+                f"iroha app sorafs toolkit validate hedging --kind {kind} --input {norito_path.as_posix()}"
             )
             if command != expected_command:
                 errors.append(f"{path}.validation_command must be `{expected_command}`")
@@ -1434,7 +1434,11 @@ def validate_expected_status(
     if not isinstance(command, str) or kind not in SUPPORTED_KINDS:
         return
     expected_tokens = [
-        "sorafs-validate",
+        "iroha",
+        "app",
+        "sorafs",
+        "toolkit",
+        "validate",
         "hedging",
         "--kind",
         kind,
@@ -1463,6 +1467,10 @@ def validate_expected_status(
 
     argv = [
         validator_path,
+        "app",
+        "sorafs",
+        "toolkit",
+        "validate",
         "hedging",
         "--kind",
         kind,

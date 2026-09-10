@@ -35,9 +35,8 @@ use iroha_data_model::{
     account::AccountId,
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
-    prelude::Name,
-    state_path::StatePath,
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_primitives::{json::Json, numeric_abi::QuantityValueV1};

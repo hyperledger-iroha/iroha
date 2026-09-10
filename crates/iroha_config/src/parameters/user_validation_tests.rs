@@ -24,11 +24,11 @@ mod duration_clamp_tests {
         NetworkId,
         account::AccountId,
         block::BlockHeader,
-        name::Name,
         sorafs::orderbook::{
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
         },
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::numeric::Quantity;
     use std::{
         fs,

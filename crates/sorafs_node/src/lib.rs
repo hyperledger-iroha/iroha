@@ -10,6 +10,8 @@ pub mod capacity;
 pub mod config;
 mod durable_transaction_forwarder;
 pub mod evidence_viewer;
+#[cfg(test)]
+mod frame_test_support;
 mod governance;
 mod governance_rooted_fs;
 pub mod governance_service;

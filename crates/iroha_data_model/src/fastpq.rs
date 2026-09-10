@@ -388,7 +388,8 @@ pub struct TransferTranscriptBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
+    use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId};
+    use iroha_model_base::name::Name;
     use iroha_primitives::{bigint::BigInt, numeric::Numeric};
     use norito::codec::{Decode, Encode};
     use std::str::FromStr;

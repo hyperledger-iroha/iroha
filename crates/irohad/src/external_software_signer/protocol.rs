@@ -58,9 +58,8 @@ pub(super) const fn native_role(
     }
 }
 /// Immutable public identity expected from one software signer service.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::SoftwareSignerPublicBindingV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerPublicBindingV1 {
     /// Exact binding format marker.
     pub magic: [u8; 8],
@@ -157,11 +156,10 @@ impl SoftwareSignerPublicBindingV1 {
     }
 }
 /// Live software-signer provenance returned by qualification and signing.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "irohad::external_software_signer::protocol::SoftwareSignerLiveProvenanceV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerLiveProvenanceV1 {
     /// Immutable public service binding.
     pub binding: SoftwareSignerPublicBindingV1,
@@ -184,9 +182,8 @@ impl SoftwareSignerLiveProvenanceV1 {
             && self.revoked == other.revoked
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::SoftwareSignerFrameV1")]
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SoftwareSignerFrameV1 {
     pub magic: [u8; 8],
     pub version: u16,
@@ -208,16 +205,14 @@ impl Drop for SoftwareSignerFrameV1 {
         scrub(&mut self.body);
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::QualifyRequestV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct QualifyRequestV1 {
     pub binding_digest: [u8; 32],
     pub client_nonce: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::QualifyResponseV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct QualifyResponseV1 {
     pub client_nonce: [u8; 32],
     pub server_nonce: [u8; 32],
@@ -225,9 +220,8 @@ pub(super) struct QualifyResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::SignRequestV1")]
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignRequestV1 {
     pub binding_digest: [u8; 32],
     pub operation_id: [u8; 32],
@@ -253,9 +247,8 @@ impl Drop for SignRequestV1 {
         scrub(&mut self.payload);
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::SignStatusV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u8)]
 pub(super) enum SignStatusV1 {
     Ok = 0,
@@ -265,9 +258,8 @@ pub(super) enum SignStatusV1 {
     StaleOrRevoked = 4,
     Unavailable = 5,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::SignResponseV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignResponseV1 {
     pub operation_id: [u8; 32],
     pub request_digest: [u8; 32],
@@ -280,9 +272,8 @@ pub(super) struct SignResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::AdminCommandV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum AdminCommandV1 {
     Status,
     Rotate {
@@ -301,17 +292,15 @@ pub(super) enum AdminCommandV1 {
         reason_digest: [u8; 32],
     },
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::AdminRequestV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AdminRequestV1 {
     pub binding_digest: [u8; 32],
     pub command: AdminCommandV1,
     pub request_digest: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::AdminStatusV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u8)]
 pub(super) enum AdminStatusV1 {
     Ok = 0,
@@ -320,9 +309,8 @@ pub(super) enum AdminStatusV1 {
     Conflict = 3,
     Unavailable = 4,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::protocol::AdminResponseV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AdminResponseV1 {
     pub request_digest: [u8; 32],
     pub status: AdminStatusV1,

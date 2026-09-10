@@ -4,6 +4,7 @@ use iroha_data_model::{
     ValidationFail, isi::error::MathError, prelude::*, query::error::FindError,
     transaction::error::prelude::TransactionRejectionReason,
 };
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 use std::sync::OnceLock;
 pub mod set;
@@ -200,10 +201,8 @@ pub(crate) fn global_data_trigger_scope_metadata_for_testing(grantee: &AccountId
 pub mod isi {
     use super::specialized::LoadedActionTrait as _;
     use super::{super::prelude::*, *};
-    use iroha_data_model::{
-        isi::error::{InvalidParameterError, RepetitionError},
-        name::Name,
-    };
+    use iroha_data_model::isi::error::{InvalidParameterError, RepetitionError};
+    use iroha_model_base::name::Name;
     const RESERVED_TRIGGER_METADATA_KEYS: [&str; 4] = [
         TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
         "__registered_at_ms",
@@ -1533,11 +1532,11 @@ mod tests {
         block::BlockHeader,
         events::time::Schedule,
         isi::error::{InstructionExecutionError, InvalidParameterError},
-        name::Name,
         parameter::{CustomParameter, CustomParameterId, Parameter},
         permission::Permission,
         role::{Role, RoleId},
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;

@@ -34,10 +34,10 @@ pub mod isi {
         asset::{ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy},
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
-        name::Name,
         nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, DataSpaceId, LaneVisibility},
     };
     use iroha_logger::prelude::*;
+    use iroha_model_base::name::Name;
     use std::{
         collections::{BTreeSet, btree_map::Entry},
         str::FromStr,
@@ -3639,7 +3639,6 @@ mod tests {
             error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         },
         metadata::Metadata,
-        name::Name,
         nexus::{
             AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
             LaneConfig, LaneId, LaneVisibility, ManifestVersion, UniversalAccountId,
@@ -3661,6 +3660,7 @@ mod tests {
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::{
         json::Json,
         numeric::{NumericSpec, Quantity},
@@ -11019,7 +11019,7 @@ mod tests {
                     authority.clone(),
                 )
                 .expect("seed a valid retained moderation policy");
-                let policy_key: iroha_data_model::state_path::StatePath =
+                let policy_key: iroha_model_base::state_path::StatePath =
                     "sorafs_moderation_policy_v1"
                         .parse()
                         .expect("moderation policy state path");

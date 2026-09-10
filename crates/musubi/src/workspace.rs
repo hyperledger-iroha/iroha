@@ -12,10 +12,8 @@ use crate::{
         ManifestError, PortablePath, ResolvedPackageManifest, WorkspaceManifest, parse_manifest,
     },
 };
-use iroha_data_model::{
-    musubi::{MusubiPackageSelectorV1, MusubiVersionReqV1},
-    name::Name,
-};
+use iroha_data_model::musubi::{MusubiPackageSelectorV1, MusubiVersionReqV1};
+use iroha_model_base::name::Name;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,

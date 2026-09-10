@@ -41,6 +41,7 @@ dev-tools = []
 vote-tally = ["dep:halo2_proofs"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 hex = { workspace = true }
 norito = { workspace = true, features = ["node-codec", "bench-internal", "simd-accel", "parallel-stage1"], default-features = false }

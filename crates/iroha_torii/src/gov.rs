@@ -75,6 +75,7 @@ use std::{collections::BTreeSet, sync::Arc};
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for drafting a Ministry agenda proposal submission transaction.
+
 pub struct MinistryAgendaProposalDraftDto {
     /// Agenda proposal payload that will be submitted on-chain.
     pub proposal: AgendaProposalV1,
@@ -116,6 +117,7 @@ pub enum MinistryAgendaProposalDraftOutcome {
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for submitting a plain (non-ZK) quadratic ballot.
+
 pub struct PlainBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
@@ -340,6 +342,7 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for submitting a ZK ballot using BallotProof-style fields.
+
 pub struct ZkBallotV1Dto {
     /// Authority submitting the ballot (AccountId string)
     pub authority: String,
@@ -374,6 +377,7 @@ pub struct ZkBallotV1Dto {
 #[derive(Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body that carries a BallotProof directly along with transaction context.
+
 pub struct ZkBallotV1BallotProofDto {
     pub authority: String,
     /// Exact genesis-derived network to build the transaction skeleton for.
@@ -1480,6 +1484,7 @@ pub fn handle_gov_parliament_tle_release_context_read(
 #[norito_schema(name = "iroha_torii::gov::CitizenDraftRequestV1")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub struct CitizenDraftRequestV1 {
     /// Request layout version.
     pub version: u16,
@@ -1642,7 +1647,7 @@ fn parse_account_literal_from_state(
     raw: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-) -> Result<iroha_data_model::account::AccountId, iroha_data_model::error::ParseError> {
+) -> Result<iroha_data_model::account::AccountId, iroha_model_base::error::ParseError> {
     parse_account_literal_with_state(state, raw, telemetry, context)
         .map(|(account_id, _)| account_id)
 }
@@ -2013,6 +2018,7 @@ fn integer_sqrt_u128(n: u128) -> u128 {
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for applying protected namespaces parameter.
+
 pub struct ProtectedNamespacesDto {
     /// Namespaces to protect (e.g., `["apps", "system"]`).
     pub namespaces: Vec<String>,
@@ -2045,7 +2051,7 @@ pub async fn handle_gov_protected_set(
     iroha_core::smartcontracts::code::validate_protected_contract_namespaces(&namespaces)
         .map_err(|error| crate::routing::conversion_error(error.to_string()))?;
     let namespace_count = namespaces.len();
-    let name = iroha_data_model::name::Name::from_str("gov_protected_namespaces").map_err(|e| {
+    let name = iroha_model_base::name::Name::from_str("gov_protected_namespaces").map_err(|e| {
         crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
             e.to_string(),
         ))

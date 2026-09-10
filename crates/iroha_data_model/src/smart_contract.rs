@@ -1,13 +1,12 @@
 //! This module contains data and structures related only to smart contract execution
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
-    error::ParseError,
     id::NetworkId,
-    name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -220,9 +219,19 @@ mod model {
     #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractAddress")]
     pub struct ContractAddress(pub(super) ConstString);
     /// Active smart-contract instance binding.
-    #[derive(norito::NoritoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
     #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractInstance")]
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractInstance {
         /// Canonical deployed contract address.
@@ -1246,6 +1255,58 @@ mod contract_address_tests {
         let err = <ContractAlias as norito::codec::Decode>::decode(&mut invalid_bytes.as_slice())
             .expect_err("invalid alias literal must fail");
         assert!(err.to_string().contains("contract alias"));
+    }
+    #[test]
+    fn contract_instance_frame_preserves_address_alias_and_code_binding() {
+        let authority = checked_random_account_id();
+        let address = ContractAddress::derive(
+            &network_id(b"contract-instance-frame-test"),
+            &authority,
+            12,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        assert_eq!(
+            <ContractInstance as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::smart_contract::model::ContractInstance",
+        );
+        assert_eq!(
+            <ContractInstance as norito::NoritoSchema>::frame_name(),
+            "iroha_data_model::smart_contract::model::ContractInstance",
+        );
+        for alias in [
+            None,
+            Some("router::dex.universal".parse().expect("valid alias")),
+        ] {
+            let instance = ContractInstance {
+                contract_address: address.clone(),
+                contract_alias: alias,
+                code_hash: Hash::new(b"contract-instance-activated-code"),
+            };
+            let frame = norito::encode_canonical(&instance).expect("contract instance frame");
+            assert_eq!(
+                frame[6..22],
+                norito::schema::identity::frame_hash::<ContractInstance>()
+            );
+            let decoded: ContractInstance =
+                norito::decode_canonical(&frame).expect("instance roundtrip");
+            assert_eq!(decoded, instance);
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("re-encode instance"),
+                frame
+            );
+            let wrong_owner = norito::encode_canonical(&address).expect("different existing root");
+            assert!(matches!(
+                norito::decode_canonical::<ContractInstance>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(
+                norito::decode_canonical::<ContractInstance>(&frame[..frame.len() - 1]).is_err()
+            );
+            let mut trailing = frame;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<ContractInstance>(&trailing).is_err());
+        }
     }
     #[test]
     fn contract_address_norito_wire_is_validated_string_literal() {

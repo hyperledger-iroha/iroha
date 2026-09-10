@@ -2738,6 +2738,16 @@ mod tests {
             .expect("pending challenge");
         assert_eq!(next.sequence, 1);
         assert_eq!(next.challenge, fixture.challenge);
+        let checkpoint = protocol.state.lock().unwrap().runtime.checkpoint();
+        let checkpoint_bytes = crate::frame_test_support::assert_current_frame(
+            &checkpoint,
+            "sorafs_node::pdp_provider::PdpProviderCheckpointV1",
+        );
+        assert_eq!(
+            fs::read(&protocol.checkpoint_store.as_ref().unwrap().checkpoint_path).unwrap(),
+            checkpoint_bytes
+        );
+
         let sink = RecordingHandoff::default();
         let proof_bytes = norito::to_bytes(&fixture.proof).expect("proof bytes");
         let accepted = protocol

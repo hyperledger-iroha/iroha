@@ -11,7 +11,8 @@ use super::{
     },
     *,
 };
-use crate::{domain::DomainId, name::Name};
+use iroha_model_base::name::Name;
+use crate::{domain::DomainId, };
 use hex_literal::hex;
 use std::str::FromStr as _;
 fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {

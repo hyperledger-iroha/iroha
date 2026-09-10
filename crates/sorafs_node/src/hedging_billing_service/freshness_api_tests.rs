@@ -62,6 +62,10 @@ fn acknowledgement_precommit_fence_preserves_checkpoint_for_head_race() {
             expected_checkpoint_fingerprint: anchor_before.checkpoint_fingerprint,
         })
         .expect("unchanged published statement");
+    crate::frame_test_support::assert_current_frame(
+        &still_published,
+        "sorafs_node::hedging_billing_service::BillingPublishedStatementV1",
+    );
     assert!(still_published.acknowledgement.is_none());
     assert!(
         ack_authority

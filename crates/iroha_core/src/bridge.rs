@@ -21,10 +21,10 @@ use iroha_data_model::{
         SccpSoraFinalityAnchorV1, sccp_sora_taira_chain_id_hash_v1,
     },
     isi::InstructionBox,
-    name::Name,
     peer::PeerId,
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint, TransactionResult},
 };
+use iroha_model_base::name::Name;
 use iroha_sccp::{
     SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, SccpReplayArchiveV1,
     TairaBridgeFinalityProofV1, TairaSccpMessageProofV1,

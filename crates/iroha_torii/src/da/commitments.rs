@@ -87,6 +87,7 @@ pub struct DaCommitmentListCursor {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct DaCommitmentListRequest {
     /// Maximum raw index rows to inspect; values above 1,000 are rejected.
     #[norito(default)]
@@ -107,6 +108,7 @@ pub struct DaCommitmentListRequest {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct DaCommitmentProofRequest {
     #[norito(default)]
     pub manifest_hash: Option<ManifestDigest>,
@@ -1405,6 +1407,22 @@ mod tests {
     }
     #[tokio::test]
     async fn commitment_post_routes_reject_oversized_bodies() {
+        crate::frame_test_support::assert_current_frame(
+            &DaCommitmentListRequest {
+                limit: std::num::NonZeroU64::new(7),
+                ..Default::default()
+            },
+            "iroha_torii::da::commitments::DaCommitmentListRequest",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &DaCommitmentProofRequest {
+                lane_id: Some(3),
+                epoch: Some(7),
+                sequence: Some(11),
+                ..Default::default()
+            },
+            "iroha_torii::da::commitments::DaCommitmentProofRequest",
+        );
         use axum::{
             Router,
             body::Body,

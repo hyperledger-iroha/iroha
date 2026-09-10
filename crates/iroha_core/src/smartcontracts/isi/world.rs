@@ -13,6 +13,7 @@ use crate::{
     },
 };
 use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
+use iroha_model_base::state_path::StatePath;
 use iroha_telemetry::metrics;
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
@@ -130,7 +131,6 @@ pub mod isi {
             error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
             governance as gov, nexus, smart_contract_code as scode, verifying_keys,
         },
-        name::Name,
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim,
@@ -168,6 +168,7 @@ pub mod isi {
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
         },
     };
+    use iroha_model_base::name::Name;
     /// Exact governance purpose carried by a one-shot retained movement capability.
     pub(in crate::smartcontracts::isi) enum VerifiedGovernanceNumericPurpose {
         LockSlash {
@@ -21145,7 +21146,6 @@ pub mod isi {
                 nexus::SetLaneRelayEmergencyValidators, verifying_keys,
             },
             metadata::Metadata,
-            name,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
                 DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
@@ -21184,6 +21184,8 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
+        #[allow(unused_imports)]
+        use iroha_model_base::name;
         use rand::{SeedableRng as _, rngs::StdRng};
         use std::{
             collections::{BTreeMap, BTreeSet},
@@ -32643,7 +32645,7 @@ seiyaku GovernanceLifecycle {
                 .increase_asset_total_amount(&asset_def_id, &Quantity::one())
                 .expect("fixture asset total must match the inserted balance");
             let mut metadata = Metadata::default();
-            let key: iroha_data_model::name::Name = "tag".parse().unwrap();
+            let key: iroha_model_base::name::Name = "tag".parse().unwrap();
             let value = Json::from(norito::json!("cleanup"));
             metadata.insert(key, value);
             stx.world.asset_metadata.insert(asset_id.clone(), metadata);
@@ -33417,7 +33419,7 @@ seiyaku GovernanceLifecycle {
                 (*ALICE_ID).clone(),
             )
             .expect("seed a valid retained moderation policy");
-            let policy_path: iroha_data_model::state_path::StatePath =
+            let policy_path: iroha_model_base::state_path::StatePath =
                 "sorafs_moderation_policy_v1"
                     .parse()
                     .expect("moderation policy state path");
@@ -37302,7 +37304,7 @@ seiyaku GovernanceLifecycle {
                 signer: kp.public_key().clone(),
                 signature: checked_signature(kp.private_key(), msg_hash.as_ref()),
             });
-            let key: iroha_data_model::name::Name = "endorsement".parse().expect("name");
+            let key: iroha_model_base::name::Name = "endorsement".parse().expect("name");
             let mut domain = Domain::new(domain_id.clone());
             domain.metadata.insert(key.clone(), Json::new(endorsement));
             Register::domain(domain)

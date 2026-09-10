@@ -109,11 +109,10 @@ fn validate_casting_phase_window_v1(
 /// containing block. Phase deadlines are deliberately not duplicated in this
 /// V1 archive: independent archive validation proves the recorded snapshot,
 /// not that an older snapshot remains fresh at a later chain height.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::tle_release::casting::ParliamentTimedOvnCastingContextArchiveV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ParliamentTimedOvnCastingContextArchiveV1 {
     version: u16,
     finalized_height: u64,

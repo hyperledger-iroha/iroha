@@ -3919,7 +3919,8 @@ mod tests {
         sample_proof, sample_provider_key, sample_verdict,
     };
     use ed25519_dalek::{Signer, SigningKey};
-    use iroha_data_model::{metadata::Metadata, name::Name};
+    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     use std::{
         collections::BTreeMap,

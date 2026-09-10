@@ -22,6 +22,7 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance,
     smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::name::Name;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use reqwest::StatusCode;
 use std::time::{Duration, Instant};

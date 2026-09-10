@@ -20,7 +20,6 @@ use iroha::{
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
         metadata::Metadata,
-        name::Name,
         prelude::{FindTransactions, QueryBuilderExt, SignedTransaction, TransactionEntrypoint},
         query::{
             CommittedTxFilters,
@@ -31,6 +30,7 @@ use iroha::{
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse, mcp as mcp_wire};
@@ -5260,9 +5260,9 @@ fn await_exact_prepared_operation(
                         cause
                             .downcast_ref::<reqwest::Error>()
                             .is_some_and(reqwest::Error::is_timeout)
-                            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                                error.kind() == std::io::ErrorKind::TimedOut
-                            })
+                            || cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
                     }) =>
             {
                 // A shrinking deadline can cancel even a healthy read. Keep the
@@ -7903,13 +7903,10 @@ mod tests {
                         .body(response.body)
                         .expect("prepared status response"))
                 }
-                PreparedStatusPoll::Failure(kind) => {
-                    Err(PreparedStatusTransportError(std::io::Error::new(
-                        kind,
-                        "scripted prepared status failure",
-                    )))
-                        .wrap_err("prepared status transport failed")
-                }
+                PreparedStatusPoll::Failure(kind) => Err(PreparedStatusTransportError(
+                    std::io::Error::new(kind, "scripted prepared status failure"),
+                ))
+                .wrap_err("prepared status transport failed"),
             }
         }
 
@@ -8189,7 +8186,9 @@ mod tests {
         let (client, transport) = prepared_status_transport_client(
             &validated,
             Duration::from_secs(30),
-            &[PreparedStatusPoll::Failure(std::io::ErrorKind::ConnectionReset)],
+            &[PreparedStatusPoll::Failure(
+                std::io::ErrorKind::ConnectionReset,
+            )],
         );
         let error = await_exact_prepared_operation(
             &client,
@@ -8211,9 +8210,9 @@ mod tests {
         );
         let timeouts = transport.timeouts.lock().unwrap();
         assert_eq!(timeouts.len(), 1);
-        assert!(timeouts[0].is_some_and(|timeout| {
-            !timeout.is_zero() && timeout <= wait_budget / 3
-        }));
+        assert!(
+            timeouts[0].is_some_and(|timeout| { !timeout.is_zero() && timeout <= wait_budget / 3 })
+        );
     }
 
     #[test]

@@ -28,6 +28,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::settlement::{
     CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec, Quantity},

@@ -76,11 +76,12 @@ pub enum QueryProjectionCheckpointJournalError {
         reason: String,
     },
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode, norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::query::projection_checkpoint_journal::PersistedQueryProjectionCheckpoint"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct PersistedQueryProjectionCheckpoint {
     version: u32,
     checkpoint: Option<QueryProjectionCheckpoint>,
@@ -635,6 +636,18 @@ mod tests {
         let mut journal = QueryProjectionCheckpointJournal::new(path.clone());
         journal.set_latest(Some(sample_checkpoint()));
         journal.persist().expect("persist journal");
+        let persisted = PersistedQueryProjectionCheckpoint {
+            version: QueryProjectionCheckpointJournal::JOURNAL_VERSION,
+            checkpoint: journal.snapshot(),
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &persisted,
+            "iroha_core::query::projection_checkpoint_journal::PersistedQueryProjectionCheckpoint",
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("actual persisted bytes"),
+            norito::encode_canonical(&persisted).expect("declared journal owner frame")
+        );
         let loaded = QueryProjectionCheckpointJournal::load(path).expect("reload journal");
         assert_eq!(loaded.snapshot(), journal.snapshot());
     }

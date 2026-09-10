@@ -11,6 +11,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_executor_data_model_derive = { path = "../iroha_executor_data_model_derive" }
 
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }

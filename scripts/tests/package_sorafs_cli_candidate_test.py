@@ -34,7 +34,7 @@ def _write_executable(path: Path, *, succeeds: bool = True) -> None:
 def _write_candidate(root: Path, *, target: str = LINUX_TARGET) -> None:
     suffix = candidate.TARGET_SUFFIXES[target]
     root.mkdir(parents=True)
-    for binary in ("sorafs_cli", "sorafs_fetch", "sorafs-validate"):
+    for binary in ("sorafs_cli", "sorafs_fetch", "iroha"):
         _write_executable(root / f"{binary}{suffix}")
         (root / f"{binary}.help.txt").write_text(
             f"{binary} help\n", encoding="utf-8"
@@ -47,9 +47,9 @@ def _write_candidate(root: Path, *, target: str = LINUX_TARGET) -> None:
     )
     (root / "CHANGELOG.md").write_text("# Changelog\n\n- verified\n", encoding="utf-8")
     (root / "LICENSE").write_text("Test license\n", encoding="utf-8")
-    validator = root / "reference-validator"
+    validator = root / "iroha-cli"
     validator.mkdir()
-    package_name = f"sorafs-validate-{VERSION}-{target}"
+    package_name = f"iroha-{VERSION}-{target}"
     (validator / f"{package_name}.tar.gz").write_bytes(b"deterministic validator")
     (validator / f"{package_name}.tar.gz.sha256").write_text(
         f"{'a' * 64}  {package_name}.tar.gz\n", encoding="utf-8"
@@ -61,11 +61,11 @@ def _write_candidate(root: Path, *, target: str = LINUX_TARGET) -> None:
         f"{'b' * 64}  {package_name}.manifest.json\n", encoding="utf-8"
     )
     (validator / f"{package_name}.sha256").write_text(
-        f"{'c' * 64}  sorafs-validate{suffix}\n", encoding="utf-8"
+        f"{'c' * 64}  iroha{suffix}\n", encoding="utf-8"
     )
     stage = validator / package_name
     stage.mkdir()
-    _write_executable(stage / f"sorafs-validate{suffix}")
+    _write_executable(stage / f"iroha{suffix}")
     (stage / "HELP.txt").write_text("validator help\n", encoding="utf-8")
     include = stage / "include"
     include.mkdir()
@@ -164,7 +164,7 @@ def test_candidate_archive_uses_windows_binary_names(tmp_path: Path) -> None:
     prefix = f"sorafs-cli-{VERSION}-{WINDOWS_TARGET}"
     assert f"{prefix}/sorafs_cli.exe" in names
     assert f"{prefix}/sorafs_fetch.exe" in names
-    assert f"{prefix}/sorafs-validate.exe" in names
+    assert f"{prefix}/iroha.exe" in names
     assert f"{prefix}/{candidate.WINDOWS_SIGNER_POLICY}" in names
     assert not any("sorafs_external_software_signer" in name for name in names)
     assert not any("runtime-provider-broker-v1" in name for name in names)
@@ -209,10 +209,10 @@ def test_candidate_archive_accepts_reference_manifest_signature(
 ) -> None:
     input_dir = tmp_path / "candidate"
     _write_candidate(input_dir)
-    package_name = f"sorafs-validate-{VERSION}-{LINUX_TARGET}"
+    package_name = f"iroha-{VERSION}-{LINUX_TARGET}"
     signature = (
         input_dir
-        / "reference-validator"
+        / "iroha-cli"
         / f"{package_name}.manifest.json.sig"
     )
     signature.write_bytes(b"\x01" * 64)
@@ -222,7 +222,7 @@ def test_candidate_archive_accepts_reference_manifest_signature(
     with tarfile.open(archive, mode="r:gz") as package:
         assert (
             f"sorafs-cli-{VERSION}-{LINUX_TARGET}/"
-            f"reference-validator/{package_name}.manifest.json.sig"
+            f"iroha-cli/{package_name}.manifest.json.sig"
             in {member.name for member in package.getmembers()}
         )
 
@@ -413,14 +413,14 @@ def test_candidate_packager_rejects_symlinked_output_directory(tmp_path: Path) -
 def test_candidate_archive_normalizes_non_binary_file_modes(tmp_path: Path) -> None:
     input_dir = tmp_path / "candidate"
     _write_candidate(input_dir)
-    package_name = f"sorafs-validate-{VERSION}-{LINUX_TARGET}"
-    source = input_dir / "reference-validator" / package_name / "HELP.txt"
+    package_name = f"iroha-{VERSION}-{LINUX_TARGET}"
+    source = input_dir / "iroha-cli" / package_name / "HELP.txt"
     source.chmod(stat.S_IRUSR | stat.S_IWUSR)
     summary = _package(input_dir, tmp_path / "out")
     archive = tmp_path / "out" / str(summary["archive"])
     member_name = (
         f"sorafs-cli-{VERSION}-{LINUX_TARGET}/"
-        f"reference-validator/{package_name}/HELP.txt"
+        f"iroha-cli/{package_name}/HELP.txt"
     )
     with tarfile.open(archive, mode="r:gz") as package:
         assert package.getmember(member_name).mode == 0o644

@@ -47,7 +47,6 @@ use iroha_data_model::{
     },
     isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
     level::Level,
-    name::Name,
     nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
     parameter::{Parameter, system::SumeragiNposParameters},
     peer::{Peer, PeerId},
@@ -70,6 +69,7 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+use iroha_model_base::name::Name;
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
 use iroha_torii_shared::configuration::Configuration;

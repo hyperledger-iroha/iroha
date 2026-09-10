@@ -16,6 +16,7 @@ use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use iroha_test_samples::{

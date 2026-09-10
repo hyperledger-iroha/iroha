@@ -4,6 +4,7 @@
 //! and the five-pair statistical gate retain their existing owners. Failed collection never
 //! publishes a passing trace or replays an ambiguous submission.
 
+use iroha_model_base::name::Name;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap},

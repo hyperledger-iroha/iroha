@@ -198,6 +198,7 @@ impl ReputationRequiredSourceMaskV1 {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
+
 pub struct ReputationFinalizedIdentityV1 {
     /// Finalized block height.
     pub height: u64,
@@ -235,9 +236,8 @@ impl ReputationCommittedEventIdentityV1 {
     }
 }
 /// Governed, deterministic ingest policy for one reputation release window.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::reputation::ReputationIngestPolicyV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationIngestPolicyV1 {
     /// Schema version.
     pub version: u8,
@@ -381,9 +381,8 @@ pub struct ReputationCommittedFeedCursorV1 {
 ///
 /// The service returns the exact snapshot signing digest but contains no key,
 /// signature, signer identity, or signing callback.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::reputation::ReputationUnsignedSigningMaterialV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationUnsignedSigningMaterialV1 {
     /// Schema version.
     pub version: u8,
@@ -1080,9 +1079,8 @@ struct ReputationUnsignedMaterialOutboxEntryV1 {
     state: ReputationUnsignedMaterialDeliveryStateV1,
     failure_receipts: Vec<[u8; 32]>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::reputation::ReputationIngestCheckpointV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationIngestCheckpointV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -3103,9 +3101,8 @@ fn build_signing_material(
         snapshot_signing_digest: signing_digest,
     })
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::reputation::ReputationSnapshotSeedV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationSnapshotSeedV1 {
     network_id: NetworkId,
     ingest_policy_digest: [u8; 32],

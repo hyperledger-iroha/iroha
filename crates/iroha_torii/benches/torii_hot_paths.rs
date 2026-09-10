@@ -23,7 +23,6 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     SignedQuery,
     account::rekey::{AccountAlias, AccountAliasDomain},
-    name::Name,
     prelude::*,
     query::{
         ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryResponse, QueryWithParams,
@@ -33,6 +32,7 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox, executor::prelude::FindParameters},
 };
 use iroha_logger::Level;
+use iroha_model_base::name::Name;
 use iroha_primitives::const_vec::ConstVec;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{

@@ -163,7 +163,6 @@ use iroha_data_model::{
         types::{BlobClass, DaRentPolicyV1, GovernanceTag, RetentionPolicy},
     },
     jurisdiction::JdgSignatureScheme,
-    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, DaManifestPolicy, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
@@ -182,6 +181,7 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
+use iroha_model_base::name::Name;
 fn resolve_private_key_source(
     inline: Option<WithOrigin<PrivateKey>>,
     file: Option<WithOrigin<PathBuf>>,
@@ -793,7 +793,7 @@ impl json::JsonDeserialize for ChainIdInConfig {
     }
 }
 impl FromEnvStr for ChainIdInConfig {
-    type Error = iroha_data_model::error::ParseError;
+    type Error = iroha_model_base::error::ParseError;
     fn from_env_str(value: Cow<'_, str>) -> std::result::Result<Self, Self::Error>
     where
         Self: Sized,

@@ -15,13 +15,13 @@ use crate::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    name::Name,
     nft::NftId,
     role::RoleId,
     rwa::RwaId,
     transaction::signed::TransactionEntrypoint,
     trigger::TriggerId,
 };
+use iroha_model_base::name::Name;
 
 use base64::engine::general_purpose::STANDARD;
 use derive_more::Constructor;

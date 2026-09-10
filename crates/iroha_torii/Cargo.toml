@@ -110,6 +110,7 @@ path = "src/bin/attachment_sanitizer.rs"
 required-features = ["app_api"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 fastpq_prover = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["app_api", "runtime"] }

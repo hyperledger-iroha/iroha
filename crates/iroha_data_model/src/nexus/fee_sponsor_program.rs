@@ -1,10 +1,9 @@
 //! On-chain Nexus fee sponsor program model.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    account::AccountId, asset::AssetDefinitionId, name::Name, smart_contract::ContractAddress,
-};
+use crate::{account::AccountId, asset::AssetDefinitionId, smart_contract::ContractAddress};
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

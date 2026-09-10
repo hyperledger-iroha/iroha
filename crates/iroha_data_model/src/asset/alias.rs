@@ -3,12 +3,11 @@ pub use self::model::*;
 use crate::{
     asset::id::AssetDefinitionId,
     domain::DomainId,
-    error::ParseError,
-    name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 use core::fmt;
 use iroha_data_model_derive::model;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

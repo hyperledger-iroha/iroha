@@ -44,13 +44,11 @@
 //!   via `EvaluatePredicate`; endpoint-only fields such as `asset_id` remain
 //!   under the authoritative local transaction filter.
 use crate::filter::{FilterExpr, validate_filter};
-use iroha_data_model::{
-    name::Name,
-    query::{
-        CommittedTransaction, CommittedTxFilters,
-        dsl::{CommittedTxPredicate as TP, CompoundPredicate as CP},
-    },
+use iroha_data_model::query::{
+    CommittedTransaction, CommittedTxFilters,
+    dsl::{CommittedTxPredicate as TP, CompoundPredicate as CP},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use norito::json::Value;
 /// Build a server-side predicate for `CommittedTransaction` from the JSON DSL.

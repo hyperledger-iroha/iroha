@@ -13,6 +13,15 @@ use std::{
 const METAL_TOOLCHAIN_REMEDIATION: &str = "verify that `xcode-select -p` or `DEVELOPER_DIR` selects a full Xcode installation and accept any pending Xcode license, then run `xcodebuild -downloadComponent MetalToolchain` manually; set `FASTPQ_SKIP_GPU_BUILD=1` only to opt out and use runtime Metal source compilation";
 
 fn main() {
+    // Keep Cargo's default whole-package scan disabled for CPU-only builds.
+    // Feature changes already select a distinct Cargo build-script unit.
+    println!("cargo:rerun-if-changed=build.rs");
+    let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
+    if !fastpq_gpu_feature {
+        println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
+        return;
+    }
+    // Only GPU-enabled builds depend on tool discovery and kernel inputs.
     println!("cargo:rerun-if-env-changed=FASTPQ_SKIP_GPU_BUILD");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
@@ -27,10 +36,9 @@ fn main() {
     println!("cargo:rerun-if-changed=metal/kernels/poseidon.metal");
     println!("cargo:rerun-if-changed=metal/kernels/digest384.metal");
     println!("cargo:rerun-if-changed=metal/kernels/bn254.metal");
-    let fastpq_gpu_feature = env::var_os("CARGO_FEATURE_FASTPQ_GPU").is_some();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let skip_gpu_build = env::var_os("FASTPQ_SKIP_GPU_BUILD").is_some();
-    if fastpq_gpu_feature && target_os == "macos" {
+    if target_os == "macos" {
         if skip_gpu_build {
             println!(
                 "cargo:warning=FASTPQ_SKIP_GPU_BUILD set; skipping offline Metal shader build and using runtime source compilation"
@@ -40,10 +48,6 @@ fn main() {
             println!("cargo:warning={error}; falling back to runtime Metal source compilation");
             println!("cargo:rustc-env=FASTPQ_METAL_LIB=");
         }
-    }
-    if !fastpq_gpu_feature {
-        println!("cargo:rustc-cfg=fastpq_cuda_unavailable");
-        return;
     }
     if target_os == "macos" {
         // Metal hosts skip the static CUDA path; the runtime will fall back to the Metal

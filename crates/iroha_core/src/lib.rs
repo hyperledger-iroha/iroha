@@ -841,9 +841,9 @@ pub type Peers = UniqueVec<PeerId>;
 /// Type of `Sender<EventBox>` which should be used for channels of `Event` messages.
 pub type EventsSender = broadcast::Sender<EventBox>;
 /// Network message envelope exchanged between peers.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::NetworkMessage")]
-#[derive(Clone, Debug, Decode, Encode)]
+#[norito(decode_from_slice)]
 pub enum NetworkMessage {
     /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
     #[codec(index = 0)]
@@ -911,25 +911,6 @@ impl NetworkMessage {
                 | Self::ToriiProxyResponse(_)
                 | Self::QueuePlanAdmissionPublication(_)
         )
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use std::borrow::Cow;
-        let min_size = norito::core::archived_payload_size::<Self>();
-        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-            let mut padded = Vec::with_capacity(min_size);
-            padded.extend_from_slice(bytes);
-            padded.resize(min_size, 0);
-            Cow::Owned(padded)
-        } else {
-            Cow::Borrowed(bytes)
-        };
-        let archived = norito::core::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-        let _guard = norito::core::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-        let value =
-            <Self as norito::core::DeserializePayload>::try_deserialize(archived.archived())?;
-        Ok((value, bytes.len()))
     }
 }
 // Encode/Decode are derived above for `NetworkMessage`.
@@ -1279,19 +1260,23 @@ pub mod role {
         }
     }
     impl FromStr for RoleIdWithOwner {
-        type Err = iroha_data_model::ParseError;
+        type Err = iroha_model_base::error::ParseError;
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             const SEPARATOR: char = '|';
             let (account_raw, role_raw) =
                 s.split_once(SEPARATOR)
-                    .ok_or(iroha_data_model::ParseError::new(
+                    .ok_or(iroha_model_base::error::ParseError::new(
                         "RoleIdWithOwner must be formatted as `account|role`",
                     ))?;
             let account = AccountId::parse_encoded(account_raw).map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid account component in RoleIdWithOwner")
+                iroha_model_base::error::ParseError::new(
+                    "Invalid account component in RoleIdWithOwner",
+                )
             })?;
             let id = role_raw.parse().map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid role component in RoleIdWithOwner")
+                iroha_model_base::error::ParseError::new(
+                    "Invalid role component in RoleIdWithOwner",
+                )
             })?;
             Ok(RoleIdWithOwner { account, id })
         }
@@ -1339,6 +1324,8 @@ mod event_ordering_tests;
 #[path = "../tests/execute_trigger_events.rs"]
 mod execute_trigger_events_tests;
 #[cfg(test)]
+mod frame_identity_tests;
+#[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]
 mod isi_gas_fees_tests;
 #[cfg(test)]
@@ -1346,6 +1333,8 @@ mod isi_gas_fees_tests;
 mod ivm_corehost_axt_tests;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 mod kagemusha_v1_test_fixtures;
+#[cfg(test)]
+mod network_payload_tests;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
 mod overlay_chunking_tests;
@@ -2425,8 +2414,19 @@ mod tests {
                 response_format: ToriiProxyResponseFormatV1::Json,
             }),
         };
-        let boxed = ncore::to_bytes(&BoxToriiProxyCarrier::Request(Box::new(request.clone())))
-            .expect("encode Box proxy carrier");
+        // This payload-only fixture varies ownership under the actual network frame.
+        let (boxed_payload, boxed_flags) = norito::codec::encode_with_header_flags(
+            &BoxToriiProxyCarrier::Request(Box::new(request.clone())),
+        );
+        let boxed =
+            ncore::frame_bare_with_header_flags::<NetworkMessage>(&boxed_payload, boxed_flags)
+                .expect("frame Box proxy carrier with the live owner");
+        let boxed_view = ncore::from_bytes_view(&boxed).expect("valid Box carrier frame/checksum");
+        assert_eq!(
+            boxed_view.schema(),
+            norito::schema::identity::frame_hash::<NetworkMessage>()
+        );
+        assert_eq!(boxed_view.as_bytes(), boxed_payload);
         let shared = ncore::to_bytes(&NetworkMessage::ToriiProxyRequest(Arc::new(request)))
             .expect("encode Arc proxy carrier");
         assert_eq!(

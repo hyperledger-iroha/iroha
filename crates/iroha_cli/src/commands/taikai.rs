@@ -18,7 +18,6 @@ use iroha::{
             BlobCodec, BlobDigest, ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy,
             StorageTicketId,
         },
-        name::Name,
         nexus::LaneId,
         taikai::{
             CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1,
@@ -28,6 +27,7 @@ use iroha::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use norito::{
     NoritoSerialize,
     json::{self, JsonSerialize, Map, Value},
@@ -2904,12 +2904,12 @@ mod summary_tests {
     use super::*;
     use iroha::data_model::{
         da::types::{BlobDigest, StorageTicketId},
-        name::Name,
         taikai::{
             SegmentTimestamp, TaikaiCarPointer, TaikaiCidIndexKey, TaikaiEnvelopeIndexes,
             TaikaiEventId, TaikaiRenditionId, TaikaiStreamId, TaikaiTimeIndexKey,
         },
     };
+    use iroha_model_base::name::Name;
     use std::{path::Path, str::FromStr};
     fn sample_bundle_summary() -> BundleSummary {
         let time_key = TaikaiTimeIndexKey {

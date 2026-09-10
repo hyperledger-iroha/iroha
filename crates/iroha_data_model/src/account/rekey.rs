@@ -1,13 +1,14 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
-use super::{Account, AccountId, Name};
+use super::{Account, AccountId};
 use crate::{
     alias_setup::AccountAliasName,
     domain::DomainId,
-    error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 use core::fmt;
 use iroha_crypto::PublicKey;
+use iroha_model_base::error::ParseError;
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{io::Cursor, str::FromStr, string::String, vec::Vec};

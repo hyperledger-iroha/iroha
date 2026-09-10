@@ -7,7 +7,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
@@ -24,6 +23,7 @@ use crate::{
 };
 use core::cmp::Ordering;
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

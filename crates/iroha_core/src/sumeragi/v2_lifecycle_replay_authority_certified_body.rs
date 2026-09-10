@@ -2305,7 +2305,7 @@ fn exact_invalid_body_report_authority(
         || certificate.subject != *subject
         || *report_subject != *subject
         || tag.height() != certificate.round.height
-        || tag.view() != certificate.round.view
+        || tag.view() < certificate.round.view
         || receipt.context_id() != round.context_id
         || receipt.round() != *round
         || receipt.subject() != *subject

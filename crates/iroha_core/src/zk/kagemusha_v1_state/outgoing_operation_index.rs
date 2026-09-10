@@ -76,12 +76,11 @@ pub type KagemushaOutgoingOperationIndexResultV1<T> =
 /// currently has no credential registry, so the qualified native session must authenticate
 /// `credential_id` and `core_authorization_key_reference` before binding a new operation.
 /// Nonzero shape and a caller-supplied key reference do not establish that authority.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationContextV1",
     frame = "iroha.kagemusha.device.v1.sender-wallet-context"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingOperationContextV1 {
     /// Stable network, device lane, asset, and scale.
     pub lane: KagemushaLaneIdV1,
@@ -264,12 +263,11 @@ impl KagemushaOutgoingOperationContextV1 {
 }
 
 /// Public inputs fixed before Core accepts an outgoing preparation.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingPublicInputsV1",
     frame = "iroha.kagemusha.device.v1.sender-public-inputs"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaOutgoingPublicInputsV1 {
     /// Exact canonical receiver request bytes.
     SendSplit {
@@ -392,12 +390,11 @@ impl KagemushaOutgoingPublicInputsV1 {
 }
 
 /// Canonical preimage shared by Core and the ABI-23 sender bridge.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingPublicInputPreimageV1",
     frame = "iroha.kagemusha.device.v1.sender-public-input-preimage"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingPublicInputPreimageV1 {
     /// Sole schema version.
     pub version: u16,
@@ -443,11 +440,10 @@ pub enum KagemushaOutgoingOperationPhaseV1 {
 }
 
 /// Snapshot-owned immutable operation binding and monotonic recovery projection.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationRecordV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingOperationRecordV1 {
     /// Independently generated caller operation ID.
     pub operation_id: DigestV1,
@@ -696,11 +692,10 @@ pub struct KagemushaOutgoingOperationPageV1 {
 /// acknowledgment, never evict an old binding or turn a used caller ID into Missing.
 /// TODO: qualify authenticated external paging for devices whose durable local
 /// storage cannot retain their complete operation history.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationIndexV1"
 )]
-#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingOperationIndexV1 {
     pub(super) revision: u128,
     pub(super) reserved_bytes: u64,
@@ -1242,6 +1237,10 @@ fn digest_bytes(domain: &[u8], bytes: &[u8]) -> DigestV1 {
 }
 
 #[cfg(test)]
+#[path = "outgoing_frame_identity_tests.rs"]
+pub(super) mod frame_identity_tests;
+
+#[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{block::BlockHeader, domain::DomainId, nexus::AxtAssetIncarnationV1};
@@ -1309,6 +1308,80 @@ mod tests {
             reserved_bytes: 0,
             records,
         }
+    }
+
+    #[test]
+    fn captured_outgoing_context_frame_identity() {
+        let index = released_redemption_index();
+        let context = &index.records.values().next().unwrap().context;
+        context.validate_shape().unwrap();
+        super::frame_identity_tests::check("KagemushaOutgoingOperationContextV1", context);
+    }
+
+    #[test]
+    fn captured_outgoing_public_inputs_frame_identity() {
+        let index = released_redemption_index();
+        let context = &index.records.values().next().unwrap().context;
+        let redeem = KagemushaOutgoingPublicInputsV1::RedeemSplit {
+            amount: 7,
+            beneficiary: iroha_test_samples::ALICE_ID.clone(),
+        };
+        redeem.validate_shape(context).unwrap();
+        super::frame_identity_tests::check("KagemushaOutgoingPublicInputsV1", &redeem);
+        let fixture = crate::zk::kagemusha_v1_recursion::tests::incoming_payment_fixture(
+            0x81, 0x82, 3, 5, 32, 32,
+        );
+        let send = KagemushaOutgoingPublicInputsV1::SendSplit {
+            request: canonical_bytes(&fixture.request).unwrap(),
+        };
+        assert_eq!(send.decode_send_parts().unwrap(), fixture.request);
+        super::frame_identity_tests::check("KagemushaOutgoingPublicInputsV1", &send);
+    }
+
+    #[test]
+    fn captured_outgoing_public_preimage_frame_identity() {
+        let index = released_redemption_index();
+        let record = index.records.values().next().unwrap();
+        let value = KagemushaOutgoingPublicInputPreimageV1 {
+            version: KAGEMUSHA_STATE_VERSION_V1,
+            operation_id: record.operation_id,
+            context: record.context.clone(),
+            inputs: KagemushaOutgoingPublicInputsV1::RedeemSplit {
+                amount: 7,
+                beneficiary: iroha_test_samples::ALICE_ID.clone(),
+            },
+        };
+        let digest = value.canonical_digest().unwrap();
+        super::frame_identity_tests::check("KagemushaOutgoingPublicInputPreimageV1", &value);
+        let _flags = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(value.canonical_digest().unwrap(), digest);
+        let mut changed = value;
+        changed.operation_id[0] ^= 1;
+        assert_ne!(changed.canonical_digest().unwrap(), digest);
+    }
+
+    #[test]
+    fn captured_outgoing_record_frame_identity() {
+        let index = released_redemption_index();
+        let record = index.records.values().next().unwrap();
+        record.validate().unwrap();
+        super::frame_identity_tests::check("KagemushaOutgoingOperationRecordV1", record);
+        let bytes = canonical_bytes(record).unwrap();
+        assert_eq!(canonical_len(record).unwrap(), bytes.len() as u64);
+    }
+
+    #[test]
+    fn captured_outgoing_index_frame_identity() {
+        let index = released_redemption_index();
+        index.validate_internal(None).unwrap();
+        super::frame_identity_tests::check("KagemushaOutgoingOperationIndexV1", &index);
+        let empty = BTreeMap::<DigestV1, KagemushaOutgoingOperationRecordV1>::new();
+        assert_eq!(
+            index.retained_record_bytes().unwrap(),
+            canonical_len(&index.records).unwrap() - canonical_len(&empty).unwrap()
+        );
     }
 
     #[test]

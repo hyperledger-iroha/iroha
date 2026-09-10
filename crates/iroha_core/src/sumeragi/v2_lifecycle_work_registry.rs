@@ -41,8 +41,8 @@ use super::{
     schema::{AttestedReadyValidateDemand, DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
     wal_recovery::{
-        AuthenticatedRecoveredWalControlProjection,
-        AuthenticatedRecoveredWalDecisionFetchProjection, AuthenticatedWalVoteLifecycleRepair,
+        AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection, AuthenticatedWalVoteLifecycleRepair,
         DurableAuthenticatedWalVoteLifecycleRepair, DurableRecoveredWalControlSignCarrierV1,
         DurableRecoveredWalDecisionFetchCarrierV1, RecoveredDecisionFetchStoreProjectionV1,
         RecoveredDecisionStoreValidateProjectionV1, RecoveredDecisionValidateInstalledSealV1,
@@ -1757,6 +1757,12 @@ enum DurableRecoveredLifecycleSignParentV1 {
     Control(DurableRecoveredWalControlSignWork),
 }
 impl DurableRecoveredLifecycleSignParentV1 {
+    fn source_matches_coordinator(&self, coordinator: &LifecycleCoordinator) -> bool {
+        match self {
+            Self::Control(parent) => parent.carrier.source_matches_coordinator(coordinator),
+            Self::Live(_) | Self::PhaseVote(_) | Self::NextWalVote(_) => true,
+        }
+    }
     fn dispatch_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
         match self {
             Self::Live(parent) => parent.dispatch_key,
@@ -1914,6 +1920,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         coordinator: &LifecycleCoordinator,
     ) -> bool {
         self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_ready_record(
                 coordinator.active_context,
                 address,
@@ -1928,6 +1935,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         coordinator: &LifecycleCoordinator,
     ) -> bool {
         self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_finalization_record(
                 coordinator.active_context,
                 address,
@@ -1943,6 +1951,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         expected_active_lease: Option<&TurnLease>,
     ) -> bool {
         self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_parked_record(
                 coordinator.active_context,
                 address,
@@ -2002,6 +2011,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
     ) -> Option<RecoveredLifecycleSignedBroadcastOutputAuthorityV1> {
         (lease.output_reservation().is_none()
             && self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_claimed_record(
                 coordinator.active_context,
                 address,

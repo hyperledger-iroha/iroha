@@ -92,7 +92,7 @@ pub(in crate::sumeragi) struct PreparedInvalidBodyReportAdapterPublication<'a> {
     event: reducer::Event,
     core_effect: reducer::Effect,
     next_fence_generation: u64,
-    registry_work: PreparedLiveValidateReportRegistryWork,
+    registry_work: Option<PreparedLiveValidateReportRegistryWork>,
 }
 /// Adapter-owned validated Apply publication bound to the exact retained live
 /// Decision WAL frame and durable Validate predecessor.
@@ -531,11 +531,21 @@ impl<'a> PreparedInvalidBodyReportAdapterReplay<'a> {
             event,
             core_effect,
             next_fence_generation,
-            registry_work,
+            registry_work: Some(registry_work),
         })
     }
 }
 impl PreparedInvalidBodyReportAdapterPublication<'_> {
+    /// Move the closed report admission to the ordinary coordinator transaction
+    /// when its Validate predecessor is already an immutable terminal row.
+    pub(in crate::sumeragi) fn take_standalone_admission(
+        &mut self,
+    ) -> Option<super::v2_lifecycle_coordinator::PreparedLifecycleAdmissionV1> {
+        self.registry_work
+            .take()
+            .map(PreparedLiveValidateReportRegistryWork::into_admission)
+    }
+
     /// Match the bound child against the staged lifecycle coordinates.
     pub(in crate::sumeragi) fn registry_work_matches(
         &self,
@@ -545,14 +555,27 @@ impl PreparedInvalidBodyReportAdapterPublication<'_> {
         digest: LifecycleDigest,
     ) -> bool {
         self.registry_work
-            .validates_publication(owner, ordinal, slot, digest)
+            .as_ref()
+            .is_some_and(|work| work.validates_publication(owner, ordinal, slot, digest))
     }
 
     /// Install the prechecked report row and staged reducer state after fsync.
     pub(in crate::sumeragi) fn install_registry_and_commit_adapter(
-        self,
+        mut self,
         reservation: LiveValidateReportRegistryReservation<'_>,
     ) {
+        let work = self
+            .registry_work
+            .take()
+            .expect("pre-fsync report publication retains its exact registry carrier");
+        reservation.install_live_report(work);
+        self.commit_after_standalone_admission();
+    }
+
+    /// Install staged adapter state only after ordinary LedgerV1 admission has
+    /// installed the extracted report. Failure before that cut drops inert state.
+    pub(in crate::sumeragi) fn commit_after_standalone_admission(self) {
+        assert!(self.registry_work.is_none());
         let Self {
             adapter,
             next_reducer,
@@ -560,9 +583,8 @@ impl PreparedInvalidBodyReportAdapterPublication<'_> {
             event,
             core_effect,
             next_fence_generation,
-            registry_work,
+            registry_work: _,
         } = self;
-        reservation.install_live_report(registry_work);
         adapter.reducer = next_reducer;
         adapter.registry = next_registry;
         adapter.reducer_fence_generation = next_fence_generation;
@@ -699,12 +721,17 @@ struct PreparedReadyDurableValidatePersistPublication<'a> {
     next_fence_generation: u64,
 }
 // READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN
+enum ReadyValidateSignOwnershipV1 {
+    LinkedValidate,
+    StandaloneWal,
+}
 /// Pre-WAL Ready-Validate vote publication bound to the exact installed
 /// Validate predecessor without exposing either pending binding.
 #[must_use = "a bound Validate Sign intent has not reached the safety WAL"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct PreparedReadyDurableValidateBoundSignPublication<'a> {
     prepared: PreparedReadyDurableValidatePersistPublication<'a>,
+    ownership: ReadyValidateSignOwnershipV1,
     child_pending: PendingRuntimeEffectBinding,
     #[cfg(test)]
     crash_after_wal_append: bool,
@@ -761,6 +788,20 @@ impl Drop for PreparedReadyDurableValidatePersistedSign<'_> {
     }
 }
 impl PreparedReadyDurableValidatePersistedSign<'_> {
+    /// Move the already-fsynced closed Sign admission to the ordinary registry
+    /// transaction without changing the immutable terminal Validate predecessor.
+    /// The armed token retains the adapter until admission commits or fails closed.
+    pub(in crate::sumeragi) fn take_standalone_admission(
+        &mut self,
+    ) -> Option<super::v2_lifecycle_coordinator::PreparedLifecycleAdmissionV1> {
+        if !self.armed || self.persisted_sign.is_some() {
+            return None;
+        }
+        self.registry_work
+            .take()
+            .map(PreparedLiveValidateSignRegistryWork::into_admission)
+    }
+
     fn post_wal_publication_is_exact(&self) -> bool {
         let (
             Some(next_reducer),
@@ -903,6 +944,16 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             .registry_work
             .take()
             .expect("pre-fsync publication retains one exact ordinary Sign carrier");
+        let reservation = *reservation;
+        work.install_into(reservation);
+        self.commit_after_standalone_admission();
+    }
+
+    /// Commit the staged reducer only after the extracted Sign admission is
+    /// durably installed. Until this call, dropping the token requires restart.
+    #[inline(never)]
+    pub(in crate::sumeragi) fn commit_after_standalone_admission(mut self: Box<Self>) {
+        assert!(self.armed && self.persisted_sign.is_none() && self.registry_work.is_none());
         let next_reducer = self
             .next_reducer
             .take()
@@ -931,8 +982,6 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             .sign_core_effect
             .take()
             .expect("pre-fsync publication retains its Sign effect");
-        let reservation = *reservation;
-        work.install_into(reservation);
         self.adapter.reducer = next_reducer;
         self.adapter.registry = next_registry;
         self.adapter.pending_persistence_id = None;
@@ -1125,6 +1174,19 @@ impl SumeragiV2Adapter {
     }
 }
 impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
+    /// Authenticate the same current validation event, but select the actual
+    /// new WAL owner for a result replay whose old terminal has no child edge.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn bind_resolved_validate_sign_predecessor(
+        self,
+        predecessor: ReadyValidateSignPredecessorAuthority<'_>,
+    ) -> Result<PreparedReadyDurableValidateBoundSignPublication<'a>, Self> {
+        self.bind_validate_sign_predecessor(predecessor)
+            .map(|mut bound| {
+                bound.ownership = ReadyValidateSignOwnershipV1::StandaloneWal;
+                bound
+            })
+    }
     /// Bind only a `ValidatedPersist` branch to the registry-minted exact
     /// Validate predecessor. A wrong branch or failed refinement returns this
     /// whole publication unchanged and performs no WAL I/O.
@@ -1161,6 +1223,7 @@ impl<'a> PreparedReadyDurableValidatePersistPublication<'a> {
         }
         Ok(PreparedReadyDurableValidateBoundSignPublication {
             prepared: self,
+            ownership: ReadyValidateSignOwnershipV1::LinkedValidate,
             child_pending,
             #[cfg(test)]
             crash_after_wal_append: false,
@@ -1210,6 +1273,7 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
         }
         let Self {
             prepared,
+            ownership,
             child_pending,
             #[cfg(test)]
             crash_after_wal_append,
@@ -1294,9 +1358,14 @@ impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
                 },
             )
             .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
-            persisted_sign
-                .bind_exact_validate_sign_pending(child_pending)
-                .map_err(|_| AdapterError::LiveWalReplayCauseMismatch)
+            match ownership {
+                ReadyValidateSignOwnershipV1::LinkedValidate => persisted_sign
+                    .bind_exact_validate_sign_pending(child_pending)
+                    .map_err(|_| AdapterError::LiveWalReplayCauseMismatch),
+                ReadyValidateSignOwnershipV1::StandaloneWal => persisted_sign
+                    .retain_exact_wal_vote_pending()
+                    .map_err(|_| AdapterError::LiveWalReplayCauseMismatch),
+            }
         })();
         let persisted_sign = match post_wal {
             Ok(persisted_sign) => persisted_sign,

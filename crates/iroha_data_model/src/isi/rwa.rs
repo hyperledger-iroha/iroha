@@ -1,6 +1,7 @@
 //! Dedicated instructions for real-world asset lots.
 use super::*;
 use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 isi! {
     /// Issue a new canonical RWA lot.

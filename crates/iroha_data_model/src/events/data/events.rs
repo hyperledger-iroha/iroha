@@ -3,6 +3,7 @@ pub use self::model::*;
 use super::*;
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
 use norito::json::{self, JsonDeserialize, JsonSerialize};

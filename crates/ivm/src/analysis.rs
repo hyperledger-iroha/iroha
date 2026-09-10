@@ -28,7 +28,7 @@ use crate::{
     prepared::PreparedContract,
 };
 use core::convert::TryFrom as _;
-use iroha_data_model::{name::Name, state_path::StatePath};
+use iroha_model_base::{name::Name, state_path::StatePath};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     error::Error,

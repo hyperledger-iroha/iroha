@@ -641,7 +641,7 @@ fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
     ]
 }
 fn sample_inrou_replica_runtime_state_for(
-    service_name: iroha_data_model::name::Name,
+    service_name: iroha_model_base::name::Name,
     service_version: &str,
     replica_slot: u16,
     validator_account_id: AccountId,
@@ -666,7 +666,7 @@ fn sample_inrou_replica_runtime_state_for(
     }
 }
 fn sample_inrou_service_placement_record_for(
-    service_name: iroha_data_model::name::Name,
+    service_name: iroha_model_base::name::Name,
     service_version: &str,
     runtime_state: &SoraInrouReplicaRuntimeStateV1,
 ) -> SoraInrouServicePlacementRecordV1 {
@@ -1153,7 +1153,7 @@ fn exact_service_revision_precondition(
     )
 }
 fn rollback_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     target_version: &str,
 ) -> ManifestProvenance {
     let payload = encode_rollback_provenance_payload(service_name.as_ref(), target_version)
@@ -1164,7 +1164,7 @@ fn rollback_provenance(
     }
 }
 fn rollout_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     rollout_handle: &str,
     healthy: bool,
     promote_to_percent: Option<u8>,
@@ -1210,8 +1210,8 @@ fn sample_bundle_with_state_binding(
     bundle
 }
 fn state_mutation_provenance(
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     value_size_bytes: Option<u64>,

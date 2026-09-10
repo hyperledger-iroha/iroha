@@ -62,7 +62,6 @@ use iroha_data_model::{
     },
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
-    state_path::StatePath,
     transaction::{
         Executable, ExecutableBatchItem, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
         SignedTransaction, executable::ContractInvocation, signed::TransactionPayload,
@@ -73,6 +72,7 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -11287,9 +11287,8 @@ impl LoadedExecutor {
 pub mod executor_norito {
     use super::*;
     /// Local DTO used for Norito encoding of `Executor`.
-    #[derive(norito::NoritoSchema)]
+    #[derive(Encode, Decode, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_core::executor::executor_norito::ExecutorDto")]
-    #[derive(Encode, Decode)]
     enum ExecutorDto {
         Initial,
         UserProvided(iroha_data_model::executor::Executor),
@@ -11335,7 +11334,34 @@ pub mod executor_norito {
         fn initial_roundtrip() {
             let exec = Executor::Initial;
             let bytes = to_bytes(&exec).expect("encode");
+            assert_eq!(
+                <ExecutorDto as norito::NoritoSchema>::nominal_name(),
+                "iroha_core::executor::executor_norito::ExecutorDto"
+            );
+            assert_eq!(
+                bytes[6..22],
+                norito::schema::identity::frame_hash::<ExecutorDto>()
+            );
+            assert!(matches!(
+                norito::decode_canonical::<ExecutorDto>(&bytes).expect("DTO frame"),
+                ExecutorDto::Initial
+            ));
+            let mut substituted = bytes.clone();
+            substituted[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<ExecutorDto>(&substituted),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(from_bytes(&substituted).is_err());
+            assert!(from_bytes(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(from_bytes(&trailing).is_err());
             let dec = from_bytes(&bytes).expect("decode");
+            assert_eq!(
+                to_bytes(&dec).expect("materialized executor re-encodes"),
+                bytes
+            );
             match dec {
                 Executor::Initial => {}
                 _ => panic!("expected Initial variant"),
@@ -11377,7 +11403,6 @@ mod tests {
             Grant, SetAssetTransferAvailability, SetAssetTransferControl,
             transfer::{TransferAssetBatch, TransferAssetBatchEntry},
         },
-        name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
@@ -11387,6 +11412,7 @@ mod tests {
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigCancel, MultisigPropose, MultisigRegister, MultisigSpec,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,

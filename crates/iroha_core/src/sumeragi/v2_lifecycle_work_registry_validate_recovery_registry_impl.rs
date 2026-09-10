@@ -618,7 +618,8 @@ impl ConcreteLifecycleWorkRegistry {
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                 RecoveredLifecycleSignClassV1::ControlProposal
-                | RecoveredLifecycleSignClassV1::ControlTimeout,
+                | RecoveredLifecycleSignClassV1::ControlTimeout
+                | RecoveredLifecycleSignClassV1::PhaseVote,
             ) => (
                 sign.matches_current_ready_record(address, digest, coordinator),
                 sign.dispatch_key,
@@ -764,7 +765,8 @@ impl ConcreteLifecycleWorkRegistry {
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                 RecoveredLifecycleSignClassV1::ControlProposal
-                | RecoveredLifecycleSignClassV1::ControlTimeout,
+                | RecoveredLifecycleSignClassV1::ControlTimeout
+                | RecoveredLifecycleSignClassV1::PhaseVote,
             ) => {
                 if !sign.carrier.matches_claimed_record(coordinator, lease) {
                     return Err(RecoveredLifecycleSignDispatchProjectionErrorV1::InvalidCarrier);
@@ -862,7 +864,8 @@ impl ConcreteLifecycleWorkRegistry {
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                 RecoveredLifecycleSignClassV1::ControlProposal
-                | RecoveredLifecycleSignClassV1::ControlTimeout,
+                | RecoveredLifecycleSignClassV1::ControlTimeout
+                | RecoveredLifecycleSignClassV1::PhaseVote,
             ) => {
                 sign.dispatch_key == Some(key)
                     && sign.carrier.matches_claimed_record(coordinator, lease)
@@ -967,7 +970,8 @@ impl ConcreteLifecycleWorkRegistry {
                     (
                         ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                         RecoveredLifecycleSignClassV1::ControlProposal
-                        | RecoveredLifecycleSignClassV1::ControlTimeout,
+                        | RecoveredLifecycleSignClassV1::ControlTimeout
+                        | RecoveredLifecycleSignClassV1::PhaseVote,
                     ) => {
                         sign.dispatch_key == Some(prepared.dispatch_key)
                             && sign.carrier.matches_claimed_record(current, lease)
@@ -1481,7 +1485,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        projection: AuthenticatedRecoveredWalControlProjection,
+        projection: AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Result<
         InstalledRecoveredWalControlSignRegistryCut<'registry>,
         RecoveredWalControlSignInstallError,
@@ -1525,7 +1529,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Option<ConcreteWorkAddress> {
         if !self.entries.is_empty()
             || !projection.is_exact(verified)
@@ -1589,7 +1593,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        control: AuthenticatedRecoveredWalControlProjection,
+        control: AuthenticatedRecoveredWalStandaloneSignProjection,
         broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
         parent_ordinal: u128,
         child_ordinal: u128,
@@ -1725,7 +1729,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        control: AuthenticatedRecoveredWalControlProjection,
+        control: AuthenticatedRecoveredWalStandaloneSignProjection,
         combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
         pair: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
     ) -> Result<
@@ -1734,8 +1738,7 @@ impl ConcreteLifecycleWorkRegistry {
     > {
         let preflight_is_exact = self.entries.is_empty()
             && control.is_exact(verified)
-            && pair.parent()
-                == super::ledger::RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+            && pair.parent().is_standalone()
             && pair.exactly_matches_ledger(ledger)
             && store.load().is_ok_and(|opened| opened == *ledger)
             && store.revalidates_recovered_control_signed_broadcast_and_sign(

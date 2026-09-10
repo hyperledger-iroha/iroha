@@ -456,7 +456,11 @@ fn empty_signature(key: [u8; 32]) -> PopSignatureV1 {
         signature: vec![1; 64],
     }
 }
-fn unsigned_root(key: [u8; 32], version: u64, previous: Option<[u8; 32]>) -> PopCommitmentRootV1 {
+fn unsigned_root(
+    key: [u8; 32],
+    version: u64,
+    previous: Option<[u8; 32]>,
+) -> PopCommitmentRootV1 {
     PopCommitmentRootV1 {
         version: sorafs_manifest::POP_COMMITMENT_ROOT_VERSION_V1,
         root_digest: scalar(100 + version),
@@ -583,7 +587,8 @@ fn finalized_sync_rejects_cursor_root_rollback_and_wrong_policy() {
 fn wallet_vault_rejects_symlink_and_wrong_wrapping_key() {
     let temp = TempDir::new().unwrap();
     let mut recipient_rng = ChaCha20Rng::from_seed([0x77; 32]);
-    let recipient_key = HybridKeyPair::generate(&mut recipient_rng).expect("wallet recipient key");
+    let recipient_key =
+        HybridKeyPair::generate(&mut recipient_rng).expect("wallet recipient key");
     let recipient = test_recipient("kms://wallet/recipient-one", &recipient_key);
     let wrapper = Arc::new(TestWrapper {
         key_id: "kms://wallet/one".to_owned(),
@@ -640,6 +645,79 @@ fn wallet_vault_rejects_symlink_and_wrong_wrapping_key() {
     vault
         .persist_credential(credential, &private)
         .expect("encrypted vault");
+    assert_pop_frame(
+        &private,
+        "sorafs_node::pop_credentials::PopWalletVaultPlaintextV1",
+    );
+    assert_pop_frame(
+        &private.witness,
+        "sorafs_node::pop_credentials::PopPrivateWitnessEnvelopeV1",
+    );
+    let vault_bytes = fs::read(vault.credential_path(credential)).unwrap();
+    let envelope: PopWalletVaultEnvelopeV1 = norito::decode_canonical(&vault_bytes).unwrap();
+    assert_pop_frame(
+        &envelope,
+        "sorafs_node::pop_credentials::PopWalletVaultEnvelopeV1",
+    );
+    assert_pop_frame(
+        &envelope.metadata,
+        "sorafs_node::pop_credentials::PopWalletVaultMetadataV1",
+    );
+    let private_delivery = PopPrivateWalletDeliveryV1 {
+        bundle: private.bundle.clone(),
+        witness: private.witness.clone(),
+    };
+    assert_pop_frame(
+        &private_delivery,
+        "sorafs_node::pop_credentials::PopPrivateWalletDeliveryV1",
+    );
+    let metadata = PopWalletDeliveryAadV1 {
+        version: POP_WALLET_DELIVERY_VERSION_V1,
+        request_id: [0x24; 32],
+        operation_digest: private.finalized_operation_digest,
+        credential_commitment: credential,
+    };
+    assert_pop_frame(
+        &metadata,
+        "sorafs_node::pop_credentials::PopWalletDeliveryAadV1",
+    );
+    let aad = wallet_delivery_aad(metadata.request_id, metadata.operation_digest, credential)
+        .unwrap();
+    assert_eq!(
+        aad,
+        [
+            WALLET_DELIVERY_AAD_DOMAIN_V1,
+            norito::encode_canonical(&metadata).unwrap().as_slice()
+        ]
+        .concat()
+    );
+    let mut encoded_delivery = norito::encode_canonical(&private_delivery).unwrap();
+    let encoded_delivery = SensitiveBytesGuard::new(&mut encoded_delivery);
+    let delivery = PopEncryptedWalletDeliveryV1 {
+        version: POP_WALLET_DELIVERY_VERSION_V1,
+        request_id: metadata.request_id,
+        registry_operation_digest: metadata.operation_digest,
+        credential_commitment: credential,
+        encrypted_payload: encrypt_payload(
+            encoded_delivery.as_slice(),
+            &aad,
+            recipient_key.public(),
+            &mut recipient_rng,
+        )
+        .unwrap(),
+    };
+    assert_pop_frame(
+        &delivery,
+        "sorafs_node::pop_credentials::PopEncryptedWalletDeliveryV1",
+    );
+    let mut opened =
+        decrypt_payload(&delivery.encrypted_payload, &aad, recipient_key.secret()).unwrap();
+    let opened = SensitiveBytesGuard::new(&mut opened);
+    assert!(
+        opened.as_slice() == encoded_delivery.as_slice(),
+        "delivery encryption changed canonical private fields"
+    );
+
     let wrong_wrapper = Arc::new(TestWrapper {
         key_id: "kms://wallet/two".to_owned(),
         key: [8; 32],

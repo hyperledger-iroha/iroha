@@ -1477,7 +1477,35 @@ impl LaunchedProductionLifecycleV1 {
                     self.register_and_drive_lifecycle_validate_sidecar(deferred, lane_work)
                 }
                 PendingLifecycleCompletionV1::RegisteredDeferredValidate(registration) => {
-                    self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
+                    // Poll the exact dependency before any pass-through so a
+                    // stream of ordinary completions cannot starve its wake.
+                    // Waiting retains the same sealed registration; only the
+                    // existing ordinary physical head may use the one-item
+                    // drain while the reducer remains fenced.
+                    let selected =
+                        self.drive_registered_lifecycle_validate_sidecar(registration, lane_work);
+                    if matches!(
+                        selected,
+                        ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
+                    ) {
+                        match self.services.prepare_ordinary_completion_behind_validate_fence() {
+                            Ok(true) => {
+                                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                            }
+                            Ok(false) => {}
+                            Err(reason) => {
+                                iroha_logger::error!(
+                                    %reason,
+                                    "ordinary Completion sidecar-wait classification failed closed"
+                                );
+                                self.close_output_for_restart();
+                                return ProductionLifecycleCompletionPreGateV1::Selected(
+                                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                                );
+                            }
+                        }
+                    }
+                    selected
                 }
             };
             return ProductionLifecycleCompletionPreGateV1::Selected(selected);

@@ -34,7 +34,6 @@ use iroha::{
         asset::AssetDefinitionId,
         isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
-        name::Name,
         prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
         query::{
             CommittedTxFilters,
@@ -114,6 +113,7 @@ use iroha_config::{
     parameters::{actual, defaults},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
 use iroha_torii_shared::{
@@ -24741,7 +24741,10 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let shared = bundle.service.lease_volumes[1].max_total_bytes.get();
         assert_ne!(ephemeral, shared);
         assert_eq!(root + ephemeral, TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1);
-        assert_eq!(root + ephemeral + shared, defaults::taira::INROU_MAX_STORAGE_BYTES);
+        assert_eq!(
+            root + ephemeral + shared,
+            defaults::taira::INROU_MAX_STORAGE_BYTES
+        );
         validate_taira_inrou_canary_storage(&bundle.container.resources, &bundle.service)
             .expect("canonical host and shared writable budgets are distinct");
 
@@ -25264,7 +25267,10 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         fs::hard_link(&path, &linked).expect("create hard-linked stage fixture");
         let error = taira_stage_owned_file_bytes(&path, "stage fixture", 128)
             .expect_err("frozen stage files must remain singly linked");
-        assert!(error.to_string().contains("exactly one hard link"), "{error}");
+        assert!(
+            error.to_string().contains("exactly one hard link"),
+            "{error}"
+        );
         fs::remove_file(&linked).expect("remove hard-linked fixture");
         symlink(&path, &linked).expect("create stage symlink fixture");
         let error = taira_stage_owned_file_bytes(&linked, "stage fixture", 128)
@@ -32188,17 +32194,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         .expect("build unpublished dual-ISA Inrou bundle");
         source.service.placement_targets =
             test_inrou_placement_targets(usize::from(source.service.replicas.get()));
-        let bundle = source.into_admitted(BTreeMap::from([
-            (
-                SoraInrouGuestIsaV1::X8664,
-                sample_published_inrou_artifact(0x31),
-            ),
-            (
-                SoraInrouGuestIsaV1::Aarch64,
-                sample_published_inrou_artifact(0x32),
-            ),
-        ]))
-        .expect("construct admitted dual-ISA Inrou bundle");
+        let bundle = source
+            .into_admitted(BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    sample_published_inrou_artifact(0x31),
+                ),
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    sample_published_inrou_artifact(0x32),
+                ),
+            ]))
+            .expect("construct admitted dual-ISA Inrou bundle");
         assert_eq!(
             bundle
                 .container

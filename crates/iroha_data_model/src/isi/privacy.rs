@@ -849,7 +849,6 @@ mod tests {
         asset::AssetBalanceScope,
         block::BlockHeader,
         domain::DomainId,
-        name::Name,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
@@ -877,6 +876,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::name::Name;
     use norito::core::DecodeFromSlice;
     use std::str::FromStr as _;
     const PRIVACY_ISI_WIRE_IDS_V1: [&str; 29] = [

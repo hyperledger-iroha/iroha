@@ -6,8 +6,9 @@
 //! messages across validators.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
+use crate::{account::AccountId, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf, SignatureOf};
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -152,6 +153,7 @@ pub struct DefiOracleAttestationSource {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct DefiOracleAttestation {
     /// Domain and subject id this attestation is valid for.
     pub key: DefiOracleAttestationKey,
@@ -200,6 +202,7 @@ pub struct DefiOracleAttestation {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct FeedId(pub Name);
 impl FeedId {
     /// Borrow the feed identifier as a string slice.
@@ -246,6 +249,7 @@ impl FromStr for FeedId {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct FeedConfigVersion(pub u32);
 impl From<u32> for FeedConfigVersion {
     fn from(value: u32) -> Self {
@@ -1869,6 +1873,7 @@ pub struct OracleProviderStatsRecord {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct OracleDisputeId(pub u64);
 /// Resolution status for a dispute.
 #[derive(
@@ -4110,3 +4115,80 @@ mod tests {
 
 #[cfg(test)]
 mod captured_oracle_schema_tests;
+
+#[cfg(test)]
+mod transcript_and_query_frame_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    fn assert_frame<T>(value: &T, owner: &str) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + std::fmt::Debug,
+    {
+        assert_eq!(T::nominal_name(), owner);
+        let frame = norito::encode_canonical(value).expect("canonical owner frame");
+        assert_eq!(&frame[6..22], &norito::schema::identity::frame_hash::<T>());
+        assert_eq!(norito::decode_canonical::<T>(&frame).unwrap(), *value);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<u8>());
+        assert!(matches!(
+            norito::decode_canonical::<T>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn oracle_movement_identifiers_keep_exact_owners() {
+        assert_frame(
+            &FeedId("price_xor_usd".parse().unwrap()),
+            "iroha_data_model::oracle::FeedId",
+        );
+        assert_frame(
+            &FeedConfigVersion(7),
+            "iroha_data_model::oracle::FeedConfigVersion",
+        );
+        let dispute = OracleDisputeId(7);
+        let frame = assert_frame(&dispute, "iroha_data_model::oracle::OracleDisputeId");
+        // A numeric value is not the dispute frame owner.
+        assert!(matches!(
+            norito::decode_canonical::<u64>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert_ne!(
+            frame,
+            norito::encode_canonical(&OracleDisputeId(8)).unwrap()
+        );
+    }
+
+    #[test]
+    fn defi_query_frame_preserves_signed_payload_and_rejects_wrong_owner() {
+        let keypair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519).unwrap();
+        let payload = br#"{"domain":1,"market_id":42,"mark_price_bps":10000,"index_price_bps":10000,"confidence_bps":5,"oracle_slot":11,"status_flags":0,"attestation_hash":17}"#.to_vec();
+        let signature = Signature::try_new(keypair.private_key(), &payload).unwrap();
+        let value = DefiOracleAttestation {
+            key: DefiOracleAttestationKey::new(DEFI_ORACLE_DOMAIN_PERPS_MARKET, 42),
+            provider: AccountId::new(keypair.public_key().clone()),
+            oracle_slot: 11,
+            status_flags: 0,
+            attestation_hash: 17,
+            oracle_payload: payload,
+            oracle_signature: signature.payload().to_vec(),
+            signer_public_key: keypair.public_key().to_bytes().1.to_vec(),
+            oracle_scheme: 1,
+            source_events: Vec::new(),
+        };
+        let frame = assert_frame(&value, "iroha_data_model::oracle::DefiOracleAttestation");
+        let decoded: DefiOracleAttestation = norito::decode_canonical(&frame).unwrap();
+        Signature::from_bytes(&decoded.oracle_signature)
+            .verify(keypair.public_key(), &decoded.oracle_payload)
+            .expect("query framing preserves the exact signed bytes");
+        assert_eq!(decoded.oracle_payload, value.oracle_payload);
+    }
+}

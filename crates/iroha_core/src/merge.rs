@@ -36,9 +36,8 @@ const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
 const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v3\0";
 /// Merge-ledger entry data required for signature payloads.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::merge::MergeLedgerCandidate")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct MergeLedgerCandidate {
     /// Exact merge-entry layout this candidate will become.
@@ -776,6 +775,15 @@ mod tests {
         };
         let canonical_candidate_bytes = candidate.canonical_bytes();
         let canonical_candidate_hash = candidate.canonical_hash();
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &candidate,
+            "iroha_core::merge::MergeLedgerCandidate",
+        );
+        assert_eq!(
+            norito::decode_canonical::<MergeLedgerCandidate>(&canonical_candidate_bytes)
+                .expect("the signed candidate frame reconstructs every bound field"),
+            candidate
+        );
         {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

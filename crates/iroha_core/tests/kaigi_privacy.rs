@@ -41,11 +41,11 @@ use iroha_data_model::{
         KaigiRecord, KaigiStatus, NewKaigi, authorization::KaigiAuthorizationIdentitiesV1,
         kaigi_metadata_key, scalar::KaigiAuthorizationScalarV1,
     },
-    name::Name,
     prelude::*,
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use kaigi_zk::{

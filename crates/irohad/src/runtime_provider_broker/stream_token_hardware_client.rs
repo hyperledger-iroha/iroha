@@ -222,6 +222,7 @@ fn stream_token_read_session(
         original.network_id,
         vec![binding.clone()],
         deadline,
+        Arc::clone(&original.decode_pool),
     )?;
     if observations.len() != 1
         || observations[0].binding != *binding

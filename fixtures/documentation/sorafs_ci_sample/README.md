@@ -23,7 +23,7 @@ release-authenticity evidence.
 The release workflow regenerates and diffs these content artifacts. Production
 release signing uses a separately generated aggregate `release_manifest.json`,
 governed raw Ed25519 key, reviewed fingerprint, and pinned
-`sorafs-validate`.
+`iroha`.
 
 ## Fixture Regeneration
 

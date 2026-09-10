@@ -19,7 +19,6 @@ extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
 // rather than silencing the lint at the crate root.
-use crate::name::Name;
 pub use iroha_crypto::PublicKey;
 pub use iroha_data_model_derive::model;
 pub use norito::codec::{Decode, Encode};
@@ -132,8 +131,6 @@ pub mod metadata;
 pub mod ministry;
 /// Musubi package registry data types for Kotodama source packages.
 pub mod musubi;
-/// Name parsing and validation utilities.
-pub mod name;
 /// Nexus-lane scaffolding and identifiers.
 pub mod nexus;
 /// Non-fungible token structures and specs.
@@ -191,8 +188,6 @@ pub mod sorafs_uri;
 pub mod soranet;
 /// World state snapshot representations.
 pub mod state;
-/// Canonical logical paths for durable ledger state.
-pub mod state_path;
 /// Subscription metadata schemas for trigger-based billing.
 pub mod subscription;
 /// Taikai broadcast metadata and segment envelope types.
@@ -249,7 +244,7 @@ mod seal {
     /// Seals the [`crate::query::Query`](crate::query::Query) trait.
     pub trait Query {}
 }
-pub use error::{EnumTryAsError, ParseError};
+pub use error::EnumTryAsError;
 pub use errors::{
     AmxStage, CanonicalError, CanonicalErrorKind, CircuitBreakerKind, SettlementRouterOutage,
 };
@@ -348,7 +343,6 @@ pub mod prelude {
         isi::prelude::*,
         kaigi::prelude::*,
         metadata::prelude::*,
-        name::prelude::*,
         nexus::{
             DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
@@ -377,7 +371,6 @@ pub mod prelude {
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,
-        state_path::prelude::*,
         subscription::prelude::*,
         transaction::prelude::*,
         trigger::prelude::*,

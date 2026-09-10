@@ -55,7 +55,6 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    name::Name,
     prelude::ChainId,
     sorafs::{
         gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
@@ -78,6 +77,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy, WriteModeHint};
 use iroha_storage_client::client::{
@@ -7576,17 +7576,7 @@ fn require_budget_approval_id(budget_hex: Option<&String>) -> Result<[u8; 32]> {
         .map_err(|err| eyre!("invalid budget_approval_id hex: {err}"))?;
     Ok(digest)
 }
-#[derive(
-    Debug,
-    Clone,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::json::JsonSerialize,
-    norito::json::JsonDeserialize,
-)]
-#[norito(decode_from_slice)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::commands::sorafs::IncentivesState")]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct IncentivesState {
     version: u16,
     reward_config: RewardConfigState,
@@ -22285,12 +22275,24 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let treasury_account = sample_account_id("treasury");
         let mut state = IncentivesState::new(&reward_config, treasury_account.clone());
         state.payouts.push(sample_reward_instruction());
-        let bytes = to_bytes(&state).expect("encode incentives state");
-        let decoded: IncentivesState = decode_from_bytes(&bytes).expect("decode incentives state");
+        let directory = tempfile::tempdir().expect("state directory");
+        let path = directory.path().join("payout_state.json");
+        save_incentives_state(&path, &state).expect("save incentives state JSON");
+        let bytes = fs::read(&path).expect("read saved state JSON");
+        let decoded = load_incentives_state(&path).expect("load incentives state JSON");
+        assert_eq!(norito::json::to_vec_pretty(&decoded).expect("reencode state JSON"), bytes);
         decoded.ensure_current().expect("state version matches");
         assert_eq!(decoded.treasury_account, treasury_account);
         assert_eq!(decoded.payouts.len(), state.payouts.len());
         assert_eq_compact! { decoded.reward_config.base_reward => state.reward_config.base_reward };
+        assert!(parse_incentives_state_snapshot(b"{").is_err());
+        let mut trailing = bytes;
+        trailing.extend_from_slice(b" []");
+        assert!(parse_incentives_state_snapshot(&trailing).is_err());
+        state.version = IncentivesState::VERSION + 1;
+        save_incentives_state(&path, &state).expect("save unsupported state version");
+        let error = load_incentives_state(&path).expect_err("unsupported state version");
+        assert!(error.to_string().contains("unsupported incentives state version"));
     }
     fn incentives_service_init_rejects_missing_budget_id() {
         let config_file = write_reward_config_with_budget(None);

@@ -129,9 +129,8 @@ pub enum RepairTransactionKindV1 {
 ///
 /// The forwarder validates the operation, its embedded canonical payloads, and its authority
 /// binding before persistence. It never creates or retains a private key.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::repair_transaction_forwarder::RepairOperationV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum RepairOperationV1 {
     /// Admit one source-bound repair report.
     Submit(SubmitSorafsRepairTask),
@@ -428,11 +427,10 @@ struct StoredDeadRepairTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "sorafs_node::repair_transaction_forwarder::RepairTransactionForwarderCheckpointV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RepairTransactionForwarderCheckpointV1 {
     version: u8,
     next_sequence: u64,
@@ -2322,7 +2320,15 @@ mod tests {
                 )),
             ),
         ];
+        crate::frame_test_support::assert_current_frame(
+            &RepairTransactionForwarderCheckpointV1::default(),
+            "sorafs_node::repair_transaction_forwarder::RepairTransactionForwarderCheckpointV1",
+        );
         for (public, legacy) in pairs {
+            crate::frame_test_support::assert_current_frame(
+                &public,
+                "sorafs_node::repair_transaction_forwarder::RepairOperationV1",
+            );
             assert_eq!(
                 norito::codec::Encode::encode(&public),
                 norito::codec::Encode::encode(&legacy)

@@ -32,9 +32,8 @@ const JOURNAL_MAP_FRAMING_BYTES: u64 = 64;
 ///
 /// Native-only confidential persistence: its canonical encoding contains the private credit
 /// opening. It is not an application/SDK transport record, despite public Rust visibility.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintInboxReservationV1")]
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct MintInboxReservationV1 {
     authorization: KagemushaMintAuthorizationV1,
     recipient_credential: KagemushaHardwareCredentialV1,
@@ -577,18 +576,16 @@ fn validate_mint_inputs(
 ///
 /// Encoding includes private opening material from live records. Only confidential, authenticated
 /// native persistence may consume those bytes; this is never a host SDK or peer-wire message.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::KagemushaMintInboxV1")]
-#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaMintInboxV1 {
     reservations: BTreeMap<CreditIdV1, MintInboxReservationV1>,
     pending: BTreeMap<CreditIdV1, StagedMintCreditV1>,
     accepted: BTreeMap<CreditIdV1, AcceptedMintReceiptV1>,
 }
 
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintJournalProjectionV1")]
-#[derive(Encode)]
 struct MintJournalProjectionV1 {
     reservations: Vec<(CreditIdV1, DigestV1)>,
     pending: Vec<MintReceiptProjectionV1>,
@@ -1217,4 +1214,18 @@ mod tests {
         oversized.guard_bundle = vec![1; KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1 + 1];
         assert!(validate_stage_certificate(&oversized).is_err());
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<MintInboxReservationV1>(
+        "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintInboxReservationV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<MintJournalProjectionV1>(
+        "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintJournalProjectionV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<KagemushaMintInboxV1>(
+        "iroha_core::zk::kagemusha_v1_state::mint_inbox::KagemushaMintInboxV1",
+    );
 }

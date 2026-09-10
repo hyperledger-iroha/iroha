@@ -4,10 +4,11 @@ pub mod authorization;
 pub mod participation;
 /// Exact canonical Pasta field encodings used by Kaigi authorization.
 pub mod scalar;
-use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
+use crate::{account::AccountId, domain::DomainId, metadata::Metadata};
 use derive_more::Display;
 use getset::Getters;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -789,7 +790,7 @@ impl KaigiRecord {
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates
 /// the [`Name`] invariants enforced by the parser.
-pub fn kaigi_metadata_key(call_name: &Name) -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_metadata_key(call_name: &Name) -> Result<Name, iroha_model_base::error::ParseError> {
     let composite = format!("kaigi__{}", call_name.as_ref());
     Name::from_str(&composite)
 }
@@ -805,7 +806,9 @@ fn relay_account_key_fragment(relay_id: &AccountId) -> String {
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
-pub fn kaigi_relay_metadata_key(relay_id: &AccountId) -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_relay_metadata_key(
+    relay_id: &AccountId,
+) -> Result<Name, iroha_model_base::error::ParseError> {
     let key = format!("kaigi_relay__{}", relay_account_key_fragment(relay_id));
     Name::from_str(&key)
 }
@@ -817,7 +820,9 @@ pub fn kaigi_relay_metadata_key(relay_id: &AccountId) -> Result<Name, crate::err
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
-pub fn kaigi_relay_feedback_key(relay_id: &AccountId) -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_relay_feedback_key(
+    relay_id: &AccountId,
+) -> Result<Name, iroha_model_base::error::ParseError> {
     let key = format!(
         "kaigi_relay_feedback__{}",
         relay_account_key_fragment(relay_id)
@@ -829,7 +834,7 @@ pub fn kaigi_relay_feedback_key(relay_id: &AccountId) -> Result<Name, crate::err
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the key violates [`Name`] rules.
-pub fn kaigi_relay_allowlist_key() -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_relay_allowlist_key() -> Result<Name, iroha_model_base::error::ParseError> {
     Name::from_str("kaigi_relay_allowlist")
 }
 /// Prelude re-export for Kaigi data structures.

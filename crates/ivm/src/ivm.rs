@@ -6987,7 +6987,7 @@ mod tests {
     #[test]
     fn public_syscall_privacy_boundaries_match_the_normative_abi_signatures() {
         fn count(declaration: &str, implicit_r10: bool) -> usize {
-            let explicit = (10usize..=14)
+            let explicit = (10usize..=15)
                 .rev()
                 .find(|register| declaration.contains(&format!("r{register}")))
                 .map_or(0, |register| register - 9);
@@ -6998,6 +6998,8 @@ mod tests {
                 explicit
             }
         }
+        assert_eq!(count("r10=value, r14=reserved", false), 5);
+        assert_eq!(count("r10=value, r15=reserved", false), 6);
         let mut documented_inputs = BTreeMap::new();
         let mut documented_outputs = BTreeMap::new();
         let mut current_number = None;

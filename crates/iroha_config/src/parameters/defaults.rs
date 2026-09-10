@@ -9,8 +9,8 @@ use iroha_data_model::{
     account::{AccountId, curve::CurveId},
     asset::prelude::AssetDefinitionId,
     domain::DomainId,
-    name::Name,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use nonzero_ext::nonzero;
 use std::{
@@ -399,15 +399,12 @@ pub mod transaction {
 pub mod compute {
     use super::*;
     use iroha_config_base::util::Bytes;
-    use iroha_data_model::{
-        compute::{
-            ComputeAuthPolicy, ComputeFeeSplit, ComputePriceAmplifiers, ComputePriceDeltaBounds,
-            ComputePriceRiskClass, ComputePriceWeights, ComputeRandomnessPolicy,
-            ComputeResourceBudget, ComputeSandboxMode, ComputeSandboxRules, ComputeSponsorPolicy,
-            ComputeStorageAccess,
-        },
-        name::Name,
+    use iroha_data_model::compute::{
+        ComputeAuthPolicy, ComputeFeeSplit, ComputePriceAmplifiers, ComputePriceDeltaBounds,
+        ComputePriceRiskClass, ComputePriceWeights, ComputeRandomnessPolicy, ComputeResourceBudget,
+        ComputeSandboxMode, ComputeSandboxRules, ComputeSponsorPolicy, ComputeStorageAccess,
     };
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
     /// Whether the compute lane is enabled by default.
     pub const ENABLED: bool = false;
@@ -638,7 +635,7 @@ pub mod content {
 /// Oracle pipeline defaults.
 pub mod oracle {
     use super::*;
-    use iroha_data_model::prelude::Name;
+    use iroha_model_base::name::Name;
     /// Public-only custody identity for the oracle reward pool.
     ///
     /// The compressed point is the first canonical prime-order Ed25519 point

@@ -153,7 +153,8 @@ struct LifecycleDecisionApplySuccessorOutputsSealV1;
 pub(in crate::sumeragi) enum LifecycleDecisionApplySuccessorOutputModeV1 {
     /// Broadcast and Apply are the two effects of one retained periodic batch.
     SameBatchSuffix,
-    /// Broadcast predates Apply in the runtime but was admitted after it.
+    /// A single-effect Broadcast predates Apply but was admitted after it.
+    /// This mode has no retained periodic Apply suffix.
     DelayedAdmissionPeriodicRetransmit { runtime_ordinal: u128 },
     /// Delayed Broadcast admission retains its bound two-effect Apply suffix.
     DelayedAdmissionPeriodicApplySuffix { runtime_ordinal: u128 },

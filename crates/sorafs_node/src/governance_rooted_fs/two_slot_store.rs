@@ -34,9 +34,8 @@ impl From<FileIdentity> for TwoSlotFileIdentityV1 {
         }
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::governance_rooted_fs::TwoSlotBindingMaterialV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotBindingMaterialV1 {
     format_version: u8,
     store_name_digest: [u8; 32],
@@ -55,16 +54,14 @@ struct TwoSlotHeaderV1 {
     binding_digest: [u8; 32],
     slot_id: u8,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::governance_rooted_fs::TwoSlotHeaderRegionV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotHeaderRegionV1 {
     header: TwoSlotHeaderV1,
     reserved: [u8; TWO_SLOT_HEADER_RESERVED_BYTES_V1],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::governance_rooted_fs::TwoSlotRecordHeaderV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotRecordHeaderV1 {
     format_version: u8,
     binding_digest: [u8; 32],
@@ -74,9 +71,8 @@ struct TwoSlotRecordHeaderV1 {
     payload_len: u64,
     payload_digest: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::governance_rooted_fs::TwoSlotRecordHeaderRegionV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotRecordHeaderRegionV1 {
     header: TwoSlotRecordHeaderV1,
     reserved: [u8; TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
@@ -90,9 +86,8 @@ struct TwoSlotCommitTrailerV1 {
     record_digest: [u8; 32],
     commit_marker: [u8; 16],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::governance_rooted_fs::TwoSlotCommitTrailerRegionV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TwoSlotCommitTrailerRegionV1 {
     trailer: TwoSlotCommitTrailerV1,
     reserved: [u8; TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],

@@ -2814,13 +2814,14 @@ impl ProductionV2Services {
             Some(V2IoCompletion::AuxiliaryNoop)
         )
     }
-    /// Prepare one ordinary Completion head while a same-address Validate successor waits.
+    /// Prepare one ordinary Completion head while a Validate owner waits.
     ///
-    /// The waiting successor remains the logical owner. This method only
-    /// restores an ordinary I/O head into the existing held slot (or observes
-    /// the already-selected local source), so the caller can use the normal
-    /// one-item pass-through drain. Dedicated lifecycle completions are never
-    /// transferred, acknowledged, or exposed while that successor is parked.
+    /// A same-address reducer-fenced successor or registered missing-sidecar
+    /// wait remains the logical owner. This method only restores an ordinary
+    /// I/O head into the existing held slot (or observes the already-selected
+    /// local source), so the caller can use the normal one-item pass-through
+    /// drain. Dedicated lifecycle completions are never transferred,
+    /// acknowledged, or exposed while that Validate owner is parked.
     pub(in crate::sumeragi) fn prepare_ordinary_completion_behind_validate_fence(
         &mut self,
     ) -> Result<bool, String> {

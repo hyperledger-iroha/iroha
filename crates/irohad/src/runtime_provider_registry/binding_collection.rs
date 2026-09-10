@@ -209,6 +209,11 @@ pub(super) fn governance_request_ingress_binding_from_service(
             service.max_request_bytes.0,
         ),
     };
+    // IPFS framing adds bytes even to an empty logical body. It must not
+    // turn an invalid zero configured request limit into a valid binding.
+    if service.max_request_bytes.0 == 0 {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+    }
     let endpoint = endpoint.ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
     let endpoint_binding =
         sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)

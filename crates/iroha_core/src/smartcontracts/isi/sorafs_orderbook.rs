@@ -47,8 +47,8 @@ use iroha_data_model::{
         },
         reserve::ReserveLifecycleStage,
     },
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::DecodeLimits;
@@ -92,22 +92,37 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     64,
 );
 type OrderbookQueryCurrent = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation;
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_orderbook::OrderbookPersistedEventV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookPersistedEventV1 {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
     event: SorafsOrderbookLedgerEvent,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_core::smartcontracts::isi::sorafs_orderbook::OrderbookEventJournalHeadV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,

@@ -2336,7 +2336,9 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &fee_after_registration,
         "Prepare registration",
     )?;
-    let registered = capture_fault_state_snapshot(&network, "smoke-registered")?;
+    // Sponsor Applied is local: wait for its exact replicated registration map
+    // before one-shot Commit vote collection across the disjoint committees.
+    let registered = wait_for_smoke_prepare_registration(&network, &before, routes.len())?;
     ensure_fault_ledger_unchanged_before_finality(&before, &registered)?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,

@@ -122,7 +122,7 @@ struct SimulateOutput {
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct GatewayRequest {
-    namespace: iroha::data_model::name::Name,
+    namespace: iroha_model_base::name::Name,
     codec: ComputeCodec,
     ttl_slots: std::num::NonZeroU64,
     gas_limit: std::num::NonZeroU64,
@@ -136,8 +136,8 @@ struct GatewayRequest {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     sponsor_budget_cu: Option<std::num::NonZeroU64>,
-    price_family: iroha::data_model::name::Name,
-    resource_profile: iroha::data_model::name::Name,
+    price_family: iroha_model_base::name::Name,
+    resource_profile: iroha_model_base::name::Name,
     auth: ComputeAuthz,
     #[norito(default)]
     headers: BTreeMap<String, String>,
@@ -606,8 +606,8 @@ fn meter(
     metering
 }
 fn charge_units(
-    price_families: &BTreeMap<iroha::data_model::name::Name, ComputePriceWeights>,
-    default_price_family: &iroha::data_model::name::Name,
+    price_families: &BTreeMap<iroha_model_base::name::Name, ComputePriceWeights>,
+    default_price_family: &iroha_model_base::name::Name,
     metering: &mut ComputeMetering,
 ) {
     let price_family = price_families

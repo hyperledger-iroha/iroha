@@ -55,9 +55,8 @@ pub enum QueryProjectionShardArchiveError {
     #[error("failed to compress query projection shard archive with zstd: {0}")]
     Compress(#[source] std::io::Error),
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::projection_shard::QueryProjectionShardLocator")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
 struct QueryProjectionShardLocator {
     version: u16,
     schema_version: u32,
@@ -68,9 +67,8 @@ struct QueryProjectionShardLocator {
     indexed_block_hash: Option<HashOf<BlockHeader>>,
 }
 /// Immutable archive describing one query projection shard snapshot.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::projection_shard::QueryProjectionShardArchive")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionShardArchive {
     /// Version of the archive payload itself.
     pub version: u16,
@@ -361,6 +359,32 @@ mod tests {
             2,
             b"payload".to_vec(),
         );
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &archive,
+            "iroha_core::query::projection_shard::QueryProjectionShardArchive",
+        );
+        let locator = archive.locator();
+        assert_eq!(
+            <QueryProjectionShardLocator as norito::NoritoSchema>::nominal_name(),
+            "iroha_core::query::projection_shard::QueryProjectionShardLocator"
+        );
+        assert_eq!(
+            <QueryProjectionShardLocator as norito::NoritoSchema>::frame_name(),
+            "iroha_core::query::projection_shard::QueryProjectionShardLocator"
+        );
+        let locator_bytes = norito::encode_canonical(&locator).expect("locator owner frame");
+        assert_eq!(
+            locator_bytes[6..22],
+            norito::schema::identity::frame_hash::<QueryProjectionShardLocator>()
+        );
+        assert_eq!(
+            archive.client_blob_id().expect("actual blob identity"),
+            BlobDigest::from_hash(blake3::hash(&locator_bytes))
+        );
+        assert!(matches!(
+            norito::decode_canonical::<QueryProjectionShardArchive>(&locator_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
         let bytes = archive.encode_archive().expect("encode archive");
         let blob_id = archive.client_blob_id().expect("derive client blob id");
         let decoded: QueryProjectionShardArchive =

@@ -117,9 +117,10 @@ pub struct QueuePlanAdmissionRegistryKeyV1 {
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 /// Immutable value claimed by a QueuePlan global-admission registry key.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionRegistryValueV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct QueuePlanAdmissionRegistryValueV1 {
     /// Registry-value layout version.
     pub version: u16,
@@ -132,9 +133,8 @@ pub struct QueuePlanAdmissionRegistryValueV1 {
 /// journal digest covers the exact transaction wire, routing plan, context, canonical ingress
 /// timestamp, network digest, and deterministic request identity. Authorities never substitute a
 /// locally sampled timestamp or independently reconstructed claim.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionBindingV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionBindingV1 {
     /// Binding layout version.
     pub version: u16,
@@ -444,9 +444,8 @@ pub struct QueuePlanAdmissionAttestationV1 {
     pub signature: Signature,
 }
 /// Coordinator-authority evidence that one exact QueuePlan journal claim is durably replicated.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionCertificateV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionCertificateV1 {
     /// Certificate layout version.
     pub version: u16,
@@ -492,9 +491,8 @@ pub struct ValidatedQueuePlanAdmissionCertificateV1 {
     /// Number of distinct attestations required for durable availability.
     pub durability_threshold: usize,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionAttestationPayloadV1")]
-#[derive(Encode)]
 struct QueuePlanAdmissionAttestationPayloadV1 {
     version: u16,
     binding_hash: Hash,
@@ -1353,9 +1351,8 @@ pub enum ToriiProxyTransactionAdmissionV1 {
     QueuePlanSynced,
 }
 /// Canonical first-release Torii request body forwarded over the P2P control plane.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::derive::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyRequestKindV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyRequestKindV1 {
     /// Submit a signed transaction to the authoritative lane validator.
     #[codec(index = 0)]
@@ -1411,9 +1408,8 @@ pub enum ToriiProxyRequestKindV1 {
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
 /// First-release P2P Torii proxy request sent from ingress to an authoritative peer.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyRequestV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyRequestV1 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
@@ -1785,6 +1781,29 @@ mod tests {
             decode_and_validate_queue_plan_admission_certificate_v1(&network_id, &canonical)
                 .expect("canonical admission certificate validates");
         assert_eq!(validated.certificate, certificate);
+        let registry_bytes = norito::encode_canonical(&validated.registry_value)
+            .expect("encode admission registry value");
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanAdmissionRegistryValueV1>(&registry_bytes)
+                .expect("decode admission registry value"),
+            validated.registry_value
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<QueuePlanAdmissionBindingV1>(&canonical),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut substituted_owner = canonical.clone();
+        substituted_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<
+            QueuePlanAdmissionBindingV1,
+        >());
+        assert!(
+            decode_and_validate_queue_plan_admission_certificate_v1(
+                &network_id,
+                &substituted_owner,
+            )
+            .is_err(),
+            "a valid signed payload cannot authorize a different framed owner"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {

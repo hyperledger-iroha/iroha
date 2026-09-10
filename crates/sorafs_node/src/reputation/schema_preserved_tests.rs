@@ -1,4 +1,60 @@
-// Existing tests kept in their original parent test namespace.
+// Replay and canonical signing-material regressions.
+
+pub(super) use crate::frame_test_support::assert_current_frame as assert_reputation_frame;
+
+#[test]
+fn unsigned_material_frame_preserves_current_owner_and_finality() {
+    let (_root, service, delivery) = ready_material_service(&trust_policy(), 17);
+    let material = &delivery.material;
+    assert_reputation_frame(
+        &service.policy,
+        "sorafs_node::reputation::ReputationIngestPolicyV1",
+    );
+    assert_reputation_frame(
+        material,
+        "sorafs_node::reputation::ReputationUnsignedSigningMaterialV1",
+    );
+    assert_reputation_frame(
+        &material.target_finalized,
+        "sorafs_node::reputation::ReputationFinalizedIdentityV1",
+    );
+    let stored = service
+        .canonical_checkpoint_bytes()
+        .expect("live checkpoint bytes");
+    let checkpoint: ReputationIngestCheckpointV1 =
+        norito::decode_canonical(&stored).expect("checkpoint owner");
+    assert_eq!(
+        assert_reputation_frame(
+            &checkpoint,
+            "sorafs_node::reputation::ReputationIngestCheckpointV1"
+        ),
+        stored
+    );
+    let mut seed = ReputationSnapshotSeedV1 {
+        network_id: material.network_id,
+        ingest_policy_digest: material.ingest_policy_digest,
+        snapshot_trust_policy_digest: material.snapshot_trust_policy_digest,
+        target_finalized: material.target_finalized,
+        target_finalized_at_unix_ms: material.target_finalized_at_unix_ms,
+        window_start_height: material.window_start_height,
+        window_end_height: material.window_end_height,
+        source_finality: material.source_finality.clone(),
+        scoring_evidence_digest: material.scoring_evidence_digest,
+    };
+    assert_eq!(
+        <ReputationSnapshotSeedV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::reputation::ReputationSnapshotSeedV1"
+    );
+    let digest =
+        hash_canonical(b"sorafs-reputation-snapshot-id-v1", &seed).expect("live snapshot seed");
+    assert_eq!(&digest[..16], material.snapshot.snapshot_id.as_slice());
+    seed.target_finalized.height += 1;
+    assert_ne!(
+        digest,
+        hash_canonical(b"sorafs-reputation-snapshot-id-v1", &seed)
+            .expect("different finality seed")
+    );
+}
 #[test]
 fn exact_replay_is_idempotent_and_byte_identical() {
     let root = TempDir::new().expect("state root");

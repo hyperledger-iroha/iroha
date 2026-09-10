@@ -10,6 +10,7 @@ repository = "https://github.com/hyperledger-iroha/iroha"
 documentation = "https://docs.rs/kotodama_lang"
 
 [dependencies]
+iroha_model_base = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }
 indexmap = "2.12.0"

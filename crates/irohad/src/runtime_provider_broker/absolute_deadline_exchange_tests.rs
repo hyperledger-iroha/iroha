@@ -1,6 +1,6 @@
 // Real local Unix exchanges exercise deadline admission and post-dispatch ambiguity.
 
-fn accept_deadline_test_stream(listener: &UnixListener) -> UnixStream {
+fn accept_deadline_test_stream(listener: &BrokerTestListener) -> BrokerTestStream {
     listener.set_nonblocking(true).unwrap();
     let deadline = BrokerDeadlineV1::new(Duration::from_secs(5)).unwrap();
     loop {
@@ -38,7 +38,11 @@ fn expired_connect_deadline_does_not_open_the_hardened_socket() {
     ));
     listener.set_nonblocking(true).unwrap();
     assert_eq!(
-        listener.accept().unwrap_err().kind(),
+        listener
+            .accept()
+            .err()
+            .expect("expired connection must not reach listener")
+            .kind(),
         io::ErrorKind::WouldBlock
     );
 }
@@ -68,7 +72,7 @@ fn partial_handshake_bytes_cannot_renew_the_original_exchange_deadline() {
         }
         let _ = stream.write_all(&frame);
     });
-    let result = BrokerSession::connect_before(
+    let result = connect_test_process_before(
         &policy,
         "test-chain",
         server_test_network_id(),
@@ -85,6 +89,7 @@ fn occupied_session_deadline_does_not_dispatch_retire_or_poison_a_request() {
     let (stream, mut peer) = UnixStream::pair().unwrap();
     let binding = signer_binding();
     let session = BrokerSession {
+        decode_pool: new_test_process_pool(),
         connection: Mutex::new(BrokerConnection {
             stream,
             session_id: TEST_SESSION_ID,
@@ -133,7 +138,7 @@ fn dispatched_deadlines_keep_mutating_ambiguity_and_read_only_unavailability() {
             let _ = release_rx.recv_timeout(Duration::from_secs(5));
         });
         let binding = signer_binding();
-        let (session, observations) = BrokerSession::connect(
+        let (session, observations) = connect_test_process(
             &policy,
             "test-chain",
             server_test_network_id(),
@@ -182,7 +187,12 @@ fn dispatched_deadlines_keep_mutating_ambiguity_and_read_only_unavailability() {
         );
         let connection = session.connection.lock().unwrap();
         assert_eq!(connection.next_request_id, 2);
-        assert_eq!(connection.poison_reason, Some(error));
+        assert_eq!(
+            connection
+                .poison_reason
+                .map(BrokerConnectionFailure::reason),
+            Some(error)
+        );
         drop(connection);
         release_tx.send(()).unwrap();
         server.join().unwrap();

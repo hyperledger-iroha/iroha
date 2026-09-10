@@ -10,7 +10,6 @@ use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
     metadata::Metadata,
-    name::Name,
     soranet::{
         Digest32, RelayId,
         incentives::{
@@ -19,6 +18,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity, RoundingMode},

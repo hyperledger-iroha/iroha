@@ -2259,7 +2259,6 @@ mod tests {
         asset::AssetDefinitionId,
         block::BlockHeader,
         domain::DomainId,
-        name::Name,
         privacy::{
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
@@ -2284,6 +2283,7 @@ mod tests {
             zk_ams_registry_record_digest_v1,
         },
     };
+    use iroha_model_base::name::Name;
     use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
     use p256::ecdsa::{
         Signature as P256Signature, SigningKey as P256SigningKey,

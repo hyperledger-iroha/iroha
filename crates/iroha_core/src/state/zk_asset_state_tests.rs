@@ -1,3 +1,4 @@
+//! Shielded asset integrity and world-snapshot serialization tests.
 use super::*;
 fn push_dummy_root(state: &mut ZkAssetState, seed: u8) {
     state
@@ -149,12 +150,12 @@ fn invalid_commitment_is_rolled_back() {
 fn commitment_preview_matches_append_without_mutating_state() {
     let mut state = ZkAssetState::default();
     push_dummy_root(&mut state, 1);
-    let before = norito::encode_canonical(&state).expect("encode state before preview");
+    let before = norito::json::to_vec(&state).expect("encode state before preview");
     let previewed = state
         .preview_commitment_root([2; 32])
         .expect("preview canonical commitment");
     assert_eq!(
-        norito::encode_canonical(&state).expect("encode state after preview"),
+        norito::json::to_vec(&state).expect("encode state after preview"),
         before,
         "preview must not mutate retained tree state"
     );
@@ -173,13 +174,13 @@ fn commitment_preview_rejects_tampered_frontier_without_mutation() {
     state.tree_frontier[0]
         .as_mut()
         .expect("one-leaf frontier slot")[0] ^= 0x01;
-    let before = norito::encode_canonical(&state).expect("encode tampered state before preview");
+    let before = norito::json::to_vec(&state).expect("encode tampered state before preview");
     let error = state
         .preview_commitment_root([2; 32])
         .expect_err("preview must reject a tampered frontier");
     assert!(error.contains("frontier") || error.contains("current root"));
     assert_eq!(
-        norito::encode_canonical(&state).expect("encode tampered state after preview"),
+        norito::json::to_vec(&state).expect("encode tampered state after preview"),
         before,
         "failed preview must not mutate retained tree state"
     );
@@ -319,9 +320,11 @@ fn persisted_tree_profile_roundtrips_and_is_required() {
     );
     let mut state = ZkAssetState::default();
     push_dummy_root(&mut state, 1);
-    let encoded = norito::to_bytes(&state).expect("encode ZK asset state");
-    let decoded =
-        norito::decode_from_bytes::<ZkAssetState>(&encoded).expect("decode ZK asset state");
+    // The state is a payload within World snapshots, with no independent frame API.
+    let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let encoded = norito::codec::Encode::encode(&state);
+    let decoded: ZkAssetState = norito::codec::DecodeAll::decode_all(&mut encoded.as_slice())
+        .expect("decode ZK asset payload");
     assert_eq!(
         decoded.tree_profile,
         ConfidentialTreeProfile::PoseidonPastaV1
@@ -435,4 +438,32 @@ fn tree_integrity_rejects_tampered_retained_root() {
         .expect_err("tampered retained roots must fail closed");
     assert!(error.contains("root history"));
     assert_eq!(state.commitments, before);
+}
+
+#[test]
+fn shielded_asset_json_roundtrip_preserves_authenticated_tree_and_spend_state() {
+    let mut state = ZkAssetState::default();
+    push_dummy_root(&mut state, 1);
+    push_dummy_root(&mut state, 2);
+    state.nullifiers.insert([0x31; 32]);
+    state
+        .record_frontier_checkpoint(5, 1, 4)
+        .expect("checkpoint");
+    state.validate_tree_integrity().expect("valid fixture tree");
+    let value = norito::json::to_value(&state).expect("World JSON state payload");
+    let decoded: ZkAssetState =
+        norito::json::from_value(value.clone()).expect("JSON state roundtrip");
+    decoded
+        .validate_tree_integrity()
+        .expect("decoded authenticated tree");
+    assert_eq!(decoded.commitments, state.commitments);
+    assert_eq!(decoded.nullifiers, state.nullifiers);
+    assert_eq!(decoded.persisted_root, state.persisted_root);
+    assert_eq!(
+        norito::json::to_value(&decoded).expect("all fields re-encode"),
+        value
+    );
+    let mut corrupted = decoded;
+    corrupted.persisted_root[0] ^= 1;
+    assert!(corrupted.validate_tree_integrity().is_err());
 }

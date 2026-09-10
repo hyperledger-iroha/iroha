@@ -1,0 +1,30 @@
+[
+  {
+    "column": 18,
+    "direction": "deserialize",
+    "explicit_root": false,
+    "file": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+    "identifier": "SetDto",
+    "kind": "capture",
+    "line": 3434,
+    "module": "iroha_core::smartcontracts::isi::triggers::set",
+    "nominal": "iroha_core::smartcontracts::isi::triggers::set::SetDto",
+    "root_hint": "iroha_core::smartcontracts::isi::triggers::set::SetDto",
+    "root_matches": true,
+    "schema_hash": "c76964d2c758c6fbb522afa6f6813a98"
+  },
+  {
+    "column": 10,
+    "direction": "serialize",
+    "explicit_root": false,
+    "file": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+    "identifier": "SetDto",
+    "kind": "capture",
+    "line": 3434,
+    "module": "iroha_core::smartcontracts::isi::triggers::set",
+    "nominal": "iroha_core::smartcontracts::isi::triggers::set::SetDto",
+    "root_hint": "iroha_core::smartcontracts::isi::triggers::set::SetDto",
+    "root_matches": true,
+    "schema_hash": "c76964d2c758c6fbb522afa6f6813a98"
+  }
+]

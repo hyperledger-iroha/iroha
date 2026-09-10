@@ -7,6 +7,7 @@ use iroha::{
     data_model::{asset::AssetDefinition, isi::InstructionBox, prelude::*},
 };
 use iroha_data_model::query::dsl::SelectorTuple;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use nonzero_ext::nonzero;
 #[test]

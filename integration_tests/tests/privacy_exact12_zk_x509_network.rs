@@ -35,7 +35,7 @@ use iroha::{
         metadata::Metadata,
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
-        prelude::{Name, QueryBuilderExt},
+        prelude::QueryBuilderExt,
         privacy::{
             IrohaZkX509StarkP256StatementV1, PrivacyActiveLifecycleV1,
             PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
@@ -67,6 +67,7 @@ use iroha_core::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::name::Name;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use std::{
     fs,

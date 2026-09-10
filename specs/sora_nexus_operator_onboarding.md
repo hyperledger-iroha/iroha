@@ -16,7 +16,7 @@ expectations before bringing a node online.
 - You obtained the reviewed SHA-256 fingerprint of the exact raw 32-byte
   release-signing public key through an authenticated channel independent of
   the downloaded manifest.
-- You obtained the packaged `sorafs-validate` candidate by direct path and its
+- You obtained the packaged `iroha` candidate by direct path and its
   independently reviewed exact executable SHA-256.
 - You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
 - You can reach the existing Sora Nexus peers that will bootstrap your node.
@@ -40,7 +40,7 @@ expectations before bringing a node online.
    contains:
    ```bash
    TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
-   RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/sorafs-validate
+   RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/iroha
    TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256=<reviewed-lowercase-sha256>
 
    python3 scripts/release_manifest_signing.py verify \
@@ -54,7 +54,7 @@ expectations before bringing a node online.
    ```
    The aggregate `.pub` is exactly 32 raw Ed25519 bytes; it is not PEM.
    The wrapper pins the verifier digest and identity, invokes
-   `sorafs-validate release-manifest`, then rechecks the manifest, key,
+   `iroha app sorafs toolkit release-manifest`, then rechecks the manifest, key,
    signature, and verifier. Production publication-plan generation and
    validation re-run this check, require the independently reviewed signing and
    verifier pins, and bind themselves to the exact aggregate-manifest SHA-256.

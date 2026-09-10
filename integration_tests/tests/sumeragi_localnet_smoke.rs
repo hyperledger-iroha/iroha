@@ -27,7 +27,6 @@ use iroha::{
             ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
         },
         metadata::Metadata,
-        name::Name,
         nexus::UniversalAccountId,
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         prelude::{Action, FindAccountById, FindAssetById, Quantity, Repeats},
@@ -49,6 +48,7 @@ use iroha_crypto::{
     try_bfv_programmed_public_parameters_with_program,
 };
 use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{

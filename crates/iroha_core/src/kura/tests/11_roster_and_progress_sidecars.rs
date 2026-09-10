@@ -1,6 +1,5 @@
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Encode, Decode, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::tests::DummySidecar")]
-#[derive(Debug, Encode, Decode, PartialEq, Eq)]
 struct DummySidecar {
     height: u64,
 }
@@ -1470,26 +1469,28 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             new_index_bytes: current.new_index_bytes.clone(),
             integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
+        let namespace = kura
+            .open_bound_progress_namespace(&data_path, &index_path)
+            .expect("bind current progress intent namespace");
+        current
+            .validate_for(&namespace, &data_path, &index_path)
+            .expect("current progress intent validates its namespace and integrity");
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &current,
+            "iroha_core::kura::BoundProgressAppendIntentV1",
+        );
         let encode_with_current_schema = |intent: &PreNamespaceBoundProgressAppendIntentV1| {
-            let mut bytes = norito::to_bytes(intent).expect("encode pre-namespace intent layout");
-            let schema =
-                norito::schema::identity::frame_hash::<BoundProgressAppendIntentV1>();
-            let schema_start = MAGIC.len() + 2;
-            let schema_end = schema_start + schema.len();
-            assert!(bytes.len() >= Header::SIZE);
-            bytes[schema_start..schema_end].copy_from_slice(&schema);
-            bytes
+            frame_kura_test_payload(&current, intent)
         };
-        // Force the current same-type schema onto the historical payload
-        // before sealing it. The regression therefore reaches positional
-        // decoding and integrity validation instead of passing only
-        // because this local fixture type has a different schema name.
+        // Seal the unsupported payload under the actual current owner so the
+        // regression reaches positional decoding and integrity validation.
         let pre_release_preimage = encode_with_current_schema(&pre_release);
         pre_release.integrity_hash = Hash::new_from_chunks(&[
             BOUND_PROGRESS_APPEND_INTENT_DIGEST_DOMAIN,
             &pre_release_preimage,
         ]);
         let pre_release_bytes = encode_with_current_schema(&pre_release);
+        assert_kura_test_payload_rejected::<BoundProgressAppendIntentV1>(&pre_release_bytes);
         let intent_path = Kura::bound_progress_append_intent_path(&index_path);
         fs::write(&intent_path, pre_release_bytes).expect("stage pre-namespace intent");
         OpenOptions::new()

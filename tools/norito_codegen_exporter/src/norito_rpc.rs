@@ -19,7 +19,6 @@ use iroha_data_model::{
         decode_instruction_from_pair, framed_instruction_payload,
     },
     metadata::Metadata,
-    name::Name,
     peer::PeerId,
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
@@ -28,6 +27,7 @@ use iroha_data_model::{
         signed::TransactionPayload,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use norito::{
     codec::Encode,

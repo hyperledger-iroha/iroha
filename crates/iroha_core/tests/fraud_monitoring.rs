@@ -18,10 +18,10 @@ use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     fraud::types::{AssessmentDecision, FraudAssessment, FraudAssessmentParts},
     metadata::Metadata,
-    name::Name,
     prelude::*,
     transaction::error::TransactionRejectionReason,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;

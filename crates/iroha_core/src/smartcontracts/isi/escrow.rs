@@ -46,6 +46,7 @@ use iroha_data_model::{
         is_reserved_orderbook_escrow_id_v1,
     },
 };
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::json::Value;

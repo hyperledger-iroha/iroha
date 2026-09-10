@@ -1046,9 +1046,18 @@ impl ParliamentBallotStateV1 {
 }
 
 /// Deterministic aggregate state for one immutable proposal attempt.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentAttemptStateV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct ParliamentAttemptStateV1 {
     attempt: GovernanceAttemptV1,
     /// Proposal-wide redraw units consumed before this attempt was created.
@@ -2616,7 +2625,6 @@ pub(crate) mod tests {
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
             parliament_ballot_participant_hash_v1,
         },
-        name::Name,
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             ValidationFeeChargingMode, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
@@ -2625,6 +2633,7 @@ pub(crate) mod tests {
             validation_fee_payout_min_xor, validation_fee_payout_recipient_share,
         },
     };
+    use iroha_model_base::name::Name;
     use rand::{SeedableRng as _, rngs::StdRng};
 
     use crate::{

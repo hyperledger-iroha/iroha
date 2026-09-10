@@ -36,7 +36,6 @@ use iroha_data_model::{
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
         MusubiSeedIngressReceiptV1, MusubiSemanticReleaseDigestV1,
     },
-    name::Name,
     permission::{Permission as AccountPermission, Permissions},
     prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
     query::error::FindError,
@@ -61,6 +60,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+use iroha_model_base::name::Name;
 use iroha_primitives::{bigint::BigInt, json::Json};
 use nonzero_ext::nonzero;
 use norito::{json, to_bytes};

@@ -333,6 +333,16 @@ impl norito::SerializePayload for BudgetedField {
 }
 
 #[test]
+fn canonical_budgeted_field_has_the_exact_primitive_frame() {
+    let mut actual = Vec::new();
+    write_canonical_field(&mut actual, &BudgetedField).unwrap();
+    let mut expected = Vec::new();
+    write_canonical_field(&mut expected, &42_u8).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(norito::decode_canonical::<u8>(&actual).unwrap(), 42);
+}
+
+#[test]
 fn canonical_field_preserves_inherited_serializer_resource_errors() {
     // Concrete borrowed public serializers need no archive-sized encode buffer. This stand-in
     // exercises a fallible serializer at the same boundary without claiming that a decoder

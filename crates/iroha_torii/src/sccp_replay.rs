@@ -233,9 +233,8 @@ pub struct SccpReplayReplicaCheckpointEntryV1 {
 }
 
 /// Exact checkpoint set returned independently by all three replicas.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1")]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SccpReplayReplicaCheckpointSetV1 {
     /// Schema version; final V1 accepts exactly one.
     pub version: u8,
@@ -675,9 +674,8 @@ struct PersistedReplayGenerationV1 {
     entries: Vec<PersistedReplayHeadEntryV1>,
 }
 
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadV1")]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayHeadV1 {
     version: u8,
     // The atomic manifest carries both generations so a crash cannot expose a
@@ -1280,10 +1278,17 @@ fn fetch_exact_three(
 }
 
 /// Settle every started replica worker before returning any creation or fetch failure.
-fn join_replica_fetch_workers(
+#[expect(
+    single_use_lifetimes,
+    reason = "a scoped handle inside impl Trait's associated type requires a named lifetime"
+)]
+fn join_replica_fetch_workers<'scope>(
     workers: impl IntoIterator<
         Item = std::io::Result<
-            std::thread::ScopedJoinHandle<'_, Result<(File, usize), ToriiSccpReplayStartupErrorV1>>,
+            std::thread::ScopedJoinHandle<
+                'scope,
+                Result<(File, usize), ToriiSccpReplayStartupErrorV1>,
+            >,
         >,
     >,
 ) -> Result<Vec<(File, usize)>, ToriiSccpReplayStartupErrorV1> {
@@ -3540,6 +3545,16 @@ mod tests {
 
         let fixture = Fixture::new();
         let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        let checkpoint_set: SccpReplayReplicaCheckpointSetV1 =
+            norito::decode_canonical(&fixture.first_bytes).expect("fixture set");
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint_set,
+            "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &loaded_head(&service).head,
+            "iroha_torii::sccp_replay::PersistedReplayHeadV1",
+        );
         let (served_domain, forest) = service
             .forest(&fixture.accumulator_id)
             .expect("verified forest is served");

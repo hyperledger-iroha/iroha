@@ -148,7 +148,6 @@ use iroha_data_model::{
     },
     parliament_types::BallotAttemptId,
     peer::PeerId,
-    prelude::Name,
     privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
@@ -156,6 +155,7 @@ use iroha_data_model::{
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
+use iroha_model_base::name::Name;
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
 #[cfg(test)]
@@ -23260,10 +23260,10 @@ impl BlockIndex {
         })
     }
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::BlockStoreCommitMarker")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::BlockStoreCommitMarker")]
 struct BlockStoreCommitMarker {
     /// Marker format version (v1).
     version: u32,
@@ -23298,10 +23298,10 @@ impl DaBlockRewriteImageV1 {
     }
 }
 /// Write-ahead record making DA-sidecar and canonical-journal rewrites recoverable.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::DaBlockRewriteStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::DaBlockRewriteStageV1")]
 struct DaBlockRewriteStageV1 {
     /// Stage format version.
     format_version: u16,
@@ -23336,10 +23336,10 @@ struct EvictionCompactionEntryV1 {
     wire_len: u64,
 }
 /// Roll-forward manifest for the two-file body-eviction compaction publication.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::EvictionCompactionStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::EvictionCompactionStageV1")]
 struct EvictionCompactionStageV1 {
     /// Stage format version.
     format_version: u16,
@@ -23383,10 +23383,10 @@ struct LaneArtifactPhysicalTarget {
     blocks_path: PathBuf,
 }
 /// Durable lane/merge association decision resolved only after the canonical marker is known.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::CanonicalAssociationStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CanonicalAssociationStageV1")]
 struct CanonicalAssociationStageV1 {
     /// Stage format version.
     format_version: u16,
@@ -23402,9 +23402,8 @@ struct CanonicalAssociationStageV1 {
     merge_entry: Option<MergeLedgerEntry>,
 }
 /// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::VerifiedSnapshotTailMarkerV1")]
-#[derive(Debug, Clone, Encode, Decode)]
 struct VerifiedSnapshotTailMarkerV1 {
     /// Marker format version.
     version: u32,
@@ -46349,6 +46348,166 @@ include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn root_storage_frame_owners_roundtrip_and_reject_substitution() {
+        fn check<T>(value: &T, nominal: &str) -> T
+        where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        {
+            assert_eq!(T::nominal_name(), nominal);
+            assert_eq!(T::frame_name(), nominal);
+            let frame = norito::encode_canonical(value).expect("encode storage owner");
+            assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
+            let decoded = norito::decode_canonical::<T>(&frame).expect("decode storage owner");
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("re-encode storage owner"),
+                frame
+            );
+            let mut wrong_owner = frame.clone();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+            let mut trailing = frame;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+            decoded
+        }
+        fn file_digest(mut bytes: &[u8]) -> Hash {
+            let len = bytes.len() as u64;
+            BlockStore::eviction_reader_digest(&mut bytes, len).expect("digest fixture file image")
+        }
+
+        let mut blocks = DummyBlocks::new();
+        let first = blocks.next();
+        let second = blocks.next();
+        let first_wire = first.encode_wire().expect("encode first canonical block");
+        let second_wire = second.encode_wire().expect("encode second canonical block");
+        let marker = BlockStoreCommitMarker::new(2, Some(second.hash()));
+        assert_eq!(
+            check(&marker, "iroha_core::kura::BlockStoreCommitMarker"),
+            marker
+        );
+        let store = BlockStore::new(Path::new(""));
+        let rewrite = DaBlockRewriteStageV1 {
+            format_version: DA_BLOCK_REWRITE_STAGE_VERSION,
+            old_marker: BlockStoreCommitMarker::new(1, Some(first.hash())),
+            new_marker: marker.clone(),
+            old_data_len: first_wire.len() as u64,
+            old_index_count: 1,
+            old_hash_count: 1,
+            old_suffix: Vec::new(),
+            replacement: vec![DaBlockRewriteImageV1 {
+                height: 2,
+                block_hash: second.hash(),
+                index_start: first_wire.len() as u64,
+                index_length: second_wire.len() as u64,
+                body: Some(second_wire.clone()),
+            }],
+        };
+        store
+            .validate_da_block_rewrite_stage(&rewrite)
+            .expect("valid rewrite fixture");
+        assert_eq!(
+            check(&rewrite, "iroha_core::kura::DaBlockRewriteStageV1"),
+            rewrite
+        );
+        let marker_bytes = norito::encode_canonical(&marker).expect("encode commit marker image");
+        let hashes = [first.hash(), second.hash()];
+        let hash_bytes: Vec<u8> = hashes
+            .iter()
+            .flat_map(|hash| hash.as_ref().iter().copied())
+            .collect();
+        let index_bytes = [
+            BlockIndex {
+                start: 0,
+                length: first_wire.len() as u64,
+            }
+            .encode(),
+            BlockIndex {
+                start: EVICTED_BLOCK_START,
+                length: second_wire.len() as u64,
+            }
+            .encode(),
+        ]
+        .concat();
+        let eviction = EvictionCompactionStageV1 {
+            format_version: EVICTION_COMPACTION_STAGE_VERSION,
+            marker,
+            marker_len: marker_bytes.len() as u64,
+            marker_digest: file_digest(&marker_bytes),
+            hashes_len: hash_bytes.len() as u64,
+            hashes_digest: file_digest(&hash_bytes),
+            data_temp_name: EVICTION_COMPACTION_DATA_FILE_NAME.to_owned(),
+            data_len: first_wire.len() as u64,
+            data_digest: file_digest(&first_wire),
+            index_temp_name: EVICTION_COMPACTION_INDEX_FILE_NAME.to_owned(),
+            index_len: index_bytes.len() as u64,
+            index_digest: file_digest(&index_bytes),
+            evicted: vec![EvictionCompactionEntryV1 {
+                height: 2,
+                block_hash: second.hash(),
+                canonical_wire_hash: Hash::new(&second_wire),
+                wire_len: second_wire.len() as u64,
+            }],
+        };
+        store
+            .validate_eviction_compaction_stage(&eviction)
+            .expect("valid eviction fixture");
+        assert_eq!(
+            check(&eviction, "iroha_core::kura::EvictionCompactionStageV1"),
+            eviction
+        );
+        let association = CanonicalAssociationStageV1 {
+            format_version: CANONICAL_ASSOCIATION_STAGE_VERSION,
+            height: 2,
+            block_hash: second.hash(),
+            canonical_wire_hash: Hash::new(&second_wire),
+            block_wire: second_wire,
+            merge_entry: None,
+        };
+        Kura::blank_kura_for_testing()
+            .validate_canonical_association_stage(&association)
+            .expect("valid canonical association fixture");
+        assert_eq!(
+            check(
+                &association,
+                "iroha_core::kura::CanonicalAssociationStageV1"
+            ),
+            association
+        );
+        let snapshot = VerifiedSnapshotTailMarkerV1::new(
+            1,
+            2,
+            verified_snapshot_hash_journal_digest(&hashes).expect("snapshot hash journal digest"),
+            Some(Hash::new(b"storage-owner-snapshot-lineage")),
+        );
+        let decoded = check(&snapshot, "iroha_core::kura::VerifiedSnapshotTailMarkerV1");
+        assert_eq!(
+            (
+                decoded.version,
+                decoded.body_prefix_count,
+                decoded.snapshot_height,
+                decoded.hash_journal_digest,
+                decoded.bootstrap_lineage_hash
+            ),
+            (
+                snapshot.version,
+                snapshot.body_prefix_count,
+                snapshot.snapshot_height,
+                snapshot.hash_journal_digest,
+                snapshot.bootstrap_lineage_hash
+            )
+        );
+        let rewrite_frame = norito::encode_canonical(&rewrite).expect("encode rewrite owner");
+        assert!(matches!(
+            norito::decode_canonical::<EvictionCompactionStageV1>(&rewrite_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     fn kaigi_signal_test_call(name: &str) -> iroha_data_model::kaigi::KaigiId {
         iroha_data_model::kaigi::KaigiId::new(
             iroha_data_model::DomainId::try_new("kaigi", "universal").expect("test domain"),
@@ -46624,6 +46783,7 @@ pub(crate) mod tests {
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
     include!("kura/tests/13_manifests_and_fsync.rs");
+    include!("kura/tests/14_pipeline_and_lane_frame_owners.rs");
     include!("kura/tests/14b_sidecar_physical_resource_tests.rs");
     include!("kura/tests/14c_authenticated_snapshot_resource_tests.rs");
     include!("kura/tests/14_resource_evidence.rs");

@@ -34,7 +34,6 @@ use iroha_data_model::{
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
-    name::Name,
     prelude as dm,
     sorafs::pin_registry::{
         ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
@@ -44,6 +43,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::Child;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider, SoraFsOrderbookTransactionSigner,

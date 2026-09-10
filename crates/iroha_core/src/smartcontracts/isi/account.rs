@@ -2,6 +2,7 @@
 //! and implementations for account queries.
 use super::prelude::*;
 use iroha_data_model::{prelude::*, query::error::FindError};
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 /// All instructions related to accounts:
 /// - minting/burning public key into account signatories
@@ -949,10 +950,10 @@ pub mod isi {
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
             domain::DomainId,
-            error::ParseError,
             isi::error::InstructionExecutionError,
             prelude::{Account, AssetDefinition, Domain, Grant, Permission, Register},
         };
+        use iroha_model_base::error::ParseError;
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
         #[test]

@@ -798,17 +798,28 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         body: UnknownTerminalOutcomeBodyV1,
         outcome_hash: Hash,
     }
-    let unknown_basis_bytes = norito::encode_canonical(&UnknownTerminalOutcomeV1 {
-        body: UnknownTerminalOutcomeBodyV1 {
-            version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
-            binding: pending.binding().clone(),
-            basis: UnknownTerminalOutcomeBasisV1::FutureReplica,
-            source: pending.source(),
-            stage: pending.stage(),
-        },
-        outcome_hash: pending.outcome_hash,
-    })
-    .expect("encode unknown terminal basis fixture");
+    let unknown_body = UnknownTerminalOutcomeBodyV1 {
+        version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
+        binding: pending.binding().clone(),
+        basis: UnknownTerminalOutcomeBasisV1::FutureReplica,
+        source: pending.source(),
+        stage: pending.stage(),
+    };
+    let unknown_body_bytes = frame_kura_test_payload(&pending.body, &unknown_body);
+    assert_kura_test_payload_rejected::<AutonomousLifecycleTerminalOutcomeBodyV1>(
+        &unknown_body_bytes,
+    );
+    let unknown = UnknownTerminalOutcomeV1 {
+        body: unknown_body,
+        // Bind the exact unknown body using the real current body envelope.
+        // The rejection must target the unknown tag, not an unrelated stale hash.
+        outcome_hash: Hash::new_from_chunks(&[
+            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN,
+            &unknown_body_bytes,
+        ]),
+    };
+    let unknown_basis_bytes = frame_kura_test_payload(&pending, &unknown);
+    assert_kura_test_payload_rejected::<AutonomousLifecycleTerminalOutcomeV1>(&unknown_basis_bytes);
     assert!(
         AutonomousLifecycleTerminalOutcomeV1::decode_framed(&unknown_basis_bytes).is_err(),
         "Norito must reject an unknown terminal-outcome basis tag",

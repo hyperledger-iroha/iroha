@@ -135,9 +135,8 @@ pub enum OrderbookTransactionKindV1 {
     SettlementReceipt,
 }
 /// Validated native orderbook operation retained for isolated external signing.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::orderbook_transaction_forwarder::OrderbookOperationV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum OrderbookOperationV1 {
     /// Execute one deterministic bounded matching transition.
     Match(MatchSorafsOrderbook),
@@ -584,11 +583,10 @@ struct StoredDeadOrderbookTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "sorafs_node::orderbook_transaction_forwarder::OrderbookTransactionForwarderCheckpointV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct OrderbookTransactionForwarderCheckpointV1 {
     version: u8,
     next_sequence: u64,
@@ -2240,6 +2238,16 @@ mod tests {
             .unwrap()
             .operation_id();
         let receipt_operation = settlement_operation(&context, [0x61; 32]);
+        for operation in [
+            match_operation(&context),
+            maintain_operation(&context),
+            receipt_operation.clone(),
+        ] {
+            crate::frame_test_support::assert_current_frame(
+                &operation,
+                "sorafs_node::orderbook_transaction_forwarder::OrderbookOperationV1",
+            );
+        }
         assert!(matches!(
             forwarder.enqueue_unsigned_operation(receipt_operation.clone(), &context),
             Err(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired)
@@ -2272,6 +2280,11 @@ mod tests {
                 .unwrap()
                 .authority,
             relayer_id
+        );
+        let checkpoint = forwarder.state.lock().unwrap().checkpoint.clone();
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint,
+            "sorafs_node::orderbook_transaction_forwarder::OrderbookTransactionForwarderCheckpointV1",
         );
         let stale = OrderbookOperationV1::Match(MatchSorafsOrderbook::new(
             context.policy_record.policy_digest,

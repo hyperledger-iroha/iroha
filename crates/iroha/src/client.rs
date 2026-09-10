@@ -8,10 +8,12 @@ mod configuration_http_tests;
 mod dispatch;
 mod moderation;
 mod multisig_validation;
+pub mod musubi;
+#[cfg(test)]
+mod musubi_http_tests;
 #[cfg(test)]
 mod operator_auth_tests;
 mod private_settlement;
-mod public_musubi;
 mod queue_plan_error;
 mod repair;
 mod reputation_journal;
@@ -92,6 +94,7 @@ use iroha_data_model::{
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_sccp::api::{
     SccpCapabilities, SccpRecentMessage, SccpRecentMessages, SccpRegistryLimits, SccpResourceLimits,
@@ -243,9 +246,6 @@ use norito::{
     },
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
-};
-pub use public_musubi::{
-    PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
 };
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
@@ -14324,10 +14324,13 @@ mod evidence_http_tests {
         );
         let err = validate_global_pipeline_status_response(&payload, expected)
             .expect_err("response hash must bind to request");
-        assert!(
-            err.to_string()
-                .contains("does not match requested transaction")
-        );
+        assert!(matches!(
+            err.downcast_ref::<crate::error::Error>(),
+            Some(crate::error::Error::ResponseBinding {
+                operation: "pipeline.transaction_status",
+                field: "hash",
+            })
+        ));
         for hash in [
             expected.to_string().to_ascii_uppercase(),
             format!("{}0", &expected.to_string()[..63]),
@@ -22995,10 +22998,11 @@ fn validate_pipeline_status_response(
         ));
     }
     if payload.hash != expected_hash {
-        return Err(eyre!(
-            "pipeline status response hash {} does not match requested transaction {expected_hash}",
-            payload.hash
-        ));
+        return Err(crate::error::Error::ResponseBinding {
+            operation: "pipeline.transaction_status",
+            field: "hash",
+        }
+        .into());
     }
     if payload.scope != expected_scope {
         return Err(eyre!(
@@ -24954,7 +24958,6 @@ mod tests {
         },
         domain::DomainId,
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
-        name::{MAX_NAME_BYTES, Name},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         parameter::system::Parameters,
         privacy::{
@@ -24974,6 +24977,7 @@ mod tests {
             pin_registry::ManifestDigest,
         },
     };
+    use iroha_model_base::{name::MAX_NAME_BYTES, name::Name};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;

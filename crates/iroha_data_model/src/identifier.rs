@@ -1,7 +1,6 @@
 //! Hidden-function-backed identifier policy and claim types.
 use crate::{
     account::{AccountId, OpaqueAccountId},
-    name::Name,
     nexus::UniversalAccountId,
     ram_lfe::{
         RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramId,
@@ -9,6 +8,7 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, PublicKey, SignatureOf};
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{fmt, str::FromStr, string::String, vec::Vec};

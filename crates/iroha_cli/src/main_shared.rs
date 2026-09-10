@@ -47,6 +47,7 @@ use iroha_config::parameters::defaults;
 use iroha_config_base::toml::{FromFileError, TomlSource};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_i18n::{Bundle, Localizer, detect_language};
+use iroha_model_base::name::Name;
 use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::FeeQuoteResponse;
 use std::num::NonZeroU64;
@@ -1076,7 +1077,7 @@ impl Run for Version {
         }
     }
 }
-fn main() {
+fn main() -> std::process::ExitCode {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let output_format = output_format_override_from_args(
         raw_args
@@ -1085,14 +1086,17 @@ fn main() {
             .map(|arg| arg.to_string_lossy().into_owned()),
     )
     .unwrap_or(CliOutputFormat::Json);
-    if let Err(report) = run() {
-        let rendered = render_cli_error(&report, output_format);
-        eprint!("{}", rendered.output);
-        std::process::exit(rendered.kind.exit_code());
+    match run() {
+        Ok(status) => status,
+        Err(report) => {
+            let rendered = render_cli_error(&report, output_format);
+            eprint!("{}", rendered.output);
+            std::process::ExitCode::from(rendered.kind.exit_code() as u8)
+        }
     }
 }
 #[allow(clippy::too_many_lines)]
-fn run() -> ReportResult<(), MainError> {
+fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let language_override = language_override_from_args(
         raw_args
@@ -1110,11 +1114,11 @@ fn run() -> ReportResult<(), MainError> {
                 let rendered = err.render().to_string();
                 let localized = localize_help_text(&rendered, &help_i18n);
                 print!("{localized}");
-                return Ok(());
+                return Ok(std::process::ExitCode::SUCCESS);
             }
             ErrorKind::DisplayVersion => {
                 print!("{}", err.render());
-                return Ok(());
+                return Ok(std::process::ExitCode::SUCCESS);
             }
             _ => {
                 return Err(Report::new(MainError::CliArgs(err.to_string())));
@@ -1123,6 +1127,24 @@ fn run() -> ReportResult<(), MainError> {
     };
     let args = Args::from_arg_matches(&matches)
         .map_err(|err| Report::new(MainError::CliArgs(err.to_string())))?;
+    if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
+        &args.command
+        && command.is_artifact_tool()
+    {
+        reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit")?;
+        if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
+            args.command
+        {
+            return Ok(match command.run_artifact() {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::ExitCode::from(error.exit_code())
+                }
+            });
+        }
+        unreachable!("local artifact command matched above");
+    }
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
     if !args.machine {
@@ -1130,23 +1152,26 @@ fn run() -> ReportResult<(), MainError> {
     }
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
         clap_markdown::print_help_markdown::<Args>();
-        return Ok(());
+        return Ok(std::process::ExitCode::SUCCESS);
     }
     error_stack::Report::set_color_mode(color_mode());
     if let Command::Taira(taira::Command::Doctor(doctor)) = &args.command {
         reject_irrelevant_taira_doctor_globals(&args)?;
         return map_command_result(
             doctor.run_without_client_config(effective_output_format(&args), io::stdout()),
-        );
+        )
+        .map(|()| std::process::ExitCode::SUCCESS);
     }
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
-        return map_command_result(reset.run_without_client_config(io::stdout()));
+        return map_command_result(reset.run_without_client_config(io::stdout()))
+            .map(|()| std::process::ExitCode::SUCCESS);
     }
     if matches!(&args.command, Command::App(app::Command::Execution(_))) {
         reject_irrelevant_local_tool_globals(&args, "app execution")?;
         if let Command::App(app::Command::Execution(command)) = args.command {
-            return map_command_result(command.run_without_client_config(io::stdout()));
+            return map_command_result(command.run_without_client_config(io::stdout()))
+                .map(|()| std::process::ExitCode::SUCCESS);
         }
         unreachable!("execution dispatch matched above");
     }
@@ -1161,7 +1186,8 @@ fn run() -> ReportResult<(), MainError> {
             commands::sorafs::toolkit::Command::Pack(command),
         ))) = args.command
         {
-            return map_command_result(command.run_without_client_config(io::stdout()));
+            return map_command_result(command.run_without_client_config(io::stdout()))
+                .map(|()| std::process::ExitCode::SUCCESS);
         }
         unreachable!("local SoraFS pack dispatch matched above");
     }
@@ -1262,7 +1288,7 @@ fn run() -> ReportResult<(), MainError> {
             .map_err(|report| report.change_context(MainError::TransactionMetadata))?;
         context.transaction_metadata = Some(metadata);
     }
-    map_command_result(args.command.run(&mut context))
+    map_command_result(args.command.run(&mut context)).map(|()| std::process::ExitCode::SUCCESS)
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.into_report().map_err(|report| {
@@ -4720,7 +4746,8 @@ mod query {
 }
 mod transaction {
     use super::*;
-    use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
+    use iroha_model_base::name::Name;
+use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, };
     use std::{
         sync::{
             Arc, LazyLock, Mutex,
@@ -6938,7 +6965,8 @@ mod repo {
 mod settlement {
     use super::*;
     use clap::ValueEnum;
-    use iroha::data_model::{
+    use iroha_model_base::name::Name;
+use iroha::data_model::{
         domain::DomainId,
         isi::{
             InstructionBox,
@@ -6952,7 +6980,7 @@ mod settlement {
         metadata::Metadata,
         nexus::DataSpaceId,
         oracle::{FeedConfigVersion, FeedEvent, FeedId},
-        prelude::{AssetDefinitionId, Name},
+        prelude::{AssetDefinitionId, },
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
     use std::collections::BTreeSet;

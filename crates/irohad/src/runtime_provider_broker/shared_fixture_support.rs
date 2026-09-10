@@ -131,7 +131,7 @@ fn start_native_signer_server(
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> (
     tempfile::TempDir,
-    EndpointPolicy,
+    BrokerTestEndpoint,
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {

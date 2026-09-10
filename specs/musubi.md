@@ -363,6 +363,14 @@ metadata, a configurable library directory, explicit exports, optional local
 contract targets, tests, readme, license, repository, keywords, and positive
 include additions.
 
+`musubi new` creates a compilable library module with a TODO-marked unit-returning
+function for each requested export. Export names must be canonical Kotodama
+identifiers permitted for those generated declarations. `musubi init` preserves
+existing library source and its function or type exports; it generates a library
+only when none exists. A conflicting source created concurrently is never
+overwritten, and a source selected for preservation cannot silently become a
+generated replacement if it disappears.
+
 A declared test target may name one `.ko` file or a directory. Directory
 targets expand to a bytewise-sorted, portable set of direct `.ko` roots under
 the package, bounded by the V1 file/source limits. The runner reads each stable
@@ -404,6 +412,18 @@ normal path dependency also declares its canonical registry package and
 version requirement. Packaging removes the path, resolves the registry
 release, and compiler-checks again from the clean packaged tree. Development
 dependencies apply only to selected workspace roots and never propagate.
+
+The compiler bridge derives canonical package identities through one shared
+encoder used by builds, packaged publication checks, and workspace tests.
+The BLAKE3 derive-key context is `iroha.musubi.kotodama-package-identity.v1`.
+Each input field has a little-endian `u64` byte-length prefix. Local inputs are
+`local`, namespace, name, and canonical version text. Registry inputs are
+`registry`, the little-endian `u64` home dataspace, `root` or `domain`, domain
+text (empty for root scope), name, and canonical version text. The resulting
+compiler identity is `musubi/local/<lowercase-hex-digest>` or
+`musubi/registry/<lowercase-hex-digest>`. Imports use the same encoder as their
+selected package. Display labels, import aliases, and filesystem paths do not
+define nominal type identity; the compiler's canonical grammar remains strict.
 
 Clean publication validation reads only the immutable `PackagePlan`: it
 recomputes the typed interface of every authenticated exact registry node,
@@ -992,8 +1012,12 @@ selector and verification graph from that journal without reading or rewriting
 the workspace lock, rebuilds the clean package, and requires exact publication
 and archive-commitment equality. Under the operation lock it reloads the
 unchanged journal and idempotently reuses or installs only that operation's
-immutable sidecars. Recovery does not load mutation credentials or advance
-publication; the user subsequently invokes `--resume`. An advanced journal,
+immutable sidecars. Local recovery reads only the public address profile from one
+bounded platform configuration image and verifies the exact cached archives before
+constructing any signer or transport. An offline cache miss fails immediately;
+an online miss loads the authenticated registry reader and storage configuration
+from that same image. Recovery never submits a mutation or advances publication;
+the user subsequently invokes `--resume`. An advanced journal,
 substituted workspace, stale revision, or mismatched existing sidecar fails
 closed. Normal resume never reconstructs unpublished workspace state.
 On qualified Unix targets, journal, staged-CAR, plan, and operation-lock reads

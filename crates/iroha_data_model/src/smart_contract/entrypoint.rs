@@ -201,7 +201,7 @@ pub enum EntrypointValueKindV1 {
     String,
     /// Nested JSON value carried as a `Json` pointer.
     Json,
-    /// Validated [`crate::name::Name`] pointer.
+    /// Validated [`iroha_model_base::name::Name`] pointer.
     Name,
     /// Validated universal account identifier pointer.
     AccountId,

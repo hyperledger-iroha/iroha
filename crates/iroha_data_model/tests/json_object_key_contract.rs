@@ -15,7 +15,6 @@ use iroha_data_model::{
     compute::ComputePriceRiskClass,
     domain::DomainId,
     isi::settlement::SettlementId,
-    name::Name,
     nexus::{DataSpaceId, LaneId},
     nft::NftId,
     oracle::FeedId,
@@ -23,9 +22,9 @@ use iroha_data_model::{
     peer::PeerId,
     proof::ProofId,
     role::RoleId,
-    state_path::StatePath,
     trigger::TriggerId,
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use norito::json::{self, JsonDeserialize, JsonObjectKey, JsonObjectKeyOwned};
 
 const KEY: &str = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";

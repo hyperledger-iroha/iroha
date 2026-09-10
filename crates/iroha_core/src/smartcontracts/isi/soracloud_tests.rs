@@ -1,4 +1,5 @@
 use super::*;
+use iroha_model_base::name::Name;
 use crate::{
     block::ValidBlock,
     kura::Kura,
@@ -15248,8 +15249,8 @@ fn sample_fhe_policy_reference(tag: &[u8]) -> SoracloudFhePolicyReferenceV1 {
     }
 }
 fn fhe_job_provenance(
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     job: FheJobSpecV1,
     policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
@@ -15415,7 +15416,7 @@ fn sample_service_secret_envelope() -> SecretEnvelopeV1 {
     }
 }
 fn decryption_request_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
 ) -> ManifestProvenance {
@@ -15517,7 +15518,7 @@ fn uploaded_model_bundle_provenance_for(
     }
 }
 fn uploaded_model_finalize_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     model_id: &str,
     artifact_id: &str,
@@ -15546,7 +15547,7 @@ fn uploaded_model_finalize_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn uploaded_model_finalize_provenance_for(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     model_id: &str,
     artifact_id: &str,
@@ -15747,7 +15748,7 @@ fn agent_deploy_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn training_start_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     job_id: &str,
     worker_group_size: u16,
@@ -15777,7 +15778,7 @@ fn training_start_provenance(
     }
 }
 fn training_checkpoint_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     completed_step: u32,
     checkpoint_size_bytes: u64,
@@ -15797,7 +15798,7 @@ fn training_checkpoint_provenance(
     }
 }
 fn training_retry_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     reason: &str,
 ) -> ManifestProvenance {
@@ -15811,7 +15812,7 @@ fn training_retry_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn model_artifact_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     training_job_id: &str,
     weight_artifact_hash: Hash,
@@ -15838,7 +15839,7 @@ fn model_artifact_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn model_weight_register_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     training_job_id: &str,
@@ -15868,7 +15869,7 @@ fn model_weight_register_provenance(
     }
 }
 fn model_weight_promote_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     gate_approved: bool,
@@ -15888,7 +15889,7 @@ fn model_weight_promote_provenance(
     }
 }
 fn model_weight_rollback_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     target_version: &str,
     reason: &str,
@@ -15909,8 +15910,8 @@ fn model_weight_rollback_provenance(
 fn hf_shared_lease_join_provenance(
     repo_id: &str,
     resolved_revision: &str,
-    service_name: &iroha_data_model::name::Name,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: &iroha_model_base::name::Name,
+    apartment_name: Option<&iroha_model_base::name::Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
@@ -15933,8 +15934,8 @@ fn hf_shared_lease_join_provenance_for(
     key_pair: &KeyPair,
     repo_id: &str,
     resolved_revision: &str,
-    service_name: &iroha_data_model::name::Name,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: &iroha_model_base::name::Name,
+    apartment_name: Option<&iroha_model_base::name::Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
@@ -15944,7 +15945,7 @@ fn hf_shared_lease_join_provenance_for(
         repo_id,
         resolved_revision,
         service_name.as_ref(),
-        apartment_name.map(iroha_data_model::name::Name::as_ref),
+        apartment_name.map(iroha_model_base::name::Name::as_ref),
         storage_class,
         lease_term_ms,
         lease_asset_definition_id,
@@ -15960,8 +15961,8 @@ fn hf_shared_lease_join_provenance_for(
 fn hf_shared_lease_renew_provenance(
     repo_id: &str,
     resolved_revision: &str,
-    service_name: &iroha_data_model::name::Name,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: &iroha_model_base::name::Name,
+    apartment_name: Option<&iroha_model_base::name::Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
@@ -15971,7 +15972,7 @@ fn hf_shared_lease_renew_provenance(
         repo_id,
         resolved_revision,
         service_name.as_ref(),
-        apartment_name.map(iroha_data_model::name::Name::as_ref),
+        apartment_name.map(iroha_model_base::name::Name::as_ref),
         storage_class,
         lease_term_ms,
         lease_asset_definition_id,
@@ -15988,16 +15989,16 @@ fn hf_shared_lease_leave_provenance(
     resolved_revision: &str,
     storage_class: StorageClass,
     lease_term_ms: u64,
-    service_name: Option<&iroha_data_model::name::Name>,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: Option<&iroha_model_base::name::Name>,
+    apartment_name: Option<&iroha_model_base::name::Name>,
 ) -> ManifestProvenance {
     let payload = encode_hf_shared_lease_leave_provenance_payload(
         repo_id,
         resolved_revision,
         storage_class,
         lease_term_ms,
-        service_name.map(iroha_data_model::name::Name::as_ref),
-        apartment_name.map(iroha_data_model::name::Name::as_ref),
+        service_name.map(iroha_model_base::name::Name::as_ref),
+        apartment_name.map(iroha_model_base::name::Name::as_ref),
     )
     .expect("hf shared lease leave payload");
     ManifestProvenance {
@@ -16373,7 +16374,7 @@ fn hf_shared_lease_audit_sequence_exhaustion_fails_before_authoritative_writes()
     permissioned_soracloud_state!(kura, state);
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name =
+    let service_name: iroha_model_base::name::Name =
         "vision_portal".parse().expect("valid service name");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
@@ -16484,7 +16485,7 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
     state.nexus.get_mut().hf_shared_leases.drain_grace = Duration::from_secs(30);
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "vision_portal".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
     let base_fee: Quantity = "0.00001".parse().expect("base fee");
@@ -16569,7 +16570,7 @@ fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), 
     state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "vision_portal".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
     let base_fee: Quantity = "0.00001".parse().expect("base fee");
@@ -16632,8 +16633,8 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
     state.nexus.get_mut().fees.fee_sink_account_id = BOB_ID.to_string();
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let renewed_service_name: iroha_data_model::name::Name =
+    let service_name: iroha_model_base::name::Name = "vision_portal".parse().expect("valid");
+    let renewed_service_name: iroha_model_base::name::Name =
         "vision_portal_v2".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
@@ -17354,7 +17355,7 @@ fn inrou_reconciliation_keeps_same_lease_host_sticky_and_reassigns_only_new_leas
 #[test]
 fn set_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
     let runtime_state = sample_inrou_replica_runtime_state_for(
         service_name.clone(),
@@ -17392,7 +17393,7 @@ fn set_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), eyr
 fn clear_inrou_replica_runtime_state_removes_exact_stale_state_without_placement()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
     let runtime_state = sample_inrou_replica_runtime_state_for(
         service_name.clone(),
@@ -17449,7 +17450,7 @@ fn set_inrou_replica_runtime_state_records_matching_placement() -> Result<(), ey
 fn set_inrou_replica_runtime_state_rejects_zero_version_and_timestamp() -> Result<(), eyre::Report>
 {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
     let canonical = sample_inrou_replica_runtime_state_for(
         service_name.clone(),
@@ -17648,7 +17649,7 @@ fn deploy_soracloud_service_records_bundle_and_audit_state() -> Result<(), eyre:
     state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     assert!(
         world
             .soracloud_service_revisions()
@@ -19310,7 +19311,7 @@ fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), ey
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
     state_block.commit_world_overlay_for_testing()?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid service name");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid service name");
     let view = state.view();
     let deployment = view
         .world()
@@ -19548,7 +19549,7 @@ fn upgrade_soracloud_service_starts_canary_rollout() -> Result<(), eyre::Report>
     state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let deployment = world
         .soracloud_service_deployments()
         .get(&service_name)
@@ -19605,7 +19606,7 @@ fn upgrade_inrou_service_rejects_partial_canary_before_revision_admission()
     .expect_err("first-release Inrou upgrades must reject split revision-private disks");
     assert_invalid_parameter_contains(error, "service.rollout.canary_percent");
 
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let deployment = stx
         .world
         .soracloud_service_deployments
@@ -19823,7 +19824,7 @@ fn rollout_step_requires_branch_specific_explicit_promotion_target() -> Result<(
         provenance: bundle_provenance_with_precondition(&upgrade_bundle, &upgrade_precondition),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
         .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
@@ -19886,7 +19887,7 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
         ),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
         .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
@@ -20027,7 +20028,7 @@ fn upgrade_inrou_service_rejects_execution_plane_and_runtime_change() -> Result<
             .contains("service revision cannot change execution_plane"),
         "unexpected error: {error:?}"
     );
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let deployment = stx
         .world
         .soracloud_service_deployments
@@ -20072,7 +20073,7 @@ fn rollback_soracloud_service_reuses_admitted_revision() -> Result<(), eyre::Rep
         ),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let mut exhausted_deployment = stx
         .world
         .soracloud_service_deployments
@@ -20221,8 +20222,8 @@ fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), ey
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-    let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
+    let binding_name: iroha_model_base::name::Name = "vault".parse().expect("valid");
     let governance_tx_hash = Hash::new(b"gov-state");
     let value_payload = vec![0xAB; 256];
     let value_payload_commitment = Hash::new(&value_payload);
@@ -22001,7 +22002,7 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let policy = sample_decryption_policy();
     let request = sample_decryption_request();
     iroha_data_model::isi::InstructionBox::from(isi::RecordSoracloudDecryptionRequest {
@@ -22041,7 +22042,7 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
     Ok(())
 }
 struct TrainingStartFixture {
-    service_name: iroha_data_model::name::Name,
+    service_name: iroha_model_base::name::Name,
     job_id: String,
 }
 impl TrainingStartFixture {
@@ -22109,7 +22110,7 @@ fn training_start_rejects_signed_model_and_job_text_aliases_before_mutation()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     for (model_name, job_id, expected) in [
         (
             " vision_model ",
@@ -22446,7 +22447,7 @@ fn rollback_soracloud_model_weight_updates_authoritative_registry_state() -> Res
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     // Build the rollback target and its successor through the authoritative lifecycle so
     // every record and audit entry receives its sequence from the same allocator.
     for (job_id, weight_version, parent_version) in

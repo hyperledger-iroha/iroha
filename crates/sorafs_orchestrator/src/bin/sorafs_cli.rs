@@ -19,7 +19,6 @@ use iroha_data_model::{
     id::ChainId,
     isi::sorafs::RegisterPinManifest,
     metadata::Metadata,
-    name::Name,
     sorafs::{
         moderation::{
             AdversarialCorpusManifestV1, MODERATION_MODEL_MAX_INPUT_BYTES_V1,
@@ -38,6 +37,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
 use iroha_version::codec::EncodeVersioned;

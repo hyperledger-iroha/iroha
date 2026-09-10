@@ -30,12 +30,11 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
     isi::transfer::TransferAssetBatch,
-    name::Name,
     nexus::{AxtPolicySnapshot, AxtPolicySnapshotValidationError, DataSpaceId},
     nft::NftId,
-    state_path::StatePath,
     zk::{OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_primitives::{
@@ -4775,9 +4774,9 @@ mod tests {
     use super::*;
     use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
-    use iroha_data_model::name::MAX_NAME_BYTES;
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use iroha_data_model::zk::BackendTag;
+    use iroha_model_base::name::MAX_NAME_BYTES;
     fn test_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
         out.extend_from_slice(&(kind as u16).to_be_bytes());

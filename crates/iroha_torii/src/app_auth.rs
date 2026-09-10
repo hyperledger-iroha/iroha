@@ -112,11 +112,11 @@ const CANONICAL_REQUEST_MAX_PATH_BYTES_V1: usize = 64 * 1024;
 pub(crate) const CANONICAL_REQUEST_MAX_ACCOUNT_LITERAL_BYTES_V1: usize = 36 * 1024;
 /// Maximum bytes in the catalog-free ASCII alias exception accepted by auth.
 ///
-/// An account alias contains at most three [`iroha_data_model::name::Name`] segments plus the `@`
+/// An account alias contains at most three [`iroha_model_base::name::Name`] segments plus the `@`
 /// and optional `.` separators. Apply this structural ceiling before normalization or catalog
 /// lookup; the wider account limit is reserved for canonical controller hex.
 const CANONICAL_REQUEST_MAX_ALIAS_LITERAL_BYTES_V1: usize =
-    3 * iroha_data_model::name::MAX_NAME_BYTES + 2;
+    3 * iroha_model_base::name::MAX_NAME_BYTES + 2;
 /// Maximum number of signatures carried by one canonical V1 witness.
 const CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1: usize = 64;
 /// Maximum decoded size of one canonical V1 witness (768 KiB).

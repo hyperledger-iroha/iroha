@@ -116,8 +116,9 @@ Dashboards and alert rules are versioned under `dashboards/` and documented in
   and every route incarnation and validator roster resolves identically at the
   request's source proposal height and the authority's current proposal height.
   Existing exact durable ownership remains idempotently reusable. A quorum
-  certificate assembled while the context was current remains usable under the
-  same complete history and current-source checks. This relies on the static
+  certificate assembled from current or accepted historical requests remains
+  usable when its canonical predecessor, active incarnation, and exact current
+  authority source pass certificate validation. This relies on the static
   at-most-`f` Byzantine-key model and does not establish continuous source
   equality under mobile key compromise. `queue_plan_admission_context_future` is retryable and
   must not create queue ownership. A future quorum certificate may be parked

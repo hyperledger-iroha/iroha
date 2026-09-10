@@ -485,6 +485,7 @@ pub struct ExecutionProofProfileV1 {
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
 )]
+
 pub struct ExecutionProofVerificationV1 {
     /// Exact compiled native verifier profile.
     pub profile_id: Hash,
@@ -500,6 +501,44 @@ pub struct ExecutionProofVerificationV1 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn verification_receipt_frame_binds_profile_statement_proof_and_height() {
+        let receipt = ExecutionProofVerificationV1 {
+            profile_id: Hash::new(b"verification-profile"),
+            statement_hash: Hash::new(b"verification-statement"),
+            proof_hash: Hash::new(b"verification-proof"),
+            verified_at_height: 42,
+        };
+        assert_eq!(
+            <ExecutionProofVerificationV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::execution_proofs::ExecutionProofVerificationV1",
+        );
+        let frame = norito::encode_canonical(&receipt).expect("verification frame");
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<ExecutionProofVerificationV1>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<ExecutionProofVerificationV1>(&frame).unwrap(),
+            receipt
+        );
+        let mut changed = receipt;
+        changed.verified_at_height += 1;
+        assert_ne!(norito::encode_canonical(&changed).unwrap(), frame);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ExecutionProofVerificationV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<ExecutionProofVerificationV1>(&frame[..frame.len() - 1])
+                .is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<ExecutionProofVerificationV1>(&trailing).is_err());
+    }
     #[test]
     fn replay_norito_roundtrip() {
         let replay = RaceReplayV1 {

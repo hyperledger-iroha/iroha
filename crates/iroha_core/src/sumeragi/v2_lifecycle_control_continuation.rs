@@ -2,14 +2,14 @@
 // This is included in wal_recovery so no raw effect or body authority escapes
 // the existing private recovery permits.
 
-/// Exact cold continuation of a Proposal whose next Vote has already advanced.
+/// Exact cold continuation of a standalone Sign whose next Vote has advanced.
 ///
 /// The complete ledger frame is retained until the registry and coordinator
 /// agree. Historical Sign rows remain untouched; only their live Broadcasts
 /// and an optional final Sign become executable again.
 pub(super) struct RecoveredControlContinuationV1 {
     ledger: super::ledger::LifecycleLedgerV1,
-    control: AuthenticatedRecoveredWalControlProjection,
+    control: AuthenticatedRecoveredWalStandaloneSignProjection,
     parent_ordinal: u128,
     broadcast_ordinal: u128,
     broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
@@ -23,23 +23,67 @@ pub(super) struct RecoveredControlVoteContinuationV1 {
     pub(super) broadcast: Option<(u128, RecoveredLifecycleSignedBroadcastProjectionV1)>,
 }
 
-impl AuthenticatedRecoveredWalControlProjection {
-    /// Classify the exact control request without exposing its signed input.
-    pub(super) fn is_proposal(&self) -> bool {
-        self.candidate.stage.kind() == LifecycleStageKind::SignProposal
+impl AuthenticatedRecoveredWalStandaloneSignProjection {
+    /// Bound the exact remaining vote chain by its closed original WAL source.
+    /// Linked Validate repairs never enter this standalone corridor.
+    fn advanced_vote_continuation_limit(&self) -> Option<usize> {
+        match (&self.origin, &self.effect) {
+            (
+                RecoveredStandaloneSignOriginV1::Control(_),
+                AdapterEffect::Sign {
+                    request: crate::sumeragi::v2::SignRequest::Proposal(_),
+                    ..
+                },
+            ) => Some(2),
+            (
+                RecoveredStandaloneSignOriginV1::ResolvedPhaseVote { .. },
+                AdapterEffect::Sign {
+                    request: crate::sumeragi::v2::SignRequest::Vote(vote),
+                    ..
+                },
+            ) if vote.phase == wire::GlobalPhase::Prepare => Some(1),
+            _ => None,
+        }
     }
 
-    /// Replay a Proposal and its already-durable, bounded Vote continuation.
+    /// Select the advanced tail without treating a row hint as authority.
+    /// Proposal always publishes its next Prepare with the Broadcast. Prepare
+    /// can publish only a Broadcast while it still awaits the PrepareQC.
+    pub(super) fn has_advanced_vote_continuation(
+        &self,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        broadcast_ordinal: u128,
+    ) -> bool {
+        match self.advanced_vote_continuation_limit() {
+            Some(2) => true,
+            Some(1) => broadcast_ordinal.checked_add(1).is_some_and(|ordinal| {
+                ledger.records().iter().any(|record| {
+                    record.ordinal() == ordinal
+                        && record.work_class() == Some(LifecycleWorkClass::SignVote)
+                        && record
+                            .key()
+                            .is_some_and(|key| key.phase() == super::LifecyclePhase::Commit)
+                        && record
+                            .stage()
+                            .is_some_and(|stage| stage.kind() == LifecycleStageKind::SignCommitVote)
+                })
+            }),
+            _ => false,
+        }
+    }
+
+    /// Replay a standalone Proposal or Prepare and its bounded Vote continuation.
     ///
-    /// A live Proposal Broadcast without its initial Prepare Sign is not a
-    /// publishable crash cut: `PreparedRecoveredLifecycleSignBroadcastAndSignTransition`
-    /// persists both children in the same exact LedgerV1 successor after the
-    /// PrepareIntent fsync. Missing initial lineage therefore remains fatal.
+    /// When a next vote is produced, its Sign and the preceding Broadcast
+    /// share one exact LedgerV1 successor after the vote's WAL fsync. The caller
+    /// keeps a standalone Prepare Broadcast without a next vote on the existing
+    /// Broadcast-only path. Proposal has at most two remaining vote phases;
+    /// standalone Prepare has only Commit.
     /// Each signature is roster-authenticated, each next Vote rejoins the
     /// semantically revalidated body store and exact WAL frame, and every live
     /// output is compared with its original ledger row before returning.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    pub(super) fn recover_advanced_proposal_continuation(
+    pub(super) fn recover_advanced_standalone_vote_continuation(
         self,
         verified: &VerifiedHeightContext,
         ledger: &super::ledger::LifecycleLedgerV1,
@@ -55,8 +99,11 @@ impl AuthenticatedRecoveredWalControlProjection {
         ),
         &'static str,
     > {
-        if !self.is_proposal() || !self.is_exact(verified) {
-            return Err("cold control continuation is not the exact Proposal");
+        let limit = self
+            .advanced_vote_continuation_limit()
+            .ok_or("cold continuation has no standalone Proposal or Prepare source")?;
+        if !self.is_exact(verified) || !self.source_matches_ledger(ledger) {
+            return Err("cold standalone continuation changed its exact WAL or terminal source");
         }
         let mut preview =
             self.prepare_cold_signed_broadcast_and_sign(verified, startup, &broadcast)?;
@@ -91,8 +138,8 @@ impl AuthenticatedRecoveredWalControlProjection {
                 .and_then(|index| ledger.records().get(index))
         };
         loop {
-            if votes.len() >= 2 {
-                return Err("cold Proposal continuation exceeds Prepare and Commit");
+            if votes.len() >= limit {
+                return Err("cold standalone continuation exceeds its remaining vote phases");
             }
             let record =
                 record_at(ordinal).ok_or("cold Proposal continuation lost its next Vote row")?;
@@ -232,9 +279,13 @@ impl AuthenticatedRecoveredWalControlProjection {
 impl RecoveredControlContinuationV1 {
     /// Recheck the retained frame and every historical parent/live child.
     pub(super) fn exactly_matches_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
+        let Some(limit) = self.control.advanced_vote_continuation_limit() else {
+            return false;
+        };
         if &self.ledger != ledger
+            || !self.control.source_matches_ledger(ledger)
             || self.votes.is_empty()
-            || self.votes.len() > 2
+            || self.votes.len() > limit
             || self.votes[0].broadcast.is_none()
         {
             return false;
@@ -272,7 +323,15 @@ impl RecoveredControlContinuationV1 {
             let Some(sign) = row(vote.ordinal) else {
                 return false;
             };
-            if expected != Some(vote.ordinal) || !owners.insert(sign.owner()) {
+            let expected_phase = if limit == 2 && index == 0 {
+                super::LifecyclePhase::Prepare
+            } else {
+                super::LifecyclePhase::Commit
+            };
+            if expected != Some(vote.ordinal)
+                || !owners.insert(sign.owner())
+                || sign.key().is_none_or(|key| key.phase() != expected_phase)
+            {
                 return false;
             }
             match &vote.broadcast {
@@ -380,7 +439,7 @@ impl RecoveredControlContinuationV1 {
         self,
         _permit: super::work_registry::RecoveredLifecycleBroadcastAndSignRegistryCommitPermitV1,
     ) -> (
-        AuthenticatedRecoveredWalControlProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection,
         u128,
         RecoveredLifecycleSignedBroadcastProjectionV1,
         u128,
@@ -397,7 +456,7 @@ impl RecoveredControlContinuationV1 {
 }
 
 #[cfg(test)]
-impl AuthenticatedRecoveredWalControlProjection {
+impl AuthenticatedRecoveredWalStandaloneSignProjection {
     /// Persist a crash frame built from real authenticated WAL frames and signed messages.
     pub(in crate::sumeragi) fn persist_advanced_continuation_for_test(
         &self,

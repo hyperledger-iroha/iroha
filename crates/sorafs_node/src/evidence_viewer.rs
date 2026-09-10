@@ -547,9 +547,8 @@ pub enum EvidenceViewerCheckpointStoreExternalErrorV1 {
 /// form the monotonic lineage, `checkpoint_digest` binds the current payload-free checkpoint,
 /// `revision` is the deterministic CAS identity, and the existing governed receipt signer
 /// authenticates the whole public record.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreRecordV1")]
-#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerCheckpointStoreRecordV1 {
     /// Record schema version.
     pub version: u16,
@@ -1303,9 +1302,8 @@ pub enum EvidenceViewerReceiptKindV1 {
     ErasureDeniedLegalHold,
 }
 /// Canonical payload-free receipt body.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerReceiptBodyV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerReceiptBodyV1 {
     /// Schema version.
     pub version: u16,
@@ -1341,9 +1339,8 @@ pub struct EvidenceViewerReceiptBodyV1 {
     pub previous_receipt_digest: [u8; 32],
 }
 /// Ed25519-authenticated payload-free receipt.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSignedReceiptV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedReceiptV1 {
     /// Canonical body.
     pub body: EvidenceViewerReceiptBodyV1,
@@ -1404,9 +1401,8 @@ pub struct EvidenceViewerReceiptCursorV1 {
 /// digest, retained receipt count, exact receipt-chain and compaction-archive
 /// heads, plus the qualified checkpoint-store handle, revision, and policy
 /// digest. Audit GETs return this retained anchor without invoking the signer.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSignedCheckpointAnchorV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedCheckpointAnchorV1 {
     /// Checkpoint/anchor schema version.
     pub version: u16,
@@ -1510,9 +1506,8 @@ pub struct EvidenceViewerCompactionArchiveRequestV1 {
 /// The head contains only payload-free metadata. The archive artifact contains
 /// the exact expired challenge/session records and is durably installed under
 /// `operation_id` before the authoritative checkpoint may prune them.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSignedCompactionArchiveHeadV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedCompactionArchiveHeadV1 {
     /// Archive schema version.
     pub version: u16,
@@ -1587,9 +1582,8 @@ impl EvidenceViewerSignedCompactionArchiveHeadV1 {
 /// `receipts` is a contiguous suffix of the authoritative signed checkpoint chain. It contains only
 /// receipt metadata and one-way actor/idempotency digests; evidence bytes, assertions, bearer
 /// grants, holder secrets, and raw viewer identities are never projected.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerTransparencyProjectionV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerTransparencyProjectionV1 {
     /// Transparency projection schema version.
     pub version: u16,
@@ -1826,17 +1820,15 @@ struct EvidenceViewerErasureIntentV1 {
     request_digest: [u8; 32],
     requested_at_unix_ms: u64,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCompactionArchivePayloadV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCompactionArchivePayloadV1 {
     version: u16,
     challenges: Vec<ChallengeRecordV1>,
     sessions: Vec<EvidenceViewerSessionSecurityRecordV1>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveArtifactV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCompactionArchiveArtifactV1 {
     version: u16,
     head: EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -1851,9 +1843,8 @@ struct EvidenceViewerDefaultRetentionFloorV1 {
     basis_session_expires_at_unix_ms: u64,
     retain_until_unix_ms: u64,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCheckpointV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCheckpointV1 {
     version: u16,
     challenges: Vec<ChallengeRecordV1>,
@@ -1867,9 +1858,8 @@ struct EvidenceViewerCheckpointV1 {
     idempotency: Vec<IdempotencyRecordV1>,
     compaction_archive_head: Option<EvidenceViewerSignedCompactionArchiveHeadV1>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCheckpointEnvelopeV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCheckpointEnvelopeV1 {
     version: u16,
     checkpoint: EvidenceViewerCheckpointV1,
@@ -6908,8 +6898,9 @@ mod tests {
             claims: &EvidenceViewerGrantClaimsV1,
         ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
             let _operation = self.qualification.operation_guard();
-            let claims_bytes =
-                norito::to_bytes(claims).map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
+            let mut claims_bytes = Vec::new();
+            norito::codec::encode_adaptive_into(claims, &mut claims_bytes)
+                .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
             let sequence = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
             let token = format!(
                 "grant-{sequence}-{}",
@@ -9723,6 +9714,10 @@ mod tests {
                 BASE_UNIX_MS + 2,
             )
             .expect("place legal hold");
+        crate::frame_test_support::assert_current_frame(
+            &hold,
+            "sorafs_node::evidence_viewer::EvidenceViewerLegalHoldV1",
+        );
         assert_eq!(
             placement.body.kind,
             EvidenceViewerReceiptKindV1::LegalHoldPlaced
@@ -9742,6 +9737,10 @@ mod tests {
             )
             .expect("record legal-hold-aware retention");
         assert!(retention.legal_hold_precedence);
+        crate::frame_test_support::assert_current_frame(
+            &retention,
+            "sorafs_node::evidence_viewer::EvidenceViewerRetentionRecordV1",
+        );
         assert!(
             service
                 .retention_due(retain_until, 16)
@@ -9818,6 +9817,10 @@ mod tests {
             EvidenceViewerReceiptKindV1::ErasureCompleted
         );
         assert_eq!(erasure.receipt_digest, receipt.receipt_digest);
+        crate::frame_test_support::assert_current_frame(
+            &erasure,
+            "sorafs_node::evidence_viewer::EvidenceViewerErasureRecordV1",
+        );
         assert_eq!(
             service
                 .erase(
@@ -9859,6 +9862,10 @@ mod tests {
         drop(service);
         let restarted = fixture.open();
         let status = restarted.audit_status().expect("restart audit projection");
+        crate::frame_test_support::assert_current_frame(
+            &status,
+            "sorafs_node::evidence_viewer::EvidenceViewerAuditStatusV1",
+        );
         assert_eq!(status.session_count, 1);
         assert_eq!(status.receipt_count, 6);
         assert_eq!(status.active_legal_hold_count, 0);

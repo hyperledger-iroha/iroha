@@ -19,13 +19,14 @@ use crate::{
 #[cfg(test)]
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
-use iroha_data_model::prelude::{Mintable, Name};
+use iroha_data_model::prelude::Mintable;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::{AssetBalanceScope, AssetId},
     nexus::DataSpaceId,
     smart_contract::ContractAddress,
 };
+use iroha_model_base::name::Name;
 #[cfg(test)]
 use iroha_primitives::numeric_abi::QuantityValueV1;
 use iroha_primitives::{

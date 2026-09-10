@@ -17,10 +17,10 @@ use crate::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    name::Name,
     nexus::{AxtAssetIncarnationV1, DataSpaceId},
 };
 use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};

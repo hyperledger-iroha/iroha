@@ -1228,10 +1228,8 @@ fn encode_base32_lower(data: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use crate::verifier::ParsedCar;
-    use iroha_data_model::{
-        name::Name,
-        taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
-    };
+    use iroha_data_model::taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution};
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
     use tempfile::{TempDir, tempdir};
     #[test]

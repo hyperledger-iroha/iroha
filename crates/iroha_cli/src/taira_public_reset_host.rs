@@ -16,6 +16,7 @@ use super::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Context as _, Result, eyre};
+use iroha_model_base::name::Name;
 use iroha::{
     client::{
         AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
@@ -33,7 +34,7 @@ use iroha::{
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
         nexus::FeeSponsorProgramId,
         peer::PeerId,
-        prelude::{Name, SignedTransaction},
+        prelude::{ SignedTransaction},
         soracloud::{
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
             SoraDeploymentBundleV1, SoraInrouGuestIsaV1, SoraInrouPlacementTargetV1,

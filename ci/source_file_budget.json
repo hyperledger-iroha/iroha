@@ -166,7 +166,7 @@
     "scripts/iso_operator_evidence_verify.py": 6426,
     "scripts/iso_production_readiness.py": 10725,
     "scripts/tests/check_sorafs_production_readiness_test.py": 17654,
-    "scripts/tests/check_sorafs_rollout_gate_contract_test.py": 28786,
+    "scripts/tests/check_sorafs_rollout_gate_contract_test.py": 28429,
     "scripts/tests/sorafs_evidence_validation_test.py": 9386,
     "scripts/tests/sorafs_runner_preflight_test.py": 3989,
     "xtask/src/main.rs": 14477,

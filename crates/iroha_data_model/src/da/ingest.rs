@@ -1,3 +1,5 @@
+//! DA ingest authorization, request, receipt, and shared durable spool types.
+
 use crate::parameter::CustomParameter;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -1311,6 +1313,27 @@ pub struct DaIngestReceipt {
     pub operator_signature: Signature,
 }
 
+/// Durable DA spool record written by Torii and read by Core block assembly.
+///
+/// Both consumers use this single declared frame owner. The embedded receipt
+/// remains a payload field; its API frame is not a spool-record envelope.
+/// The canonical identity retains the original Torii producer's name independently
+/// of this type's physical Rust module, preserving the durable spool contract.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::StoredDaReceipt")]
+pub struct StoredDaReceipt {
+    /// Exact supported spool payload version.
+    pub version: u16,
+    /// Monotonic sequence within the receipt's lane and epoch.
+    pub sequence: u64,
+    /// Signed ingest acknowledgement.
+    pub receipt: DaIngestReceipt,
+}
+impl StoredDaReceipt {
+    /// The only supported durable receipt payload version.
+    pub const VERSION: u16 = 1;
+}
+
 #[cfg(test)]
 mod pin_scope_tests {
     use super::*;
@@ -1569,3 +1592,102 @@ mod admission_policy_tests {
 
 #[cfg(test)]
 mod captured_ingest_schema_tests;
+
+#[cfg(test)]
+mod stored_receipt_frame_tests {
+    use super::*;
+
+    pub(super) fn fixture(pdp_commitment: Option<Vec<u8>>) -> StoredDaReceipt {
+        let signer = KeyPair::try_from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("deterministic signer");
+        StoredDaReceipt {
+            version: StoredDaReceipt::VERSION,
+            sequence: 7,
+            receipt: DaIngestReceipt {
+                client_blob_id: BlobDigest::new([1; 32]),
+                lane_id: LaneId::new(3),
+                epoch: 5,
+                blob_hash: BlobDigest::new([2; 32]),
+                chunk_root: BlobDigest::new([3; 32]),
+                manifest_hash: BlobDigest::new([4; 32]),
+                storage_ticket: StorageTicketId::new([5; 32]),
+                pdp_commitment,
+                stripe_layout: DaStripeLayout::default(),
+                queued_at_unix: 1234,
+                rent_quote: DaRentQuote::default(),
+                operator_signature: Signature::try_new(signer.private_key(), b"receipt fixture")
+                    .expect("sign fixture"),
+            },
+        }
+    }
+
+    #[test]
+    fn stored_receipt_has_one_shared_frame_owner_and_exact_roundtrip() {
+        let stored = fixture(None);
+        assert_eq!(
+            <StoredDaReceipt as norito::NoritoSchema>::nominal_name(),
+            "iroha_torii::da::persistence::StoredDaReceipt"
+        );
+        assert_eq!(
+            <StoredDaReceipt as norito::NoritoSchema>::frame_name(),
+            "iroha_torii::da::persistence::StoredDaReceipt"
+        );
+        let bytes = norito::encode_canonical(&stored).expect("shared receipt frame");
+        // The source-bound original producer capture independently confirms
+        // this sole frame identity and the complete root/container frames.
+        assert_eq!(
+            norito::schema::identity::frame_hash::<StoredDaReceipt>(),
+            [
+                0xf4, 0xb0, 0x55, 0xd4, 0xb6, 0xa0, 0x6e, 0xd2, 0xff, 0x40, 0xfb, 0x14, 0xe1, 0x40,
+                0x0f, 0xb3,
+            ]
+        );
+        assert_eq!(
+            bytes[6..22],
+            norito::schema::identity::frame_hash::<StoredDaReceipt>()
+        );
+        let decoded: StoredDaReceipt = norito::decode_canonical(&bytes).expect("exact roundtrip");
+        assert_eq!(decoded, stored);
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("re-encode"),
+            bytes
+        );
+        let receipt_frame = norito::encode_canonical(&stored.receipt).expect("API receipt frame");
+        assert!(matches!(
+            norito::decode_canonical::<StoredDaReceipt>(&receipt_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<DaIngestReceipt>(&bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        // The removed Core duplicate and the superseded model-path declaration
+        // are different owners, never alternative spellings accepted on disk.
+        for wrong_owner in [
+            [
+                0x91, 0xd1, 0xb4, 0x31, 0x94, 0x8e, 0x90, 0x5b, 0xb3, 0xb2, 0x88, 0xbe, 0x0a, 0x3e,
+                0x09, 0x7b,
+            ],
+            [
+                0x14, 0x48, 0x06, 0x51, 0x39, 0x29, 0xcb, 0xdf, 0xaf, 0xff, 0x96, 0x39, 0x90, 0x59,
+                0x83, 0x40,
+            ],
+        ] {
+            let mut substituted = bytes.clone();
+            substituted[6..22].copy_from_slice(&wrong_owner);
+            norito::core::from_bytes_view(&substituted)
+                .expect("only the declared owner differs; envelope and payload remain valid");
+            assert!(matches!(
+                norito::decode_canonical::<StoredDaReceipt>(&substituted),
+                Err(norito::Error::SchemaMismatch)
+            ));
+        }
+        assert!(norito::decode_canonical::<StoredDaReceipt>(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<StoredDaReceipt>(&trailing).is_err());
+    }
+}
+
+#[cfg(test)]
+mod stored_receipt_original_frame_tests;

@@ -291,7 +291,6 @@ use iroha_data_model::{
     domain::DomainId,
     events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
-    name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
     peer::{Peer, PeerId},
@@ -324,6 +323,8 @@ use iroha_executor_data_model::permission::query::{
     CanReadAllLedgerData, CanReadRestrictedDataspace,
 };
 use iroha_futures::supervisor::ShutdownSignal;
+#[cfg(feature = "app_api")]
+use iroha_model_base::name::Name;
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_primitives::{addr::SocketAddr, numeric::Quantity};
@@ -1141,6 +1142,8 @@ mod event;
 pub mod explorer;
 #[cfg(feature = "app_api")]
 pub mod filter;
+#[cfg(test)]
+mod frame_test_support;
 #[cfg(feature = "app_api")]
 pub(crate) mod generic_query;
 #[cfg(feature = "app_api")]
@@ -2382,7 +2385,7 @@ fn is_exact_tx_history_dataspace_alias(
 ) -> bool {
     !dataspace.is_empty()
         && !dataspace.contains('.')
-        && iroha_data_model::name::canonicalize_domain_label(dataspace)
+        && iroha_model_base::name::canonicalize_domain_label(dataspace)
             .is_ok_and(|canonical| canonical == dataspace)
         && catalog.by_alias(dataspace).is_some()
 }
@@ -8563,6 +8566,7 @@ async fn handler_gov_unlock_stats(
     norito::derive::NoritoDeserialize,
 )]
 /// Full canonical account state exposed only through the trusted internal read boundary.
+
 struct InternalAccountReadResponse {
     /// Canonical domainless account identifier.
     id: AccountId,
@@ -14567,6 +14571,7 @@ pub struct ZkIvmProveRequestDto {
     Eq,
 )]
 /// Response body returned by `POST /v1/zk/ivm/prove` and `DELETE /v1/zk/ivm/prove/{job_id}`.
+
 pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
@@ -21152,7 +21157,7 @@ impl CanonicalFanoutBatchRef<'_> {
         }
     }
     fn values_encoded_len_exact(self) -> Option<usize> {
-        fn sequence<T: norito::core::NoritoSerialize>(values: &[T]) -> Option<usize> {
+        fn sequence<T: norito::core::SerializePayload>(values: &[T]) -> Option<usize> {
             let mut total = norito::core::seq_len_prefix_len(values.len());
             for value in values {
                 let item_len = value.encoded_len_exact()?;
@@ -21169,7 +21174,7 @@ impl CanonicalFanoutBatchRef<'_> {
         self,
         writer: &mut norito::core::Encoder<'_>,
     ) -> Result<(), norito::core::Error> {
-        fn sequence<T: norito::core::NoritoSerialize>(
+        fn sequence<T: norito::core::SerializePayload>(
             values: &[T],
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
@@ -43546,7 +43551,7 @@ impl Torii {
     ) -> Result<(), String> {
         const PIN_GLOBAL_USAGE_STATE_KEY_V1: &str = "sorafs_pin_accounting_v1/global";
         const PIN_GLOBAL_USAGE_MAX_BYTES_V1: usize = 128;
-        let key = iroha_data_model::state_path::StatePath::from_str(PIN_GLOBAL_USAGE_STATE_KEY_V1)
+        let key = iroha_model_base::state_path::StatePath::from_str(PIN_GLOBAL_USAGE_STATE_KEY_V1)
             .map_err(|error| format!("invalid pin resource summary state path: {error:?}"))?;
         let world = state.world_view();
         let usage = match world.smart_contract_state().get(&key) {

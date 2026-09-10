@@ -6,6 +6,7 @@
 //! is a universal-domain control, NOT private-to-universal transition evidence.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+use iroha_model_base::name::Name;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},

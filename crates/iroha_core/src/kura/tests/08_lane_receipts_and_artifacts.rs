@@ -678,8 +678,13 @@ fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evide
         (block, _ownership, proposal),
         kura,
     ) = MarkedLaneBlockFixture::committed().into_parts();
+    let application_height = NonZeroUsize::new(
+        usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+    )
+    .expect("fixture application height is non-zero");
     kura.store_block(Arc::new(block))
         .expect("store block with lane artifact and results");
+    persist_v2_finality_chain_through(&kura, application_height);
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("persist current lane application receipt");
     let current = kura
@@ -687,7 +692,7 @@ fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evide
         .expect("current lane application receipt");
     let pre_release = PreReleaseLaneBlockApplicationReceiptArtifact {
         format: current.format,
-        proposal: current.proposal,
+        proposal: current.proposal.clone(),
         artifact: current
             .source
             .global_artifact()
@@ -695,12 +700,13 @@ fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evide
             .clone(),
         application_block_height: current.application_block_height,
         application_block_hash: current.application_block_hash,
-        entrypoint_indices: current.entrypoint_indices,
-        entrypoint_hashes: current.entrypoint_hashes,
-        result_hashes: current.result_hashes,
-        results: current.results,
+        entrypoint_indices: current.entrypoint_indices.clone(),
+        entrypoint_hashes: current.entrypoint_hashes.clone(),
+        result_hashes: current.result_hashes.clone(),
+        results: current.results.clone(),
     };
-    let payload = norito::to_bytes(&pre_release).expect("encode pre-release application receipt");
+    let payload = frame_kura_test_payload(&current, &pre_release);
+    assert_kura_test_payload_rejected::<LaneBlockApplicationReceiptArtifact>(&payload);
     let (data_path, index_path) =
         Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
@@ -1013,7 +1019,8 @@ fn lane_block_execution_input_reader_rejects_pre_release_correlated_source_layou
         routing_plans: current.routing_plans.clone(),
         native_amx_receipts: current.native_amx_receipts.clone(),
     };
-    let payload = norito::to_bytes(&pre_release).expect("encode pre-release lane execution input");
+    let payload = frame_kura_test_payload(&current, &pre_release);
+    assert_kura_test_payload_rejected::<LaneBlockExecutionInputArtifact>(&payload);
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(

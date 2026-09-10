@@ -16,7 +16,7 @@ The local SF-9a state machine and reporting foundations are implemented. Torii
 persists coordinator state to a Norito snapshot, exposes status/export/report
 and ingestion endpoints, records ingestion telemetry, and ships dashboard
 panels plus alert fixtures. The reference validator also provides
-`sorafs-validate por --challenge <path> --proof <path>`.
+`iroha app sorafs toolkit validate por --challenge <path> --proof <path>`.
 
 The former deterministic randomness adapter fabricated bytes labelled as a
 drand signature and paired them with an empty VRF source. It has been removed
@@ -484,7 +484,7 @@ drand, VRF, report, export, response-body, transaction, token, secret, and key
 material, under-sized provider or challenge samples, unauthenticated or
 non-Norito routes, route latency above threshold, scheduler lag above threshold,
 missing deterministic seed replay, missing drand/VRF validation, missing
-repair/governance handoff, missing `sorafs-validate por` replay, unresolved
+repair/governance handoff, missing `iroha app sorafs toolkit validate por` replay, unresolved
 coordinator state, report latency above threshold, missing PoR metrics
 or alerts, critical alerts, seed replay digest drift across runtime/replay/
 reporting/observability/governance artifacts, and governance packets not bound
@@ -536,7 +536,7 @@ Implemented locally:
   `/v1/sorafs/por/ingestion/{manifest_digest_hex}`.
 - Scheduler, forced-challenge, duplicate-sample, and ingestion telemetry with
   checked-in dashboard and alert fixtures.
-- `generate_por_fixtures` and `sorafs-validate por` reference validation.
+- `generate_por_fixtures` and `iroha app sorafs toolkit validate por` reference validation.
 - Fail-closed SF-9 rollout evidence gate, collection planner, operator argfile
   templates, payload-free canary builder, and focused tests, including
   cross-artifact seed replay digest binding with per-artifact summary

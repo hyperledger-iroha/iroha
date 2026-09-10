@@ -2216,10 +2216,15 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
         expected_root, result_root,
         "the result Merkle root must be an adversarially distinct fallback candidate"
     );
+    let mut json_accept = HeaderMap::new();
+    json_accept.insert(
+        axum::http::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
     let resp = handler_ledger_state_root(
         State(Arc::clone(&app)),
         axum::extract::Path(1),
-        HeaderMap::new(),
+        json_accept.clone(),
     )
     .await
     .expect("authenticated state-root response");
@@ -2284,13 +2289,14 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
     let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.state_root, expected_root);
     assert_eq!(decoded.finality_artifact, expected_artifact);
-    let resp = handler_ledger_state_proof(
-        State(Arc::clone(&app)),
-        axum::extract::Path(1),
-        HeaderMap::new(),
-    )
-    .await
-    .expect("authenticated state-proof JSON response");
+    let resp =
+        handler_ledger_state_proof(State(Arc::clone(&app)), axum::extract::Path(1), json_accept)
+            .await
+            .expect("authenticated state-proof JSON response");
+    assert_eq!(
+        resp.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/json"))
+    );
     let body = torii_body_bytes(resp, "body").await;
     let proof: StateFinalityResponse = norito::json::from_slice(&body).expect("JSON proof");
     assert_eq!(proof.height, 1);
@@ -2326,10 +2332,15 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         .with_state(app.clone());
     let request = Request::builder()
         .uri("/v1/ledger/state-proof/1")
+        .header(axum::http::header::ACCEPT, "application/json")
         .body(Body::empty())
         .expect("request");
     let response = router.clone().oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/json"))
+    );
     let bytes = torii_body_bytes(response, "body").await;
     let proof: StateFinalityResponse = norito::json::from_slice(&bytes).expect("JSON proof");
     assert_eq!(proof.height, 1);
@@ -2343,10 +2354,19 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         .expect("request");
     let response = router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(axum::http::header::CONTENT_TYPE),
+        Some(&HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE))
+    );
     let bytes = torii_body_bytes(response, "body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&bytes).expect("archived state proof");
     let proof: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
+    let canonical = crate::frame_test_support::assert_current_frame(
+        &proof,
+        "iroha_torii::ledger_state_finality::StateFinalityResponse",
+    );
+    assert_eq!(canonical.as_slice(), bytes.as_ref());
     assert_eq!(proof.height, 1);
     assert_eq!(proof.block_hash, expected_artifact.block_hash);
     assert_eq!(proof.state_root, expected_root);

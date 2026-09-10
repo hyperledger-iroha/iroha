@@ -1,7 +1,7 @@
 //! Metadata: key-value pairs that can be attached to accounts, transactions and assets.
 pub use self::model::*;
-use crate::prelude::Name;
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use norito::core::{self as ncore};
 use std::{borrow::Borrow, collections::BTreeMap, format, str::FromStr, string::String, vec::Vec};

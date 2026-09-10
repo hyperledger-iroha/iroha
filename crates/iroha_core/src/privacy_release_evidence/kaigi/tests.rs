@@ -1,6 +1,7 @@
 //! Real generated fixture carriers through the same native Core verifier.
 use super::*;
-use iroha_data_model::{domain::DomainId, kaigi::KaigiPrivacyMode, name::Name, proof::ProofBox};
+use iroha_data_model::{domain::DomainId, kaigi::KaigiPrivacyMode, proof::ProofBox};
+use iroha_model_base::name::Name;
 
 #[test]
 fn real_kaigi_release_builders_preserve_governed_keys_and_final_carriers() {

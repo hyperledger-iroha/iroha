@@ -35,7 +35,6 @@ use iroha_data_model::{
         register::Register,
     },
     metadata::Metadata,
-    name::Name,
     parameter::{
         Parameter,
         custom::CustomParameter,
@@ -63,6 +62,7 @@ use iroha_executor_data_model::permission::{
     trigger::CanRegisterTrigger,
 };
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,

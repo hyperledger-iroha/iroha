@@ -1,0 +1,327 @@
+{
+  "identities": [
+    {
+      "nominal": "musubi::publish::PublicationReleaseSubmissionIntentV1",
+      "serialize_hash": "c0a2fa3ee55f8825dd631a5d40d315c5",
+      "deserialize_hash": "c0a2fa3ee55f8825dd631a5d40d315c5"
+    },
+    {
+      "nominal": "musubi::publish::PublicationReleaseSubmissionTerminalV1",
+      "serialize_hash": "9ab1b8be79ece1af8b306e3991c5c436",
+      "deserialize_hash": "9ab1b8be79ece1af8b306e3991c5c436"
+    },
+    {
+      "nominal": "musubi::publish::PublicationReleaseSubmissionAttemptV1",
+      "serialize_hash": "841978c1490b148945d65ccb884b811a",
+      "deserialize_hash": "841978c1490b148945d65ccb884b811a"
+    },
+    {
+      "nominal": "musubi::publish::PublicationReleaseSubmissionOutcomeV1",
+      "serialize_hash": "3c153550f1b16554daae0c7aa86e7ac6",
+      "deserialize_hash": "3c153550f1b16554daae0c7aa86e7ac6"
+    },
+    {
+      "nominal": "musubi::publish::PublicationAmxSubmissionV1",
+      "serialize_hash": "ef28a18b324e0b7a09dad4673c2786b1",
+      "deserialize_hash": "ef28a18b324e0b7a09dad4673c2786b1"
+    },
+    {
+      "nominal": "musubi::publish::PublicationFinalEvidenceV1",
+      "serialize_hash": "8695f21e6b036c04267f193bf93903f4",
+      "deserialize_hash": "8695f21e6b036c04267f193bf93903f4"
+    },
+    {
+      "nominal": "musubi::publish::PublicationFinalCheckpointV1",
+      "serialize_hash": "f9f7fa1a30f29a30f19abb2a13bfa443",
+      "deserialize_hash": "f9f7fa1a30f29a30f19abb2a13bfa443"
+    },
+    {
+      "nominal": "musubi::publish::PublicationJournalV1",
+      "serialize_hash": "317db54c1d36166ba1e1102c45bde2d4",
+      "deserialize_hash": "317db54c1d36166ba1e1102c45bde2d4"
+    },
+    {
+      "nominal": "musubi::publish::PublicationReleaseSignedEnvelopeV1",
+      "serialize_hash": "a9ba907666a6b7c9be3a0296c8798b98",
+      "deserialize_hash": "a9ba907666a6b7c9be3a0296c8798b98"
+    },
+    {
+      "nominal": "musubi::publication_runtime::PublicationProviderAttestationCheckpointV1",
+      "serialize_hash": "089460e662713a4a391142d12ec3dfb7",
+      "deserialize_hash": "089460e662713a4a391142d12ec3dfb7"
+    },
+    {
+      "nominal": "musubi::publication_runtime::PublicationProviderAttestationSetCheckpointV1",
+      "serialize_hash": "fc6f9baf26fe042a97b2aca850edc337",
+      "deserialize_hash": "fc6f9baf26fe042a97b2aca850edc337"
+    },
+    {
+      "nominal": "musubi::registry_cache::ResolverIndexCacheSnapshotV1",
+      "serialize_hash": "1ed802e1e45a95ee3d933730796942aa",
+      "deserialize_hash": "1ed802e1e45a95ee3d933730796942aa"
+    },
+    {
+      "nominal": "musubi::registry_cache::ResolverIndexCacheCatalogV1",
+      "serialize_hash": "e9ee5c768fbc6b26360682c8408211d3",
+      "deserialize_hash": "e9ee5c768fbc6b26360682c8408211d3"
+    }
+  ],
+  "frames": [
+    {
+      "owner": "PublicationReleaseSubmissionIntentV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationReleaseSubmissionIntentV1>",
+      "serialize_hash": "6627a051c05050d5b3c0145fb88aaf37",
+      "deserialize_hash": "6627a051c05050d5b3c0145fb88aaf37",
+      "frame_hex": "4e52543000006627a051c05050d5b3c0145fb88aaf37000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionIntentV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationReleaseSubmissionIntentV1>",
+      "serialize_hash": "5802975d9ea62b9f29c252aeefd3907b",
+      "deserialize_hash": "5802975d9ea62b9f29c252aeefd3907b",
+      "frame_hex": "4e52543000005802975d9ea62b9f29c252aeefd3907b000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionTerminalV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationReleaseSubmissionTerminalV1>",
+      "serialize_hash": "32a8da89088855e8a7ca75cd061109eb",
+      "deserialize_hash": "32a8da89088855e8a7ca75cd061109eb",
+      "frame_hex": "4e525430000032a8da89088855e8a7ca75cd061109eb000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionTerminalV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationReleaseSubmissionTerminalV1>",
+      "serialize_hash": "258a19b5ace463cfba5028283c53b73f",
+      "deserialize_hash": "258a19b5ace463cfba5028283c53b73f",
+      "frame_hex": "4e5254300000258a19b5ace463cfba5028283c53b73f000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionAttemptV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationReleaseSubmissionAttemptV1>",
+      "serialize_hash": "7cf6867f50bcd8176e9aef3fac5fc3e6",
+      "deserialize_hash": "7cf6867f50bcd8176e9aef3fac5fc3e6",
+      "frame_hex": "4e52543000007cf6867f50bcd8176e9aef3fac5fc3e6000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionAttemptV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationReleaseSubmissionAttemptV1>",
+      "serialize_hash": "1e9f05cd1fbf5b467391427d0f18eb03",
+      "deserialize_hash": "1e9f05cd1fbf5b467391427d0f18eb03",
+      "frame_hex": "4e52543000001e9f05cd1fbf5b467391427d0f18eb03000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionOutcomeV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationReleaseSubmissionOutcomeV1>",
+      "serialize_hash": "1681566ba0670e42fda868944e3a1d19",
+      "deserialize_hash": "1681566ba0670e42fda868944e3a1d19",
+      "frame_hex": "4e52543000001681566ba0670e42fda868944e3a1d19000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationReleaseSubmissionOutcomeV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationReleaseSubmissionOutcomeV1>",
+      "serialize_hash": "77b481f40499840d1ae427c58b0413a1",
+      "deserialize_hash": "77b481f40499840d1ae427c58b0413a1",
+      "frame_hex": "4e525430000077b481f40499840d1ae427c58b0413a1000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationAmxSubmissionV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationAmxSubmissionV1>",
+      "serialize_hash": "d167597282b9af25759dcf5fcb1ff269",
+      "deserialize_hash": "d167597282b9af25759dcf5fcb1ff269",
+      "frame_hex": "4e5254300000d167597282b9af25759dcf5fcb1ff269000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationAmxSubmissionV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationAmxSubmissionV1>",
+      "serialize_hash": "4fd516d0f64eaf9b49707051b1fcac84",
+      "deserialize_hash": "4fd516d0f64eaf9b49707051b1fcac84",
+      "frame_hex": "4e52543000004fd516d0f64eaf9b49707051b1fcac84000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationFinalEvidenceV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationFinalEvidenceV1>",
+      "serialize_hash": "c1b07fd45211022dc9813b5eeb2af21e",
+      "deserialize_hash": "c1b07fd45211022dc9813b5eeb2af21e",
+      "frame_hex": "4e5254300000c1b07fd45211022dc9813b5eeb2af21e000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationFinalEvidenceV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationFinalEvidenceV1>",
+      "serialize_hash": "423abc5e2a5f99a528d14f29b4c2d5a2",
+      "deserialize_hash": "423abc5e2a5f99a528d14f29b4c2d5a2",
+      "frame_hex": "4e5254300000423abc5e2a5f99a528d14f29b4c2d5a2000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationFinalCheckpointV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationFinalCheckpointV1>",
+      "serialize_hash": "76bc22c96610322d785f139e4a8f4d7d",
+      "deserialize_hash": "76bc22c96610322d785f139e4a8f4d7d",
+      "frame_hex": "4e525430000076bc22c96610322d785f139e4a8f4d7d000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationFinalCheckpointV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationFinalCheckpointV1>",
+      "serialize_hash": "a624bfdf15d404e8992b488e99f1d003",
+      "deserialize_hash": "a624bfdf15d404e8992b488e99f1d003",
+      "frame_hex": "4e5254300000a624bfdf15d404e8992b488e99f1d003000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationJournalV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationJournalV1>",
+      "serialize_hash": "b08308cca42ca97bfae2c8e7b62c6fe9",
+      "deserialize_hash": "b08308cca42ca97bfae2c8e7b62c6fe9",
+      "frame_hex": "4e5254300000b08308cca42ca97bfae2c8e7b62c6fe9000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationJournalV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationJournalV1>",
+      "serialize_hash": "9c4924cfc4ba9328c38f5d7469dd2108",
+      "deserialize_hash": "9c4924cfc4ba9328c38f5d7469dd2108",
+      "frame_hex": "4e52543000009c4924cfc4ba9328c38f5d7469dd2108000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationReleaseSignedEnvelopeV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publish::PublicationReleaseSignedEnvelopeV1>",
+      "serialize_hash": "b0631f59f785035870e91f4f05c2aca5",
+      "deserialize_hash": "b0631f59f785035870e91f4f05c2aca5",
+      "frame_hex": "4e5254300000b0631f59f785035870e91f4f05c2aca5000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationReleaseSignedEnvelopeV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publish::PublicationReleaseSignedEnvelopeV1>",
+      "serialize_hash": "9e5e2382ecd67702b98c0acff6fd8112",
+      "deserialize_hash": "9e5e2382ecd67702b98c0acff6fd8112",
+      "frame_hex": "4e52543000009e5e2382ecd67702b98c0acff6fd8112000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationProviderAttestationCheckpointV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publication_runtime::PublicationProviderAttestationCheckpointV1>",
+      "serialize_hash": "64e484dbe0fcf5a414624fb3f6f55a03",
+      "deserialize_hash": "64e484dbe0fcf5a414624fb3f6f55a03",
+      "frame_hex": "4e525430000064e484dbe0fcf5a414624fb3f6f55a03000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationProviderAttestationCheckpointV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publication_runtime::PublicationProviderAttestationCheckpointV1>",
+      "serialize_hash": "a57f0ec7527d45442a9862f17eae59c4",
+      "deserialize_hash": "a57f0ec7527d45442a9862f17eae59c4",
+      "frame_hex": "4e5254300000a57f0ec7527d45442a9862f17eae59c4000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "PublicationProviderAttestationSetCheckpointV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::publication_runtime::PublicationProviderAttestationSetCheckpointV1>",
+      "serialize_hash": "47924ae30d1c4c699177f0650f2f03fb",
+      "deserialize_hash": "47924ae30d1c4c699177f0650f2f03fb",
+      "frame_hex": "4e525430000047924ae30d1c4c699177f0650f2f03fb000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "PublicationProviderAttestationSetCheckpointV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::publication_runtime::PublicationProviderAttestationSetCheckpointV1>",
+      "serialize_hash": "a55c48a285237a26ebca0e976fcdcd67",
+      "deserialize_hash": "a55c48a285237a26ebca0e976fcdcd67",
+      "frame_hex": "4e5254300000a55c48a285237a26ebca0e976fcdcd67000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheSnapshotV1",
+      "shape": "root",
+      "nominal": "musubi::registry_cache::ResolverIndexCacheSnapshotV1",
+      "serialize_hash": "1ed802e1e45a95ee3d933730796942aa",
+      "deserialize_hash": "1ed802e1e45a95ee3d933730796942aa",
+      "frame_hex": "4e52543000001ed802e1e45a95ee3d933730796942aa002601000000000000803145bd57298070022032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f9114902710133080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000c3010100000000000000b901150c0b0a617070732e736f72612f0704010000000100a101150c0b0a617070732e736f72612f07040100000001002032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f911492a0b0a09617070732e736f7261090807000000000000000a01000000050461707073080100000000000000080000000000000000010033080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000080000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheSnapshotV1",
+      "shape": "option_some",
+      "nominal": "core::option::Option<musubi::registry_cache::ResolverIndexCacheSnapshotV1>",
+      "serialize_hash": "5619b623cff6e969563d0d3995c84583",
+      "deserialize_hash": "5619b623cff6e969563d0d3995c84583",
+      "frame_hex": "4e52543000005619b623cff6e969563d0d3995c84583002901000000000000c5b884ae479744010201a6022032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f9114902710133080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000c3010100000000000000b901150c0b0a617070732e736f72612f0704010000000100a101150c0b0a617070732e736f72612f07040100000001002032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f911492a0b0a09617070732e736f7261090807000000000000000a01000000050461707073080100000000000000080000000000000000010033080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000080000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheSnapshotV1",
+      "shape": "vec_two",
+      "nominal": "alloc::vec::Vec<musubi::registry_cache::ResolverIndexCacheSnapshotV1>",
+      "serialize_hash": "81ac6d33f8ef0696d2108d57ea6f25c7",
+      "deserialize_hash": "81ac6d33f8ef0696d2108d57ea6f25c7",
+      "frame_hex": "4e525430000081ac6d33f8ef0696d2108d57ea6f25c700580200000000000039481362af607ba2020200000000000000a6022032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f9114902710133080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000c3010100000000000000b901150c0b0a617070732e736f72612f0704010000000100a101150c0b0a617070732e736f72612f07040100000001002032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f911492a0b0a09617070732e736f7261090807000000000000000a01000000050461707073080100000000000000080000000000000000010033080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000080000000000000000a6022032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f9114902710133080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000c3010100000000000000b901150c0b0a617070732e736f72612f0704010000000100a101150c0b0a617070732e736f72612f07040100000001002032c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f911492a0b0a09617070732e736f7261090807000000000000000a01000000050461707073080100000000000000080000000000000000010033080a00000000000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a080a00000000000000080000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheCatalogV1",
+      "shape": "root",
+      "nominal": "musubi::registry_cache::ResolverIndexCacheCatalogV1",
+      "serialize_hash": "e9ee5c768fbc6b26360682c8408211d3",
+      "deserialize_hash": "e9ee5c768fbc6b26360682c8408211d3",
+      "frame_hex": "4e5254300000e9ee5c768fbc6b26360682c8408211d3002200000000000000e5be1ca0ca56e8590216156d75737562692d7265736f6c7665722d63616368650101080000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheCatalogV1",
+      "shape": "option_some",
+      "nominal": "core::option::Option<musubi::registry_cache::ResolverIndexCacheCatalogV1>",
+      "serialize_hash": "2b4cb48aaa3a7b2eb95321799165162b",
+      "deserialize_hash": "2b4cb48aaa3a7b2eb95321799165162b",
+      "frame_hex": "4e52543000002b4cb48aaa3a7b2eb95321799165162b002400000000000000bddace052cafdc5402012216156d75737562692d7265736f6c7665722d63616368650101080000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheCatalogV1",
+      "shape": "vec_two",
+      "nominal": "alloc::vec::Vec<musubi::registry_cache::ResolverIndexCacheCatalogV1>",
+      "serialize_hash": "a367a51f73f5188e67f4dc6a1b5b890e",
+      "deserialize_hash": "a367a51f73f5188e67f4dc6a1b5b890e",
+      "frame_hex": "4e5254300000a367a51f73f5188e67f4dc6a1b5b890e004e000000000000004c45e7b7f3cf1c530202000000000000002216156d75737562692d7265736f6c7665722d636163686501010800000000000000002216156d75737562692d7265736f6c7665722d63616368650101080000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheSnapshotV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::registry_cache::ResolverIndexCacheSnapshotV1>",
+      "serialize_hash": "5619b623cff6e969563d0d3995c84583",
+      "deserialize_hash": "5619b623cff6e969563d0d3995c84583",
+      "frame_hex": "4e52543000005619b623cff6e969563d0d3995c84583000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "ResolverIndexCacheSnapshotV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::registry_cache::ResolverIndexCacheSnapshotV1>",
+      "serialize_hash": "81ac6d33f8ef0696d2108d57ea6f25c7",
+      "deserialize_hash": "81ac6d33f8ef0696d2108d57ea6f25c7",
+      "frame_hex": "4e525430000081ac6d33f8ef0696d2108d57ea6f25c7000800000000000000c0ca824265736ab6000000000000000000"
+    },
+    {
+      "owner": "ResolverIndexCacheCatalogV1",
+      "shape": "option_none",
+      "nominal": "core::option::Option<musubi::registry_cache::ResolverIndexCacheCatalogV1>",
+      "serialize_hash": "2b4cb48aaa3a7b2eb95321799165162b",
+      "deserialize_hash": "2b4cb48aaa3a7b2eb95321799165162b",
+      "frame_hex": "4e52543000002b4cb48aaa3a7b2eb95321799165162b000100000000000000593f676473a1ad1f0000"
+    },
+    {
+      "owner": "ResolverIndexCacheCatalogV1",
+      "shape": "vec_empty",
+      "nominal": "alloc::vec::Vec<musubi::registry_cache::ResolverIndexCacheCatalogV1>",
+      "serialize_hash": "a367a51f73f5188e67f4dc6a1b5b890e",
+      "deserialize_hash": "a367a51f73f5188e67f4dc6a1b5b890e",
+      "frame_hex": "4e5254300000a367a51f73f5188e67f4dc6a1b5b890e000800000000000000c0ca824265736ab6000000000000000000"
+    }
+  ]
+}

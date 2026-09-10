@@ -19,7 +19,7 @@ The checked-in automation has distinct responsibilities:
 | `.github/workflows/workspace_release.yml` | Exact-SHA workspace release gate. It runs nightly, on `main`, on `v*` tags, by manual dispatch, and as a reusable workflow. Its jobs check formatting, build the workspace, build Rustdoc, run the workspace tests and compile-unit guard, collect coverage, and run strict Clippy. |
 | `scripts/run_release_pipeline.py` | Local Iroha 3 coordinator. It builds from reviewed prebuilt binaries, produces bundle inventories and checksums, creates the aggregate manifest, optionally signs it through an external signer, and creates and validates a publication plan. |
 | `.github/workflows/publish.yml` | Iroha 3 `v3*` container publication workflow. It is not the generic coordinator. |
-| `.github/workflows/sorafs-cli-release.yml` | Separate SoraFS CLI/reference-validator release workflow for `sorafs-cli-v*`. Its evidence does not certify the generic Iroha bundles. |
+| `.github/workflows/sorafs-cli-release.yml` | Separate SoraFS tooling/canonical CLI release workflow for `sorafs-cli-v*`. Its evidence does not certify the generic Iroha bundles. |
 | `.github/workflows/mobile_sdk_artifacts.yml` | Separate mobile SDK artifact workflow. |
 
 No checked-in workflow invokes `scripts/run_release_pipeline.py`. A local run
@@ -164,12 +164,12 @@ canonical `release_manifest.json`:
 - `--trusted-signing-fingerprint` comes from an authenticated review channel,
   not from the downloaded artifact set
 - `--release-manifest-verifier` identifies the reviewed
-  `sorafs-validate` executable
+  `iroha` executable
 - `--trusted-release-manifest-verifier-sha256` independently pins that exact
   executable
 
 Verify the tuple with `scripts/release_manifest_signing.py verify`; the native
-contract invoked is `sorafs-validate release-manifest`. Then verify every
+contract invoked is `iroha app sorafs toolkit release-manifest`. Then verify every
 candidate against both its checksum sidecar and the authenticated aggregate
 manifest as described in `release_artifact_selection.md`.
 

@@ -1,6 +1,6 @@
 //! End-to-end coverage for one-shot public entrypoint argument decoding.
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Name;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, ProgramMetadata,

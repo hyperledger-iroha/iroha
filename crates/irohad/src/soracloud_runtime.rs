@@ -60,7 +60,6 @@ use iroha_data_model::{
     Encode,
     account::AccountId,
     isi::{self, InstructionBox},
-    name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_HTTP_SERVICE_REPLICA_MAX_V1, SORA_INROU_DATA_VOLUME_MOUNT_ROOT_V1,
@@ -93,6 +92,7 @@ use iroha_data_model::{
     transaction::{TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 #[cfg(test)]
 use iroha_torii::sorafs::api::StorageStoredFileDto;

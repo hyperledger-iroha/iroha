@@ -439,11 +439,10 @@ impl KagemushaRecoveryMetadataV1 {
 }
 
 /// Complete statement for one hardware metadata CAS and retained terminal certificate.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryCheckpointStatementV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryCheckpointStatementV1 {
     /// Nonzero exact retry identity, not authorization by itself.
     pub operation_id: DigestV1,
@@ -749,3 +748,13 @@ where
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        KagemushaRecoveryCheckpointStatementV1,
+    >(
+        "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryCheckpointStatementV1",
+    );
+}

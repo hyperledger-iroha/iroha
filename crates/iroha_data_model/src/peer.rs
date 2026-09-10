@@ -1,9 +1,10 @@
 //! This module contains [`Peer`] structure and related implementations and traits implementations.
 pub use self::model::*;
-use crate::{Identifiable, Registered, error::ParseError};
+use crate::{Identifiable, Registered};
 use derive_more::Constructor;
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use iroha_primitives::addr::SocketAddr;
 
 use norito::json::{self, FastJsonWrite, JsonDeserialize};

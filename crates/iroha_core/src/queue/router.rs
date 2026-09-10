@@ -58,14 +58,12 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     musubi::MusubiPackageIdV1,
-    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
     },
     permission::Permission,
     smart_contract::ContractAddress,
-    state_path::StatePath,
     transaction::{Executable, ExecutableBatchItem, signed::TransactionPayload},
 };
 use iroha_executor_data_model::isi::multisig::{
@@ -90,6 +88,7 @@ use iroha_executor_data_model::permission::{
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
     },
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use std::{
@@ -255,9 +254,8 @@ pub struct NativeAmxRoutingPlan {
     pub participants: Vec<RouteLeg>,
 }
 /// Complete routing plan for a transaction.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::queue::router::RoutingPlan")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RoutingPlan {
     /// The transaction executes on one lane/dataspace route.
     Single(RouteLeg),
@@ -9047,6 +9045,39 @@ mod tests {
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     use std::collections::{BTreeMap, BTreeSet};
+    #[test]
+    fn routing_plan_frame_and_leg_payload_preserve_their_boundaries() {
+        let leg = RouteLeg::new(RoutingDecision::default(), RouteLegRole::Coordinator);
+        let plan = RoutingPlan::Single(leg);
+        let leg_bytes = {
+            let _layout =
+                norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::COMPACT_LEN);
+            let mut bytes = Vec::new();
+            norito::SerializePayload::serialize(&leg, &mut norito::core::Encoder::new(&mut bytes))
+                .expect("encode route leg payload");
+            assert_eq!(
+                norito::core::decode_field_canonical::<RouteLeg>(&bytes)
+                    .expect("decode route leg payload"),
+                (leg, bytes.len())
+            );
+            bytes
+        };
+        assert!(!leg_bytes.is_empty());
+        let plan_bytes = norito::encode_canonical(&plan).expect("encode routing plan");
+        let unrelated_bytes = norito::encode_canonical(&42_u8).expect("encode unrelated owner");
+        assert_eq!(
+            norito::decode_from_bytes::<RoutingPlan>(&plan_bytes).expect("decode routing plan"),
+            plan
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<u8>(&plan_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_from_bytes::<RoutingPlan>(&unrelated_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
     fn sample_transaction(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,

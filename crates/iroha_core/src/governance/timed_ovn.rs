@@ -1473,11 +1473,18 @@ pub enum TimedOvnLifecyclePhaseV1 {
 /// cannot contain simultaneous sealed/released records or skip the
 /// registration and survivor-freeze checks. Decoded states remain untrusted
 /// until [`Self::validate`] replays the phase's complete public evidence.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnLifecycleStateV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnLifecycleStateV1")]
 #[norito(tag = "phase", content = "state", deny_unknown_fields)]
 pub enum TimedOvnLifecycleStateV1 {
     /// Registration is open; no participant corpus is frozen yet.
@@ -3155,6 +3162,10 @@ mod tests {
                 .survivor_corpus_root,
             roots.survivor_corpus_root
         );
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &frozen_archive,
+            "iroha_core::tle_release::casting::ParliamentTimedOvnCastingContextArchiveV1",
+        );
         let framed = frozen_archive
             .to_canonical_bytes_v1()
             .expect("bounded header-framed casting archive");
@@ -3224,6 +3235,10 @@ mod tests {
                 .register_participant(binding(99), registration_records[0].clone(), &tle.key)
                 .err(),
             Some(TimedOvnEvidenceError::ParticipantBindingMismatch)
+        );
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &lifecycle,
+            "iroha_core::governance::timed_ovn::TimedOvnLifecycleStateV1",
         );
         let mut lifecycle = lifecycle;
         for (participant_hash, registration_record) in participant_ids

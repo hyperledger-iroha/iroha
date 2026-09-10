@@ -588,6 +588,36 @@ fn completed_musubi_claim_exists_only_for_the_local_finalized_completion() {
         )
         .expect("seal exact local finalized completion");
     assert_eq!(completed.provider_id(), LOCAL_PROVIDER);
+    let preimage = ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
+        network_id: completed.network_id,
+        provider_id: completed.provider_id,
+        binding: completed.binding.clone(),
+        completion: completed.completion.clone(),
+    };
+    assert_eq!(
+        <ProviderIngestMusubiCompletionClaimDigestPreimageV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::provider_ingest_runtime::ProviderIngestMusubiCompletionClaimDigestPreimageV1"
+    );
+    let bytes = norito::encode_canonical(&preimage).expect("exact completed-claim preimage");
+    assert_eq!(
+        bytes[6..22],
+        norito::schema::identity::frame_hash::<ProviderIngestMusubiCompletionClaimDigestPreimageV1>(
+        )
+    );
+    let mut expected_digest = blake3::Hasher::new();
+    expected_digest.update(PROVIDER_INGEST_MUSUBI_COMPLETION_CLAIM_DIGEST_DOMAIN_V1);
+    expected_digest.update(&u64::try_from(bytes.len()).unwrap().to_be_bytes());
+    expected_digest.update(&bytes);
+    assert_eq!(
+        provider_ingest_musubi_completion_claim_digest_v1(&completed),
+        Some(*expected_digest.finalize().as_bytes())
+    );
+    let mut other_provider = completed.clone();
+    other_provider.provider_id = SOURCE_PROVIDER;
+    assert_ne!(
+        provider_ingest_musubi_completion_claim_digest_v1(&other_provider),
+        provider_ingest_musubi_completion_claim_digest_v1(&completed)
+    );
     assert!(
         completed.completed_musubi_store_instance.is_none(),
         "generic finalized-ledger claims must not carry attestation store authority"

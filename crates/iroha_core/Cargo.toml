@@ -173,6 +173,7 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "bridge", "governance"] }
 iroha_macro = { workspace = true }

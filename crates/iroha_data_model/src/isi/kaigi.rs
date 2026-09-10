@@ -257,9 +257,9 @@ mod tests {
     use crate::{
         domain::DomainId,
         kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy},
-        name::Name,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

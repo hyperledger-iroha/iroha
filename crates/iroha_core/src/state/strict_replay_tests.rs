@@ -685,7 +685,7 @@ impl StrictReplayFixture {
         )])
         .sign(self.genesis_key.private_key());
         let applied = self.append_transaction_at_view(transaction, view);
-        let effect_key: iroha_data_model::name::Name =
+        let effect_key: iroha_model_base::name::Name =
             "strict_replay_effect".parse().expect("effect key");
         assert_eq!(
             self.materialized_state

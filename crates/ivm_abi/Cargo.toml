@@ -14,6 +14,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "governance"] }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }

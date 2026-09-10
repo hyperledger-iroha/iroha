@@ -69,6 +69,7 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
     let observed = make_server_observation(&binding, &backends)
         .expect("qualify stable finalized release anchor");
     let state = BrokerServerStateV1 {
+        decode_pool: new_test_process_pool(),
         chain_id: "privacy-release-anchor-test-chain".to_owned(),
         network_id: server_test_network_id(),
         catalog: vec![binding.clone()],
@@ -185,6 +186,7 @@ fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
     let no_readback_observed = make_server_observation(&binding, &no_readback_backends)
         .expect("qualify non-persisting test release anchor");
     let no_readback_state = BrokerServerStateV1 {
+        decode_pool: new_test_process_pool(),
         chain_id: "privacy-release-anchor-no-readback-test-chain".to_owned(),
         network_id: server_test_network_id(),
         catalog: vec![binding],

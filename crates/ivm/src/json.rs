@@ -11,8 +11,9 @@ use core::{fmt::Write as _, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
-    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
+    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, NftId},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,

@@ -14,6 +14,7 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use iroha_data_model::transaction::signed::TransactionSignatureError;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, syscalls as ivm_sys};

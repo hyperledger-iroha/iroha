@@ -40,7 +40,10 @@ use crate::sumeragi::{
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 /// Capability proving that raw planner rows are assembled only inside this
 /// production factory.
 ///
@@ -1792,17 +1795,20 @@ impl ProductionLifecycleOwnerV1 {
                         return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
                     }
                 };
-                if transition.persist_and_publish().is_err() {
-                    iroha_logger::error!(
-                        ordinal,
-                        "Ready Validate no-successor transaction publication failed"
-                    );
-                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
-                }
+                let outcome = match transition.persist_and_publish() {
+                    Ok(outcome) => Arc::new(outcome),
+                    Err(_) => {
+                        iroha_logger::error!(
+                            ordinal,
+                            "Ready Validate no-successor transaction publication failed"
+                        );
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
                 executor
                     .release_live_lifecycle_validate_successor(
                         ordinal,
-                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedNoSuccessor,
+                        crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::AdvancedNoSuccessor(outcome),
                     )
                     .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })

@@ -4715,3 +4715,11 @@ mod unsupported_platform_tests {
         assert!(!requested.exists());
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_frame_fixture.rs"]
+mod persistence_frame_fixture;
+
+#[cfg(test)]
+#[path = "publish/frame_identity_tests.rs"]
+mod frame_identity_tests;

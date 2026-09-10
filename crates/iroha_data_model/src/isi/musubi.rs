@@ -4,7 +4,6 @@
 //! Every mutable operation carries an explicit compare-and-set or policy
 //! revision, and Parliament recovery carries an exact action-bound decision.
 use super::*;
-use crate::error::ParseError;
 use crate::musubi::{
     ArchiveId, MUSUBI_MAX_PACKAGE_OWNERS_V1, MusubiAliasNameV1, MusubiArchiveCommitmentV1,
     MusubiArchiveLocationIdV1, MusubiGovernanceDecisionV1, MusubiNamespaceBindingV1,
@@ -15,6 +14,7 @@ use crate::musubi::{
     validate_musubi_account_id_v1,
 };
 use crate::sorafs::pin_registry::{ManifestDigest, ReplicationOrderId};
+use iroha_model_base::error::ParseError;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 isi! {

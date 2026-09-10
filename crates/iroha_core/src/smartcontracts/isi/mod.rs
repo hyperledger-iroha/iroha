@@ -1019,6 +1019,7 @@ mod tests {
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+    use iroha_model_base::{name::Name, state_path::StatePath};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,

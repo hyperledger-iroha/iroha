@@ -2,10 +2,10 @@
 //!
 //! They are used together with [`QueryBox`](crate::query::QueryBox) to
 //! configure execution of trait-object queries.
-use crate::name::Name;
 use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use iroha_version::{Decode, Encode};
 use nonzero_ext::nonzero;

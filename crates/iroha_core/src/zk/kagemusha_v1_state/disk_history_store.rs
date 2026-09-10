@@ -102,11 +102,10 @@ impl KagemushaHistoryDeviceCredentialsV1 {
 
 // Norito's canonical header declares the layout. The frame magic fixes this journal at V1;
 // callers cannot select another schema/codec or decode a verified capability from disk.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::disk_history_store::JournalRecordV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 enum JournalRecordV1 {
     Initialize {
         lane_binding: DigestV1,
@@ -412,3 +411,11 @@ fn journal_error(error: PrivateJournalError) -> KagemushaHistoryStoreErrorV1 {
 #[cfg(test)]
 #[path = "disk_history_store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<JournalRecordV1>(
+        "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::disk_history_store::JournalRecordV1",
+    );
+}

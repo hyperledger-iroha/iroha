@@ -23,8 +23,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
-    error::ParseError,
-    name::Name,
     nexus::DataSpaceId,
     sorafs::{
         capacity::ProviderId,
@@ -35,6 +33,7 @@ use crate::{
         },
     },
 };
+use iroha_model_base::{error::ParseError, name::Name};
 use streaming::canonical_frame_len;
 
 use streaming::musubi_json_len_bounded;

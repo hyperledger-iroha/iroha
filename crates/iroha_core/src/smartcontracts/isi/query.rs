@@ -1,10 +1,14 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
+#[cfg(test)]
+mod accounting_tests;
 mod canonical_topk;
 mod fast_iter_decode;
 mod ordinary_iterable;
 mod ordinary_memory;
 mod ordinary_stored;
+#[cfg(test)]
+mod payload_sort_tests;
 mod singular_memory;
 use crate::{
     prelude::ValidSingularQuery,
@@ -45,7 +49,8 @@ use iroha_data_model::{
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
-use norito::core::{Header, NoritoSerialize};
+use iroha_model_base::name::Name;
+use norito::core::{Header, NoritoSerialize, SerializePayload};
 pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
 pub use ordinary_memory::{
     ORDINARY_ABI_VERSION_SOURCE_BYTES, ORDINARY_NAME_ID_SOURCE_BYTES,
@@ -59,6 +64,8 @@ pub(crate) use ordinary_memory::{
     ensure_stored_revalidation_admitted as ensure_ordinary_stored_revalidation_admitted,
 };
 pub use singular_memory::SingularQueryOutputLimits;
+#[cfg(test)]
+pub(crate) use singular_memory::encode_singular_query_source_for_test;
 pub(crate) use singular_memory::{
     BorrowedSingularOption, BorrowedSingularStruct, SingularQueryCurrentAllocation,
     SingularQueryRetainedVec, SingularQueryVecBuilder, own_singular_query_serialized_source,
@@ -75,7 +82,7 @@ use std::{
 /// Allows to generalize retrieving the metadata key for all the query output types
 pub trait SortableQueryOutput {
     /// Type used for deterministic tie-breaking when metadata sort keys are equal.
-    type TiebreakKey: Ord + NoritoSerialize + Send + Sync;
+    type TiebreakKey: Ord + Send + Sync;
     /// Get the sorting key for the output, from metadata
     ///
     /// If the type doesn't have metadata or metadata key doesn't exist - return None
@@ -221,7 +228,8 @@ pub struct QueryExecutionStats {
     processed_bytes: u64,
 }
 impl QueryExecutionStats {
-    /// Number of items charged by query execution.
+    /// Number of source items or history projection work units charged by query execution.
+    /// Retained sort-key bytes do not add another source item.
     #[must_use]
     pub const fn processed_items(self) -> u64 {
         self.processed_items
@@ -234,7 +242,7 @@ impl QueryExecutionStats {
     pub const fn processed_bytes(self) -> u64 {
         self.processed_bytes
     }
-    fn record_item<T: NoritoSerialize>(
+    fn record_item<T: SerializePayload>(
         &mut self,
         value: &T,
         budget: Option<QueryExecutionBudget>,
@@ -245,18 +253,7 @@ impl QueryExecutionStats {
             .ok_or(Error::GasBudgetExceeded)?;
         self.record_value_bytes(value, budget)
     }
-    fn record_skipped_value<T: NoritoSerialize>(
-        &mut self,
-        value: &T,
-        budget: Option<QueryExecutionBudget>,
-    ) -> Result<(), Error> {
-        self.processed_items = self
-            .processed_items
-            .checked_add(1)
-            .ok_or(Error::GasBudgetExceeded)?;
-        self.record_value_bytes(value, budget)
-    }
-    fn record_value_bytes<T: NoritoSerialize>(
+    fn record_value_bytes<T: SerializePayload>(
         &mut self,
         value: &T,
         budget: Option<QueryExecutionBudget>,
@@ -350,7 +347,7 @@ impl std::io::Write for BoundedLengthWriter {
         Ok(())
     }
 }
-fn bounded_bare_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Result<u64, Error> {
+fn bounded_bare_encoded_len<T: SerializePayload>(value: &T, limit: u64) -> Result<u64, Error> {
     if let Some(exact) = value.encoded_len_exact() {
         let exact = u64::try_from(exact).unwrap_or(u64::MAX);
         if exact > limit {
@@ -391,7 +388,7 @@ fn bounded_framed_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Resu
         .checked_add(payload)
         .ok_or(Error::GasBudgetExceeded)
 }
-fn bounded_encoded_vec_tiebreak_len<T: NoritoSerialize>(
+fn bounded_encoded_vec_tiebreak_len<T: SerializePayload>(
     value: &T,
     limit: u64,
 ) -> Result<u64, Error> {
@@ -1411,7 +1408,8 @@ fn scan_unsorted_transaction_page(
                 processed_items: processed_items.get(),
                 processed_bytes: processed_bytes.get(),
             };
-            current_stats.record_skipped_value(&transaction, execution_budget)?;
+            // The history visitor already charged the projection work for this row.
+            current_stats.record_value_bytes(&transaction, execution_budget)?;
             processed_bytes.set(current_stats.processed_bytes);
             if !matches {
                 return Ok(ControlFlow::Continue(()));
@@ -1556,7 +1554,8 @@ fn collect_sorted_transaction_prefix(
                 processed_items: processed_items.get(),
                 processed_bytes: processed_bytes.get(),
             };
-            current_stats.record_skipped_value(&value, execution_budget)?;
+            // The history visitor already charged the projection work for this row.
+            current_stats.record_value_bytes(&value, execution_budget)?;
             if !matches {
                 processed_bytes.set(current_stats.processed_bytes);
                 return Ok(ControlFlow::Continue(()));
@@ -1568,7 +1567,7 @@ fn collect_sorted_transaction_prefix(
             }
             let sort_key = value.get_metadata_sorting_key(key);
             if let Some(sort_key) = sort_key {
-                current_stats.record_skipped_value(sort_key, execution_budget)?;
+                current_stats.record_value_bytes(sort_key, execution_budget)?;
             }
             let tiebreak_key =
                 materialize_admitted_tiebreak_key(&value, &mut current_stats, execution_budget)?;
@@ -2054,7 +2053,7 @@ fn collect_ephemeral_sorted_prefix<I>(
 ) -> Result<(Vec<I::Item>, u64), Error>
 where
     I: Iterator,
-    I::Item: SortableQueryOutput + NoritoSerialize,
+    I::Item: SortableQueryOutput + SerializePayload,
 {
     let mut count = 0_u64;
     if keep == 0 {
@@ -2070,7 +2069,7 @@ where
         stats.record_item(&value, budget)?;
         let sort_key = value.get_metadata_sorting_key(key);
         if let Some(sort_key) = sort_key {
-            stats.record_skipped_value(sort_key, budget)?;
+            stats.record_value_bytes(sort_key, budget)?;
         }
         let sort_key = sort_key.cloned();
         let tiebreak_key = materialize_admitted_tiebreak_key(&value, stats, budget)?;
@@ -2357,7 +2356,7 @@ where
         let Some(value) = iter.next() else {
             break;
         };
-        stats.record_skipped_value(&value, budget)?;
+        stats.record_item(&value, budget)?;
         skipped = skipped.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
     }
     let mut first_batch_values = Vec::new();
@@ -2846,7 +2845,7 @@ where
             let Some(value) = iter.next() else {
                 break;
             };
-            stats.record_skipped_value(&value, budget)?;
+            stats.record_item(&value, budget)?;
             skipped = skipped.saturating_add(1);
         }
         while usize::try_from(processed).unwrap_or(usize::MAX) < probe {
@@ -2866,7 +2865,7 @@ where
         let mut batch_iter =
             ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
         let (batch, _next) = batch_iter.next_batch(0)?;
-        debug_assert_eq!(stats.processed_items(), processed);
+        debug_assert_eq!(stats.processed_items(), skipped.saturating_add(processed));
         return Ok((QueryOutput::new_bounded(batch, has_more, None), stats));
     }
     if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
@@ -2903,7 +2902,7 @@ where
             stats.record_item(&value, budget)?;
             let sort_key = value.get_metadata_sorting_key(key);
             if let Some(sort_key) = sort_key {
-                stats.record_skipped_value(sort_key, budget)?;
+                stats.record_value_bytes(sort_key, budget)?;
             }
             sort_keys.push(sort_key.cloned());
             let tiebreak_key = materialize_admitted_tiebreak_key(&value, &mut stats, budget)?;
@@ -2966,7 +2965,7 @@ where
         let Some(value) = iter.next() else {
             break;
         };
-        stats.record_skipped_value(&value, budget)?;
+        stats.record_item(&value, budget)?;
         skipped = skipped.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
     }
     while !limit.is_some_and(|limit| count >= limit) {
@@ -3072,7 +3071,7 @@ where
                 let Some(value) = iter.next() else {
                     break;
                 };
-                stats.record_skipped_value(&value, budget)?;
+                stats.record_item(&value, budget)?;
                 skipped = skipped.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
             }
             while !limit.is_some_and(|limit| count >= limit) {
@@ -3158,6 +3157,7 @@ public_address = "addr:127.0.0.1:1337#8F78"
 [torii]
 address = "addr:127.0.0.1:8080#8942"
 app_api_max_fetch_size = {max_fetch_size}
+app_api_default_list_limit = {max_fetch_size}
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -3254,7 +3254,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     #[test]
     fn postprocessing_reports_processed_items_for_sorted_queries() {
-        let key: iroha_data_model::name::Name = "rank".parse().expect("name");
+        let key: iroha_model_base::name::Name = "rank".parse().expect("name");
         let params = QueryParams {
             pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
             sorting: Sorting::by_metadata_key(key),
@@ -4283,16 +4283,17 @@ mod tests {
     #[derive(norito::derive::NoritoSerialize)]
     struct CountingTiebreakValue {
         id: u8,
+        #[norito(skip)]
+        derivations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
-    static TIEBREAK_DERIVATIONS: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(0);
     impl SortableQueryOutput for CountingTiebreakValue {
         type TiebreakKey = Vec<u8>;
         fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
             None
         }
         fn tiebreak_key(&self) -> Self::TiebreakKey {
-            TIEBREAK_DERIVATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.derivations
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             vec![self.id; 16 * 1024]
         }
         fn bounded_tiebreak_key_len(&self, limit: u64) -> Result<u64, Error> {
@@ -4304,9 +4305,12 @@ mod tests {
     }
     #[test]
     fn ephemeral_sort_derives_and_charges_each_large_tiebreak_key_once() {
-        TIEBREAK_DERIVATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let derivations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut stats = QueryExecutionStats::default();
-        let values = (0_u8..32).map(|id| CountingTiebreakValue { id });
+        let values = (0_u8..32).map(|id| CountingTiebreakValue {
+            id,
+            derivations: derivations.clone(),
+        });
         let budget = QueryExecutionBudget::from_weighted_limit(2_000_000, 1, 1);
         let (sorted, count) = collect_ephemeral_sorted_prefix(
             values,
@@ -4320,7 +4324,7 @@ mod tests {
         assert_eq!(count, 32);
         assert_eq!(sorted.len(), 16);
         assert_eq!(
-            TIEBREAK_DERIVATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            derivations.load(std::sync::atomic::Ordering::Relaxed),
             32,
             "sorting comparisons must reuse the one admitted key per item",
         );
@@ -4328,8 +4332,11 @@ mod tests {
     }
     #[test]
     fn ephemeral_sort_rejects_large_tiebreak_key_before_materialization() {
-        TIEBREAK_DERIVATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
-        let value = CountingTiebreakValue { id: 7 };
+        let derivations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let value = CountingTiebreakValue {
+            id: 7,
+            derivations: derivations.clone(),
+        };
         let item_bytes = bounded_bare_encoded_len(&value, u64::MAX).expect("measure item");
         let key_bytes = value
             .bounded_tiebreak_key_len(u64::MAX)
@@ -4347,10 +4354,39 @@ mod tests {
             .expect_err("oversized key must fail its allocation-free preflight");
         assert!(matches!(error, Error::GasBudgetExceeded));
         assert_eq!(
-            TIEBREAK_DERIVATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            derivations.load(std::sync::atomic::Ordering::Relaxed),
             0,
             "rejected keys must never be constructed",
         );
+    }
+    #[test]
+    fn tiebreak_derivations_are_fixture_owned_and_excluded_from_payload() {
+        #[derive(norito::derive::NoritoSerialize)]
+        struct ValuePayload {
+            id: u8,
+        }
+        let first = CountingTiebreakValue {
+            id: 7,
+            derivations: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let second = CountingTiebreakValue {
+            id: 7,
+            derivations: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        assert_eq!(first.tiebreak_key(), vec![7; 16 * 1024]);
+        assert_eq!(
+            first.derivations.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            second
+                .derivations
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+        );
+        let expected = norito::codec::encode_adaptive(&ValuePayload { id: 7 });
+        assert_eq!(norito::codec::encode_adaptive(&first), expected);
+        assert_eq!(norito::codec::encode_adaptive(&second), expected);
     }
     #[test]
     fn singular_response_is_measured_before_host_serialization() {
@@ -4623,7 +4659,7 @@ mod tests {
         )
         .expect("execution geometry");
         let cursor_retained = OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
-            1,
+            3,
             source_bytes,
             source_bytes,
             archive_bytes,
@@ -4631,20 +4667,20 @@ mod tests {
         .expect("cursor geometry");
         let ordinary = OrdinaryQueryExecutionLimits::try_new(
             1,
-            QueryExecutionBudget::from_weighted_limit(2, 1, 0),
+            QueryExecutionBudget::from_weighted_limit(4, 1, 0),
             1,
             execution_headroom,
             source_bytes,
             response_bytes,
-            1,
+            3,
             source_bytes,
             cursor_retained,
             4 * 1_024,
             archive_bytes,
             decode,
         )
-        .expect("two-item page-plus-tail budget");
-        let values = ["one", "two", "probe"].map(|name| {
+        .expect("valid four-item work budget and three-item retained tail");
+        let values = ["one", "two", "three", "four", "probe"].map(|name| {
             name.parse::<RoleId>()
                 .expect("protocol-bounded role identifier")
         });
@@ -4652,6 +4688,18 @@ mod tests {
             fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
             ..QueryParams::default()
         };
+        // One page and three retained rows fit; the fifth source row is an overflow probe.
+        assert!(
+            prepare_stored_unsorted_bounded_start(
+                values[..4].to_vec().into_iter(),
+                SelectorTuple::<RoleId>::default(),
+                &params,
+                QueryLimits::new(1)
+                    .with_count_mode(QueryCountMode::Bounded)
+                    .with_ordinary_execution_limits(ordinary),
+            )
+            .is_ok()
+        );
         let result = prepare_stored_unsorted_bounded_start(
             values.into_iter(),
             SelectorTuple::<RoleId>::default(),
@@ -4672,20 +4720,38 @@ mod tests {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
         use nonzero_ext::nonzero;
         let first = domain_with_query_payload("bounded-first", 8, 0);
-        let oversized = domain_with_query_payload(
-            "bounded-oversized",
-            usize::try_from(MAX_STORED_QUERY_RETAINED_BYTES)
-                .expect("retained-byte bound fits usize")
-                .saturating_add(1),
-            1,
-        );
+        let mut values = vec![first];
+        let mut retained_bytes = 0_u64;
+        while retained_bytes <= MAX_STORED_QUERY_RETAINED_BYTES {
+            let index = values.len();
+            let row = domain_with_query_payload(
+                &format!("bounded-tail{index}"),
+                iroha_primitives::json::MAX_JSON_BYTES / 2,
+                u64::try_from(index).unwrap(),
+            );
+            let row_bytes = bounded_bare_encoded_len(&row, u64::MAX).expect("valid bounded row");
+            assert!(row_bytes < MAX_STORED_QUERY_RETAINED_BYTES);
+            retained_bytes += row_bytes;
+            values.push(row);
+        }
+        assert!(values.len() - 1 < MAX_STORED_QUERY_RETAINED_ITEMS);
+        assert!(retained_bytes > MAX_STORED_QUERY_RETAINED_BYTES);
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
             fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
         };
+        assert!(
+            prepare_stored_unsorted_bounded_start(
+                values[..values.len() - 1].to_vec().into_iter(),
+                SelectorTuple::<Domain>::default(),
+                &params,
+                QueryLimits::new(1).with_count_mode(QueryCountMode::Bounded),
+            )
+            .is_ok()
+        );
         let result = prepare_stored_unsorted_bounded_start(
-            [first, oversized].into_iter(),
+            values.into_iter(),
             SelectorTuple::<Domain>::default(),
             &params,
             QueryLimits::new(1).with_count_mode(QueryCountMode::Bounded),
@@ -5445,7 +5511,7 @@ mod tests {
                 ShutdownSignal::new(),
             ));
             let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-            let state = State::new(world, kura, handle.clone());
+            let state = State::new(with_global_reader(world, &ALICE_ID), kura, handle.clone());
             (state, handle)
         }
         let params = QueryParams::default();
@@ -5548,7 +5614,7 @@ mod tests {
                 ShutdownSignal::new(),
             ));
             let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-            let state = State::new(world, kura, handle.clone());
+            let state = State::new(with_global_reader(world, &ALICE_ID), kura, handle.clone());
             (state, handle)
         }
         let params = QueryParams::default();
@@ -5647,7 +5713,7 @@ mod tests {
                 ShutdownSignal::new(),
             ));
             let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-            let state = State::new(world, kura, handle.clone());
+            let state = State::new(with_global_reader(world, &ALICE_ID), kura, handle.clone());
             (state, handle)
         }
         let params = QueryParams::default();
@@ -5911,7 +5977,12 @@ mod tests {
             ShutdownSignal::new(),
         ));
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new_with_chain(world, kura, handle.clone(), ChainId::from("chain"));
+        let state = State::new_with_chain(
+            with_global_reader(world, &ALICE_ID),
+            kura,
+            handle.clone(),
+            ChainId::from("chain"),
+        );
         let state_view = state.view();
         let params = QueryParams {
             pagination: Pagination::default(),
@@ -5971,7 +6042,7 @@ mod tests {
             ShutdownSignal::new(),
         ));
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
+        let state = State::new(with_global_reader(world, &ALICE_ID), kura, handle.clone());
         // Add two simple time triggers
         {
             let mut block = state.world.triggers.block();
@@ -6183,7 +6254,7 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         // Build world with two accounts and two asset definitions
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
-        let (acc1_id, _) = iroha_test_samples::gen_account_in("w");
+        let acc1_id = ALICE_ID.clone();
         let (acc2_id, _) = iroha_test_samples::gen_account_in("w");
         let acc1 = Account::new(acc1_id.clone()).build(&ALICE_ID);
         let acc2 = Account::new(acc2_id.clone()).build(&ALICE_ID);
@@ -6220,7 +6291,7 @@ mod tests {
             ShutdownSignal::new(),
         ));
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
+        let state = State::new(with_global_reader(world, &ALICE_ID), kura, handle.clone());
         let state_view = state.view();
         // Accounts: default params
         let params = QueryParams {
@@ -6327,7 +6398,7 @@ mod tests {
     fn ranked_account_fixture(fixture: IterDispatchRankFixture) -> (World, [AccountId; 3]) {
         let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account_ids = [
-            iroha_test_samples::gen_account_in("w").0,
+            ALICE_ID.clone(),
             iroha_test_samples::gen_account_in("w").0,
             iroha_test_samples::gen_account_in("w").0,
         ];
@@ -6339,7 +6410,7 @@ mod tests {
         let second = ranked_account(&account_ids[1], ranks[1]);
         let third = ranked_account(&account_ids[2], ranks[2]);
         (
-            World::with([domain], [first, second, third], []),
+            with_global_reader(World::with([domain], [first, second, third], []), &ALICE_ID),
             account_ids,
         )
     }
@@ -6667,7 +6738,7 @@ mod tests {
             ShutdownSignal::new(),
         ));
         let handle = crate::query::store::LiveQueryStoreHandle::new(store);
-        let state = State::new(world, kura, handle.clone());
+        let state = State::new(with_global_reader(world, &ALICE_ID), kura, handle.clone());
         // Insert two time triggers
         {
             let mut block = state.world.triggers.block();
@@ -6852,16 +6923,26 @@ mod tests {
         };
         // Build a state and add two domains with comparable metadata
         let kura = Kura::blank_kura_for_testing();
-        let state = State::new(
-            world_with_test_domains(),
-            kura.clone(),
-            LiveQueryStore::start_test(),
+        let world = with_global_reader(
+            World::with(
+                [
+                    Domain::new(DomainId::try_new("wonderland", "universal").unwrap())
+                        .build(&ALICE_ID),
+                ],
+                [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+                [],
+            ),
+            &ALICE_ID,
         );
+        let state = State::new(world, kura.clone(), LiveQueryStore::start_test());
         let parent_block = state.view().latest_block();
-        let block_header = ValidBlock::new_dummy(&bls_test_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
+        let unverified_block =
+            BlockBuilder::new(vec![dummy_accepted_transaction(state.network_id)])
+                .chain(0, parent_block.as_deref())
+                .sign(ALICE_KEYPAIR.private_key())
+                .unpack(|_| {});
+        // Execution and autoscale samples belong to this exact block header.
+        let mut state_block = state.block(unverified_block.header());
         let mut state_tx = state_block.transaction();
         // Register a second domain
         let alpha_id = DomainId::try_new("alpha", "universal").expect("valid");
@@ -6881,11 +6962,6 @@ mod tests {
         let (peer_pk, _) = bls_test_keypair().into_parts();
         let peer_id = PeerId::new(peer_pk);
         let topology = Topology::new(vec![peer_id]);
-        let unverified_block =
-            BlockBuilder::new(vec![dummy_accepted_transaction(state.network_id)])
-                .chain(0, parent_block.as_deref())
-                .sign(ALICE_KEYPAIR.private_key())
-                .unpack(|_| {});
         let vcb = unverified_block
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {})
@@ -6923,7 +6999,21 @@ mod tests {
         let QueryResponse::Iterable(output) = resp else {
             panic!("expected iterable response")
         };
-        let (_batch, _rem, _cursor) = output.into_parts();
+        let (batch, remaining, cursor) = output.into_parts();
+        let mut columns = batch.into_iter();
+        let domains = match columns.next().expect("domain result column") {
+            iroha_data_model::query::QueryOutputBatchBox::Domain(domains) => domains,
+            other => panic!("expected domains, got {other:?}"),
+        };
+        assert!(columns.next().is_none());
+        assert_eq!(domains.len(), 2);
+        assert_eq!(domains[0].id, alpha_id);
+        assert_eq!(
+            domains[1].id,
+            DomainId::try_new("wonderland", "universal").expect("valid")
+        );
+        assert_eq!(remaining, 0);
+        assert!(cursor.is_none());
         Ok(())
     }
     #[tokio::test]
@@ -6970,6 +7060,12 @@ mod tests {
         Mint::asset_quantity(13_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
+        Grant::account_permission(
+            Permission::from(iroha_executor_data_model::permission::query::CanReadAllLedgerData),
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant authenticated query reader");
         stx.apply();
         let _ = sblock.commit_world_overlay_for_testing();
         let state_view = state.view();
@@ -7027,7 +7123,7 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
         // World with a domain, two accounts, one asset definition, and a minted asset to one account
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let (acc1_id, _) = iroha_test_samples::gen_account_in("wonderland");
+        let acc1_id = ALICE_ID.clone();
         let (acc2_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let ad_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -7067,6 +7163,12 @@ mod tests {
         Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
+        Grant::account_permission(
+            Permission::from(iroha_executor_data_model::permission::query::CanReadAllLedgerData),
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant authenticated query reader");
         stx.apply();
         let _ = sblock.commit_world_overlay_for_testing();
         let state_view = state.view();
@@ -7167,6 +7269,14 @@ mod tests {
             Mint::asset_quantity(7_u32, AssetId::new(ad_id.clone(), BOB_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for BOB");
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::query::CanReadAllLedgerData,
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant authenticated query reader");
             stx.apply();
             let _ = sblock.commit_world_overlay_for_testing();
             (state, handle, ad_id)
@@ -7391,14 +7501,29 @@ mod tests {
             fetch_size: FetchSize::new(Some(nonzero!(3_u64))),
         };
         let validated = ValidQueryRequest::validate_for_client_parts(
-            find_transactions_request(params),
+            find_transactions_request(params.clone()),
             &ALICE_ID,
             &state_view,
             QueryLimits::default().with_count_mode(QueryCountMode::Exact),
         )
         .expect("validate exact transaction query");
+        let rejected = ValidQueryRequest::validate_for_client_parts(
+            find_transactions_request(params),
+            &ALICE_ID,
+            &state_view,
+            QueryLimits::default().with_count_mode(QueryCountMode::Exact),
+        )
+        .expect("validate exact transaction query")
+        .execute_ephemeral_with_stats(
+            &query_handle,
+            &state_view,
+            &ALICE_ID,
+            Some(QueryExecutionBudget::from_weighted_limit(31, 1, 0)),
+        )
+        .expect_err("all 32 history projection units must be charged");
+        assert_eq!(rejected, Error::GasBudgetExceeded);
         state_view.kura().reset_merge_query_read_counters_for_test();
-        let item_budget = QueryExecutionBudget::from_weighted_limit(64, 1, 0);
+        let item_budget = QueryExecutionBudget::from_weighted_limit(32, 1, 0);
         let (QueryResponse::Iterable(output), stats) = validated
             .execute_ephemeral_with_stats(&query_handle, &state_view, &ALICE_ID, Some(item_budget))
             .expect("execute exact transaction query")

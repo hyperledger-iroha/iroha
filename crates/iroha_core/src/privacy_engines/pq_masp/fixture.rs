@@ -14,7 +14,6 @@ use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
     domain::DomainId,
-    name::Name,
     privacy::{
         PqMaspStarkStatementV1, PrivacyAuthorizationKeyDigestV1, PrivacyNoteEncryptionKeyDigestV1,
         PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyPqAuthorizationProfileV1,
@@ -22,6 +21,7 @@ use iroha_data_model::{
         PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
     },
 };
+use iroha_model_base::name::Name;
 use rand::TryCryptoRng;
 use sha2::{Digest as _, Sha256};
 use soranet_pq::{

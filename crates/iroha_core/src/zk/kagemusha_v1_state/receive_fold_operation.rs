@@ -136,11 +136,10 @@ impl PreparedConsumedCreditV1 {
     }
 }
 
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldEffectV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ReceiveFoldEffectV1 {
     credit_id: CreditIdV1,
     amount: u128,
@@ -152,21 +151,19 @@ const RECEIVE_FOLD_DECISION_ID_DOMAIN_V1: &[u8] =
 const RECEIVE_FOLD_DECISION_VALUE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:receive-fold:terminal-decision-value\0";
 
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionIdV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ReceiveFoldDecisionIdV1 {
     predecessor_state_commitment: DigestV1,
     credit_id: CreditIdV1,
 }
 
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionValueV1"
 )]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ReceiveFoldDecisionValueV1 {
     successor_state_commitment: DigestV1,
     credit_id: CreditIdV1,
@@ -689,4 +686,18 @@ fn receive_fold_effect_digest(
 
 fn receive_fold_error(_: ReceiveFoldErrorV1) -> KagemushaStateErrorV1 {
     KagemushaStateErrorV1::InvalidPeerCredit
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<ReceiveFoldDecisionIdV1>(
+        "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionIdV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<ReceiveFoldDecisionValueV1>(
+        "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionValueV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<ReceiveFoldEffectV1>(
+        "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldEffectV1",
+    );
 }

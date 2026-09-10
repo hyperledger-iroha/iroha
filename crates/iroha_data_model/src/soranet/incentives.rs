@@ -130,6 +130,7 @@ impl RelayBondPolicyV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct RelayBondLedgerEntryV1 {
     /// Relay fingerprint as advertised in the directory.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -378,6 +379,7 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct RelayEpochMetricsV1 {
     /// Relay fingerprint as advertised in the directory consensus.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -444,6 +446,7 @@ impl RelayEpochMetricsV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct RelayRewardInstructionV1 {
     /// Relay fingerprint for which the payout is being issued.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -561,6 +564,7 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct RelayRewardDisputeV1 {
     /// Relay fingerprint associated with the disputed payout.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -618,8 +622,9 @@ impl RelayRewardDisputeV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{domain::DomainId, isi::TransferBox, name::Name};
+    use crate::{domain::DomainId, isi::TransferBox};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::name::Name;
     use iroha_primitives::{json::Json, numeric::Numeric};
     use std::str::FromStr;
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
@@ -837,6 +842,35 @@ mod tests {
             bonded_since_unix: 1_000,
             exit_capable: true,
         };
+        assert_eq!(
+            <RelayBondLedgerEntryV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::soranet::incentives::RelayBondLedgerEntryV1"
+        );
+        let frame = norito::encode_canonical(&entry).expect("encode declared owner frame");
+        assert_eq!(
+            frame[6..22],
+            norito::core::schema_hash_for_name(
+                "iroha_data_model::soranet::incentives::RelayBondLedgerEntryV1"
+            )
+        );
+        let restored: RelayBondLedgerEntryV1 =
+            norito::decode_canonical(&frame).expect("decode declared owner frame");
+        assert_eq!(
+            norito::encode_canonical(&restored).expect("reencode restored owner"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<RelayBondLedgerEntryV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<RelayBondLedgerEntryV1>(&frame[..frame.len() - 1]).is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<RelayBondLedgerEntryV1>(&trailing).is_err());
         assert!(entry.meets_exit_minimum(&policy));
     }
     #[test]
@@ -982,6 +1016,58 @@ mod tests {
         assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
     }
     #[test]
+    fn relay_epoch_metrics_frame_preserves_epoch_and_measurement_binding() {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "region".parse().expect("metadata name"),
+            crate::prelude::Json::new("jp"),
+        );
+        let metrics = RelayEpochMetricsV1 {
+            relay_id: [0x31; 32],
+            epoch: 7,
+            uptime_seconds: 57,
+            scheduled_uptime_seconds: 60,
+            verified_bandwidth_bytes: 1_u128 << 65,
+            compliance: RelayComplianceStatusV1::Warning,
+            reward_score: 19,
+            confidence_floor_per_mille: 900,
+            measurement_ids: vec![[0x42; 32], [0x43; 32]],
+            metadata,
+        };
+        assert_eq!(
+            <RelayEpochMetricsV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::soranet::incentives::RelayEpochMetricsV1"
+        );
+        let frame = norito::encode_canonical(&metrics).expect("metrics frame");
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<RelayEpochMetricsV1>()
+        );
+        let restored: RelayEpochMetricsV1 =
+            norito::decode_canonical(&frame).expect("metrics roundtrip");
+        assert_eq!(restored, metrics);
+        let mut next_epoch = metrics.clone();
+        next_epoch.epoch += 1;
+        assert_ne!(
+            norito::encode_canonical(&next_epoch).expect("next epoch frame"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<
+            RelayBandwidthProofPayloadV1,
+        >());
+        assert!(matches!(
+            norito::decode_canonical::<RelayEpochMetricsV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<RelayEpochMetricsV1>(&frame[..frame.len() - 1]).is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<RelayEpochMetricsV1>(&trailing).is_err());
+    }
+    #[test]
     fn uptime_ratio_handles_zero_schedule() {
         let metrics = RelayEpochMetricsV1 {
             relay_id: [0_u8; 32],
@@ -1054,6 +1140,36 @@ mod tests {
             budget_approval_id: Some([0xA1; 32]),
             metadata: Metadata::default(),
         };
+        assert_eq!(
+            <RelayRewardInstructionV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::soranet::incentives::RelayRewardInstructionV1"
+        );
+        let frame = norito::encode_canonical(&instruction).expect("encode declared owner frame");
+        assert_eq!(
+            frame[6..22],
+            norito::core::schema_hash_for_name(
+                "iroha_data_model::soranet::incentives::RelayRewardInstructionV1"
+            )
+        );
+        let restored: RelayRewardInstructionV1 =
+            norito::decode_canonical(&frame).expect("decode declared owner frame");
+        assert_eq!(
+            norito::encode_canonical(&restored).expect("reencode restored owner"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<RelayRewardInstructionV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<RelayRewardInstructionV1>(&frame[..frame.len() - 1])
+                .is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<RelayRewardInstructionV1>(&trailing).is_err());
         assert!(instruction.is_zero_amount());
     }
     #[test]
@@ -1109,6 +1225,35 @@ mod tests {
             Quantity::from(16_u32),
             "bandwidth weighting mismatch",
         );
+        assert_eq!(
+            <RelayRewardDisputeV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::soranet::incentives::RelayRewardDisputeV1"
+        );
+        let frame = norito::encode_canonical(&dispute).expect("encode declared owner frame");
+        assert_eq!(
+            frame[6..22],
+            norito::core::schema_hash_for_name(
+                "iroha_data_model::soranet::incentives::RelayRewardDisputeV1"
+            )
+        );
+        let restored: RelayRewardDisputeV1 =
+            norito::decode_canonical(&frame).expect("decode declared owner frame");
+        assert_eq!(
+            norito::encode_canonical(&restored).expect("reencode restored owner"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<RelayRewardDisputeV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<RelayRewardDisputeV1>(&frame[..frame.len() - 1]).is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<RelayRewardDisputeV1>(&trailing).is_err());
         assert_eq!(dispute.status, RelayRewardDisputeStatusV1::Pending);
         assert_eq!(dispute.original_instruction, instruction);
         let mut resolution = Metadata::default();

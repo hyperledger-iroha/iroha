@@ -321,13 +321,13 @@ mod tests {
         data_model::{
             asset::AssetDefinitionId,
             domain::DomainId,
-            name::Name,
             nexus::{
                 FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorNativeInstructionSelector,
                 FeeSponsorProgramId, FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector,
             },
         },
     };
+    use iroha_model_base::name::Name;
     use std::{fs, num::NonZeroU64, str::FromStr};
     const CANONICAL_NETWORK_ID_LITERAL: &str =
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";

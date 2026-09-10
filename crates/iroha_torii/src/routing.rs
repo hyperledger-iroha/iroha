@@ -484,10 +484,10 @@ use iroha_data_model::{
         pipeline::{BlockStatus, PipelineEventBox},
     },
     metadata::Metadata,
-    name::Name,
     query::error::QueryExecutionFail,
     soradns::{DirectoryRotationPolicyV1, RadRevokeReason},
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
     PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
@@ -1612,6 +1612,8 @@ derived_items! {
 #[norito_schema(name = "iroha_torii::routing::RecordSoranetPrivacyEventDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/event`.
+
+
 pub struct RecordSoranetPrivacyEventDto {
     /// Privacy telemetry event emitted by a relay component.
     pub event: SoranetPrivacyEventV1,
@@ -1630,6 +1632,8 @@ pub struct RecordSoranetPrivacyEventDto {
 #[norito_schema(name = "iroha_torii::routing::RecordSoranetPrivacyShareDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/share`.
+
+
 pub struct RecordSoranetPrivacyShareDto {
     /// Secret-shared Prio contribution emitted by a collector.
     pub share: SoranetPrivacyPrioShareV1,
@@ -1973,6 +1977,8 @@ const KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES: usize = 1_024;
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::KaigiCallSignalsCursorV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+
+
 struct KaigiCallSignalsCursorV1 {
     version: u8,
     call_id: KaigiId,
@@ -5256,6 +5262,7 @@ include!("routing/signed_query_execution.rs");
 )]
 #[norito(deny_unknown_fields)]
 /// Request body for creating a Connect session.
+
 pub struct ConnectSessionRequest {
     /// Client-provided session id (canonical base64url without padding).
     pub sid: String,
@@ -5569,6 +5576,8 @@ derived_items! {
 #[norito(deny_unknown_fields)]
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
+
+
 pub struct ZkRootsGetRequestDto {
     /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
     /// whose shielded pool roots to fetch.
@@ -5595,6 +5604,8 @@ pub struct ZkRootsGetResponseDto {
 #[norito_schema(name = "iroha_torii::routing::ZkMerklePathGetRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request for current profiled confidential-tree inclusion paths.
+
+
 pub struct ZkMerklePathGetRequestDto {
     /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
     /// whose shielded pool commitment paths to fetch.
@@ -5643,6 +5654,8 @@ pub struct ZkMerklePathGetResponseDto {
 #[norito_schema(name = "iroha_torii::routing::ZkVoteGetTallyRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request for election tally (convenience JSON wrapper).
+
+
 pub struct ZkVoteGetTallyRequestDto {
     /// Canonical governance selector V1 identifying the election.
     pub election_id: String,
@@ -5837,6 +5850,8 @@ pub async fn handle_get_proof(
 )]
 #[norito(deny_unknown_fields)]
 /// Canonical signed-query envelope for `FindProofRecordById`.
+
+
 pub struct ProofFindByIdQueryDto {
     /// Versioned Norito `SignedQuery` bytes encoded as canonical padded base64.
     pub signed_query_b64: String,
@@ -6396,6 +6411,8 @@ derived_items! {
 /// resolves the exact enabled typed route, locates the already registered
 /// contract artifact by the route's SHA-256 policy commitment, and verifies
 /// that the referenced proof key is currently active before returning bytes.
+
+
 pub struct SccpSoraOutboundMaterialDto {
     /// Response schema version. First release is exactly `1`.
     pub version: u8,
@@ -13363,7 +13380,7 @@ fn encode_contract_state_pointer_tlv_bytes(
             (PointerType::Blob, bytes)
         }
         ivm::EmbeddedStateType::Name => {
-            let value: iroha_data_model::name::Name = raw.parse().ok()?;
+            let value: iroha_model_base::name::Name = raw.parse().ok()?;
             (PointerType::Name, to_bytes(&value).ok()?)
         }
         ivm::EmbeddedStateType::AccountId => {
@@ -13622,7 +13639,7 @@ fn decode_contract_state_pointer_json_fragment(
         Type::Name => {
             let payload =
                 decode_contract_state_pointer_payload(envelope, PointerType::Name, "Name")?;
-            let value: iroha_data_model::prelude::Name =
+            let value: iroha_model_base::name::Name =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode name: {err}"))?;
             if encode_contract_state_pointer_tlv_bytes(ty, value.as_ref()).as_deref()
                 != Some(envelope)
@@ -29049,7 +29066,7 @@ fn load_asset_transfer_control_store(
     account_id: &iroha_data_model::account::AccountId,
     metadata: &iroha_data_model::metadata::Metadata,
 ) -> Result<iroha_data_model::asset::AssetTransferControlStoreV1> {
-    let metadata_key = iroha_data_model::name::Name::from_str(
+    let metadata_key = iroha_model_base::name::Name::from_str(
         iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
     )
     .map_err(|err| conversion_error(format!("invalid control metadata key: {err}")))?;
@@ -29339,6 +29356,8 @@ derived_items! {
 #[norito_schema(name = "iroha_torii::routing::ZkVkRegisterDto")]
 #[norito(deny_unknown_fields)]
 /// DTO for registering a verifying key
+
+
 pub struct ZkVkRegisterDto {
     /// Account authorizing the operation
     pub authority: iroha_data_model::account::AccountId,
@@ -29405,6 +29424,8 @@ derived_items! {
 #[norito_schema(name = "iroha_torii::routing::ZkVkUpdateDto")]
 #[norito(deny_unknown_fields)]
 /// DTO for updating a verifying key record
+
+
 pub struct ZkVkUpdateDto {
     /// Account authorizing the operation
     pub authority: iroha_data_model::account::AccountId,
@@ -30084,6 +30105,8 @@ derived_items! {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::SetContractAliasDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct SetContractAliasDto {
     /// Transaction authority.
     pub authority: iroha_data_model::account::AccountId,
@@ -30262,6 +30285,8 @@ derived_items! {
 /// Omitting both signing fields prepares a canonical unsigned draft. Supplying both
 /// fields verifies and submits the exact deterministic transaction described by
 /// the remaining fields. No server-side private-key or nonce surface exists.
+
+
 pub struct AssetTransferRequestDto {
     /// Exact canonical I105 account authorizing and sourcing the transfer.
     pub authority: String,
@@ -30375,6 +30400,8 @@ pub struct AssetTransferResponseDto {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::ContractCallDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct ContractCallDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -30455,6 +30482,8 @@ pub struct ContractCallBatchPrepareItemDto {
 #[norito_schema(name = "iroha_torii::routing::ContractCallBatchPrepareDto")]
 #[norito(deny_unknown_fields)]
 /// Request for canonical ordered contract-call batch preparation.
+
+
 pub struct ContractCallBatchPrepareDto {
     /// Ordered call and native-instruction items.
     pub entries: Vec<ContractCallBatchPrepareItemDto>,
@@ -30551,6 +30580,8 @@ pub struct ContractCallBatchPlanDto {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::ContractCallSimulateDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct ContractCallSimulateDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -31141,6 +31172,8 @@ pub struct MultisigAccountSelectorDto {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::MultisigProposeDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct MultisigProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31184,6 +31217,8 @@ pub struct MultisigProposeDto {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::MultisigApproveDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct MultisigApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31213,6 +31248,8 @@ pub struct MultisigApproveDto {
 #[norito_schema(name = "iroha_torii::routing::MultisigContractCallProposeDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for proposing a multisig-wrapped contract call.
+
+
 pub struct MultisigContractCallProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31247,6 +31284,8 @@ pub struct MultisigContractCallProposeDto {
 #[norito_schema(name = "iroha_torii::routing::MultisigContractCallApproveDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for approving a multisig-wrapped contract call proposal.
+
+
 pub struct MultisigContractCallApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31327,7 +31366,10 @@ mod multisig_native_norito_dto_tests {
                 std::num::NonZeroU64::new(10_000),
             ),
         };
-        let bytes = norito::to_bytes(&request).expect("encode request");
+        let bytes = crate::frame_test_support::assert_current_frame(
+            &request,
+            "iroha_torii::routing::MultisigContractCallProposeDto",
+        );
         let view = norito::core::from_bytes_view(&bytes).expect("payload view");
         let selector_payload = bare_payload_with_flags(&request.selector, view.flags());
         assert_eq!(
@@ -31354,21 +31396,56 @@ mod multisig_native_norito_dto_tests {
             Some(10_000)
         );
     }
+    fn assert_retired_multisig_payload_rejected_under_current_owner(mut bytes: Vec<u8>) {
+        let signer = AccountId::new(
+            super::checked_routing_fixture_keypair(
+                0x73, iroha_crypto::Algorithm::Ed25519,
+                "derive current multisig payload control signer",
+            ).public_key().clone(),
+        );
+        let current = MultisigProposeDto {
+            selector: MultisigAccountSelectorDto {
+                multisig_account_id: None,
+                multisig_account_alias: Some("cbdc@hbl.sbp".into()),
+            },
+            signer_account_id: signer,
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: Some(1_700_000_000_234),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(), std::num::NonZeroU64::new(10_000),
+            ),
+            memo: None,
+            validation_fee_policy_version: None,
+            validation_fee_policy_hash: None,
+            validation_fee_hijiri_fee_quote_hash: None,
+            instructions: Vec::new(),
+            validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
+        };
+        crate::frame_test_support::assert_current_frame(
+            &current, "iroha_torii::routing::MultisigProposeDto",
+        );
+        // Keep the captured unsupported payload and declared layout, replacing only
+        // its outer owner so rejection exercises the current payload decoder.
+        bytes[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<MultisigProposeDto>());
+        let error = norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
+            .expect_err("unsupported sponsor metadata payload must not decode under current owner");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
+    }
     routing_test! { sync retired_multisig_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9003403000000000000c451acc6dd15a8f70251014f000000004a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101004f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110100010001000a0108d2040000000000001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432d8040200000000000000a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e400000000000000e600289487e97fb60202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000504000000004f000000004a2100000000000000010001220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122a6020f0e69726f68612e7472616e7366657294020c010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900e4000000000000005a9e96352b9536ab0202000000de0180014f000000004a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101112001c30173013b0134014101180147011401b601f40144018f016a0108019a01380e01000000090800000000000000000b05010000000a04020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
         .expect("fixture hex");
-        norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
-            .expect_err("retired metadata fee sponsor fixture must not decode");
+        assert_retired_multisig_payload_rejected_under_current_owner(bytes);
     }
     routing_test! { sync retired_multisig_account_sponsor_metadata_native_fixture_is_rejected
         let bytes = hex::decode(
             "4e525430000055d4aca04764986b7830e36cc7b2bfb9004302000000000000af7359993510158c02640162010000005d01010201005701000000000000004e4a210000000000000001000111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011102010001004f000000004a210000000000000001000122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201220122012201000b01090864656164626565660701050463326c6e0a010873658e10940100001301111073706f6e736f7240706f622e6362736910010e0d515220696e766f696365203432c4020100000000000000ba020f0e69726f68612e7472616e73666572a80220010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900f800000000000000a25f939a2d0a8f7e0202000000f201930162010000005d01010201005701000000000000004e4a21000000000000000100011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110111011101110201002001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd01660e01000000090801000000000000000c0602000000f40104020000004f000000004a2100000000000000010001330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133013301330133",
         )
         .expect("fixture hex");
-        norito::decode_from_bytes::<MultisigProposeDto>(&bytes)
-            .expect_err("retired multisig metadata fee sponsor fixture must not decode");
+        assert_retired_multisig_payload_rejected_under_current_owner(bytes);
     }
 }
 derived_items! {
@@ -31377,6 +31454,8 @@ derived_items! {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::MultisigCancelRequestDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct MultisigCancelRequestDto {
     /// Alias-aware selector for the multisig authority controlling the action.
     #[norito(flatten)]
@@ -31476,6 +31555,8 @@ pub struct MultisigCancelResponseDto {
 #[norito_schema(name = "iroha_torii::routing::MultisigSpecRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a multisig spec through the alias-aware selector.
+
+
 pub struct MultisigSpecRequestDto {
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
@@ -31500,6 +31581,8 @@ pub struct MultisigProposalsQueryResponseDto {
 #[norito_schema(name = "iroha_torii::routing::MultisigProposalsResolveRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a single multisig proposal.
+
+
 pub struct MultisigProposalsResolveRequestDto {
     /// Alias-aware selector for the multisig authority that owns the proposal.
     #[norito(flatten)]
@@ -31530,6 +31613,8 @@ pub struct MultisigProposalResolveResponseDto {
 #[norito_schema(name = "iroha_torii::routing::MultisigProposalsQueryRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for querying multisig proposals.
+
+
 pub struct MultisigProposalsQueryRequestDto {
     /// Alias-aware selector for the multisig authority whose proposals are queried.
     #[norito(flatten)]
@@ -31587,6 +31672,8 @@ pub struct AccountRecoveryDetachedAuthDto {
 #[norito_schema(name = "iroha_torii::routing::AccountRecoveryPolicySetDto")]
 #[norito(deny_unknown_fields)]
 /// Configure the exact regulated 2-of-3, 72-hour account-recovery policy.
+
+
 pub struct AccountRecoveryPolicySetDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31604,6 +31691,8 @@ pub struct AccountRecoveryPolicySetDto {
 #[norito_schema(name = "iroha_torii::routing::AccountRecoveryProposeDto")]
 #[norito(deny_unknown_fields)]
 /// Propose an alias-bound controller replacement through regulated recovery.
+
+
 pub struct AccountRecoveryProposeDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31617,6 +31706,8 @@ pub struct AccountRecoveryProposeDto {
 #[norito_schema(name = "iroha_torii::routing::AccountRecoveryApproveDto")]
 #[norito(deny_unknown_fields)]
 /// Approve an alias-bound regulated account-recovery request.
+
+
 pub struct AccountRecoveryApproveDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31628,6 +31719,8 @@ pub struct AccountRecoveryApproveDto {
 #[norito_schema(name = "iroha_torii::routing::AccountRecoveryFinalizeDto")]
 #[norito(deny_unknown_fields)]
 /// Finalize an alias-bound regulated account-recovery request after quorum and cooling.
+
+
 pub struct AccountRecoveryFinalizeDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -31639,6 +31732,8 @@ pub struct AccountRecoveryFinalizeDto {
 #[norito_schema(name = "iroha_torii::routing::AccountRecoveryStatusRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Query an alias-bound recovery policy, request, and proposal-invalidation evidence.
+
+
 pub struct AccountRecoveryStatusRequestDto {
     #[norito(flatten)]
     pub selector: AccountRecoverySelectorDto,
@@ -36622,7 +36717,7 @@ fn tx_field_value(
         ),
         _ if field.starts_with("metadata.") => {
             let rest = field.strip_prefix("metadata.")?;
-            let name: iroha_data_model::prelude::Name = rest.parse().ok()?;
+            let name: iroha_model_base::name::Name = rest.parse().ok()?;
             match &tx.entrypoint() {
                 iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                     signed.metadata().get(&name).map(|json| json.get().clone())
@@ -36647,7 +36742,7 @@ fn tx_metadata_json_value(
     tx: &iroha_data_model::query::CommittedTransaction,
     key: &str,
 ) -> Option<norito::json::Value> {
-    let name: iroha_data_model::prelude::Name = key.parse().ok()?;
+    let name: iroha_model_base::name::Name = key.parse().ok()?;
     let raw = match &tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             signed.metadata().get(&name).map(|json| json.get().clone())
@@ -37299,7 +37394,7 @@ fn validate_tx_filter_adapter_for_endpoint(
                 }
                 field if field.starts_with("metadata.") => {
                     let rest = field.strip_prefix("metadata.").unwrap_or("");
-                    rest.parse::<iroha_data_model::prelude::Name>()
+                    rest.parse::<iroha_model_base::name::Name>()
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
@@ -37346,7 +37441,7 @@ fn validate_tx_filter_adapter_for_endpoint(
                     }
                     field if field.starts_with("metadata.") => {
                         let rest = field.strip_prefix("metadata.").unwrap_or("");
-                        rest.parse::<iroha_data_model::prelude::Name>()
+                        rest.parse::<iroha_model_base::name::Name>()
                             .map(|_| ())
                             .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                     }
@@ -37397,7 +37492,7 @@ fn validate_tx_filter_adapter_for_endpoint(
                 }
                 field if field.starts_with("metadata.") => {
                     let rest = field.strip_prefix("metadata.").unwrap_or("");
-                    rest.parse::<iroha_data_model::prelude::Name>()
+                    rest.parse::<iroha_model_base::name::Name>()
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
@@ -37486,7 +37581,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         F::Not(inner) => !filter_tx(inner, tx),
         F::Eq(f, v) => {
             if let Some(rest) = f.0.strip_prefix("metadata.") {
-                let Ok(name) = rest.parse::<iroha_data_model::prelude::Name>() else {
+                let Ok(name) = rest.parse::<iroha_model_base::name::Name>() else {
                     return false;
                 };
                 let Some(meta) = metadata_map.and_then(|m| m.get(&name)) else {
@@ -37533,7 +37628,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
         F::Ne(f, v) => {
             if let Some(rest) = f.0.strip_prefix("metadata.") {
-                let Ok(name) = rest.parse::<iroha_data_model::prelude::Name>() else {
+                let Ok(name) = rest.parse::<iroha_model_base::name::Name>() else {
                     return false;
                 };
                 let Some(meta_val) = metadata_map.and_then(|m| m.get(&name)) else {
@@ -37582,7 +37677,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         },
         F::In(f, list) => {
             if let Some(rest) = f.0.strip_prefix("metadata.") {
-                let Ok(name) = rest.parse::<iroha_data_model::prelude::Name>() else {
+                let Ok(name) = rest.parse::<iroha_model_base::name::Name>() else {
                     return false;
                 };
                 let Some(meta_val) = metadata_map.and_then(|m| m.get(&name)) else {
@@ -37631,7 +37726,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
         F::Nin(f, list) => {
             if let Some(rest) = f.0.strip_prefix("metadata.") {
-                let Ok(name) = rest.parse::<iroha_data_model::prelude::Name>() else {
+                let Ok(name) = rest.parse::<iroha_model_base::name::Name>() else {
                     return false;
                 };
                 let Some(meta_val) = metadata_map.and_then(|m| m.get(&name)) else {
@@ -37680,7 +37775,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
         F::Exists(f) => {
             if let Some(rest) = f.0.strip_prefix("metadata.") {
-                let Ok(name) = rest.parse::<iroha_data_model::prelude::Name>() else {
+                let Ok(name) = rest.parse::<iroha_model_base::name::Name>() else {
                     return false;
                 };
                 return metadata_map.and_then(|m| m.get(&name)).is_some();
@@ -37696,7 +37791,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
         }
         F::IsNull(f) => {
             if let Some(rest) = f.0.strip_prefix("metadata.") {
-                let Ok(name) = rest.parse::<iroha_data_model::prelude::Name>() else {
+                let Ok(name) = rest.parse::<iroha_model_base::name::Name>() else {
                     return false;
                 };
                 let Some(meta_val) = metadata_map.and_then(|m| m.get(&name)) else {
@@ -38112,12 +38207,12 @@ pub(crate) fn parse_account_literal_with_state(
     literal: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-) -> Result<(iroha_data_model::account::AccountId, String), iroha_data_model::error::ParseError> {
+) -> Result<(iroha_data_model::account::AccountId, String), iroha_model_base::error::ParseError> {
     match AccountId::parse_encoded(literal) {
         Ok(account_id) => {
             let canonical = account_id.to_string();
             if literal != canonical {
-                let err = iroha_data_model::error::ParseError::new(
+                let err = iroha_model_base::error::ParseError::new(
                     "account id must use its exact canonical I105 literal",
                 );
                 record_account_literal_reject(telemetry, context, err.reason());
@@ -38304,7 +38399,7 @@ pub fn parse_account_literal(
     literal: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-) -> Result<AccountId, iroha_data_model::error::ParseError> {
+) -> Result<AccountId, iroha_model_base::error::ParseError> {
     match AccountId::parse_encoded(literal) {
         Ok(parsed) => Ok(parsed),
         Err(err) => {
@@ -56722,7 +56817,7 @@ struct AccountListItem {
 #[derive(Clone)]
 enum AccountSortField {
     Id,
-    Metadata(Option<iroha_data_model::prelude::Name>),
+    Metadata(Option<iroha_model_base::name::Name>),
     Unsupported,
 }
 #[derive(Clone)]
@@ -56790,7 +56885,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
             if f.0 == "id" {
                 v.as_str().is_some_and(|s| s == id)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     metadata.get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>().ok().as_ref() == Some(v)
                     })
@@ -56805,7 +56900,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
             if f.0 == "id" {
                 v.as_str().map(|s| s != id).unwrap_or(true)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     match metadata.get(&name) {
                         Some(j) => j
                             .try_into_any_norito::<norito::json::Value>()
@@ -56824,7 +56919,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
         F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let (Some(vn), Ok(name)) =
-                    (v.as_u64(), k.parse::<iroha_data_model::prelude::Name>())
+                    (v.as_u64(), k.parse::<iroha_model_base::name::Name>())
                 {
                     if let Some(j) = metadata.get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
@@ -56847,7 +56942,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
             if f.0 == "id" {
                 list.iter().filter_map(|v| v.as_str()).any(|s| s == id)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     if let Some(j) = metadata.get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             return list.iter().any(|v| v == &nv);
@@ -56863,7 +56958,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
             if f.0 == "id" {
                 list.iter().filter_map(|v| v.as_str()).all(|s| s != id)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     if let Some(j) = metadata.get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             return list.iter().all(|v| v != &nv);
@@ -56881,7 +56976,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
             if f.0 == "id" {
                 true
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     metadata.get(&name).is_some()
                 } else {
                     false
@@ -56892,7 +56987,7 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
         }
         F::IsNull(f) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     metadata.get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>()
                             .ok()
@@ -61651,6 +61746,8 @@ derived_items! {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::SpaceDirectoryManifestPublishDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct SpaceDirectoryManifestPublishDto {
     /// Account that authorizes the manifest publication.
     pub authority: iroha_data_model::account::AccountId,
@@ -61666,6 +61763,8 @@ pub struct SpaceDirectoryManifestPublishDto {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::routing::SpaceDirectoryManifestRevokeDto")]
 #[norito(deny_unknown_fields)]
+
+
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.
     pub authority: iroha_data_model::account::AccountId,
@@ -66852,7 +66951,7 @@ enum AssetDefinitionSortField {
     AliasBindingLeaseExpiryMs,
     AliasBindingGraceUntilMs,
     AliasBindingBoundAtMs,
-    Metadata(Option<iroha_data_model::prelude::Name>),
+    Metadata(Option<iroha_model_base::name::Name>),
     Unsupported,
 }
 #[derive(Clone)]
@@ -66961,7 +67060,7 @@ fn asset_definition_filter_object(
         F::Not(inner) => !asset_definition_filter_object(inner, def),
         F::Eq(f, v) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     def.metadata().get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>().ok().as_ref() == Some(v)
                     })
@@ -66974,7 +67073,7 @@ fn asset_definition_filter_object(
         }
         F::Ne(f, v) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     match def.metadata().get(&name) {
                         Some(j) => j
                             .try_into_any_norito::<norito::json::Value>()
@@ -66993,7 +67092,7 @@ fn asset_definition_filter_object(
         F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let (Some(vn), Ok(name)) =
-                    (v.as_u64(), k.parse::<iroha_data_model::prelude::Name>())
+                    (v.as_u64(), k.parse::<iroha_model_base::name::Name>())
                 {
                     if let Some(j) = def.metadata().get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
@@ -67014,7 +67113,7 @@ fn asset_definition_filter_object(
         }
         F::In(f, list) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     if let Some(j) = def.metadata().get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             return list.iter().any(|v| v == &nv);
@@ -67028,7 +67127,7 @@ fn asset_definition_filter_object(
         }
         F::Nin(f, list) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     if let Some(j) = def.metadata().get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
                             return list.iter().all(|v| v != &nv);
@@ -67044,7 +67143,7 @@ fn asset_definition_filter_object(
         }
         F::Exists(f) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     def.metadata().get(&name).is_some()
                 } else {
                     false
@@ -67055,7 +67154,7 @@ fn asset_definition_filter_object(
         }
         F::IsNull(f) => {
             if let Some(k) = f.0.strip_prefix("metadata.") {
-                if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
+                if let Ok(name) = k.parse::<iroha_model_base::name::Name>() {
                     def.metadata().get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>()
                             .ok()
@@ -68562,7 +68661,7 @@ struct NftListItem {
 #[derive(Clone)]
 enum NftSortField {
     Id,
-    Metadata(Option<iroha_data_model::prelude::Name>),
+    Metadata(Option<iroha_model_base::name::Name>),
     Unsupported,
 }
 #[derive(Clone)]

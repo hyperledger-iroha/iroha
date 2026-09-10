@@ -1270,7 +1270,7 @@ impl LifecycleLedgerStoreV1 {
         opened: &LifecycleLedgerV1,
         reconciled: &LifecycleLedgerV1,
         successor: &LifecycleLedgerV1,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
         control_ordinal: u128,
     ) -> Result<AuthenticatedRecoveredTimeoutSupersessionSuccessorV1, LifecycleLedgerError> {
         if !staged.exactly_matches_successor(
@@ -1483,7 +1483,7 @@ impl LifecycleLedgerStoreV1 {
     /// Reopen and compare the complete exact control-Sign row without exposing it.
     pub(super) fn revalidates_authenticated_wal_control_sign(
         &self,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
         ordinal: u128,
     ) -> bool {
         let Ok(loaded) = self.load() else {
@@ -1503,7 +1503,7 @@ impl LifecycleLedgerStoreV1 {
     pub(super) fn revalidates_recovered_control_signed_broadcast(
         &self,
         verified: &VerifiedHeightContext,
-        control: &AuthenticatedRecoveredWalControlProjection,
+        control: &AuthenticatedRecoveredWalStandaloneSignProjection,
         broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
         parent_ordinal: u128,
         child_ordinal: u128,
@@ -1524,7 +1524,7 @@ impl LifecycleLedgerStoreV1 {
     pub(super) fn revalidates_recovered_control_signed_broadcast_and_sign(
         &self,
         verified: &VerifiedHeightContext,
-        control: &AuthenticatedRecoveredWalControlProjection,
+        control: &AuthenticatedRecoveredWalStandaloneSignProjection,
         combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
         expected: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
     ) -> bool {
@@ -2577,7 +2577,7 @@ pub(in crate::sumeragi) fn control_timeout_supersession_persistence_failure_for_
     root: &Path,
     context: LifecycleContext,
     verified: &VerifiedHeightContext,
-    projection: &AuthenticatedRecoveredWalControlProjection,
+    projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
 ) -> bool {
     let Ok((store, opened)) = LifecycleLedgerStoreV1::open(root, context) else {
         return false;

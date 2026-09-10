@@ -948,18 +948,16 @@ pub fn validate_musubi_provider_attestation_inventory_binding_v1(
     }
     qualification.validate()
 }
-#[derive(norito::NoritoSchema)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::provider_attestation_journal::ApprovalIdPreimageV1")]
-#[derive(NoritoSerialize)]
 struct ApprovalIdPreimageV1 {
     key: MusubiProviderBundleAttestationKeyV1,
     payload_signing_hash: [u8; 32],
     completion_claim_digest: [u8; 32],
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::provider_attestation_journal::InventoryHandoffIdPreimageV1")]
-#[derive(NoritoSerialize)]
 struct InventoryHandoffIdPreimageV1 {
     scope: MusubiProviderAttestationInventoryScopeV1,
     key: MusubiProviderBundleAttestationKeyV1,
@@ -1075,9 +1073,8 @@ pub struct MusubiProviderAttestationJournalPolicyV1 {
     /// Maximum CAS conflicts retried by one journal operation.
     pub max_cas_retries: u32,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::provider_attestation_journal::JournalPolicyDigestMaterialV1")]
-#[derive(NoritoSerialize)]
 struct JournalPolicyDigestMaterialV1 {
     version: u8,
     max_entries: u64,
@@ -1815,9 +1812,8 @@ impl StoredJournalEntryV1 {
         }
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::provider_attestation_journal::StoredJournalCheckpointV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredJournalCheckpointV1 {
     version: u8,
     checkpoint_sequence: u64,
@@ -4008,6 +4004,22 @@ fn encode_checkpoint_pruning_delivered(
         }
     }
 }
+// Reserve the same conservative envelope and alignment budget for nested payloads
+// without making those field-only records standalone frame owners.
+fn canonical_reserve_footprint<T: norito::SerializePayload>(
+    value: &T,
+) -> Result<usize, MusubiProviderAttestationJournalErrorV1> {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let payload_len = norito::core::encoded_payload_len(value)
+        .map_err(|_| MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)?;
+    let alignment = norito::core::archived_payload_align::<T>();
+    let padding = (alignment - norito::core::Header::SIZE % alignment) % alignment;
+    norito::core::Header::SIZE
+        .checked_add(padding)
+        .and_then(|overhead| overhead.checked_add(payload_len))
+        .ok_or(MusubiProviderAttestationJournalErrorV1::CapacityExceeded)
+}
 fn checkpoint_future_reserve_bytes(
     checkpoint: &StoredJournalCheckpointV1,
 ) -> Result<usize, MusubiProviderAttestationJournalErrorV1> {
@@ -4027,12 +4039,8 @@ fn checkpoint_future_reserve_bytes(
         .entries
         .iter()
         .try_fold(header_reserve, |total, entry| {
-            let encoded_entry_len = norito::encode_canonical(entry)
-                .map_err(|_| MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)?
-                .len();
-            let encoded_intent_len = norito::encode_canonical(&entry.intent)
-                .map_err(|_| MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)?
-                .len();
+            let encoded_entry_len = canonical_reserve_footprint(entry)?;
+            let encoded_intent_len = canonical_reserve_footprint(&entry.intent)?;
             let target_footprint = match &entry.state {
                 StoredJournalStateV1::AwaitingApproval { .. }
                 | StoredJournalStateV1::ApprovalClaimed { .. } => encoded_intent_len

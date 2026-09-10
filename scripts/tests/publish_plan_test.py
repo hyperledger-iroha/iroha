@@ -87,7 +87,7 @@ def _sign_manifest(
     )
     public_input = tmp_path / "manifest-signing-public.raw"
     signer = tmp_path / "external-ed25519-signer"
-    verifier = tmp_path / "sorafs-validate"
+    verifier = tmp_path / "iroha"
     public_input.write_bytes(public)
     public_input.chmod(0o600)
     signer.write_text(
@@ -113,6 +113,9 @@ def _sign_manifest(
         "import sys\n"
         "from pathlib import Path\n"
         "args = sys.argv[1:]\n"
+        "if args[:3] != ['app', 'sorafs', 'toolkit']:\n"
+        "    raise SystemExit(4)\n"
+        "args = args[3:]\n"
         "if len(args) != 9 or args[0] != 'release-manifest':\n"
         "    raise SystemExit(4)\n"
         "options = dict(zip(args[1::2], args[2::2]))\n"

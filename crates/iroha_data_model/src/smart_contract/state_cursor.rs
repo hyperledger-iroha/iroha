@@ -3,7 +3,7 @@ use iroha_schema::IntoSchema;
 use norito::{Decode, Encode};
 
 use super::entrypoint::EntrypointValueKindV1;
-use crate::{name::Name, state_path::StatePath};
+use iroha_model_base::{name::Name, state_path::StatePath};
 
 /// Maximum complete canonical Norito cursor frame accepted by V1 boundaries.
 pub const MAX_STATE_CURSOR_BYTES_V1: usize = 64 * 1024;
@@ -139,13 +139,13 @@ mod tests {
         boundary.map = map.parse().unwrap();
         boundary.last_key = format!(
             "{map}/{}",
-            "ab".repeat((crate::state_path::MAX_STATE_PATH_BYTES - 256) / 2)
+            "ab".repeat((iroha_model_base::state_path::MAX_STATE_PATH_BYTES - 256) / 2)
         )
         .parse()
         .unwrap();
         assert_eq!(
             boundary.last_key.as_ref().len(),
-            crate::state_path::MAX_STATE_PATH_BYTES
+            iroha_model_base::state_path::MAX_STATE_PATH_BYTES
         );
         let frame = boundary.encode_frame().unwrap();
         assert!(frame.len() <= MAX_STATE_CURSOR_BYTES_V1);

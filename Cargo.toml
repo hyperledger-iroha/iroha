@@ -69,6 +69,7 @@ iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
+iroha_model_base = { path = "crates/iroha_model_base", default-features = false }
 iroha_service_model = { path = "crates/iroha_service_model" }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
@@ -300,6 +301,7 @@ default-members = [
     "crates/norito_derive",
     "crates/iroha_primitives",
     "crates/iroha_crypto",
+    "crates/iroha_model_base",
     "crates/iroha_data_model",
     "crates/iroha_config_base",
     "crates/iroha_config",
@@ -380,6 +382,10 @@ codegen-units = 256
 [profile.dev.package.iroha_data_model]
 codegen-units = 8
 
+# Preserve compiler settings for definitions moved out of the aggregate model.
+[profile.dev.package.iroha_model_base]
+codegen-units = 8
+
 [profile.test.package."*"]
 debug = 0
 codegen-units = 256
@@ -400,10 +406,59 @@ opt-level = 3
 [profile.test.package.blake2]
 opt-level = 3
 
+# Four-peer native consensus profiling found BLS signing and verification in
+# unoptimized field arithmetic. Optimize the concrete crypto instantiations and
+# their arithmetic dependencies in both runnable profiles, retaining assertions
+# and overflow checks and sharing artifacts between the node and test harnesses.
+[profile.dev.package.iroha_crypto]
+opt-level = 3
+
+[profile.test.package.iroha_crypto]
+opt-level = 3
+
+[profile.dev.package.w3f-bls]
+opt-level = 3
+
+[profile.test.package.w3f-bls]
+opt-level = 3
+
+[profile.dev.package.ark-bls12-381]
+opt-level = 3
+
+[profile.test.package.ark-bls12-381]
+opt-level = 3
+
+[profile.dev.package.ark-ec]
+opt-level = 3
+
+[profile.test.package.ark-ec]
+opt-level = 3
+
+[profile.dev.package.ark-ff]
+opt-level = 3
+
+[profile.test.package.ark-ff]
+opt-level = 3
+
+[profile.dev.package.ark-poly]
+opt-level = 3
+
+[profile.test.package.ark-poly]
+opt-level = 3
+
+[profile.dev.package.ark-serialize]
+opt-level = 3
+
+[profile.test.package.ark-serialize]
+opt-level = 3
+
 # Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;
 # one CGU reached 19.32 GiB. Eight was the lowest measured partition count, and
 # the shared decoder engine reduced its exact no-run reproducer to 11.466 GiB.
 [profile.test.package.iroha_data_model]
+codegen-units = 8
+
+[profile.test.package.iroha_model_base]
 codegen-units = 8
 
 # The six-lane native-STARK digest dominates FASTPQ's proof regression tests.
@@ -420,6 +475,9 @@ opt-level = 2
 [profile.release.package.iroha_data_model]
 opt-level = 1
 
+[profile.release.package.iroha_model_base]
+opt-level = 1
+
 # Fast, incremental optimization for local runnable builds only. This profile
 # is not valid for release, packaging, or evidence-producing workflows; those
 # must continue to use the unchanged `release` or `deploy` profiles. Keep the
@@ -433,6 +491,9 @@ lto = false
 debug = 0
 
 [profile.local-release.package.iroha_data_model]
+opt-level = 1
+
+[profile.local-release.package.iroha_model_base]
 opt-level = 1
 
 [profile.deploy]

@@ -198,6 +198,48 @@ fn panel_notification_archive_publishes_audits_and_rotates_signers() {
     )
     .expect("strict first archive artifact");
     assert_eq!(first_artifact.payload.records.len(), 2);
+    assert_eq!(
+        crate::frame_test_support::assert_current_frame(
+            &first_artifact,
+            "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveArtifactV1"
+        ),
+        first_artifact_bytes
+    );
+    crate::frame_test_support::assert_current_frame(
+        &first_artifact.head,
+        "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &first_artifact.source_manifest,
+        "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveSourceManifestV1",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &first_artifact.payload,
+        "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchivePayloadV1",
+    );
+    for record in &first_artifact.payload.records {
+        let ModerationTerminalArchiveRecordV1::PanelNotification(record) = record else {
+            panic!("actual terminal panel record");
+        };
+        crate::frame_test_support::assert_current_frame(
+            record,
+            "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveRecordV1",
+        );
+    }
+    let mut wrong_owner = first_artifact_bytes.clone();
+    wrong_owner[6] ^= 1;
+    assert!(
+        verify_panel_notification_archive_artifact(&bounds, &orchestrator.network_id, &wrong_owner)
+            .is_err()
+    );
+    assert!(
+        verify_panel_notification_archive_artifact(
+            &bounds,
+            &orchestrator.network_id,
+            &first_artifact_bytes[..first_artifact_bytes.len() - 1]
+        )
+        .is_err()
+    );
     assert!(first_artifact.payload.records.iter().all(|record| {
         matches!(
             record,

@@ -174,7 +174,6 @@ impl Diagnostic {
     }
     /// Return the stable public code.
     #[must_use]
-    #[cfg(test)]
     pub const fn code(&self) -> ErrorCode {
         self.code
     }

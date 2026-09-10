@@ -7,11 +7,12 @@ records focused regressions and separates these results from full runtime and
 feature qualification. This is a first-release cutover without alternate
 accepted hashes or compatibility paths.
 
-The corrected codec candidate passes 1,334 default tests and 1,336 tests with
-`schema-structural`, each with one existing ignored generator. Codec and derive
-test Clippy passes with warnings denied. All 60 derive unit tests, 14 strict JSON
-tests and four UI harness tests pass on the same source. Earlier separate
-captures retain passing Norito doctests and all 950 default SoraFS library tests,
+The enum-prefix correction passes 1,338 default tests and 1,340 tests with
+`schema-structural`, each with one existing ignored generator. The structural
+suite, all 60 derive unit tests, 14 strict JSON tests, four UI harness tests and
+strict codec/derive test Clippy bind the same candidate source; the default suite
+retains its separate earlier source seal. Earlier captures retain passing Norito
+doctests and all 950 default SoraFS library tests,
 including the captured revocation preimage. These captures are not a full
 workspace or release qualification. See the
 [current cutover evidence](#active-identity-cutover-2026-09-09).
@@ -325,13 +326,20 @@ whole-stack or compiler-memory peaks.
 
 The zero-warning BFV build and its runtime evidence bind source
 `d22c04be7ccadc6d8c4cf6ac9ecd95d1e56b671bb27d3cf60222ce7b6a2cea26`.
-The byte-admission test passes all six original assertion paths on the default
-stack; all 46 hash/multihash regressions pass on the same artifact. The complete
-799-diagnostic audit is still running and is not a passing result. Its frozen
-source, statement preservation and emitted-frame evidence live under
+Both targeted BFV tests pass on the default stack: the byte-admission test
+preserves all six original assertion paths, and the complete audit passes all
+799 unchanged diagnostics in 6,360.88 seconds. All 46 hash/multihash regressions
+pass on the same retained artifact
+`344cbe5bf22c13b137c4cdfa9718074e075eb4a333542030c360f3ce0ac727af`.
+All 19,815 recorded inputs remain unchanged during execution, and all 18 edited
+source files match the live repository, frozen candidate and patch replay.
+`bfv-stack-boundaries/final-qualification-v1/qualification.json` binds these
+results to their exact source, compiler and executable; its SHA-256 is
+`75eb983d8910ac57a3759089d508f1dda295e36c896248e5e4cf0bf9f7ed8d61`.
+The frozen statement-preservation and emitted-frame records remain under
 `bfv-stack-boundaries/`; `bfv-stack-parent-review-v1/` records independent
-fixture-ownership and compilation-unit checks. The separate next consumer
-snapshot leaves this running source and retained executable untouched.
+fixture-ownership and compilation-unit checks. This qualifies two targeted BFV
+tests and 46 hash/schema tests, not the full crypto library or release.
 
 FASTPQ now declares only its actual frame owners, preserving separately captured
 nominal names and root projections. Thirteen obsolete attributes disappear from
@@ -395,6 +403,306 @@ The same-source Genesis Clippy run then stops at three excessive-argument and tw
 unit-error API sites in SoraFS. Both failed runs remain;
 `service-model-doc-markdown-v1/qualification.json` binds this narrow correction.
 There is no passing dependent/workspace lint, node or release qualification.
+
+
+The IVM follow-up declares six measured frame owners and routes the private
+registry's diagnostic decoding through the registry itself. The original-codec
+capture records 65 complete root/Option/Vec frames before declaration changes.
+Batch envelopes use their one declared frame hash; signature preimages, codec
+bytes, ABI, gas and production admission limits remain unchanged. The retired
+argument-shape test now frames its unchanged payload under the actual record
+identity before asserting rejection. Separate fixtures exercise the full
+256-level logical type limit and the 33-level JSON nesting limit, including
+rejection beyond each limit; the normative ABI assertion counts registers r10
+through r15.
+
+All 774 default IVM library tests pass with no ignored cases on source
+`1cc39965cf1079960933795fab51066c8bdbab8e61abcbe78bd7302eb90a2341`,
+with 19,829 unchanged inputs, zero build warnings and the default stack.
+`ivm-boundary-candidate-v2/library-qualification-v1.json` has SHA-256
+`b170a7898b3474ccd1f8ca775db4a0aeff1abeb2794391f1113e84f72b4d2a7a`.
+The prior full run's two fixture failures remain retained. Four integration
+selections pass 18/41/1/91 tests on their separately sealed earlier source; they
+are not promoted to final-source evidence. P2P's same-source default library
+passes 592 tests; the subsequent QUIC selection retains one failure in disabled
+DATAGRAM negotiation and two existing ignored cases. Its transport correction
+and new payload-prefix checks are pending separate candidate qualification.
+Strict dependent/workspace Clippy, full node/consensus and release qualification
+remain open.
+
+
+The next prefix-boundary tests reproduce both manual P2P decoder failures, then
+isolate an enum-derive defect: its slice adapter entered an exact payload context
+and reported the entire input length. Enum slice generation now uses the same
+bounded prefix decoder as named records. Every enum arm retains its original
+field codec, discriminant and validation hook; exact fields and complete frames
+still reject unread bytes. The direct suite passes all ten enum cases, including
+four new layout/container/validation/allocation regressions.
+
+The complete default Norito suite then passes 1,338 tests with one existing
+snapshot generator ignored, zero build warnings and the default stack, on source
+`f6a27445597bef9361c7e323a8279e068e149c2f04cae179ffd32c37bdfde4fb`.
+All 19,834 inputs and ten executed artifact identities are sealed by
+`norito-enum-prefix-v1/default-codec-qualification-v1.json` (SHA-256
+`ca4f3bd3c183a27af05d35cdb1f3b5f96121160bf3e7e908b34c71533e00e7be`).
+The next candidate binds 19,835 unchanged inputs on source
+`06cda5887fc4aef22e554a56245d368906f8f466fa52a21c7dbbfc5eacb0b35b`.
+Its complete structural codec suite passes 1,340 tests with one existing ignored
+snapshot generator; all 78 derive unit/JSON/UI tests pass, and default-feature
+codec/derive test Clippy passes with warnings denied. The complete default P2P
+library passes 598 tests; its QUIC-enabled library passes 633 with two existing
+ignored cases. Both builds have zero warnings and both runs use the default
+stack. This includes all six new payload-prefix tests and the disabled-DATAGRAM
+regression after the listener explicitly sets zero buffers. Public QUIC
+qualification gates remain unchanged.
+
+`norito-enum-prefix-v1/structural-and-derive-qualification-v1.json` (SHA-256
+`7f6d64f6f82eaaba92d27d47d0af3d099ede0dcfc9f461aa681241d06147f2b8`),
+`norito-enum-prefix-v1/strict-clippy-qualification-v1.json` (SHA-256
+`873269df7b453504c51fd0ea0fe268020de42557995a754cfe95168beb5e5b03`),
+and `p2p-payload-prefix-v1/full-library-qualification-v1.json` (SHA-256
+`ea5e7c5c7055e816c40536bccc3f13fefd0cd33b48876af4f4526c6a19e49a0a`)
+bind the exact artifacts, source and retained results. Earlier default IVM and
+BFV results retain their distinct source seals; they are not promoted to this
+candidate. The first Core/P2P build exhausted disk space while writing compiler
+caches; the retried Core build reports 1,525 diagnostics across the remaining
+frame-owner/trait migrations and produces no Core test executable. Both failed
+attempts are retained. Full Core, dependent/workspace lint, measured memory and
+release qualification remain open.
+
+Borrowed singular-query sources now implement payload serialization only. One
+private output frame selects the owned result's identity and preserves its
+alignment without constructing the result. Iterator/option/struct/trigger views
+and six Musubi page producers carry no independent frame projection. The output
+frame ceiling, active allocation limits and source-drop-before-decode sequence
+remain enforced. All 22 focused query-memory tests pass using the exact module
+source and built Norito/model dependencies, including five new identity,
+alignment, payload-only, allocation and drop-order regressions. That harness
+does not qualify the full Core crate or Musubi/trigger callers; their complete
+consumer build remains pending. The exact query-memory source, 22 passing tests
+and independent review are bound by
+`core-singular-payload-v1/focused-qualification-v1.json` (SHA-256
+`ef3c7735fffae50496065ca68b91ce09e3d0952fbd8801e7686f3f0b6d52863b`).
+
+Twelve additional actual Core frame owners now declare their measured identities:
+three STARK parameters/key/envelope records, two recursion archives, six outgoing
+operation/redemption records and the trigger-set persistence DTO. Their 24
+original directional observations retain the same nominal names, explicit root
+projections, field order and payload bodies. Nested DTOs and removed-shape
+negative fixtures stay payload-only. The trigger executable's source-owned
+payload regression passes with the current model/codec dependencies, including
+fixed/compact field boundaries and malformed input; no full trigger-store
+qualification is inferred from that focused harness.
+
+The combined candidate binds 19,844 unchanged inputs on source
+`0d431ab01f1b91896a51cae26295e4437a4eced0f4add462dd42e7cf9085e2fc`.
+Its Core test build still fails with 1,252 diagnostics and no executable, with
+zero compiler warnings plus the isolated checkout's recorded missing-git
+build-script notice. The intermediate query/STARK build retains 1,350 diagnostics
+on its separately sealed source. Neither result is a passing Core build. Scoped
+formatting, patch checks and codec guards pass for all 18 changed source/fixture
+paths; the complete state/consensus, workspace, native, memory and release gates
+remain open.
+
+The following Core stage declares 42 actual KAGEMUSHA state owners and 25
+finalized-query owners from retained directional identity observations. Eight
+commitment functions and their private preimages move unchanged into one cohesive
+module; the state root falls to 4,858 lines and the commitment module is 312 lines.
+The one previously uncaptured function-local lane-binding record retains its
+compiler nominal with a source assertion; it is not claimed as original capture
+evidence. Existing Kura/private-settlement changes are reconciled as a separate
+54-owner, 103-observation slice. These observations establish identities and
+unchanged record bodies, not original complete frames or passing state recovery.
+
+Bare receiver accounting, query memory meters and their callers now require only
+payload serialization. Sort keys require ordering, with their preflight byte
+budget still enforced before allocation. JSON-only tiered values retain their
+existing hash/accounting contract without a binary-frame requirement. Two exact
+receiver-accounting tests and eight exact query budget/heap/sort tests pass on the
+default stack. The query tests replace their shared static observation counter with
+fixture-owned counters excluded from encoding; the retained harness inherits
+worker settings and does not independently establish parallel execution. Four unused-code warnings belong to that partial-module harness.
+
+Seven further DA/query persistence owners preserve 13 original directional
+observations and all 191 earlier assertions. Their production tokens are
+unchanged except for declarations. The checkpoint descriptor stays a nested
+payload under its durable journal owner. All 25 tests from the complete query
+index/checkpoint/journal/shard/rowset modules pass using the actual filesystem,
+codec/model and compression dependencies, with inherited worker settings and
+the default stack. The old harness report says default parallel execution but
+does not pin or record a worker count; that wording does not qualify concurrency.
+Three unused-code warnings belong to this focused harness; DA quota/cursor,
+Windows, Core state/consensus and release execution are not qualified by it.
+
+The intermediate Core source `c2cc2094e1049fd936877d075c4706f92d11d744f5c5a52a31c3b4245be5d794`
+binds 19,852 unchanged inputs and still fails its test build with 534 diagnostics,
+zero compiler warnings and no executable. The earlier 1,080- and 542-diagnostic
+builds are retained. A separate early failure exposed a missed production import
+that the original focused harness supplied; the corrected production import and
+its full-build check supersede that initial review. None of these failures is
+reported as a passing Core build. The focused source/artifact records are
+`core-query-fixture-isolation-v1/query-isolation-runtime-1/qualification.json`
+and `core-da-query-frame-adoption-v1/query-persistence-runtime-2/qualification.json`.
+The original sequential seven-test query result and failed persistence harness
+are retained with their exact limitations.
+All 45 scoped Rust formatter checks pass. The authoritative repository source
+budget still reports 236 findings with 171 unchanged exceptions; the two
+KAGEMUSHA modules above pass their individual production limits. Codec guards
+and exact historical-archive verification pass.
+
+The subsequent queue slice keeps eight actual frame owners with 16 captured
+original directions. Route legs stay payload-only; the synthetic queue context
+hashes their bytes under an explicit layout, with ambient-layout and exact
+payload checks. Routing-plan and journal owners retain typed framing and
+substituted-header rejection. Unrelated concurrent reservation/recovery changes
+are preserved in ROOT and excluded from this isolated adoption slice. Its five
+formatter and exact patch-replay checks pass; queue runtime remains pending.
+
+The combined Core source
+`a561f59d7c223d665dec71a47aa7b2538cbae88714399133ff5cb1eec666fbb7`
+binds 19,852 unchanged inputs and fails with 389 diagnostics (157 distinct
+messages), zero compiler warnings and no test executable. None of the latest
+changed query, queue or DA sites has a primary diagnostic. This is still a failed
+Core build, with the isolated checkout's missing-git build-script notice retained.
+The source-bound result is `consumer-next-candidate/core-queue-query-persistence-build-1.json`
+(SHA-256 `98f72656e6ec27967a7504b6176a4a34ec7eb8b87073828038d49994a7b16035`).
+This partial-source failure is retained; the full-source reconciliation below
+supersedes it for current Core compilation. State/consensus execution and all
+broader qualification gates remain open.
+
+The complete working-tree reconciliation preserves all existing changes and binds
+19,865 inputs to source `2d9d8ffd95e96afaa0c174f5fd61fe58c850f344d0e4a4856e0d294b90c55839`.
+The full Core library test build passes with zero compiler warnings; its retained
+executable is `9e8fc627300ff92adea2538bcf1b408514f11de200b9207cc059e635a6f21047`.
+The isolated checkout notice about missing Git metadata remains recorded. On the
+default stack, this executable passes all 55 Native AMX, 258 DA, 21 projection
+persistence and four index-status tests. Four-worker runs pass 24 frame-owner,
+11 lane-drain and eight merge tests. The model and crypto test builds also
+pass with zero warnings; four-worker default-stack runs pass 32 Native AMX
+model tests and 82 hash-related crypto tests, including both direct schema
+recursion regressions. The other selections inherit the host
+one-worker setting; this is not a claim of default-parallel qualification.
+
+A separate frame-identity run passes 29 and fails one provider archive fixture:
+its default retention epoch precedes its approval. The source correction gives
+the fixture its existing order deadline as retention and keeps production
+lifecycle validation intact. The complete query run passes 156 tests and fails 22. It finds metadata keys
+charged as source rows, two identifier decoder field-bound failures, and stale
+authority/configuration/resource fixtures rejected by current validation. The correction separates source-item accounting from
+key-byte work, keeps skipped rows and history projection work charged, and
+adds exact-budget and one-unit-short controls. The subsequent full Core runtime
+results are recorded below; the failed reports remain unchanged. The new identifier bound is the complete borrowed
+root payload, including its discriminant and field prefix. All 14 tests from
+the complete canonical top-K module pass on the default stack with four
+explicit workers, retaining exact allocation and one-byte-short rejection
+controls. This focused artifact is `ef40dc702781450d1f94ad0e85c367ff22868bc9dae9eee48f8454b9e4af6454`,
+with exact source and dependency seals in `core-canonical-id-root-budget-fix-v1/runtime-1`. Three uncalled-public-API warnings belong to this isolated module harness.
+
+The ten-path correction bundle binds source
+`25b0562999e5d8123096ad0050d48f89ea5cde90aea8cfac7e9a20dc2d79d294`
+with 19,866 inputs. Query fixtures now use registered, explicitly authorized
+readers, valid configuration and execution geometry, and individually valid
+JSON rows that cross the aggregate tail bound. All 302 earlier assertions
+remain; five positive/boundary controls are added. The first Core rebuild
+reaches LLVM and fails from exhausted disk space, with zero compiler warnings
+and no executable. Its source seal remains unchanged. Only idle model/Core
+incremental caches from the task-isolated target are reclaimed; sources, actual
+library/test artifacts and evidence are retained. The second build passes with
+zero compiler warnings and retained executable
+`f54bb8fd3efa1438ccf1f77774bf8d118e441680e3f9093a58bf460de0823ecf`.
+Four-worker default-stack runs pass all 258 DA and 31 frame-identity tests.
+The complete query selection passes 180 and fails one; the provider archive
+selection passes 40 and fails four. The remaining query fixture constructs its
+state overlay from a dummy header instead of the block it actually validates.
+The correction uses the actual header and asserts the exact descending domain
+batch. The four archive fixtures change projected deadlines without changing
+their canonical order payloads. Their correction updates both representations
+together, retaining production validation and all previous assertions.
+The combined Core/model/schema test build passes with zero warnings on source
+`fff529153d260f6bca32859c2503fede7b084845ed7867b8de8b3e98232647d3`
+with 19,868 unchanged candidate inputs. A test-only schema closure correction
+then binds source `809c092f3f92d300dced319010c8bfb8b91d1f547d1e379f76dc140a39403d01`;
+all three Cargo test targets still build without warnings. Four-worker runs on
+the default stack pass all 181 query, 258 Core DA, 31 frame-identity, 53 model DA,
+32 model Native AMX and nine schema-generator tests. The model tests include the
+maximum 4,096-source schema/codec/hash/drop regression and both permanent receipt
+tests. These are selected suites, not the full model or Core library runtime.
+`runtime-stage-809c-v1.json` binds all seven reports, including the provider
+failure below (SHA-256 `c1a01804c432c6d7366f7aad7d57665fb610e5754994635085ef70062839369a`).
+
+The schema closure check now iterates actual stored `Metadata` references rather
+than parsing type names. Its exhaustive variant match checks every stored edge
+without recursion and does not expand `HashOf<T>` phantom referents or leaf
+`Compact<T>` name parameters. Four additional controls exercise dangling edges,
+independent map/result slots, valid cycles and phantom parameters. The complete
+current registry is closed under these references; all nine tests pass both in
+the exact-source harness and in the Cargo-built test executable.
+
+The provider selection initially passes 39 and fails five because its shortened
+six-second order window still carries a ten-second ingest SLA. The corrected
+fixture sets both values explicitly and rejects a seven-second SLA. The unchanged
+default fixture, exact replacement window and both oversized SLA controls pass
+three source-bound canonical-component tests with zero warnings. Production
+validation, default fixture values and all previous assertions remain intact.
+The complete Core archive rerun on source
+`bdf268c369fbb170155538901874f996478dfa46bde2d4be9b0d7233fc149f99`
+passes 43 and fails one: the approval-substitution fixture approves after its
+order was issued, so local validation rejects it before the intended history
+check. That fixture now issues at epoch two, expires at seven and uses a
+five-second SLA. Explicit positive controls prove both modified records are
+locally valid before the unchanged substitution/rollback assertions. Four
+canonical-component tests cover the original default, both replacement windows
+and oversized SLA rejection.
+
+The final combined Core/model/schema test build passes with zero warnings on
+source `70f4ec63fa35913aa645eeb5b86cee6ee811f9bc3e7421c4977594d043afecc8`
+with 19,868 unchanged inputs. All 44 provider archive tests then pass with four
+workers on the default stack, including the history controls. The model and
+schema executables are byte-identical to the passing `809c` build above; only
+provider test fixtures changed afterward. The final checkpoint
+`stack-root-final-runtime-checkpoint-v1.json`
+(SHA-256 `317c3b4e60aaba7059b3c348f9e8cbb8240ce29cf9c40b102b72ec1601f754a8`)
+binds these reports, the retained failures and source-preservation checks for
+all three stack-fix owners and 18 BFV audit paths. The earlier 799-case BFV audit
+retains its own source identity; it is not a fresh run on this final source.
+These scoped results do not qualify full workspace, native, memory or release
+acceptance.
+
+A freshly rebuilt original dependency graph reproduces the exact Torii receipt
+DTO and writer in their original crate/module scope. Ten original complete
+root/Option/Vec frames retain nominal
+`iroha_torii::da::persistence::StoredDaReceipt` and both directional root hashes
+`f4b055d4b6a06ed2ff40fb14e1400fb3`. The corrected shared model keeps that one
+wire owner. The source-bound original capture is
+`stored-da-receipt-original-reference-v1/capture-seal.json`
+(SHA-256 `d7903477574dc1739e5b795a1ed7fe4970f3e4acaad53922781b1150d441c7ac`).
+The current shared-model probe passes with zero warnings and all ten original
+records equal byte-for-byte, including names and frame hashes. Its comparison
+seal is `stored-da-receipt-current-comparison-v2/comparison-seal.json`
+(SHA-256 `b7c15645db5ec7406afe6aa7a3cb3c0ee049e520cd1abdcbc98ce573f6ae23d3`).
+The first copy attempt failed from disk exhaustion before probe compilation;
+that failure is retained, and the successful attempt uses copy-on-write
+dependency retention. This bounded DTO/writer reproduction does not qualify
+full Torii or receipt-signature authentication; actual Torii execution remains
+open. The ten captured frames now have permanent model regression tests. The
+complete new test module and existing owner test pass against the actual current
+model libraries: two tests, zero warnings, four workers and the default stack.
+They also reject truncated, trailing and corrupt frames under an unrelated
+ambient layout. The exact-module qualification is
+`stored-da-receipt-golden-runtime-v1/qualified-proposal.json`
+(SHA-256 `e8cac1dc8b70cfa6769cc1a26051783fc67325c8f1227862d29313e75dedd609`).
+These tests and the byte-identical original fixture are integrated. The combined
+build and 53-test model DA suite above qualify their actual model test executable.
+
+All 16 feature-resolved normal/build dependency-boundary selections and 45 guard
+tests pass on this full source. Manifest dependency budgets remain failed. The
+reviewed original baseline attributes all 24 changed metric cells to four
+`rustix` filesystem edges, one dependency-free `fastpq_isi` edge and two removed
+build-support edges. Required no-follow filesystem checks remain in place; no
+budget has been widened. CLI-only SoraFS validator migration is inventoried but
+not implemented by this checkpoint. The reports reside under
+`consumer-next-candidate/core-full-root-*`, `full-root-architecture-checks-v1`
+and `full-root-budget-attribution-v1` in the retained evidence directory.
 
 The SCCP correction changes only three stale test provenance pins to the existing
 Tolk-owned StateInit fixture, authenticated against its generator and source

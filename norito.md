@@ -921,3 +921,13 @@ Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`
 is reserved for tooling that explicitly opts out of schema validation. Schema
 opt-out never disables the payload-derived resource budget.
+
+### Enum slice boundaries
+
+A derived enum with `#[norito(decode_from_slice)]` decodes one payload prefix and
+returns the exact consumed byte count, including its discriminant. Named, tuple
+and unit variants share the bounded payload decoder; bytes belonging to the
+caller remain unread. Nested fields and complete-frame/exact-slice APIs still
+reject trailing bytes. The advertised layout, validation hook, field/count
+bounds and enclosing allocation budget apply to the prefix operation. This
+changes no wire bytes, frame identities or protocol version.

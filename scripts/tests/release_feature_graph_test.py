@@ -701,7 +701,7 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         Path("csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"),
         Path("flake.nix"),
         Path("scripts/package_sorafs_cli_candidate.py"),
-        Path("scripts/package_sorafs_validate_release.sh"),
+        Path("scripts/package_iroha_cli_release.sh"),
         Path("scripts/package_mobile_sdk_artifacts.sh"),
         Path("release/version-map.toml"),
         Path("specs/sorafs/runbooks/release_rollback_yank.md"),
@@ -1050,7 +1050,7 @@ def test_shipping_declarations_cover_docker_and_sorafs_release_surfaces() -> Non
     fetch = target_for(workflow, "sorafs_fetch")
     assert fetch.package == "sorafs_car"
     assert "cli" in fetch.features
-    assert target_for(workflow, "sorafs-validate").package == "sorafs_manifest"
+    assert target_for(workflow, "iroha").package == "iroha_cli"
     workflow_signer = target_for(workflow, "sorafs_external_software_signer")
     assert workflow_signer.package == "irohad"
     assert "external-software-signer-bin" in workflow_signer.features

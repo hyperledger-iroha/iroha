@@ -452,6 +452,7 @@ fn source_reader_io_error(kind: std::io::ErrorKind) -> std::io::Error {
     std::io::Error::new(kind, "authenticated provider source stream failed")
 }
 struct ProviderIngestBrokerSourceReader {
+    decode_pool: Arc<DecodeResourcePoolV1>,
     stream: UnixStream,
     deadline: std::time::Instant,
     content_length: u64,
@@ -498,9 +499,12 @@ impl ProviderIngestBrokerSourceReader {
             return Err(self.poison(std::io::ErrorKind::InvalidData));
         }
         self.apply_deadline()?;
-        let decode_admission =
-            DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
-                .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
+        let decode_admission = DecodeResourceAdmissionV1::acquire_from(
+            Arc::clone(&self.decode_pool),
+            None,
+            SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
+        )
+        .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
         let frame = read_length_prefixed_with_decode_admission(
             &mut ProviderSourceDeadlineReader {
                 stream: &self.stream,
@@ -564,9 +568,12 @@ impl ProviderIngestBrokerSourceReader {
             return Err(self.poison(std::io::ErrorKind::UnexpectedEof));
         }
         self.apply_deadline()?;
-        let decode_admission =
-            DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
-                .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
+        let decode_admission = DecodeResourceAdmissionV1::acquire_from(
+            Arc::clone(&self.decode_pool),
+            None,
+            SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
+        )
+        .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
         let frame = read_length_prefixed_with_decode_admission(
             &mut ProviderSourceDeadlineReader {
                 stream: &self.stream,
@@ -697,6 +704,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
         reason = "the blocking stream owns all authenticated connection inputs"
     )]
     fn open_stream(
+        decode_pool: Arc<DecodeResourcePoolV1>,
         endpoint: EndpointPolicy,
         chain_id: String,
         network_id: NetworkId,
@@ -719,6 +727,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
             network_id,
             requested_catalog,
             Some(source_deadline_remaining(deadline)?),
+            &decode_pool,
         )?;
         let observed = observations
             .iter()
@@ -730,7 +739,8 @@ impl ProviderIngestBrokerAuthenticatedSource {
             return Err(BrokerError::StaleOrRevoked);
         }
         apply_source_socket_deadline(&connection.stream, deadline)?;
-        let decode_admission = DecodeResourceAdmissionV1::acquire_operation(
+        let decode_admission = DecodeResourceAdmissionV1::acquire_operation_from(
+            Arc::clone(&decode_pool),
             OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
         )?;
         let decode_scope = decode_admission.enter();
@@ -785,7 +795,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
             .map_err(|_| BrokerError::Rejected)?;
         let plan = decode_source_plan(&header.plan)?;
         validate_source_payload_metadata(&fetch.authorization, &manifest, &plan)?;
-        let retained_memory = acquire_source_retained_memory(&plan)?;
+        let retained_memory = acquire_source_retained_memory(&decode_pool, &plan)?;
         let content_length = header.content_length;
         let frame_count = header.frame_count;
         let transcript = source_stream_transcript(&operation_request, &response);
@@ -796,6 +806,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
         drop(header);
         let expected_payload_digest = *plan.payload_digest.as_bytes();
         let reader = ProviderIngestBrokerSourceReader {
+            decode_pool,
             stream: connection.stream,
             deadline,
             content_length,
@@ -832,6 +843,7 @@ impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1
         '_,
         Result<Self::Fetched, sorafs_node::ProviderIngestSourceFetchErrorV1>,
     > {
+        let decode_pool = Arc::clone(&self.session.decode_pool);
         let endpoint = self.endpoint.clone();
         let chain_id = self.chain_id.clone();
         let network_id = self.session.network_id;
@@ -843,6 +855,7 @@ impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1
             crate::panic_recovery::join_recoverable(
                 crate::panic_recovery::spawn_blocking_recoverable(move || {
                     Self::open_stream(
+                        decode_pool,
                         endpoint,
                         chain_id,
                         network_id,

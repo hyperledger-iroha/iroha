@@ -208,11 +208,19 @@ impl ReputationFinalizedArchiveBounds {
     }
 }
 /// Exact immutable finalized-chain identity used as an archive key.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::query::reputation_finalized::ReputationFinalizedArchiveKeyV1")]
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::query::reputation_finalized::ReputationFinalizedArchiveKeyV1")]
 pub struct ReputationFinalizedArchiveKeyV1 {
     /// Exact network from which the projection was captured.
     pub network_id: NetworkId,
@@ -269,9 +277,8 @@ impl ReputationFinalizedArchiveKeyV1 {
 /// Event feeds contain their full ordered history through `key`; they are not pre-paginated. This
 /// insertion/capture form is never returned with a silently truncated prefix: after compaction
 /// callers must use the retained pagination APIs and receive a typed `HistoryPruned` boundary.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::reputation_finalized::ReputationFinalizedProjectionV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedProjectionV1 {
     /// Exact chain, height, and block hash shared by every field.
     pub key: ReputationFinalizedArchiveKeyV1,
@@ -949,11 +956,10 @@ struct ReputationFeedHighWaterMarksV1 {
     orderbook_events: u64,
     reserve_events: u64,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationFinalizedAnchorManifestV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedAnchorManifestV1 {
     key: ReputationFinalizedArchiveKeyV1,
     predecessor: Option<ReputationFinalizedArchiveKeyV1>,
@@ -1011,9 +1017,10 @@ impl ReputationFinalizedAnchorManifestV1 {
         Ok(())
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::query::reputation_finalized::ReputationFinalizedAnchorDeltaV1")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedAnchorDeltaV1 {
     proof_outcomes: Vec<ProofOutcomeFinalizedEventV1>,
     journal_events: Vec<ReputationJournalFinalizedEventV1>,
@@ -1067,11 +1074,10 @@ impl ReputationFinalizedAnchorDeltaV1 {
         Ok(())
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::PersistedReputationFinalizedAnchorV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PersistedReputationFinalizedAnchorV1 {
     version: u16,
     manifest_digest: [u8; 32],
@@ -1079,11 +1085,10 @@ struct PersistedReputationFinalizedAnchorV1 {
     manifest: ReputationFinalizedAnchorManifestV1,
     delta: ReputationFinalizedAnchorDeltaV1,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationFinalizedAnchorDigestMaterialV1"
 )]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
 struct ReputationFinalizedAnchorDigestMaterialV1 {
     version: u16,
     manifest_digest: [u8; 32],
@@ -1132,11 +1137,10 @@ impl PersistedReputationFinalizedAnchorV1 {
         )
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::PersistedReputationAuthorityPolicyV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PersistedReputationAuthorityPolicyV1 {
     version: u16,
     record_digest: [u8; 32],
@@ -1254,11 +1258,10 @@ fn validate_feed_prefixes_against_anchor(
     }
     Ok(block_hashes)
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationCheckpointValidationSummaryV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationCheckpointValidationSummaryV1 {
     high_water_marks: ReputationFeedHighWaterMarksV1,
     policy_record_digest: [u8; 32],
@@ -1267,11 +1270,10 @@ struct ReputationCheckpointValidationSummaryV1 {
     reserve_provider_count: u64,
     reserve_provider_state_root: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationFinalizedVirtualBaseCheckpointV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedVirtualBaseCheckpointV1 {
     original_activation_floor: ReputationFinalizedArchiveKeyV1,
     retention_floor: ReputationFinalizedArchiveKeyV1,
@@ -1307,11 +1309,10 @@ struct ReputationFinalizedVirtualBaseCheckpointV1 {
     validation_summary: ReputationCheckpointValidationSummaryV1,
     validation_summary_digest: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::PersistedReputationFinalizedVirtualBaseCheckpointV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PersistedReputationFinalizedVirtualBaseCheckpointV1 {
     version: u16,
     checkpoint_digest: [u8; 32],
@@ -2100,11 +2101,10 @@ impl ReputationFinalizedArchiveRetentionAuthorityBindingV1 {
         self.qualification
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationFinalizedArchiveCompactionProposalMaterialV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedArchiveCompactionProposalMaterialV1 {
     version: u16,
     fence: ReputationFinalizedArchiveRetentionFenceV1,
@@ -2201,11 +2201,10 @@ impl ReputationFinalizedArchiveCompactionProposalV1 {
         self.proposal_digest
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationFinalizedArchiveRetentionApprovalMaterialV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationFinalizedArchiveRetentionApprovalMaterialV1 {
     namespace: [u8; 32],
     version: u16,
@@ -2216,11 +2215,10 @@ struct ReputationFinalizedArchiveRetentionApprovalMaterialV1 {
     predecessor_checkpoint_digest: Option<[u8; 32]>,
 }
 /// Canonical monotonic CAS record approving one exact compaction proposal.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::query::reputation_finalized::ReputationFinalizedArchiveRetentionApprovalRecordV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationFinalizedArchiveRetentionApprovalRecordV1 {
     material: ReputationFinalizedArchiveRetentionApprovalMaterialV1,
     revision: [u8; 32],
@@ -9440,6 +9438,7 @@ pub enum ReputationFinalizedArchiveError {
 }
 #[cfg(test)]
 mod tests {
+    mod frame_identity_tests;
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{

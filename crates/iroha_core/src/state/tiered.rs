@@ -10,10 +10,9 @@ use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::prelude::StatePath;
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{
-    core::NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -2178,7 +2177,7 @@ impl TieredStateBackend {
     ) -> Result<()>
     where
         K: norito::codec::Encode,
-        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
+        V: json::JsonSerialize + MeasuredBytes,
     {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
@@ -2192,7 +2191,7 @@ impl TieredStateBackend {
         ctx: &mut CollectContext,
     ) -> Result<()>
     where
-        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
+        V: json::JsonSerialize + MeasuredBytes,
     {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);
@@ -2723,7 +2722,6 @@ mod measured_bytes_impls {
         },
         ipfs::IpfsPath,
         metadata::Metadata,
-        name::Name,
         nexus::{
             AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtPolicyEntry,
             AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
@@ -2754,6 +2752,7 @@ mod measured_bytes_impls {
         trigger::{TriggerId, action::Repeats},
         zk::BackendTag,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::{
         bigint::BigInt,
         const_vec::ConstVec,

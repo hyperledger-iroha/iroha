@@ -217,7 +217,8 @@ pub(crate) fn verify_public_inputs_v1(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
-    use iroha_data_model::{domain::DomainId, name::Name};
+    use iroha_data_model::domain::DomainId;
+    use iroha_model_base::name::Name;
     use kaigi_zk::authorization_v1::{KaigiAuthorizationWitnessV1, compute_authorization_v1};
     use std::str::FromStr as _;
 

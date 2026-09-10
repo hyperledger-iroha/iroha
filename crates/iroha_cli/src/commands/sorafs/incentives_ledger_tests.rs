@@ -208,6 +208,41 @@ fn write_state_without_budget(path: &Path) {
 }
 
 #[test]
+fn ledger_export_canonical_frame_rejects_invalid_owner_and_boundaries() {
+    use norito::NoritoSchema as _;
+    const SCHEMA_OFFSET: usize = 4 + 1 + 1;
+    let export = LedgerExportFile {
+        version: LedgerExportFile::VERSION,
+        transfers: vec![sample_transfer_record(TransferKind::Payout, 5)],
+    };
+    assert_eq!(
+        LedgerExportFile::nominal_name(),
+        "iroha::commands::sorafs::LedgerExportFile"
+    );
+    let frame = norito::encode_canonical(&export).expect("encode declared owner frame");
+    assert_eq!(
+        frame[SCHEMA_OFFSET..SCHEMA_OFFSET + 16],
+        norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile")
+    );
+    let restored: LedgerExportFile =
+        norito::decode_canonical(&frame).expect("decode declared owner frame");
+    assert_eq!(
+        norito::encode_canonical(&restored).expect("reencode restored owner"),
+        frame
+    );
+    let mut wrong_owner = frame.clone();
+    wrong_owner[SCHEMA_OFFSET] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<LedgerExportFile>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(norito::decode_canonical::<LedgerExportFile>(&frame[..frame.len() - 1]).is_err());
+    let mut trailing = frame;
+    trailing.push(0);
+    assert!(norito::decode_canonical::<LedgerExportFile>(&trailing).is_err());
+}
+
+#[test]
 fn ledger_export_frame_round_trip_and_version_rejection_use_the_file_reader() {
     use norito::NoritoSchema as _;
     let export = LedgerExportFile {

@@ -171,7 +171,7 @@ fn expected_controller(owner: &AccountId) -> Result<NameControllerV1, AliasSetup
 fn validate_text_id_pair(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     target: &AliasTargetV1,
     now_ms: u64,
 ) -> Result<bool, AliasSetupError> {
@@ -631,12 +631,12 @@ fn ensure_active_parent_record(
 }
 fn validate_parent_resource(
     world: &impl WorldReadOnly,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<(), AliasSetupError> {
-    let dataspace_is_planned = |name: &iroha_data_model::name::Name, id: DataSpaceId| {
+    let dataspace_is_planned = |name: &iroha_model_base::name::Name, id: DataSpaceId| {
         planned_dataspaces
             .get(name)
             .is_some_and(|planned| *planned == id)
@@ -989,7 +989,7 @@ pub fn classify_alias_intent_with_endorsement_policy(
 pub fn classify_alias_intent_with_planned_dataspaces(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<AliasPlanDispositionV1, AliasSetupError> {
@@ -1015,7 +1015,7 @@ pub fn classify_alias_intent_with_planned_dataspaces(
 pub fn classify_alias_intent_with_planned_parents(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
     intent: &AliasIntentV1,
     now_ms: u64,
@@ -1044,7 +1044,7 @@ pub fn classify_alias_intent_with_planned_parents(
 pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
     intent: &AliasIntentV1,
     now_ms: u64,
@@ -1238,7 +1238,7 @@ mod tests {
             .insert(record_storage_key(&selector), record.encode());
     }
     fn dynamic_dataspace_intent(owner: AccountId) -> AliasIntentV1 {
-        let name: iroha_data_model::name::Name = "paynet".parse().expect("dataspace name");
+        let name: iroha_model_base::name::Name = "paynet".parse().expect("dataspace name");
         let dataspace_id = crate::sns::dataspace_id_for_sns_alias(name.as_ref())
             .expect("deterministic dataspace id");
         AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {

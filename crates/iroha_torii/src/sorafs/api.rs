@@ -19747,9 +19747,8 @@ struct AppealFinanceDepositExpectation {
 }
 const APPEAL_FINANCE_SETTLEMENT_OUTBOX_CONTEXT_VERSION_V1: u8 = 1;
 const APPEAL_FINANCE_DEPOSIT_OUTBOX_CONTEXT_VERSION_V1: u8 = 1;
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceSettlementOutboxContextV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AppealFinanceSettlementOutboxContextV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -19795,9 +19794,8 @@ impl AppealFinanceSettlementSnapshotV1 {
         }
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceDepositOutboxContextV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AppealFinanceDepositOutboxContextV1 {
     version: u8,
     policy_digest: [u8; 32],
@@ -31621,9 +31619,9 @@ mod advert_tests {
                 ProofOutcomeSignerPolicyV1,
             },
         },
-        state_path::StatePath,
     };
     use iroha_executor_data_model::permission::sorafs::CanManageSorafsProofOutcomePolicy;
+    use iroha_model_base::state_path::StatePath;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     use norito::to_bytes;

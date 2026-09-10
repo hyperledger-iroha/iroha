@@ -8,9 +8,10 @@ use crate::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
-    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
+    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, NftId},
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},

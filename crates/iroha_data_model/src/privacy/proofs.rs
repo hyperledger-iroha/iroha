@@ -1445,13 +1445,13 @@ mod exact12_fixture {
         domain::DomainId,
         isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
         metadata::Metadata,
-        name::Name,
         transaction::{
             Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain,
             TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::name::Name;
     use iroha_version::codec::EncodeVersioned as _;
     use std::{
         fmt::Write as _,

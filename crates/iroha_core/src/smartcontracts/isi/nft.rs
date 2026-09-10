@@ -826,6 +826,7 @@ pub mod query {
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::IntoKeyValue;
+        use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
         use std::collections::BTreeSet;

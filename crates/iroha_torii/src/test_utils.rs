@@ -29,13 +29,13 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     permission,
     prelude::{
-        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, Register,
-        TransactionBuilder,
+        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Register, TransactionBuilder,
     },
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::name::Name;
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,

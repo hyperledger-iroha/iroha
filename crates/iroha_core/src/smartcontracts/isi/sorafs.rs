@@ -20,7 +20,6 @@ use iroha_data_model::{
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1,
         MusubiReplicationOrderArchiveBindingV1, MusubiReplicationOrderLocationReferenceV1,
     },
-    name::Name,
     permission::{Permission, Permissions},
     query::{
         error::{FindError, QueryExecutionFail},
@@ -67,9 +66,9 @@ use iroha_data_model::{
             XOR_QUANTITY_SCALE, checked_mul_div_round_u128,
         },
     },
-    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
     numeric::{NumericOperationError, Quantity, RoundingMode},
@@ -4956,27 +4955,43 @@ const REPAIR_PAYLOAD_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REPAIR_PAYLOAD_MAX_DECODE_ALLOCATION_BYTES_V1,
     64,
 );
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairSourceBindingV1")]
-#[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct RepairSourceBindingV1 {
     source_identity: [u8; 32],
     task_id: [u8; 32],
     ticket_id: String,
     report_digest: [u8; 32],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairPersistedEventV1")]
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct RepairPersistedEventV1 {
     sequence: u64,
     target_block_height: u64,
     event_index: u32,
     event: SorafsRepairLedgerEvent,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairEventJournalHeadV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct RepairEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -15821,6 +15836,86 @@ mod sorafs_tests {
                 .expect("repair journal exists")
                 .last_sequence,
             1
+        );
+    }
+    #[test]
+    fn repair_durable_frames_preserve_source_and_journal_bindings() {
+        fn check<T>(
+            world: &impl crate::state::WorldReadOnly,
+            key: &StatePath,
+            name: &str,
+            decode: impl Fn(&[u8]) -> Result<T, InstructionExecutionError>,
+        ) where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        {
+            let bytes = world
+                .smart_contract_state()
+                .get(key)
+                .expect("persisted owner frame");
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            let view = norito::core::from_bytes_view(bytes).expect("valid persisted envelope");
+            assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
+            let decoded = decode(bytes).expect("bounded production state decoder");
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("re-encode all fields"),
+                *bytes
+            );
+            let mut substituted = bytes.to_vec();
+            substituted[6..22]
+                .copy_from_slice(&norito::schema::identity::frame_hash::<iroha_crypto::Hash>());
+            assert!(matches!(
+                norito::decode_canonical::<T>(&substituted),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(decode(&substituted).is_err());
+            assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes.to_vec();
+            trailing.push(0);
+            assert!(decode(&trailing).is_err());
+        }
+        let mut state = make_state();
+        let authority = alice();
+        let provider = ProviderId::new([0xD1; 32]);
+        grant_repair_operator(&mut state, &authority, provider);
+        let report = repair_report("REP-FRAME-1", provider, [0xD2; 32], &authority, 2_000);
+        let source_identity = [0xD3; 32];
+        transact_repair(&mut state, 1, 2_000_000, |transaction| {
+            SubmitSorafsRepairTask::new(source_identity, to_bytes(&report).expect("report frame"))
+                .execute(&authority, transaction)
+        })
+        .expect("commit repair submission");
+        let view = state.view();
+        let world = view.world();
+        let source = read_repair_source_binding(world, source_identity)
+            .expect("validated source binding")
+            .expect("source exists");
+        assert_eq!(source.ticket_id, report.ticket_id.0);
+        let head = read_repair_event_journal_head(world)
+            .expect("journal head agrees with event")
+            .expect("head exists");
+        assert_eq!(head.last_sequence, 1);
+        let event = read_repair_persisted_event(world, head.last_sequence)
+            .expect("validated event")
+            .expect("event exists");
+        validate_repair_event_task_binding(world, &event).expect("event matches stored task");
+        check::<RepairSourceBindingV1>(
+            world,
+            &repair_source_key(source_identity),
+            "iroha_core::smartcontracts::isi::sorafs::RepairSourceBindingV1",
+            |bytes| decode_repair_state(bytes, "test repair source binding"),
+        );
+        check::<RepairPersistedEventV1>(
+            world,
+            &repair_event_key(head.last_sequence),
+            "iroha_core::smartcontracts::isi::sorafs::RepairPersistedEventV1",
+            |bytes| decode_repair_state(bytes, "test repair persisted event"),
+        );
+        check::<RepairEventJournalHeadV1>(
+            world,
+            repair_event_journal_head_key(),
+            "iroha_core::smartcontracts::isi::sorafs::RepairEventJournalHeadV1",
+            |bytes| decode_repair_state(bytes, "test repair journal head"),
         );
     }
     #[test]

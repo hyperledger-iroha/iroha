@@ -8,7 +8,6 @@ use iroha_data_model::nexus::staking::PublicLaneValidatorStatus;
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
-    name::Name,
     nexus::LaneId,
     peer::PeerId,
     soracloud::{
@@ -25,6 +24,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{

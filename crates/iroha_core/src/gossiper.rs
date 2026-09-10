@@ -37,7 +37,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -3014,7 +3014,7 @@ fn len_prefixed_field_payload(bytes: &[u8], offset: usize) -> Result<(&[u8], usi
 }
 fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
@@ -3028,7 +3028,7 @@ fn decode_bounded_len_prefixed_sequence<T>(
     offset: usize,
 ) -> Result<(Vec<T>, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (sequence_len, _) = ncore::inspect_seq_len_slice(payload)?;
@@ -3624,7 +3624,7 @@ fn gossip_vec_payload_len_exact<'a>(
 }
 fn gossip_encoded_vec_payload_len_exact<'a, T>(items: impl Iterator<Item = &'a T>) -> Option<usize>
 where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
 {
     let mut count = 0usize;
     let mut total = 0usize;
@@ -3777,6 +3777,8 @@ fn partition_gossip_batch(
         encoded_len: exact_len,
     }
 }
+#[cfg(test)]
+mod payload_codec_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

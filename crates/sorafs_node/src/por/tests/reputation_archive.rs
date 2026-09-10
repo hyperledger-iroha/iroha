@@ -36,13 +36,14 @@ fn reputation_work_and_ack_checkpoint_roundtrip_byte_identically() {
         .unwrap()
         .reputation_work;
     let checkpoint = source.checkpoint();
-    let canonical = norito::to_bytes(&checkpoint).expect("encode source checkpoint");
+    // The tracker is a nested field of the node checkpoint, with the fixed V1 payload layout.
+    let canonical = norito::codec::encode_adaptive(&checkpoint);
     let restored = PorTracker::default();
     restored
         .restore_checkpoint(checkpoint)
         .expect("restore canonical checkpoint");
     assert_eq!(
-        norito::to_bytes(&restored.checkpoint()).expect("encode restored checkpoint"),
+        norito::codec::encode_adaptive(&restored.checkpoint()),
         canonical
     );
     assert_eq!(
@@ -173,8 +174,8 @@ fn tracker_checkpoint_preserves_pending_proofs_and_finalized_payloads() {
         .record_proof(&pending_proof, &sample_provider_key())
         .unwrap();
     let checkpoint = source.checkpoint();
-    let encoded = norito::to_bytes(&checkpoint).unwrap();
-    let checkpoint = norito::decode_from_bytes(&encoded).unwrap();
+    let encoded = norito::codec::encode_adaptive(&checkpoint);
+    let checkpoint = norito::codec::decode_adaptive(&encoded).unwrap();
     let restored = PorTracker::with_entry_limit(4);
     restored.restore_checkpoint(checkpoint).unwrap();
     restored
@@ -349,6 +350,39 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
     let after_compaction = tracker.checkpoint();
     assert!(after_compaction.finalized.is_empty());
     assert!(after_compaction.replay_archive_receipt.is_some());
+    let readback = archive
+        .state
+        .lock()
+        .unwrap()
+        .records
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let record_bytes = crate::frame_test_support::assert_current_frame(
+        &readback.record,
+        "sorafs_node::por::PorFinalizedReplayArchiveRecordV1",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &readback.receipt,
+        "sorafs_node::por::PorFinalizedReplayArchiveReceiptV1",
+    );
+    let mut expected = blake3::Hasher::new();
+    expected.update(POR_FINALIZED_REPLAY_ARCHIVE_RECORD_DIGEST_DOMAIN_V1);
+    expected.update(&u64::try_from(record_bytes.len()).unwrap().to_le_bytes());
+    expected.update(&record_bytes);
+    assert_eq!(
+        readback.record.record_digest().unwrap(),
+        *expected.finalize().as_bytes()
+    );
+    readback
+        .validate_at_checkpoint(
+            archive.binding,
+            readback.receipt,
+            PorFinalizedReplayArchiveProofBoundsV1::production_default(),
+        )
+        .expect("actual authenticated archive head after codec roundtrip");
+
     let status_after_compaction = tracker
         .status_authority_snapshot()
         .expect("compacted status remains queryable");
@@ -372,8 +406,8 @@ fn authenticated_archive_compaction_is_crash_replay_safe_and_preserves_conflicts
     assert_eq!(archive.append_calls(), 2);
     assert_eq!(archive.retained_records(), 1);
     assert_eq!(
-        norito::to_bytes(&tracker.checkpoint()).unwrap(),
-        norito::to_bytes(&after_compaction).unwrap()
+        norito::codec::encode_adaptive(&tracker.checkpoint()),
+        norito::codec::encode_adaptive(&after_compaction)
     );
     let restored = PorTracker::with_entry_limit(1);
     restored

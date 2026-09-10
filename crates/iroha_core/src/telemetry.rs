@@ -58,10 +58,11 @@ use iroha_data_model::{
         SettlementAtomicity, SettlementExecutionOrder, SettlementId, SettlementPlan,
     },
     kaigi::KaigiRelayHealthStatus,
-    name::Name,
 };
 use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
+#[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
+use iroha_model_base::name::Name;
 use iroha_p2p::OnlinePeers;
 use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "telemetry")]

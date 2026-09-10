@@ -12,12 +12,12 @@ use iroha_data_model::{
     asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
-    name::Name,
     transaction::{
         FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
         signed::TransactionPayload,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     codec::Encode,

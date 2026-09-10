@@ -1,7 +1,7 @@
 //! Bounded durable state storage for development and test hosts.
 use crate::VMError;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64_STANDARD};
-use iroha_data_model::state_path::StatePath;
+use iroha_model_base::state_path::StatePath;
 use norito::json;
 #[path = "state_overlay_fs.rs"]
 mod state_overlay_fs;

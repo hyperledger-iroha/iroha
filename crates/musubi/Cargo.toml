@@ -18,6 +18,7 @@ categories = ["command-line-utilities", "development-tools"]
 workspace = true
 
 [dependencies]
+iroha_model_base = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 eyre = { workspace = true }

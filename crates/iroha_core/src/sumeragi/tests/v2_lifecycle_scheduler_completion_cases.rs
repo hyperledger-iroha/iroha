@@ -3137,3 +3137,5 @@ mod unified_completion_classifier_tests {
         );
     }
 }
+
+include!("v2_lifecycle_scheduler_resolved_validate_cases.rs");

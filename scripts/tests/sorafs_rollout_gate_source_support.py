@@ -15,6 +15,7 @@ _SOURCE_COMPONENTS = {
     ),
     "check_sorafs_rollout_gate_contract_test.py": (
         "sorafs_rollout_gate_contract_inventory.py",
+        "sorafs_hedging_billing_service_contract.py",
     ),
     # Mirror the Rust test module's three include! components for static scans.
     "provider_ingest_runtime.rs": (

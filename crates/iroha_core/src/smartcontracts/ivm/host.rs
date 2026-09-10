@@ -82,7 +82,6 @@ use iroha_data_model::{
     soracloud::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
-    state_path::StatePath,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -90,6 +89,7 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     bigint::BigInt,
     calendar,
@@ -1569,7 +1569,7 @@ fn visit_bounded_durable_state_positions(
 #[cfg(test)]
 mod durable_state_merge_tests {
     use super::*;
-    use iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
+    use iroha_model_base::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
     #[test]
     fn bounded_merge_seeks_after_deleted_positions_and_stops_without_lookahead() {
@@ -17052,7 +17052,7 @@ seiyaku PrivilegedBinding {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "n1".parse().unwrap(),
         );
-        let key: iroha_data_model::name::Name = "k".parse().unwrap();
+        let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let value = iroha_primitives::json::Json::new("v");
         let nft_blob = norito::to_bytes(&nft_id).expect("encode nft id");
         let key_blob = norito::to_bytes(&key).expect("encode name");
@@ -17109,7 +17109,7 @@ seiyaku PrivilegedBinding {
         let program = build_program(&code, 0);
         vm.load_program(&program).unwrap();
         // payload is a Name
-        let key: iroha_data_model::name::Name = "k".parse().unwrap();
+        let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let key_blob = norito::to_bytes(&key).expect("encode key");
         // Wrong version
         let mut tlv_wrong_ver = Vec::new();
@@ -20009,7 +20009,55 @@ seiyaku OpaqueInstructionSubmission {
                 },
             }],
         };
-        let payload = norito::to_bytes(&batch).expect("encode batch");
+        let entry = &batch.entries[0];
+        let current = TransferAssetBatch::new(vec![TransferAssetBatchEntry::new(
+            entry.from.clone(),
+            entry.to.clone(),
+            entry.asset_definition.clone(),
+            1_u64,
+        )]);
+        let (current_payload, current_flags, forged_payload, flags) = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (current_payload, current_flags) =
+                norito::codec::encode_with_header_flags(&current);
+            let (forged_payload, flags) = norito::codec::encode_with_header_flags(&batch);
+            (current_payload, current_flags, forged_payload, flags)
+        };
+        let control = norito::core::frame_bare_with_header_flags::<TransferAssetBatch>(
+            &current_payload,
+            current_flags,
+        )
+        .unwrap();
+        assert_eq!(control, norito::encode_canonical(&current).unwrap());
+        let mut control_host = CoreHost::new(entry.from.clone());
+        let mut control_vm = IVM::new(1_000);
+        control_vm
+            .load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load control metadata");
+        let control_ptr = store_tlv(&mut control_vm, PointerType::NoritoBytes, &control);
+        control_vm.set_register(10, control_ptr);
+        let gas = control_host
+            .syscall(ivm_sys::SYSCALL_TRANSFER_V1_BATCH_APPLY, &mut control_vm)
+            .expect("current canonical amount passes through the same frame construction");
+        let expected = InstructionBox::from(current);
+        assert_eq!(gas, crate::gas::meter_instruction(&expected));
+        assert_eq!(control_host.queued, vec![expected]);
+        let payload = norito::core::frame_bare_with_header_flags::<TransferAssetBatch>(
+            &forged_payload,
+            flags,
+        )
+        .unwrap();
+        let view = norito::core::from_bytes_view(&payload)
+            .expect("valid current batch owner, length and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<TransferAssetBatch>()
+        );
+        assert_eq!(view.as_bytes(), forged_payload.as_slice());
+        let error = norito::decode_canonical::<TransferAssetBatch>(&payload)
+            .expect_err("noncanonical numeric payload must fail inside the actual batch owner");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
         assert!(matches!(

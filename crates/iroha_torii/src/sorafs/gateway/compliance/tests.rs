@@ -785,17 +785,30 @@ fn promote(
 fn threshold_promotion_is_durable_and_predecessor_bound() {
     let store = Arc::new(MemoryStore::default());
     let controller = GatewayComplianceController::new(config(), store.clone()).expect("controller");
+    crate::frame_test_support::assert_current_frame(
+        &trust_policy(),
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceTrustPolicyV1",
+    );
     let first = sign_catalog(payload(1, None));
+    crate::frame_test_support::assert_current_frame(
+        &first.payload,
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogPayloadV1",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &first,
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogV1",
+    );
     let first_digest = controller
         .stage_catalog(first.clone(), NOW + 5, mutation_binding(1))
         .expect("stage first")
         .catalog_digest;
+    let first_ack = acknowledgement(0, first_digest, true);
+    crate::frame_test_support::assert_current_frame(
+        &first_ack.payload,
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceAcknowledgementPayloadV1",
+    );
     controller
-        .acknowledge(
-            acknowledgement(0, first_digest, true),
-            NOW + 10,
-            mutation_binding(2),
-        )
+        .acknowledge(first_ack, NOW + 10, mutation_binding(2))
         .expect("ack");
     assert!(matches!(
         controller.promote(first_digest, 1, NOW + 20, mutation_binding(3)),
@@ -815,7 +828,24 @@ fn threshold_promotion_is_durable_and_predecessor_bound() {
             .catalog_digest,
         first_digest
     );
-    assert_eq!(controller.checkpoint().expect("checkpoint").revision, 4);
+    let checkpoint = controller.checkpoint().expect("checkpoint");
+    assert_eq!(checkpoint.revision, 4);
+    let canonical = crate::frame_test_support::assert_current_frame(
+        &checkpoint,
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCheckpointV1",
+    );
+    assert_eq!(
+        store.durable_bytes().expect("durable promoted checkpoint"),
+        canonical
+    );
+    assert_eq!(
+        decode_checkpoint(&canonical).expect("production checkpoint decoder"),
+        checkpoint
+    );
+    let mut wrong_owner = canonical.clone();
+    wrong_owner[6] ^= 1;
+    assert!(decode_checkpoint(&wrong_owner).is_err());
+    assert!(decode_checkpoint(&canonical[..canonical.len() - 1]).is_err());
     drop(controller);
     let recovered = GatewayComplianceController::new(config(), store).expect("recover checkpoint");
     assert_eq!(
@@ -1624,6 +1654,10 @@ fn threshold_rollback_changes_serving_pointer_but_preserves_chain_head() {
         reason_code: "bad-feed".into(),
         authorized_at_unix: NOW + 55,
     };
+    crate::frame_test_support::assert_current_frame(
+        &rollback_payload,
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceRollbackPayloadV1",
+    );
     let digest = hash_canonical(
         ROLLBACK_SIGNING_DOMAIN_V1,
         &rollback_payload,
@@ -2077,4 +2111,67 @@ fn file_store_rejects_symlink_checkpoint() {
         Err(GatewayComplianceError::Persistence(_))
     ));
     assert_eq!(fs::read(target).expect("read target"), b"old");
+}
+
+#[test]
+fn current_feed_frames_bind_normalized_documents_and_transport_pins() {
+    let document = GatewayComplianceFeedDocumentV1 {
+        version: GATEWAY_COMPLIANCE_FEED_VERSION_V1,
+        feed_id: "baseline".into(),
+        generated_at_unix: NOW,
+        baseline_rules: Vec::new(),
+        appeal_overrides: Vec::new(),
+        legal_safety_holds: Vec::new(),
+        toggles: Vec::new(),
+    }
+    .normalize()
+    .expect("valid normalized feed");
+    let bytes = crate::frame_test_support::assert_current_frame(
+        &document,
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedDocumentV1",
+    );
+    let decoded: GatewayComplianceFeedDocumentV1 =
+        norito::decode_canonical(&bytes).expect("decode normalized feed frame");
+    assert_eq!(
+        document.canonical_digest().expect("feed digest"),
+        decoded.canonical_digest().expect("decoded feed digest")
+    );
+    let pins = BTreeMap::from([("feed.example".to_owned(), BTreeSet::from([[0x71; 32]]))]);
+    let payload = GatewayComplianceFeedTransportPolicyDigestV1 {
+        version: 1,
+        hosts: vec![GatewayComplianceFeedTransportHostDigestV1 {
+            hostname: "feed.example".to_owned(),
+            accepted_spki_sha256: vec![[0x71; 32]],
+        }],
+    };
+    assert_eq!(
+        <GatewayComplianceFeedTransportPolicyDigestV1 as norito::NoritoSchema>::nominal_name(),
+        "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedTransportPolicyDigestV1",
+    );
+    let encoded = encode_bounded(&payload, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1)
+        .expect("encode-only transport fingerprint frame");
+    assert_eq!(
+        norito::core::from_bytes_view(&encoded)
+            .expect("valid transport frame")
+            .schema(),
+        norito::schema::identity::frame_hash::<GatewayComplianceFeedTransportPolicyDigestV1>(),
+    );
+    assert!(encode_bounded(&payload, encoded.len() - 1).is_err());
+    let expected = hash_canonical(
+        FEED_TRANSPORT_POLICY_DOMAIN_V1,
+        &payload,
+        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+    )
+    .expect("hash exact framed transport payload");
+    assert_eq!(
+        gateway_compliance_feed_transport_policy_digest(&pins)
+            .expect("production pin policy digest"),
+        expected
+    );
+    let changed = BTreeMap::from([("feed.example".to_owned(), BTreeSet::from([[0x72; 32]]))]);
+    assert_ne!(
+        gateway_compliance_feed_transport_policy_digest(&changed)
+            .expect("rotated pin policy digest"),
+        expected
+    );
 }

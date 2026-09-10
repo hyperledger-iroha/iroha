@@ -737,7 +737,74 @@ fn journal_policy_defaults_and_hard_limits_share_config_bounds() {
     }
 }
 #[test]
+fn nested_reserve_count_preserves_current_frame_budget_without_an_owner() {
+    struct PayloadOnly(u64);
+    impl norito::SerializePayload for PayloadOnly {
+        fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+            norito::SerializePayload::serialize(&self.0, encoder)
+        }
+    }
+    let value = 257_u64;
+    assert_eq!(
+        canonical_reserve_footprint(&PayloadOnly(value)).expect("payload-only reserve"),
+        norito::encode_canonical(&value)
+            .expect("actual scalar frame")
+            .len()
+    );
+    let fixture = fixture(0x15, 0x16);
+    let checkpoint = awaiting_checkpoint(&fixture);
+    let bytes = encode_checkpoint(&checkpoint, test_policy()).expect("production checkpoint");
+    assert_eq!(
+        canonical_reserve_footprint(&checkpoint).expect("checkpoint footprint"),
+        bytes.len()
+    );
+    assert_eq!(
+        <StoredJournalCheckpointV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::provider_attestation_journal::StoredJournalCheckpointV1"
+    );
+    let snapshot =
+        MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(bytes.clone())
+            .expect("checkpoint snapshot");
+    assert_eq!(
+        decode_checkpoint(&snapshot, test_policy()).expect("production checkpoint roundtrip"),
+        checkpoint
+    );
+    let mut wrong_owner = bytes.clone();
+    wrong_owner[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<StoredJournalCheckpointV1>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    let wrong_snapshot =
+        MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(wrong_owner)
+            .expect("substituted snapshot");
+    assert!(decode_checkpoint(&wrong_snapshot, test_policy()).is_err());
+    assert!(
+        norito::decode_canonical::<StoredJournalCheckpointV1>(&bytes[..bytes.len() - 1]).is_err()
+    );
+    let expected = checkpoint_future_reserve_bytes(&checkpoint).expect("future reserve");
+    let alternate = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+    let _ambient = norito::core::DecodeFlagsGuard::enter(alternate);
+    assert_eq!(
+        checkpoint_future_reserve_bytes(&checkpoint).expect("fixed-layout future reserve"),
+        expected
+    );
+}
+#[test]
 fn journal_policy_digest_is_stable_and_commits_every_bound() {
+    assert_eq!(
+        <ApprovalIdPreimageV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::provider_attestation_journal::ApprovalIdPreimageV1"
+    );
+    assert_eq!(
+        <InventoryHandoffIdPreimageV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::provider_attestation_journal::InventoryHandoffIdPreimageV1"
+    );
+    assert_eq!(
+        <JournalPolicyDigestMaterialV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::provider_attestation_journal::JournalPolicyDigestMaterialV1"
+    );
+
     let policy = test_policy();
     let expected = [
         0x03, 0xbb, 0x0e, 0x39, 0xde, 0x37, 0x4f, 0x94, 0xfc, 0x8c, 0x3e, 0x94, 0xa6, 0x75, 0x84,

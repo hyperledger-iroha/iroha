@@ -307,6 +307,51 @@ fn pre_cut_policy() -> PreCutModerationLedgerPolicyV1 {
         unrevealed_commit_penalty_points: current.unrevealed_commit_penalty_points,
     }
 }
+fn frame_pre_cut_moderation_payload<Owner, Payload>(
+    current: &Owner,
+    unsupported: &Payload,
+) -> Vec<u8>
+where
+    Owner: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    Payload: norito::SerializePayload,
+{
+    let (current_payload, current_flags, payload, flags) = {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (current_payload, current_flags) = norito::codec::encode_with_header_flags(current);
+        let (payload, flags) = norito::codec::encode_with_header_flags(unsupported);
+        (current_payload, current_flags, payload, flags)
+    };
+    let control =
+        norito::core::frame_bare_with_header_flags::<Owner>(&current_payload, current_flags)
+            .unwrap();
+    assert_eq!(
+        control,
+        encode_state(current, "current layout control").unwrap()
+    );
+    let decoded: Owner = decode_state_with_current(&control, "current layout control", None)
+        .expect("the production state decoder accepts the current layout under this envelope");
+    assert_eq!(
+        encode_state(&decoded, "decoded current control").unwrap(),
+        control
+    );
+    let frame = norito::core::frame_bare_with_header_flags::<Owner>(&payload, flags).unwrap();
+    let view = norito::core::from_bytes_view(&frame)
+        .expect("valid unsupported frame header, length and checksum");
+    assert_eq!(
+        view.schema(),
+        norito::schema::identity::frame_hash::<Owner>()
+    );
+    assert_eq!(view.as_bytes(), payload.as_slice());
+    assert!(
+        !matches!(
+            norito::decode_canonical::<Owner>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ),
+        "unsupported payload must reach the actual current owner decoder"
+    );
+    frame
+}
 fn startup_error(world: World) -> String {
     State::try_new(
         world,
@@ -399,6 +444,12 @@ fn startup_world_with_policy(manager: &AccountId) -> World {
 #[test]
 fn startup_rejects_pre_cut_moderation_policy_layout() {
     let manager = account(&keypair(0x11));
+    let current = ModerationLedgerPolicyRecord {
+        policy: policy(),
+        policy_digest: policy().digest().expect("current policy digest"),
+        activated_at_unix_ms: OPENED_AT,
+        activated_by: manager.clone(),
+    };
     let legacy = PreCutModerationLedgerPolicyRecord {
         policy: pre_cut_policy(),
         policy_digest: [0x41; 32],
@@ -408,7 +459,7 @@ fn startup_rejects_pre_cut_moderation_policy_layout() {
     let mut world = World::new();
     world.smart_contract_state.insert(
         policy_key().clone(),
-        norito::to_bytes(&legacy).expect("encode pre-cut moderation policy"),
+        frame_pre_cut_moderation_payload(&current, &legacy),
     );
     let error = startup_error(world);
     assert!(
@@ -429,6 +480,20 @@ fn startup_rejects_pre_cut_moderation_case_layout() {
         policy_digest: current_policy_digest,
         activated_at_unix_ms: OPENED_AT,
         activated_by: manager.clone(),
+    };
+    let current = ModerationCaseRecordV1 {
+        spec: spec_with_policy(jurors.to_vec(), 1, &active_policy.policy),
+        policy: active_policy.policy.clone(),
+        status: ModerationCaseStatusV1::Open,
+        opened_at_unix_ms: OPENED_AT,
+        opened_by: manager.clone(),
+        commitment_count: 0,
+        reveal_count: 0,
+        challenge_count: 0,
+        challenge_ids: Vec::new(),
+        pending_challenge_count: 0,
+        accepted_challenge_count: 0,
+        expired_challenge_count: 0,
     };
     let legacy = PreCutModerationCaseRecordV1 {
         spec: PreCutModerationCaseSpecV1 {
@@ -463,7 +528,7 @@ fn startup_rejects_pre_cut_moderation_case_layout() {
     );
     world.smart_contract_state.insert(
         case_key(&case_id, &round_id),
-        norito::to_bytes(&legacy).expect("encode pre-cut moderation case"),
+        frame_pre_cut_moderation_payload(&current, &legacy),
     );
     let error = startup_error(world);
     assert!(
@@ -480,6 +545,7 @@ fn startup_rejects_pre_cut_moderation_appeal_layout() {
     let current = startup_registering_appeal(&appellant);
     let case_id = current.intake.case_id.clone();
     let round_id = current.intake.round_id.clone();
+    let current_control = current.clone();
     let legacy = PreCutModerationAppealRecordV1 {
         intake: current.intake,
         intake_digest: current.intake_digest,
@@ -499,7 +565,7 @@ fn startup_rejects_pre_cut_moderation_appeal_layout() {
     let mut world = startup_world_with_policy(&manager);
     world.smart_contract_state.insert(
         appeal_key(&case_id, &round_id),
-        norito::to_bytes(&legacy).expect("encode pre-cut moderation appeal"),
+        frame_pre_cut_moderation_payload(&current_control, &legacy),
     );
     let error = startup_error(world);
     assert!(

@@ -27,6 +27,10 @@ fn issuer_enrollment_and_checkpoint_frames_survive_every_caller_layout() {
         )
         .unwrap();
         let enrollment_bytes = norito::encode_canonical(&enrollment).unwrap();
+        assert_pop_frame(
+            &enrollment,
+            "sorafs_node::pop_credentials::PopEncryptedEnrollmentV1",
+        );
         assert_eq!(encode_canonical(&enrollment).unwrap(), enrollment_bytes);
         service.submit_enrollment(&enrollment_bytes, 20).unwrap();
         let signed_approval = approval(
@@ -35,6 +39,10 @@ fn issuer_enrollment_and_checkpoint_frames_survive_every_caller_layout() {
             &enrollment,
             &policy,
             PopApprovalDecisionV1::Approve,
+        );
+        assert_pop_frame(
+            &signed_approval,
+            "sorafs_node::pop_credentials::PopApprovalV1",
         );
         let mut signable = signed_approval.clone();
         signable.signature.clear();
@@ -50,6 +58,10 @@ fn issuer_enrollment_and_checkpoint_frames_survive_every_caller_layout() {
         service.consume_verified_nullifier(nullifier).unwrap();
         let checkpoint_path = service.checkpoint_path.clone();
         let retained = service.state.clone();
+        assert_pop_frame(
+            &retained,
+            "sorafs_node::pop_credentials::PopIssuerCheckpointV1",
+        );
         let retained_bytes = fs::read(&checkpoint_path).unwrap();
         assert_eq!(retained_bytes, norito::encode_canonical(&retained).unwrap());
         let snapshot = (
@@ -184,6 +196,10 @@ fn issuer_enrollment_and_checkpoint_frames_survive_every_caller_layout() {
 fn enrollment_encryption_uses_canonical_private_payload_and_aad_under_every_caller_layout() {
     let (_temp, _service, policy, wallet, _approvers, enrollment) = service_fixture();
     let private = private_enrollment(&wallet);
+    assert_pop_frame(
+        &private,
+        "sorafs_node::pop_credentials::PopPrivateEnrollmentV1",
+    );
     let mut expected_plaintext = norito::encode_canonical(&private).unwrap();
     let expected_plaintext = SensitiveBytesGuard::new(&mut expected_plaintext);
     let metadata = PopEnrollmentAadV1 {
@@ -194,6 +210,10 @@ fn enrollment_encryption_uses_canonical_private_payload_and_aad_under_every_call
         recipient_key_id: policy.enrollment_recipient_key_id.clone(),
     };
     let canonical_metadata = norito::encode_canonical(&metadata).unwrap();
+    assert_pop_frame(
+        &metadata,
+        "sorafs_node::pop_credentials::PopEnrollmentAadV1",
+    );
     let expected_aad = [ENROLLMENT_AAD_DOMAIN_V1, canonical_metadata.as_slice()].concat();
     assert_eq!(enrollment.aad().unwrap(), expected_aad);
     let mut recipient_rng = ChaCha20Rng::from_seed([0x45; 32]);
@@ -258,4 +278,34 @@ fn nullifier_replay_cache_is_atomic_and_survives_restart() {
         restored.consume_verified_nullifier(nullifier),
         Err(PopCredentialServiceError::ReplayedProof)
     );
+}
+
+fn assert_pop_frame<T>(value: &T, name: &str)
+where
+    T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + PartialEq,
+{
+    assert_eq!(T::nominal_name(), name);
+    assert_eq!(T::frame_name(), name);
+    let mut encoded = norito::encode_canonical(value).expect("canonical POP frame");
+    let bytes = SensitiveBytesGuard::new(&mut encoded);
+    assert_eq!(
+        bytes.as_slice()[6..22],
+        norito::schema::identity::frame_hash::<T>()
+    );
+    let decoded: T = norito::decode_canonical(bytes.as_slice()).expect("exact POP frame roundtrip");
+    assert!(&decoded == value, "POP fields changed in roundtrip");
+    let mut wrong_encoded = bytes.as_slice().to_vec();
+    let mut wrong = SensitiveBytesGuard::new(&mut wrong_encoded);
+    wrong.as_mut_slice()[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<T>(wrong.as_slice()),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(
+        norito::decode_canonical::<T>(&bytes.as_slice()[..bytes.as_slice().len() - 1]).is_err()
+    );
+    let mut extra = bytes.as_slice().to_vec();
+    extra.push(0);
+    let trailing = SensitiveBytesGuard::new(&mut extra);
+    assert!(norito::decode_canonical::<T>(trailing.as_slice()).is_err());
 }

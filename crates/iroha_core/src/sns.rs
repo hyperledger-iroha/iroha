@@ -30,11 +30,11 @@ use iroha_data_model::{
         ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
         fixtures,
     },
-    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_model_base::state_path::StatePath;
 #[cfg(test)]
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -778,7 +778,7 @@ pub(crate) fn process_alias_auto_renewals(state_block: &mut StateBlock<'_>) {
 pub fn selector_for_account_alias(
     alias: &AccountAlias,
     catalog: &DataSpaceCatalog,
-) -> Result<NameSelectorV1, iroha_data_model::error::ParseError> {
+) -> Result<NameSelectorV1, iroha_model_base::error::ParseError> {
     Ok(NameSelectorV1 {
         version: NameSelectorV1::VERSION,
         suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
@@ -2750,7 +2750,7 @@ fn resolve_active_dataspace_by_id(
     let mut resolution = catalog
         .by_id(dataspace_id)
         .map(|entry| {
-            if entry.alias.len() > iroha_data_model::name::MAX_NAME_BYTES {
+            if entry.alias.len() > iroha_model_base::name::MAX_NAME_BYTES {
                 return Err(SnsError::Conflict(format!(
                     "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: configured dataspace alias exceeds the canonical name limit"
                 )));
@@ -2774,7 +2774,7 @@ fn resolve_active_dataspace_by_id(
                     "dataspace SNS record contains trailing bytes".to_owned(),
                 ));
             }
-            if record.selector.label.len() > iroha_data_model::name::MAX_NAME_BYTES {
+            if record.selector.label.len() > iroha_model_base::name::MAX_NAME_BYTES {
                 return Err(SnsError::Internal(
                     "dataspace SNS record label exceeds the canonical name limit".to_owned(),
                 ));

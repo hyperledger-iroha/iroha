@@ -35,6 +35,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use std::str::FromStr as _;
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 =

@@ -1858,17 +1858,15 @@ pub enum GuardSetPersistenceError {
         message: String,
     },
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_orchestrator::soranet::GuardSetEnvelopeV8")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetEnvelopeV8 {
     version: u8,
     payload: Vec<u8>,
     cache_tag_hex: String,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_orchestrator::soranet::GuardSetPayloadV8")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetPayloadV8 {
     guards: Vec<GuardRecordPersist>,
 }
@@ -2776,9 +2774,9 @@ mod tests {
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
-        name::Name,
         soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1},
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::numeric::Quantity;
     use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
@@ -3197,6 +3195,53 @@ mod tests {
         assert_eq!(decoded.guards()[0].relay_id, relay_id(0x01));
         assert_eq!(decoded.guards()[0].bandwidth_bytes_per_sec, 4 * 1024 * 1024);
         assert_eq!(decoded.guards()[0].reputation_weight, 77);
+        assert_eq!(
+            <GuardSetEnvelopeV8 as norito::NoritoSchema>::nominal_name(),
+            "sorafs_orchestrator::soranet::GuardSetEnvelopeV8"
+        );
+        assert_eq!(
+            <GuardSetPayloadV8 as norito::NoritoSchema>::nominal_name(),
+            "sorafs_orchestrator::soranet::GuardSetPayloadV8"
+        );
+        let mut envelope: GuardSetEnvelopeV8 =
+            norito::decode_from_bytes(&encoded).expect("outer owner");
+        assert_eq!(
+            encoded[6..22],
+            norito::schema::identity::frame_hash::<GuardSetEnvelopeV8>()
+        );
+        assert_eq!(
+            envelope.payload[6..22],
+            norito::schema::identity::frame_hash::<GuardSetPayloadV8>()
+        );
+        let payload: GuardSetPayloadV8 =
+            norito::decode_from_bytes(&envelope.payload).expect("inner owner");
+        assert_eq!(
+            to_bytes(&payload).expect("inner roundtrip"),
+            envelope.payload
+        );
+        let mut wrong_outer = encoded.clone();
+        wrong_outer[6..22]
+            .copy_from_slice(&norito::schema::identity::frame_hash::<GuardSetPayloadV8>());
+        assert!(matches!(
+            GuardSet::decode_authenticated(&wrong_outer, &key),
+            Err(GuardSetPersistenceError::Decode(
+                norito::Error::SchemaMismatch
+            ))
+        ));
+        assert!(GuardSet::decode_authenticated(&encoded[..encoded.len() - 1], &key).is_err());
+        // A valid MAC must not authorize an inner frame belonging to the outer owner.
+        envelope.payload[6..22]
+            .copy_from_slice(&norito::schema::identity::frame_hash::<GuardSetEnvelopeV8>());
+        envelope.cache_tag_hex = GuardCacheTag::generate(&key, &envelope.payload)
+            .expect("authenticate wrong inner owner")
+            .to_hex();
+        let wrong_inner = to_bytes(&envelope).expect("current outer owner");
+        assert!(matches!(
+            GuardSet::decode_authenticated(&wrong_inner, &key),
+            Err(GuardSetPersistenceError::Decode(
+                norito::Error::SchemaMismatch
+            ))
+        ));
     }
     #[test]
     fn guard_cache_enforces_guard_count_and_rejects_authenticated_malformed_fields() {

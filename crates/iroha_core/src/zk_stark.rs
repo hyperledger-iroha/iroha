@@ -326,9 +326,10 @@ fn two_inv() -> Fq {
 /// irreducible. Every verifier entry point rejects coefficients outside the canonical base-field
 /// range. The Norito payload is exactly four little-endian coefficients (32 bytes), using the
 /// same canonical field codec as FASTPQ without a struct frame.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_core::zk_stark::GoldilocksFp4V1")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct GoldilocksFp4V1 {
     c0: u64,
     c1: u64,
@@ -890,6 +891,9 @@ fn validate_stark_opening_commitment_params_with_limits_v1(
     Ok(())
 }
 #[cfg(test)]
+#[path = "zk_stark/frame_identity_tests.rs"]
+mod frame_identity_tests;
+#[cfg(test)]
 mod tests {
     include!("zk_stark/tests.rs");
 }
@@ -1021,11 +1025,16 @@ pub struct MerklePath {
     pub siblings: Vec<GoldilocksDigest384V1>,
 }
 /// Parameters for a binary multi-round FRI check.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk_stark::StarkFriParamsV1")]
 #[derive(
-    Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::zk_stark::StarkFriParamsV1")]
 pub struct StarkFriParamsV1 {
     /// Version tag for format evolution
     pub version: u16,
@@ -1050,11 +1059,16 @@ pub struct StarkFriParamsV1 {
 ///
 /// Note: `domain_tag` is **not** part of the verifying key because it is instance-specific
 /// and is derived from the outer [`iroha_data_model::zk::OpenVerifyEnvelope`] metadata.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk_stark::StarkFriVerifyingKeyV1")]
 #[derive(
-    Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::zk_stark::StarkFriVerifyingKeyV1")]
 pub struct StarkFriVerifyingKeyV1 {
     /// Version tag for format evolution.
     pub version: u16,
@@ -1241,7 +1255,17 @@ mod verifying_key_decode_tests {
             merkle_arity: payload.merkle_arity,
             hash_fn: 1,
         };
-        let bytes = norito::encode_canonical(&retired).expect("encode retired selector key");
+        let (payload, flags) = norito::codec::encode_with_header_flags(&retired);
+        let bytes =
+            norito::core::frame_bare_with_header_flags::<StarkFriVerifyingKeyV1>(&payload, flags)
+                .expect("frame retired key payload under the actual V1 owner");
+        let view = norito::core::from_bytes_view(&bytes).expect("valid frame and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<StarkFriVerifyingKeyV1>(),
+            "rejection must exercise the retired payload, not an unrelated frame identity"
+        );
+        assert_eq!(view.as_bytes(), payload);
         assert!(
             decode_stark_fri_verifying_key_v1(&bytes).is_err(),
             "the selector-free V1 decoder must reject pre-release selector-bearing keys"
@@ -1417,11 +1441,16 @@ pub struct StarkProofV1 {
     pub air: Option<StarkAirProofV1>,
 }
 /// Verification envelope for STARK FRI multi-round (binary) proofs.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk_stark::StarkVerifyEnvelopeV1")]
 #[derive(
-    Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::zk_stark::StarkVerifyEnvelopeV1")]
 pub struct StarkVerifyEnvelopeV1 {
     /// Parameters used by the prover
     pub params: StarkFriParamsV1,

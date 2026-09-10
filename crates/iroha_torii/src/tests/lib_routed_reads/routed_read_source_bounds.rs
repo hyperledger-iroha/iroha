@@ -10,6 +10,7 @@ use iroha_data_model::Registrable as _;
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
 )]
+
 struct RoutedReadSourceFixture {
     id: String,
     metadata: Vec<String>,
@@ -46,11 +47,25 @@ fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
         &owned.optional,
     ]);
     let _flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let expected = norito::core::to_bytes_bounded(&owned, usize::MAX)
-        .expect("owned fixture has a canonical frame");
+    let expected = crate::frame_test_support::assert_current_frame(
+        &owned,
+        "iroha_torii::RoutedReadSourceFixture",
+    );
+    type Source = ToriiBorrowedRoutedReadStruct<'static, RoutedReadSourceFixture, 3>;
+    assert_eq!(
+        <Source as norito::NoritoSchema>::nominal_name(),
+        "iroha_torii::ToriiBorrowedRoutedReadStruct<'_, iroha_torii::RoutedReadSourceFixture, 3>",
+    );
+    assert_eq!(
+        <Source as norito::NoritoSchema>::frame_name(),
+        <RoutedReadSourceFixture as norito::NoritoSchema>::frame_name(),
+    );
     let actual = norito::core::to_bytes_bounded(&source, expected.len())
         .expect("borrowed fixture fits its exact canonical boundary");
     assert_eq!(actual, expected);
+    let decoded: RoutedReadSourceFixture = norito::decode_canonical(&actual)
+        .expect("borrowed source decodes through the actual owned target");
+    assert_eq!(decoded, owned);
     assert!(norito::core::to_bytes_bounded(&source, expected.len() - 1).is_err());
 }
 #[test]

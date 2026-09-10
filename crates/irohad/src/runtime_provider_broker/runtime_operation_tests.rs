@@ -1301,7 +1301,7 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         );
     });
     let binding = signer_binding();
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = connect_test_process(
         &policy,
         "test-chain",
         server_test_network_id(),
@@ -1422,7 +1422,7 @@ fn fake_broker_resolves_and_operates_moderation_quarantine_wrapper() {
             &operation_response(&unwrap, STATUS_OK_V1, unwrapped),
         );
     });
-    let dependencies = resolve(&moderation_server_test_catalog(), &policy)
+    let dependencies = resolve_test_process(&moderation_server_test_catalog(), &policy)
         .expect("resolve moderation quarantine broker wrapper");
     let key_wrapper = dependencies
         .moderation_quarantine_key_wrapper
@@ -1483,8 +1483,8 @@ fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
             .shutdown(std::net::Shutdown::Both)
             .expect("drop wrap response after dispatch");
     });
-    let dependencies =
-        resolve(&moderation_server_test_catalog(), &policy).expect("resolve moderation wrapper");
+    let dependencies = resolve_test_process(&moderation_server_test_catalog(), &policy)
+        .expect("resolve moderation wrapper");
     let key_wrapper = dependencies
         .moderation_quarantine_key_wrapper
         .expect("moderation wrapper dependency");
@@ -1496,8 +1496,8 @@ fn moderation_wrap_disconnect_is_ambiguous_and_never_replayed() {
     );
     assert_eq!(
         key_wrapper.wrap_dek(context_digest, &dek),
-        Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable),
-        "the poisoned session must reject locally rather than replay"
+        Err(sorafs_node::ModerationQuarantineKeyOperationErrorV1::Ambiguous),
+        "the poisoned session preserves uncertainty and rejects locally without replay"
     );
     server.join().expect("join disconnecting broker");
     assert_eq!(
@@ -1534,8 +1534,8 @@ fn moderation_provider_unavailable_status_remains_definitive() {
             &operation_response(&wrap, STATUS_UNAVAILABLE_V1, redacted),
         );
     });
-    let dependencies =
-        resolve(&moderation_server_test_catalog(), &policy).expect("resolve moderation wrapper");
+    let dependencies = resolve_test_process(&moderation_server_test_catalog(), &policy)
+        .expect("resolve moderation wrapper");
     let key_wrapper = dependencies
         .moderation_quarantine_key_wrapper
         .expect("moderation wrapper dependency");
@@ -1584,7 +1584,7 @@ fn reputation_threshold_disconnect_is_ambiguous_and_never_replayed() {
             .shutdown(std::net::Shutdown::Both)
             .expect("drop reputation threshold response after dispatch");
     });
-    let dependencies = resolve(
+    let dependencies = resolve_test_process(
         &reputation_runtime_test_catalog(IrohaRuntimeProviderSlotV1::ReputationThresholdSigner),
         &policy,
     )
@@ -1634,7 +1634,7 @@ fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
         );
     });
     let binding = signer_binding();
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = connect_test_process(
         &policy,
         "test-chain",
         server_test_network_id(),
@@ -1661,7 +1661,8 @@ fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
     );
     assert_eq!(
         sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer),
-        Err(ERROR_UNAVAILABLE.to_owned())
+        Err(ERROR_STALE_OR_REVOKED.to_owned()),
+        "revocation remains a permanent failure without another provider call"
     );
     server.join().expect("join fake broker");
     assert_eq!(seen.load(Ordering::SeqCst), 1);
@@ -1699,7 +1700,7 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
         drop(stream);
     });
     let binding = checkpoint_binding();
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = connect_test_process(
         &policy,
         "test-chain",
         server_test_network_id(),
@@ -1725,7 +1726,8 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
     );
     assert_eq!(
         sorafs_node::GovernanceDagSealedCheckpointStore::compare_and_swap(&store, slot, None, next,),
-        Err(ERROR_UNAVAILABLE.to_owned())
+        Err(ERROR_AMBIGUOUS.to_owned()),
+        "the unresolved mutation remains ambiguous without another provider call"
     );
     server.join().expect("join fake broker");
     assert_eq!(
@@ -1760,7 +1762,7 @@ fn fake_broker_rejects_substituted_handshake_catalog() {
         send_handshake(&mut stream, &response);
     });
     assert!(matches!(
-        BrokerSession::connect(
+        connect_test_process(
             &policy,
             "test-chain",
             server_test_network_id(),
@@ -1789,14 +1791,14 @@ fn billing_catalog_requires_all_six_exact_backends() {
             7,
             TEST_POLICY_DIGEST,
         );
-        prepare_server_state(&catalog, billing_runtime_backends(slot, false))
+        prepare_test_server_state(&catalog, billing_runtime_backends(slot, false))
             .unwrap_or_else(|error| panic!("accept exact {slot:?} billing backend: {error:?}"));
         assert!(matches!(
-            prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new(),),
+            prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new(),),
             Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
         ));
         assert!(matches!(
-            prepare_server_state(&catalog, billing_runtime_backends(slot, true),),
+            prepare_test_server_state(&catalog, billing_runtime_backends(slot, true),),
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
     }

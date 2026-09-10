@@ -1188,9 +1188,8 @@ impl ChunkSlice {
 }
 const POR_COMMITMENT_VERSION_V1: u8 = 1;
 const POR_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.por.commitment.digest.v1\0";
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::store::StoredPorCommitmentV1")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct StoredPorCommitmentV1 {
     version: u8,
     root: [u8; 32],
@@ -1278,9 +1277,8 @@ impl StoredPorCommitmentV1 {
         Ok(hasher.finalize().into())
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::store::ManifestIndex")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ManifestIndex {
     version: u8,
     total_bytes: u64,
@@ -1328,9 +1326,8 @@ struct ManifestIndexEntry {
     #[norito(default)]
     last_access: u64,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::store::StoredManifestRecord")]
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredManifestRecord {
     manifest_id: String,
     manifest_cid: Vec<u8>,
@@ -6032,6 +6029,59 @@ mod tests {
         let por_tree = stored.por_tree();
         assert_eq!(por_tree.payload_len(), plan.content_length);
         assert_eq!(por_tree.chunks().len(), plan.chunks.len());
+        fn assert_frame<T>(bytes: &[u8], name: &str) -> T
+        where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+            let decoded: T = norito::decode_canonical(bytes).expect("actual durable storage frame");
+            assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+            let mut wrong_owner = bytes.to_vec();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes.to_vec();
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+            decoded
+        }
+        let metadata = fs::read(
+            backend
+                .manifests_dir
+                .join(&manifest_id)
+                .join(METADATA_FILE_NAME),
+        )
+        .unwrap();
+        let record = assert_frame::<StoredManifestRecord>(
+            &metadata,
+            "sorafs_node::store::StoredManifestRecord",
+        );
+        assert_eq!(record.manifest_id, manifest_id);
+        let index = assert_frame::<ManifestIndex>(
+            &fs::read(&backend.index_path).unwrap(),
+            "sorafs_node::store::ManifestIndex",
+        );
+        assert_eq!(index.entries.len(), 1);
+        assert_eq!(index.entries[0].manifest_id, manifest_id);
+        let commitment_bytes = norito::to_bytes(&record.por_commitment).unwrap();
+        let commitment = assert_frame::<StoredPorCommitmentV1>(
+            &commitment_bytes,
+            "sorafs_node::store::StoredPorCommitmentV1",
+        );
+        assert_eq!(commitment, record.por_commitment);
+        let mut expected = blake3::Hasher::new();
+        expected.update(POR_COMMITMENT_DIGEST_DOMAIN_V1);
+        expected.update(&u64::try_from(commitment_bytes.len()).unwrap().to_le_bytes());
+        expected.update(&commitment_bytes);
+        assert_eq!(
+            commitment.digest().unwrap(),
+            *expected.finalize().as_bytes()
+        );
     }
     #[test]
     fn ingest_rejects_manifest_por_root_mismatch_without_publication() {

@@ -50,7 +50,6 @@ use iroha_data_model::{
         BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
     },
-    name::Name,
     nft::NftId,
     query::{QueryRequest, SingularQueryBox},
     role::RoleId,
@@ -58,9 +57,9 @@ use iroha_data_model::{
         AccessSetHints, DynamicAccessHint, EntryPointKind, EntrypointParamDescriptor,
         StateDescriptor, TriggerCallback, TriggerDescriptor,
     },
-    state_path::StatePath,
     trigger::{Trigger, TriggerId},
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use norito::json;
 use std::{
     cell::RefCell,
@@ -1491,7 +1490,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             )
         }
         DRK::Name => {
-            let nm: iroha_data_model::name::Name = raw.parse().ok()?;
+            let nm: iroha_model_base::name::Name = raw.parse().ok()?;
             (
                 PointerType::Name,
                 ivm_abi::codec::encode_canonical_norito(&nm).ok()?,
@@ -2063,7 +2062,7 @@ mod tests {
         sample_account_id().to_string()
     }
     fn kotodama_escrow_hex(name: &str) -> String {
-        let name: iroha_data_model::name::Name = name.parse().expect("valid escrow name");
+        let name: iroha_model_base::name::Name = name.parse().expect("valid escrow name");
         let id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&name);
         hex::encode(id.as_hash().as_ref())
     }
@@ -8803,13 +8802,13 @@ seiyaku Test {{
         use iroha_data_model::{
             account::AccountId,
             events::{EventFilterBox, execute_trigger::ExecuteTriggerEventFilter},
-            name::Name,
             transaction::{Executable, IvmBytecode},
             trigger::{
                 Trigger, TriggerId,
                 action::{Action, Repeats},
             },
         };
+        use iroha_model_base::name::Name;
         use std::str::FromStr;
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
         let authority = AccountId::new(

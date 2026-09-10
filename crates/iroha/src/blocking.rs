@@ -4,6 +4,7 @@
 // of `client::Client`, then expose their canonical forms only through this facade.
 
 pub mod configuration;
+pub mod musubi;
 pub mod status;
 pub mod streams;
 mod subscriptions;

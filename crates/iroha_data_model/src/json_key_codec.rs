@@ -135,26 +135,6 @@ impl JsonKeyCodec for crate::account::AccountId {
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
-impl JsonKeyCodec for crate::name::Name {
-    fn encode_json_key(&self, out: &mut String) {
-        json::write_json_string(self.as_ref(), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        encoded
-            .parse::<crate::name::Name>()
-            .map_err(|err| json::Error::Message(err.reason().into()))
-    }
-}
-impl JsonKeyCodec for crate::state_path::StatePath {
-    fn encode_json_key(&self, out: &mut String) {
-        json::write_json_string(self.as_ref(), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        encoded
-            .parse::<crate::state_path::StatePath>()
-            .map_err(|err| json::Error::Message(err.reason().into()))
-    }
-}
 impl JsonKeyCodec for crate::proof::VerifyingKeyId {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
@@ -200,7 +180,9 @@ impl JsonKeyCodec for crate::smart_contract::ContractAlias {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse()
-            .map_err(|err: crate::ParseError| json::Error::Message(err.reason().into()))
+            .map_err(|err: iroha_model_base::error::ParseError| {
+                json::Error::Message(err.reason().into())
+            })
     }
 }
 impl JsonKeyCodec for crate::smart_contract::ContractAddress {

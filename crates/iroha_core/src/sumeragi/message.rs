@@ -22,11 +22,10 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, OnceLock},
 };
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::sumeragi::message::BlockMessage")]
 #[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 /// Messages used by peers to communicate during the consensus process.
-#[derive(Debug, Clone, Decode, Encode, FromVariant)]
+#[derive(Debug, Clone, Decode, Encode, FromVariant, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::BlockMessage")]
 pub enum BlockMessage {
     /// Advertisement that a peer durably retains a canonical committed block body.
     #[codec(index = 0)]
@@ -124,10 +123,8 @@ impl BlockMessage {
 }
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let mut cursor = bytes;
-        let value: Self = Decode::decode(&mut cursor)?;
+        let (value, consumed) = ncore::decode_field_prefix::<Self>(bytes)?;
         value.ensure_supported_wire_version()?;
-        let consumed = bytes.len().saturating_sub(cursor.len());
         Ok((value, consumed))
     }
 }
@@ -636,6 +633,12 @@ mod tests {
     };
     use norito::{core as norito_core, decode_from_bytes};
     use std::sync::Arc;
+
+    fn encode_wire_payload(value: &BlockMessageWire) -> Result<Vec<u8>, norito_core::Error> {
+        let mut bytes = Vec::new();
+        norito::SerializePayload::serialize(value, &mut norito_core::Encoder::new(&mut bytes))?;
+        Ok(bytes)
+    }
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("Sumeragi message fixture key generation should succeed")
     }
@@ -716,6 +719,31 @@ mod tests {
             }),
         ))
     }
+    #[test]
+    fn captured_original_core_block_and_network_frames() {
+        use crate::frame_identity_tests::shapes;
+        let advert = signed_kura_replica_advert_fixture();
+        advert
+            .verify_keeper_signature()
+            .expect("existing signed advert is valid");
+        for (variant, message) in [
+            ("payload_chunk", sample_v2_message()),
+            (
+                "kura_replica_advert",
+                BlockMessage::KuraReplicaAdvert(advert),
+            ),
+        ] {
+            message
+                .ensure_live_outbound()
+                .expect("existing live message fixture");
+            shapes("block_message", variant, &message);
+            let wire = BlockMessageWire::try_preencoded(Arc::new(message))
+                .expect("existing live block pre-encoding");
+            let network = crate::NetworkMessage::SumeragiBlock(Arc::new(wire));
+            shapes("network_message", variant, &network);
+        }
+    }
+
     fn retagged_block_message_frame(tag: u32) -> Vec<u8> {
         let mut encoded = norito_core::to_bytes(&sample_v2_message())
             .expect("encode canonical Sumeragi v2 fixture");
@@ -930,7 +958,7 @@ mod tests {
         message.protocol_version = message.protocol_version.saturating_sub(1);
         let message = Arc::new(BlockMessage::V2(message));
         assert!(BlockMessageWire::try_preencoded(Arc::clone(&message)).is_err());
-        assert!(norito_core::to_bytes(&BlockMessageWire::new((*message).clone())).is_err());
+        assert!(encode_wire_payload(&BlockMessageWire::new((*message).clone())).is_err());
         let raw = norito_core::to_bytes(message.as_ref())
             .expect("encode non-canonical version as an adversarial raw fixture");
         assert!(
@@ -994,9 +1022,11 @@ mod tests {
         );
         assert_current_v2("decode_from_slice message", decoded.as_message());
         assert_eq!(decoded.encoded_len(), Some(wrapped_encoded.len()));
-        assert!(
-            norito_core::to_bytes(&decoded).is_ok(),
-            "a decoded current frame must remain canonically encodable"
+        assert_eq!(
+            encode_wire_payload(&decoded)
+                .expect("a decoded current frame must remain canonically encodable"),
+            wrapped_encoded,
+            "the wire wrapper emits the exact cached BlockMessage frame"
         );
         let decoded_via_decode: BlockMessageWire =
             Decode::decode(&mut wrapped_encoded.as_slice()).expect("decode block message wire");
@@ -1005,7 +1035,11 @@ mod tests {
             decoded_via_decode.encoded_len(),
             Some(wrapped_encoded.len())
         );
-        assert!(norito_core::to_bytes(&decoded_via_decode).is_ok());
+        assert_eq!(
+            encode_wire_payload(&decoded_via_decode)
+                .expect("encode wrapper decoded through its payload codec"),
+            wrapped_encoded,
+        );
         let decoded_payload =
             decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
         assert_current_v2("cached payload", &decoded_payload);

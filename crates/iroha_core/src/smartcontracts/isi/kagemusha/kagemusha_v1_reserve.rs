@@ -2178,11 +2178,13 @@ fn validate_mint_finality_attachment(
 }
 
 #[cfg(test)]
-fn canonical_wire_digest<T: norito::NoritoSerialize>(
+fn canonical_wire_digest<T: norito::SerializePayload>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaReserveErrorV1> {
-    let encoded = norito::encode_canonical(value)
+    // This test-only attachment hashes one fixed-v1 payload in its explicit result domain.
+    let mut encoded = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut encoded)
         .map_err(|error| KagemushaReserveErrorV1::Encoding(error.to_string()))?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| KagemushaReserveErrorV1::Encoding("wire length exceeds u64".to_owned()))?;
@@ -3253,9 +3255,9 @@ mod tests {
         let mut book = KagemushaReserveBookV1::new();
         let top_up = verified_top_up(1, 1, 80);
         commit_top_up(&mut book, &top_up, 1);
-        let bytes = norito::encode_canonical(&book).expect("encode pending book");
+        let bytes = norito::codec::Encode::encode(&book);
         let decoded: KagemushaReserveBookV1 =
-            norito::decode_canonical(&bytes).expect("decode pending book");
+            norito::codec::decode_adaptive(&bytes).expect("decode pending book payload");
         decoded.validate().expect("valid decoded accounting");
         let record = match decoded.operation(&top_up.operation_id()) {
             Some(KagemushaReserveOperationRecordV1::TopUp(record)) => record,
@@ -3295,9 +3297,9 @@ mod tests {
             KagemushaMintFinalizationOutcomeV1::Finalized(attachment) => attachment,
             _ => panic!("new local attachment"),
         };
-        let bytes = norito::encode_canonical(&attachment).expect("encode local attachment");
+        let bytes = norito::codec::Encode::encode(&attachment);
         let decoded: KagemushaMintFinalityAttachmentV1 =
-            norito::decode_canonical(&bytes).expect("decode local attachment");
+            norito::codec::decode_adaptive(&bytes).expect("decode local attachment payload");
         assert_eq!(
             validate_mint_finality_attachment_with_anchor(
                 record,
@@ -3389,7 +3391,7 @@ mod tests {
         book.commit(plan.clone()).expect("original valid commit");
         let before = book.clone();
         let original = book.operation(&verified.operation_id()).unwrap().clone();
-        let original_bytes = norito::encode_canonical(&original).unwrap();
+        let original_bytes = norito::codec::Encode::encode(&original);
         for time in [90_000, 100_000, u64::MAX] {
             let context = KagemushaReserveCommitContextV1::after_block_context_verification(
                 tagged_id(0x41, time),
@@ -3405,8 +3407,7 @@ mod tests {
             );
             assert_eq!(book, before);
             assert_eq!(
-                norito::encode_canonical(book.operation(&verified.operation_id()).unwrap())
-                    .unwrap(),
+                norito::codec::Encode::encode(book.operation(&verified.operation_id()).unwrap()),
                 original_bytes
             );
         }

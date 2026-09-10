@@ -1490,6 +1490,109 @@ fn genesis_moderation_permission_bypass_matches_executor_policy() {
     );
 }
 #[test]
+fn moderation_durable_frames_preserve_appeal_and_sortition_bindings() {
+    fn check<T>(
+        world: &impl crate::state::WorldReadOnly,
+        key: &StatePath,
+        name: &str,
+        decode: impl Fn(&[u8]) -> Result<T, InstructionExecutionError>,
+    ) where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        let bytes = world
+            .smart_contract_state()
+            .get(key)
+            .expect("persisted owner frame");
+        assert_eq!(T::nominal_name(), name);
+        assert_eq!(T::frame_name(), name);
+        let view = norito::core::from_bytes_view(bytes).expect("valid persisted envelope");
+        assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
+        let decoded = decode(bytes).expect("bounded production state decoder");
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("re-encode all fields"),
+            *bytes
+        );
+        let mut substituted = bytes.to_vec();
+        substituted[6..22]
+            .copy_from_slice(&norito::schema::identity::frame_hash::<iroha_crypto::Hash>());
+        assert!(matches!(
+            norito::decode_canonical::<T>(&substituted),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(decode(&substituted).is_err());
+        assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes.to_vec();
+        trailing.push(0);
+        assert!(decode(&trailing).is_err());
+    }
+    let mut fixture = PanelFixture::new();
+    fixture.submit(1, 0, 1);
+    let view = fixture.state.view();
+    let world = view.world();
+    let deposit = read_appeal_deposit_binding(world, [0x91; 32])
+        .expect("deposit binding agrees with appeal")
+        .expect("deposit exists");
+    let proof_token = read_appeal_proof_token_binding(world, [0x32; 32])
+        .expect("proof-token binding agrees with appeal")
+        .expect("proof-token exists");
+    assert_eq!(deposit.intake_digest, proof_token.intake_digest);
+    let schedule = read_sortition_anchor_schedule(world).expect("validated sortition schedule");
+    assert_eq!(schedule.entries.len(), 1);
+    assert_eq!(schedule.entries[0].intake_digest, deposit.intake_digest);
+    let head = read_event_journal_head(world)
+        .expect("journal head agrees with terminal event")
+        .expect("journal head exists");
+    read_persisted_event(world, head.last_sequence)
+        .expect("validated terminal event")
+        .expect("terminal event exists");
+    check::<AppealDepositBindingStateV1>(
+        world,
+        &appeal_deposit_key([0x91; 32]),
+        "iroha_core::smartcontracts::isi::sorafs_moderation::AppealDepositBindingStateV1",
+        |bytes| decode_state_with_current(bytes, "test deposit binding", None),
+    );
+    check::<AppealProofTokenBindingStateV1>(
+        world,
+        &appeal_proof_token_key([0x32; 32]),
+        "iroha_core::smartcontracts::isi::sorafs_moderation::AppealProofTokenBindingStateV1",
+        |bytes| decode_state_with_current(bytes, "test proof-token binding", None),
+    );
+    check::<ModerationSortitionAnchorScheduleV1>(
+        world,
+        sortition_anchor_schedule_key(),
+        "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationSortitionAnchorScheduleV1",
+        |bytes| decode_state_with_current(bytes, "test sortition schedule", None),
+    );
+    check::<ModerationPersistedEventV1>(
+        world,
+        &event_key(head.last_sequence),
+        "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationPersistedEventV1",
+        |bytes| decode_state_with_current(bytes, "test persisted event", None),
+    );
+    check::<ModerationEventJournalHeadV1>(
+        world,
+        event_journal_head_key(),
+        "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationEventJournalHeadV1",
+        |bytes| decode_state_with_current(bytes, "test journal head", None),
+    );
+    let deposit_frame = world
+        .smart_contract_state()
+        .get(&appeal_deposit_key([0x91; 32]))
+        .expect("deposit frame");
+    assert!(matches!(
+        norito::decode_canonical::<AppealProofTokenBindingStateV1>(deposit_frame),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    let proof_frame = world
+        .smart_contract_state()
+        .get(&appeal_proof_token_key([0x32; 32]))
+        .expect("proof-token frame");
+    assert!(matches!(
+        norito::decode_canonical::<AppealDepositBindingStateV1>(proof_frame),
+        Err(norito::Error::SchemaMismatch)
+    ));
+}
+#[test]
 fn appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic() {
     let mut fixture = PanelFixture::new();
     let manager = fixture.manager_id();
