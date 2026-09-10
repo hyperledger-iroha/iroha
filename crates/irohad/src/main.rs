@@ -6597,6 +6597,26 @@ fn freeze_lane_manifests_for_startup_replay(
     registry.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(registry))
 }
+/// Freeze compliance once before snapshot authentication or transaction replay.
+///
+/// The same immutable engine is installed in State and later shared with Queue. Revalidating its
+/// coverage after replay does not rescan mutable policy files.
+fn freeze_lane_compliance_for_startup_replay(
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> ReportResult<Option<Arc<LaneComplianceEngine>>, StartError> {
+    if !nexus.compliance.enabled {
+        return Ok(None);
+    }
+    let dir = nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
+        Report::new(StartError::InitKura)
+            .attach("lane compliance enabled but no policy_dir configured")
+    })?;
+    let engine = LaneComplianceEngine::from_directory(dir, nexus.compliance.audit_only)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+    engine.validate_active_catalog(&nexus.lane_catalog)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+    Ok(Some(Arc::new(engine)))
+}
 /// Rebind the frozen startup sources to the effective catalog produced by replay.
 fn rebind_frozen_lane_manifests_after_startup_replay(
     frozen: &LaneManifestRegistryHandle,
@@ -6606,6 +6626,8 @@ fn rebind_frozen_lane_manifests_after_startup_replay(
     rebound.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(rebound))
 }
+#[cfg(test)]
+mod startup_runtime_policy_tests;
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -7877,11 +7899,45 @@ impl Iroha {
                 block_count.0
             )));
         }
+        // An imported snapshot has not yet authorized geometry mutation. Compute its candidate
+        // policy from configured static settings and authenticated restored topology without
+        // replacing State's canonical snapshot projection. Freeze filesystem-backed policy once.
+        let startup_policy_nexus = if provisional_imported_prefix {
+            nexus_config_for_startup_replay(config.nexus.clone(), Some(&state.nexus_snapshot()))
+        } else {
+            nexus_for_runtime_surfaces(&state)
+        };
+        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) = if emergency_fast {
+            iroha_logger::warn!(
+                "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
+            );
+            (Arc::new(LaneManifestRegistry::empty()), None)
+        } else {
+            let manifests = freeze_lane_manifests_for_startup_replay(&startup_policy_nexus)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| report.attach("lane manifest registry is not ready before snapshot authentication and Kura replay"))?;
+            let compliance = freeze_lane_compliance_for_startup_replay(&startup_policy_nexus)?;
+            (manifests, compliance)
+        };
+        let startup_policy = if emergency_fast {
+            iroha_core::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+        } else {
+            iroha_core::sumeragi::V2SnapshotStartupPolicy::from_configured_runtime(
+                &state,
+                &startup_policy_nexus,
+                frozen_startup_lane_manifests.as_ref(),
+                frozen_startup_lane_compliance.as_deref(),
+            )
+        }
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+        state.install_lane_manifests(&frozen_startup_lane_manifests);
+        state.install_lane_compliance_engine(frozen_startup_lane_compliance.clone());
         let mut snapshot_startup_authorization =
             iroha_core::sumeragi::authenticate_v2_snapshot_startup(
                 kura.as_ref(),
                 &state,
                 &v2_replay_plan,
+                &startup_policy,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         let authenticated_snapshot_mode = snapshot_startup_authorization
@@ -8030,6 +8086,7 @@ impl Iroha {
                 kura.as_ref(),
                 &state,
                 &v2_replay_plan,
+                &startup_policy,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
@@ -8049,23 +8106,6 @@ impl Iroha {
         if provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
         }
-        // Transaction validation during replay consults the lane registry. Freeze and install the
-        // configured source set before the first replay transition; installing it only after
-        // replay leaves even the default lane absent on snapshot-free restart.
-        let frozen_startup_lane_manifests = if emergency_fast {
-            iroha_logger::warn!(
-                "emergency Fast startup deferred lane-manifest directory loading and validation until a Strict restart"
-            );
-            Arc::new(LaneManifestRegistry::empty())
-        } else {
-            let replay_nexus = nexus_for_runtime_surfaces(&state);
-            freeze_lane_manifests_for_startup_replay(&replay_nexus)
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-                .map_err(|report| {
-                    report.attach("lane manifest registry is not ready before atomic Kura replay")
-                })?
-        };
-        state.install_lane_manifests(&frozen_startup_lane_manifests);
         if generic_replay_height > state_height {
             iroha_logger::info!(
                 start_height = generic_replay_start,
@@ -8081,6 +8121,15 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
+        // Key admission and rotation read canonical WSV parameters. Local configuration must
+        // match that authority rather than overwriting it after replay without a block.
+        state
+            .validate_sumeragi_key_policy(&config.sumeragi)
+            .map_err(|field| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "configured Sumeragi key policy differs from canonical state: {field}"
+                ))
+            })?;
         // No Kura writer is live while trust selection or replay can still fail. Emergency Fast
         // remains read-only for its entire process lifetime; Strict owns every writer and repair.
         if emergency_fast {
@@ -8122,32 +8171,11 @@ impl Iroha {
         let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
         let governance_catalog = Arc::new(runtime_nexus.governance.clone());
         let registry_cfg = runtime_nexus.registry.clone();
-        let lane_compliance = if emergency_fast {
-            if runtime_nexus.compliance.enabled {
-                iroha_logger::warn!(
-                    "emergency Fast startup deferred compliance-policy directory loading and validation until a Strict restart"
-                );
-            }
-            None
-        } else if runtime_nexus.compliance.enabled {
-            let dir = runtime_nexus
-                .compliance
-                .policy_dir
-                .as_ref()
-                .ok_or_else(|| {
-                    Report::new(StartError::InitKura)
-                        .attach("lane compliance enabled but no policy_dir configured")
-                })?;
-            let engine =
-                LaneComplianceEngine::from_directory(dir, runtime_nexus.compliance.audit_only)
-                    .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
-            engine
-                .validate_active_catalog(lane_catalog.as_ref())
-                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
-            Some(Arc::new(engine))
-        } else {
-            None
-        };
+        let lane_compliance = frozen_startup_lane_compliance;
+        if let Some(engine) = lane_compliance.as_ref() {
+            engine.validate_active_catalog(lane_catalog.as_ref())
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+        }
         let mut queue_config = config.queue;
         if emergency_fast {
             queue_config.capacity = std::num::NonZeroUsize::MIN;
@@ -8165,7 +8193,6 @@ impl Iroha {
             &dataspace_catalog,
             lane_compliance.clone(),
         ));
-        state.install_lane_compliance_engine(lane_compliance.clone());
         // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
         // snapshot used by replay to the effective catalog, rather than rescanning mutable files
         // at a second startup boundary.
@@ -8756,7 +8783,6 @@ impl Iroha {
         // Use cloned config values to keep `config` borrowable later.
         let tiered_state_cfg = config.tiered_state.clone();
         let pipeline_cfg = config.pipeline.clone();
-        let sumeragi_cfg = config.sumeragi.clone();
         let fraud_cfg = config.fraud_monitoring.clone();
         let zk_cfg = config.zk.clone();
         let gov_cfg = config.gov.clone();
@@ -8774,7 +8800,6 @@ impl Iroha {
                     report.attach("failed to restore effective Nexus tiered lane geometry")
                 })?;
             state.set_pipeline(pipeline_cfg);
-            state.set_sumeragi_parameters(&sumeragi_cfg);
             state.set_oracle(oracle_cfg);
             state.set_fraud_monitoring(fraud_cfg);
             // Settlement runtime state was installed before Kura replay. Preserve
@@ -14273,6 +14298,9 @@ fn validate_genesis_execution_offline(
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
+    let frozen_compliance = freeze_lane_compliance_for_startup_replay(&replay_nexus)
+        .change_context(MainError::Config)?;
+    state.install_lane_compliance_engine(frozen_compliance);
     let signed_voters =
         iroha_core::sumeragi::signed_genesis_voting_peers(genesis).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
@@ -18512,6 +18540,9 @@ mod tests {
             let lane_manifests = freeze_lane_manifests_for_startup_replay(&nexus)
                 .expect("fixture lane manifests must be ready for genesis replay");
             state.install_lane_manifests(&lane_manifests);
+            let compliance = freeze_lane_compliance_for_startup_replay(&nexus)
+                .expect("fixture compliance must be ready for genesis replay");
+            state.install_lane_compliance_engine(compliance);
             (validation_root, state, kura)
         }
         fn sign_configured_genesis_for_test(

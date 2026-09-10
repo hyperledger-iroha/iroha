@@ -534,9 +534,10 @@ pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{
-    AuthenticatedV2SnapshotStartup, V2StartupReplayError, V2StartupReplayPlan,
-    authenticate_v2_snapshot_replay_boundary, authenticate_v2_snapshot_startup,
-    authenticated_v2_snapshot_startup_mode, plan_v2_startup_replay,
+    AuthenticatedV2SnapshotStartup, V2SnapshotStartupPolicy, V2StartupReplayError,
+    V2StartupReplayPlan, authenticate_v2_snapshot_replay_boundary,
+    authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
+    plan_v2_startup_replay,
 };
 pub(crate) mod v2_runner;
 pub(crate) mod v2_runtime;

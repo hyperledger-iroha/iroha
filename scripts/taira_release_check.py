@@ -494,6 +494,11 @@ DAEMON_STAGES = (("offline final genesis deployment authority", (
     "tests::manifest_crypto_checks::check_config_inrou_authority_requires_canonical_account_and_signed_genesis",
 )),)
 
+DAEMON_STAGES += (("frozen startup policy before snapshot authentication and replay", (
+    "startup_runtime_policy_tests::startup_compliance_is_installed_before_execution_policy_derivation_and_reused",
+    "startup_runtime_policy_tests::startup_compliance_rejects_missing_and_wrong_lane_policy_before_replay",
+)),)
+
 TORII_UNIT_STAGES = (("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
     "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
@@ -564,6 +569,25 @@ CORE_STAGES += (("authenticated admission and coherent State publication", (
     "state::tests::queue_plan_carrier_validation_uses_one_generation_coherent_state_view",
 )),)
 
+CORE_STAGES += (("authenticated snapshot owner policy and startup custody", (
+    "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
+    "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
+    "state::tests::snapshot_owner_policy_requires_complete_canonical_fields",
+    "state::tests::set_nexus_rejects_two_step_staking_mode_toggle_with_live_shared_state",
+    "state::tests::set_nexus_rejects_live_single_lane_stake_owner_reassignment",
+    "state::tests::state_json_rejects_prior_nexus_runtime_version",
+    "state::tests::emergency_fast_restored_config_rejects_dataspace_catalog_replacement",
+    "sumeragi::v2_recovery::tests::imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_state",
+    "sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor",
+    "sumeragi::v2_recovery::tests::snapshot_bootstrap_authentication_rejects_future_kaigi_feedback_and_rolls_back",
+    "sumeragi::v2_recovery::tests::all_hash_only_snapshot_without_authenticated_record_fails_closed",
+    "sumeragi::v2_recovery::tests::later_snapshot_before_first_full_finality_is_rejected_without_mutation",
+    "sumeragi::v2_recovery::tests::later_snapshot_rejects_lineage_changed_from_immutable_first_height",
+    "sumeragi::v2_recovery::tests::hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution",
+    "state::tests::startup_sumeragi_key_policy_matches_canonical_state_without_mutation",
+    "state::tests::startup_sumeragi_key_policy_rejects_each_mismatch_without_mutation",
+)),)
+
 PROOF_STAGES = (("canonical proof resource bounds", (
     "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
     "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
@@ -589,7 +613,7 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
 )),)
 
-NETWORK_STAGES = (("four-validator multi-route transaction commit", (
+NETWORK_STAGES = (("four-validator multi-route commit and signed snapshot restart", (
     "four_peer_multiroute_public_transaction_sequence_reaches_applied",
 )),)
 

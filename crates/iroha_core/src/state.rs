@@ -27076,24 +27076,10 @@ impl State {
             }
             drop(world);
             drop(commit_topology);
-            if record.context.nexus_amx_context_hash
-                != crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(self)
-            {
-                return Err(
-                    "bootstrap Nexus/AMX context does not match the complete restored validator and lane state"
-                        .to_owned(),
-                );
-            }
-            let live_execution_policy = Hash::prehashed(
-                self.execution_policy_digest_v1()
-                    .map_err(|error| format!("failed to derive execution policy: {error}"))?,
-            );
-            if record.context.execution_policy_hash != live_execution_policy {
-                return Err(format!(
-                    "bootstrap execution-policy hash {:?} does not match restored local policy {live_execution_policy:?}",
-                    record.context.execution_policy_hash
-                ));
-            }
+            // The authenticated payload fixes World, lane ownership, roster and lineage here.
+            // Process-local Nexus, manifests and compliance are still decode placeholders. Their
+            // two context commitments are checked by V2SnapshotStartupPolicy before the typed
+            // startup authorization can finalize provisional Kura or permit executable replay.
         }
         let promoted = self
             .snapshot_v2_bootstrap_candidate
@@ -44317,7 +44303,41 @@ impl State {
         #[cfg(feature = "sm-ffi-openssl")]
         iroha_crypto::sm::OpenSslProvider::set_preview_enabled(_crypto.enable_sm_openssl_preview);
     }
-    /// Update consensus policy parameters sourced from configuration.
+    /// Check configured consensus-key policy against the canonical state without changing it.
+    ///
+    /// Startup must retain parameters authenticated by genesis, replay, or a signed snapshot.
+    /// Local configuration may assert that policy, but cannot replace it outside a block.
+    ///
+    /// # Errors
+    /// Returns the name of the first consensus-key policy field that differs from canonical state.
+    pub fn validate_sumeragi_key_policy(
+        &self,
+        sumeragi: impl Into<self::SumeragiPolicyConfig>,
+    ) -> Result<(), &'static str> {
+        let policy = sumeragi.into();
+        let parameters = self.world.parameters.view();
+        let canonical = &parameters.sumeragi;
+        if canonical.key_activation_lead_blocks != policy.key_activation_lead_blocks {
+            return Err("key_activation_lead_blocks");
+        }
+        if canonical.key_overlap_grace_blocks != policy.key_overlap_grace_blocks {
+            return Err("key_overlap_grace_blocks");
+        }
+        if canonical.key_expiry_grace_blocks != policy.key_expiry_grace_blocks {
+            return Err("key_expiry_grace_blocks");
+        }
+        // The canonical snapshot commitment treats the allowed algorithms as a set.
+        let canonical_algorithms: BTreeSet<_> =
+            canonical.key_allowed_algorithms.iter().copied().collect();
+        if canonical_algorithms != policy.key_allowed_algorithms {
+            return Err("key_allowed_algorithms");
+        }
+        Ok(())
+    }
+    /// Set consensus-key policy while constructing fixture state.
+    ///
+    /// Production startup must use [`Self::validate_sumeragi_key_policy`] instead: committed
+    /// parameters may only change through canonical execution, never local startup configuration.
     pub fn set_sumeragi_parameters(&mut self, sumeragi: impl Into<self::SumeragiPolicyConfig>) {
         let policy = sumeragi.into();
         let mut params_block = self.world.parameters.block();
@@ -44548,7 +44568,9 @@ impl State {
                     .to_owned(),
             ));
         }
-        if requested.dataspace_catalog != restored.dataspace_catalog {
+        if SnapshotNexusOwnerPolicy::from_nexus(requested).dataspaces
+            != SnapshotNexusOwnerPolicy::from_nexus(restored).dataspaces
+        {
             return Err(LaneLifecycleError::ConfiguredCatalogBaseline(
                 "emergency Fast configuration differs from the restored runtime dataspace catalog"
                     .to_owned(),
@@ -51283,17 +51305,41 @@ impl State {
         [u8; 32],
         iroha_config::parameters::actual::NexusConsensusPolicyDigestError,
     > {
-        let crypto = self.crypto.read().clone();
         let nexus = self.nexus_snapshot();
         let lane_manifests = self.lane_manifests.read().clone();
         let lane_compliance = self.lane_compliance_engine();
+        self.execution_policy_digest_with_runtime_policies_v1(
+            &nexus,
+            lane_manifests.as_ref(),
+            lane_compliance.as_deref(),
+        )
+    }
+    /// Compute the configured execution policy without changing authenticated snapshot state.
+    ///
+    /// Startup supplies the configured Nexus policy merged with restored topology and the exact
+    /// frozen manifest/compliance sources. This permits hash-only snapshot authentication before
+    /// Kura authorizes geometry publication; it does not install or authorize that candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the supplied Nexus policy or loaded runtime policies are incomplete.
+    pub fn execution_policy_digest_with_runtime_policies_v1(
+        &self,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        lane_manifests: &LaneManifestRegistry,
+        lane_compliance: Option<&LaneComplianceEngine>,
+    ) -> core::result::Result<
+        [u8; 32],
+        iroha_config::parameters::actual::NexusConsensusPolicyDigestError,
+    > {
+        let crypto = self.crypto.read().clone();
         compute_execution_policy_digest_v1(
             &self.pipeline,
             &self.oracle,
             crypto.as_ref(),
-            &nexus,
-            lane_manifests.as_ref(),
-            lane_compliance.as_deref(),
+            nexus,
+            lane_manifests,
+            lane_compliance,
             &self.fraud_monitoring,
             &self.zk,
             &self.gov,
@@ -66174,16 +66220,88 @@ pub(crate) struct SnapshotLaneIncarnationLineage {
     pub incarnation: Hash,
     pub activation_height: u64,
 }
+/// Closed snapshot representation of the staking activation modes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub(crate) enum SnapshotLaneValidatorMode {
+    StakeElected,
+    AdminManaged,
+}
+impl From<iroha_config::parameters::actual::LaneValidatorMode> for SnapshotLaneValidatorMode {
+    fn from(mode: iroha_config::parameters::actual::LaneValidatorMode) -> Self {
+        match mode {
+            iroha_config::parameters::actual::LaneValidatorMode::StakeElected => Self::StakeElected,
+            iroha_config::parameters::actual::LaneValidatorMode::AdminManaged => Self::AdminManaged,
+        }
+    }
+}
+impl From<SnapshotLaneValidatorMode> for iroha_config::parameters::actual::LaneValidatorMode {
+    fn from(mode: SnapshotLaneValidatorMode) -> Self {
+        match mode {
+            SnapshotLaneValidatorMode::StakeElected => Self::StakeElected,
+            SnapshotLaneValidatorMode::AdminManaged => Self::AdminManaged,
+        }
+    }
+}
+/// Canonical dataspace identity retained for ownership and alias reconciliation.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotDataSpaceMetadata {
+    pub id: DataSpaceId,
+    pub alias: String,
+    pub fault_tolerance: u32,
+}
+/// Prior committed policy needed to interpret lane activity and staking ownership.
+///
+/// Startup must compare the configured policy with this authenticated projection,
+/// never with the placeholder defaults used for other process-local Nexus fields.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotNexusOwnerPolicy {
+    pub dataspaces: Vec<SnapshotDataSpaceMetadata>,
+    pub public_validator_mode: SnapshotLaneValidatorMode,
+    pub restricted_validator_mode: SnapshotLaneValidatorMode,
+    pub max_validators: u32,
+    pub routing_default_lane: LaneId,
+    pub routing_default_dataspace: DataSpaceId,
+    pub autoscale_enabled: bool,
+    pub autoscale_min_lane_id: u32,
+    pub autoscale_max_lane_id_exclusive: u32,
+}
+impl SnapshotNexusOwnerPolicy {
+    fn from_nexus(nexus: &iroha_config::parameters::actual::Nexus) -> Self {
+        Self {
+            dataspaces: nexus
+                .dataspace_catalog
+                .entries()
+                .iter()
+                .map(|entry| SnapshotDataSpaceMetadata {
+                    id: entry.id,
+                    alias: entry.alias.clone(),
+                    fault_tolerance: entry.fault_tolerance,
+                })
+                .collect(),
+            public_validator_mode: nexus.staking.public_validator_mode.into(),
+            restricted_validator_mode: nexus.staking.restricted_validator_mode.into(),
+            max_validators: nexus.staking.max_validators.get(),
+            routing_default_lane: nexus.routing_policy.default_lane,
+            routing_default_dataspace: nexus.routing_policy.default_dataspace,
+            autoscale_enabled: nexus.autoscale.enabled,
+            autoscale_min_lane_id: nexus.autoscale.min_lane_id.get(),
+            autoscale_max_lane_id_exclusive: nexus.autoscale.max_lane_id_exclusive.get(),
+        }
+    }
+}
 /// Versioned, consensus-relevant Nexus runtime state persisted with WSV snapshots.
 ///
-/// Static Nexus policy remains configuration-sourced at startup. The effective lane
-/// catalog, autoscale cooldown cursor, and canonical autoscale sample window are
-/// stateful, however: lifecycle operations and applied canonical blocks mutate them
-/// after startup.
+/// Local configuration supplies the requested static policy at startup. Its prior
+/// ownership projection is retained so reconciliation can reject an actual owner
+/// change without mistaking missing configuration for a committed transition.
+/// Lifecycle operations and canonical blocks also mutate the effective catalog,
+/// autoscale cooldown cursor, and canonical autoscale sample window after startup.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub(crate) struct SnapshotNexusRuntime {
-    /// Snapshot layout version. Version 3 retains lane lineage and canonical autoscale history.
+    /// Snapshot layout version. Version 4 also retains the prior ownership policy.
     pub version: u8,
+    /// Exact prior policy used to resolve lane activity and staking ownership.
+    pub owner_policy: SnapshotNexusOwnerPolicy,
     /// Valid lane identifier namespace size.
     pub lane_count: u32,
     /// Effective lane catalog at the snapshot height.
@@ -66207,7 +66325,7 @@ impl SnapshotNexusRuntime {
     /// This version covers the complete manually serialized State JSON envelope, not only the
     /// fields in [`SnapshotNexusRuntime`]. Any persisted State JSON shape change must advance it so
     /// frozen predecessor hash bridges fail closed instead of normalizing an unreviewed schema.
-    pub(crate) const VERSION: u8 = 3;
+    pub(crate) const VERSION: u8 = 4;
     /// Capture the stateful Nexus fields from a consistent state view.
     #[cfg(test)]
     pub(crate) fn from_nexus(
@@ -66255,6 +66373,7 @@ impl SnapshotNexusRuntime {
         );
         Self {
             version: Self::VERSION,
+            owner_policy: SnapshotNexusOwnerPolicy::from_nexus(nexus),
             lane_count: nexus.lane_catalog.lane_count().get(),
             lanes: nexus.lane_catalog.lanes().to_vec(),
             lane_incarnation_lineage: lane_incarnation_lineage

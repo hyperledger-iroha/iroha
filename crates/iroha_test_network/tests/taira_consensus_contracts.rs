@@ -1,4 +1,4 @@
-//! Mandatory four-validator public-transaction qualification with production NPoS/DA defaults.
+//! Mandatory four-validator public-transaction and snapshot-restart qualification.
 //! Requires a prebuilt native daemon; sandbox denials and missing peers always fail.
 use color_eyre::eyre::{self, Result, WrapErr, ensure, eyre};
 use futures::future::try_join_all;
@@ -9,12 +9,140 @@ use iroha_data_model::{
     metadata::Metadata,
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
-use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
-use std::{path::Path, time::Duration};
+use iroha_test_network::{
+    Network, NetworkPeer, init_instruction_registry, read_on_dedicated_thread,
+};
+use norito::json::{self, Value};
+use std::{
+    fs,
+    io::{BufRead, BufReader},
+    path::Path,
+    time::Duration,
+};
 use tokio::time::{Instant, sleep, timeout_at};
 
 #[path = "support/multiroute.rs"]
 mod multiroute;
+
+fn snapshot_log_contains_height(peer: &NetworkPeer, message: &str, height: u64) -> Result<bool> {
+    for path in [peer.latest_stdout_log_path(), peer.latest_stderr_log_path()]
+        .into_iter()
+        .flatten()
+    {
+        for line in BufReader::new(fs::File::open(path)?).lines() {
+            let line = line?;
+            if !line.contains(message) {
+                continue;
+            }
+            let Ok(record) = json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if record.get("fields").is_some_and(|fields| {
+                fields.get("message").and_then(Value::as_str) == Some(message)
+                    && fields.get("at_height").and_then(Value::as_u64) == Some(height)
+            }) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn published_snapshot_height(peer: &NetworkPeer) -> Result<Option<u64>> {
+    let root = peer.kura_store_dir().join("snapshot");
+    let pointer = match fs::read_to_string(root.join("current")) {
+        Ok(pointer) => pointer,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let digest = pointer.trim();
+    ensure!(
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "snapshot generation pointer is malformed"
+    );
+    let generation = root.join("generations").join(digest);
+    for artifact in [
+        "snapshot.data",
+        "snapshot.sha256",
+        "snapshot.sig",
+        "snapshot.fast.norito",
+        "snapshot.merkle.json",
+    ] {
+        let metadata = fs::metadata(generation.join(artifact))?;
+        ensure!(
+            metadata.is_file() && metadata.len() > 0,
+            "published snapshot is missing its complete signed artifact set"
+        );
+    }
+    let snapshot: Value = json::from_slice(&fs::read(generation.join("snapshot.data"))?)?;
+    let hashes = snapshot
+        .get("block_hashes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| eyre!("published snapshot has no committed block-hash vector"))?;
+    Ok(Some(u64::try_from(hashes.len())?))
+}
+
+async fn restart_validator_from_applied_snapshot(
+    network: &Network,
+    applied_height: u64,
+) -> Result<()> {
+    let peer = &network.peers()[0];
+    // Wait for an actual completed generation before asking the harness to stop the process.
+    // Its bounded shutdown may force-kill a slow daemon; this must still exercise cold restore.
+    let snapshot_deadline = Instant::now() + Duration::from_secs(60);
+    timeout_at(snapshot_deadline, async {
+        loop {
+            if let Some(height) = published_snapshot_height(peer)?
+                && height >= applied_height
+                && snapshot_log_contains_height(
+                    peer,
+                    "Successfully created a snapshot of state",
+                    height,
+                )?
+            {
+                return Ok::<(), eyre::Report>(());
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .wrap_err(
+        "validator did not publish a signed snapshot after the exact Applied transaction",
+    )??;
+    let previous_log = peer.latest_stdout_log_path();
+    peer.shutdown().await;
+    // Shutdown may publish a newer complete generation; qualify the one startup will read.
+    let snapshot_height = published_snapshot_height(peer)?
+        .ok_or_else(|| eyre!("validator lost its published snapshot during shutdown"))?;
+    ensure!(
+        snapshot_height >= applied_height,
+        "shutdown snapshot regressed behind the Applied transaction"
+    );
+    let genesis = network.genesis();
+    let restart_deadline = Instant::now() + Duration::from_secs(180);
+    timeout_at(restart_deadline, async {
+        peer.start_checked(network.config_layers_for_peer(peer), Some(&genesis)).await?;
+        ensure!(peer.latest_stdout_log_path() != previous_log, "restart did not create a new daemon run");
+        loop {
+            let remaining = restart_deadline.saturating_duration_since(Instant::now());
+            ensure!(!remaining.is_zero(), "validator snapshot restart exceeded its deadline");
+            let mut builder = peer.client().client().to_builder();
+            builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
+            let client = builder.build()?;
+            if let Ok(status) = client.status().get().await
+                && status.blocks >= snapshot_height
+                && snapshot_log_contains_height(peer, "Successfully loaded the state from a snapshot", snapshot_height)?
+            {
+                // An idle chain creates no empty blocks. The preserved committed tip is ready;
+                // the next exact public transaction proves renewed execution on all four peers.
+                eprintln!("Taira validator restored its signed snapshot and Torii state: snapshot_height={snapshot_height}, committed_height={}", status.blocks);
+                return Ok::<(), eyre::Report>(());
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.wrap_err("validator failed signed-snapshot restore and HTTP readiness")??;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> Result<()> {
@@ -32,6 +160,14 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
         startup_deadline,
         tokio::task::spawn_blocking(|| {
             multiroute::network_builder()
+                .with_config_layer(|layer| {
+                    layer
+                        .write(["snapshot", "mode"], "read_write")
+                        .write(["snapshot", "store_dir"], "./storage/snapshot")
+                        .write(["snapshot", "create_every_ms"], 1_000_i64)
+                        .write(["logger", "format"], "json")
+                        .write(["logger", "level"], "INFO");
+                })
                 .with_base_seed_if_unset(stringify!(
                     four_peer_multiroute_public_transaction_sequence_reaches_applied
                 ))
@@ -143,6 +279,9 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
         })??;
         ensure!(applied_height > preceding_applied_height, "each sequential transaction must reach a later committed height");
         preceding_applied_height = applied_height;
+        if sequence == 2 {
+            restart_validator_from_applied_snapshot(&network, applied_height).await?;
+        }
         }
         Ok(())
     }

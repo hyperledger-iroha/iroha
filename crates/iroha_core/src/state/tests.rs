@@ -19271,6 +19271,29 @@ state_test! { sync restored_runtime_catalog_must_match_the_authenticated_snapsho
 }
 state_test! { sync emergency_fast_restored_config_rejects_dataspace_catalog_replacement
     let restored = iroha_config::parameters::actual::Nexus::default();
+    let mut described = restored.clone();
+    described.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+        description: Some("local operator description".to_owned()),
+        ..DataSpaceMetadata::default()
+    }]).expect("description-only catalog");
+    State::ensure_emergency_fast_restored_catalogs_match(&restored, &described)
+        .expect("operator descriptions are outside canonical dataspace identity");
+    for changed_field in 0..3 {
+        let mut entry = DataSpaceMetadata::default();
+        match changed_field {
+            0 => entry.id = DataSpaceId::new(9),
+            1 => entry.alias = "different-alias".to_owned(),
+            _ => entry.fault_tolerance = 2,
+        }
+        let mut changed = restored.clone();
+        changed.dataspace_catalog = DataSpaceCatalog::new(vec![entry])
+            .expect("intrinsically valid changed dataspace policy");
+        assert!(matches!(
+            State::ensure_emergency_fast_restored_catalogs_match(&restored, &changed),
+            Err(LaneLifecycleError::ConfiguredCatalogBaseline(message))
+                if message.contains("dataspace catalog")
+        ), "canonical dataspace field {changed_field} must remain exact");
+    }
     let mut requested = restored.clone();
     requested.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata {
@@ -43701,6 +43724,7 @@ include!("trigger_execution_and_delta_merge_tests.rs");
 include!("view_projection_tests.rs");
 include!("musubi_snapshot_validation_tests.rs");
 include!("lane_authority_exactness_tests.rs");
+include!("snapshot_owner_policy_tests.rs");
 
 state_test! { sync certified_snapshot_corruption_cannot_become_an_empty_lane
     let lane_id = LaneId::new(1);
