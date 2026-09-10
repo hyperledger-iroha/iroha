@@ -149,7 +149,10 @@ fees and the public QueuePlanSynced intent through signing and replay validation
 Dedicated service-owned Ordinary admission remains a separate contract.
 Global status can query other peers, so only the additional local observation
 establishes each validator's own application. Peer clients ignore ambient client
-identity and endpoint overrides; status observations have five-second requests.
+identity and endpoint overrides. Each status read uses the SDK routed request
+budget capped by the remaining absolute phase deadline. The blocking local read
+recomputes that budget after its dedicated thread starts; thread scheduling cannot
+give a late request a fresh timeout.
 Public submission retains the SDK's routed request budget and reconciles its
 original hash before the separate 90-second all-peer observation phase.
 Cargo emits both node and client paths explicitly; fallback builds and

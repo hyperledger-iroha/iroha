@@ -11,7 +11,7 @@ use iroha_data_model::{
 };
 use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
 use std::{path::Path, time::Duration};
-use tokio::time::{Instant, sleep, timeout, timeout_at};
+use tokio::time::{Instant, sleep, timeout_at};
 
 #[path = "support/multiroute.rs"]
 mod multiroute;
@@ -50,12 +50,14 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
         .await
         .wrap_err("four-peer startup exceeded its deadline")??;
         ensure!(network.peers().len() == 4, "the fixture must start all four validators");
-        let initial = try_join_all(network.peers().iter().map(|peer| async move {
+        let initial = timeout_at(startup_deadline, try_join_all(network.peers().iter().map(|peer| async move {
+            let remaining = startup_deadline.saturating_duration_since(Instant::now());
+            ensure!(!remaining.is_zero(), "four-peer startup observation exceeded its deadline");
             let mut builder = peer.client().client().to_builder();
-            builder.torii_request_timeout = Duration::from_secs(5);
+            builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
             let client = builder.build()?;
             client.status().get().await.map_err(eyre::Report::from)
-        })).await?;
+        }))).await.wrap_err("four-peer startup observation exceeded its deadline")??;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
         let mut builder = network.client().client().to_builder();
         builder.transaction_status_timeout = Duration::from_secs(75);
@@ -87,18 +89,29 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
             .collect::<String>();
         // The all-peer observation deadline starts after SDK reconciliation;
         // it must not cancel a potentially durable public admission.
-        let result = timeout(Duration::from_secs(90), async {
+        let observation_deadline = Instant::now() + Duration::from_secs(90);
+        let result = timeout_at(observation_deadline, async {
         loop {
             let observations = try_join_all(network.peers().iter().map(|peer| async move {
-                let mut builder = peer.client().client().to_builder();
-                builder.torii_request_timeout = Duration::from_secs(5);
-                let client = builder.build()?;
-                let global = client.fetch_transaction_status_response_global(expected_hash).await?;
+                let observation_client = peer.client().client().clone();
+                // Global status can use Torii's routed/fanout budget. Bound each
+                // read by the same observation deadline, never an arbitrary
+                // shorter timeout or a new deadline for each peer/request.
+                let bounded_client = move || -> Result<iroha::client::Client> {
+                    let remaining = observation_deadline.saturating_duration_since(Instant::now());
+                    ensure!(!remaining.is_zero(), "four-peer public transaction observation exceeded its fixed 90-second deadline");
+                    let mut builder = observation_client.to_builder();
+                    builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
+                    Ok(builder.build()?)
+                };
+                let global = bounded_client()?.fetch_transaction_status_response_global(expected_hash).await?;
                 // Global lookups may fan out to another validator. Prove this
                 // peer's own committed state before counting it as applied.
-                let status = client.status().get().await?;
+                let status = bounded_client()?.status().get().await?;
                 let local = read_on_dedicated_thread(move || {
-                    client.get_transaction_status_response_local(expected_hash)
+                    // Recompute after thread scheduling, immediately before
+                    // the blocking request takes its remaining I/O budget.
+                    bounded_client()?.get_transaction_status_response_local(expected_hash)
                 }).await?;
                 Ok::<_, eyre::Report>((status.blocks, global, local))
             })).await?;
