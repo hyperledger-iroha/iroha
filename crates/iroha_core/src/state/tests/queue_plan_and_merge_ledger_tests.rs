@@ -604,7 +604,7 @@ state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
     let admission = state.merge_admission.read();
     assert!(admission.latest_entry().is_none());
     assert!(admission.latest_lane_snapshots.is_empty());
-    assert!(admission.latest_execution_heights.is_empty());
+    assert!(admission.latest_execution_frontiers.is_empty());
 }
 state_test! { sync durable_kura_carrier_requires_exact_committed_state_carrier_before_publication
     let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
@@ -629,7 +629,7 @@ state_test! { sync durable_kura_carrier_requires_exact_committed_state_carrier_b
         let admission = state.merge_admission.read();
         assert!(admission.latest_entry().is_none());
         assert!(admission.latest_lane_snapshots.is_empty());
-        assert!(admission.latest_execution_heights.is_empty());
+        assert!(admission.latest_execution_frontiers.is_empty());
     }
     commit_exact_merge_carrier_to_state(&state, &carrier, &entry);
     assert_eq!(state.merge_ledger.snapshot().len(), 1);
@@ -746,7 +746,7 @@ state_test! { sync same_block_merge_and_lane_replacement_preserves_history_and_p
     );
     assert!(
         admission
-            .latest_execution_heights
+            .latest_execution_frontiers
             .keys()
             .all(|(lane_id, _, _)| *lane_id != replaced_lane),
         "replacement must prune old-incarnation execution tips"

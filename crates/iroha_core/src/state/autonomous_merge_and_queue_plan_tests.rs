@@ -285,9 +285,7 @@ fn assert_fastpq_batch_rejected(
     match state.validate_merge_execution_batch(
         active_lanes,
         &batch,
-        &std::collections::BTreeMap::new(),
-        true,
-        Some(ConsensusMode::Permissioned),
+        MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
     ) {
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
             assert_eq!(reason, expected_reason)
@@ -335,19 +333,14 @@ fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_con
         );
         commit_staged_autonomous_for_test(historical_block)
             .expect("commit the exact historical sealed carrier");
-        historical_state.validate_merge_execution_batch(
-            &historical_entry.active_lanes,
-            historical_entry.execution_batch.as_ref().expect("historical execution batch"),
-            &std::collections::BTreeMap::new(), false, None,
-        ).expect("historical validation accepts complete committed identities and registry ownership");
+        historical_state.recover_merge_ledger_from_kura()
+            .expect("historical recovery authenticates the complete committed carrier and its registry ownership");
     }
     assert!(matches!(
         state.validate_merge_execution_batch(
             &entry.active_lanes,
             batch,
-            &std::collections::BTreeMap::new(),
-            true,
-            Some(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"

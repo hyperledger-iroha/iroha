@@ -16,8 +16,10 @@ v2_apply_test!(
             v2_runtime::{RuntimeQueueConfig, RuntimeStep, SerializedV2Runtime},
         };
 
-        let fixture =
-            ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle();
+        let mut fixture = ApplyFixture::new_with_options_and_retention(
+            false, false, true, false,
+            NonZeroUsize::new(1).expect("retain the current real block during eviction"),
+        );
         fixture
             .execute(&mut fixture.reopen_body_store())
             .expect("commit real genesis");
@@ -508,6 +510,114 @@ v2_apply_test!(
         assert_eq!(receipt.proposal, certificate.proposal);
         assert_eq!(receipt.application_block_hash, merge.body.hash());
         assert_eq!(receipt.application_block_height, 5);
+
+        // Restart through the real snapshot reader. The first autonomous merge
+        // entry is lane slot three: ordinary slots one and two are intentionally
+        // absent from merge-only history. Recovery must authenticate the signed
+        // historical carrier instead of inventing a missing autonomous prefix.
+        let snapshot = norito::json::to_json(fixture.state.as_ref())
+            .expect("serialize the actual mixed ordinary/autonomous State");
+        let restored = crate::state::deserialize::KuraSeed {
+            kura: Arc::clone(&fixture.kura),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json_str(&snapshot)
+        .expect("restore the sparse autonomous ledger through canonical snapshot recovery");
+        assert_eq!(restored.committed_height(), 5);
+        assert_eq!(restored.latest_block_hash_fast(), Some(merge.body.hash()));
+        assert_eq!(restored.merge_ledger.snapshot(), fixture.state.merge_ledger.snapshot());
+        assert!(entrypoints.iter().all(|hash| restored.has_committed_entrypoint(*hash)));
+
+        // Lane manifests are runtime configuration, not snapshot authority.
+        // Match daemon startup's normal configuration installation only after
+        // the cold historical recovery above has already succeeded.
+        restored.install_lane_manifests(&fixture.state.lane_manifests.read().clone());
+
+        let finality = fixture.kura.v2_finality_artifact(5)
+            .expect("read exact restored parent finality")
+            .expect("restored parent retains finality");
+        let restored_view = restored.view();
+        let next_context = crate::sumeragi::v2_context::build_successor_height_context_from_state(
+            &finality,
+            &restored_view,
+            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&restored),
+        ).expect("derive the real successor from restored State");
+        drop(restored_view);
+        let next_transaction = TransactionBuilder::new(
+            next_context.network_id,
+            fixture.service.genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ).with_instructions([Log::new(Level::INFO, "ordinary work after snapshot restart".to_owned())])
+            .sign(fixture.genesis_key.private_key());
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(next_transaction));
+        let route = queue.route_plan_with_state(&accepted, &restored)
+            .expect("route next real transaction against restored State").coordinator_route();
+        let next_hash = Hash::from(accepted.hash_as_entrypoint());
+        let leader = usize::try_from(next_context.leader(0)).expect("restored leader index");
+        let next_plan = crate::sumeragi::lane_planner::prepare_v2_lane_payload_plan(
+            &restored,
+            fixture.kura.as_ref(),
+            &next_context,
+            0,
+            &next_context.roster[leader].validator,
+            std::slice::from_ref(&route),
+            std::slice::from_ref(&next_hash),
+        ).expect("plan the next exact lane slot after restart");
+        assert!(next_plan.unavailable_indices.is_empty());
+        assert_eq!(next_plan.ownerships.len(), 1);
+        assert_eq!(next_plan.ownerships[0].lane_block_height, 4);
+        assert_eq!(next_plan.ownerships[0].previous_lane_block_height, 3);
+        assert_eq!(next_plan.ownerships[0].previous_lane_block_descriptor_hash,
+            Some(descriptor.descriptor_hash));
+
+        fixture.state = Arc::new(restored);
+        let (restart_events, _restart_receiver) = tokio::sync::broadcast::channel(32);
+        let restart_queue = fixture_queue(fixture.state.as_ref(), restart_events.clone());
+        fixture.service = V2ApplyService::new(
+            Arc::clone(&fixture.state), restart_queue, Arc::clone(&fixture.kura),
+            None, None, fixture.service.block_cadence,
+            fixture.service.genesis_account.clone(), restart_events,
+            fixture.service.validator_set_pops.clone(),
+        );
+        let next_context = verified_successor_context_at_fixture_tip(&fixture);
+        let mut ordinary = build_apply_fixture_at_context_with_autonomous_payloads(
+            &fixture, next_context.context().clone(), Vec::new(),
+        );
+        let next_ownership = &ordinary.body.execution_context()
+            .expect("post-restart ordinary ownership").lane_payload_ownerships[0];
+        assert_eq!(next_ownership.lane_block_height, 4);
+        assert_eq!(next_ownership.previous_lane_block_descriptor_hash, Some(descriptor.descriptor_hash));
+        fixture.service.execute(&ordinary.context, &mut ordinary.store, &ordinary.task)
+            .expect("execute real next-slot ordinary work after snapshot restart");
+        assert_eq!(fixture.state.committed_height(), 6);
+
+        // Exercise genuine Kura eviction after the later real block supplies an
+        // inline tail. Historical recovery must use retained signed finality,
+        // not a accidentally cached full carrier or active-lane receipt bridge.
+        let merge_height = NonZeroUsize::new(5).expect("nonzero merge height");
+        let (_, merge_bytes) = fixture.kura.durable_block_payload_len_by_hash(merge.body.hash())
+            .expect("read finalized merge carrier size").expect("merge carrier size");
+        assert_eq!(fixture.kura.advertise_required_replicas_for_bench(merge_height), Some(merge_bytes));
+        assert!(fixture.kura.evict_block_bodies(merge_bytes)
+            .expect("evict through normal keeper policy") >= merge_bytes);
+        fixture.kura.remove_evicted_block_sidecar_for_testing(merge_height)
+            .expect("model remote-only carrier after actual eviction");
+        assert!(fixture.kura.get_block_without_merge_sidecar(merge_height).is_none());
+        let compacted_snapshot = norito::json::to_json(fixture.state.as_ref())
+            .expect("serialize State after real successor execution and carrier eviction");
+        let compacted = crate::state::deserialize::KuraSeed {
+            kura: Arc::clone(&fixture.kura),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }.into_state_from_json_str(&compacted_snapshot)
+            .expect("restore through retained finality with the merge body unavailable");
+        assert_eq!(compacted.committed_height(), 6);
+        assert_eq!(compacted.latest_block_hash_fast(), Some(ordinary.body.hash()));
+        assert_eq!(compacted.merge_ledger.snapshot(), fixture.state.merge_ledger.snapshot());
+        assert!(entrypoints.iter().all(|hash| compacted.has_committed_entrypoint(*hash)));
     }
 );
 

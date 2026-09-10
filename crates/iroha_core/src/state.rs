@@ -3687,14 +3687,60 @@ impl MergeBindingHistory {
 struct MergeAdmissionState {
     binding_history: MergeBindingHistory,
     latest_lane_snapshots: BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
-    latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
+    latest_execution_frontiers: BTreeMap<(LaneId, DataSpaceId, Hash), MergeExecutionFrontier>,
+}
+#[derive(Clone, Copy, Debug)]
+struct MergeExecutionFrontier {
+    height: u64,
+    descriptor_hash: Hash,
+}
+fn validate_sparse_merge_execution_successor(
+    previous: Option<MergeExecutionFrontier>,
+    descriptor: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
+) -> Result<(), MergeLedgerCommitError> {
+    if descriptor.previous_lane_block_height.checked_add(1) != Some(descriptor.lane_block_height)
+        || (descriptor.previous_lane_block_height == 0)
+            != descriptor.previous_lane_block_descriptor_hash.is_none()
+    {
+        return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+            "autonomous merge descriptor has malformed predecessor coordinates".to_owned(),
+        ));
+    }
+    if let Some(previous) = previous {
+        if descriptor.lane_block_height <= previous.height {
+            return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                expected_height: previous.height.checked_add(1).unwrap_or(u64::MAX),
+                attempted_height: descriptor.lane_block_height,
+            });
+        }
+        if descriptor.previous_lane_block_height == previous.height
+            && descriptor.previous_lane_block_descriptor_hash != Some(previous.descriptor_hash)
+        {
+            return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                "adjacent autonomous merge entries disagree on the exact predecessor descriptor"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+/// Constructed only after recovery authenticates the entry's merge QC and its
+/// exact Kura carrier against retained global finality. That certificate owns
+/// historical execution authority even after ordinary or Native sidecars retire.
+struct HistoricalMergeExecutionAuthority<'a> {
+    entry: &'a MergeLedgerEntry,
+}
+enum MergeExecutionValidationAuthority<'a> {
+    Live(ConsensusMode),
+    Historical(HistoricalMergeExecutionAuthority<'a>),
 }
 #[derive(Clone)]
 struct MergeAdmissionSnapshot {
     expected_epoch: u64,
     previous_view: u64,
     latest_lane_snapshots: BTreeMap<(LaneId, DataSpaceId, Hash), MergeLaneSnapshot>,
-    latest_execution_heights: BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
 }
 impl MergeAdmissionSnapshot {
     fn expected_epoch(&self) -> u64 {
@@ -3720,7 +3766,6 @@ impl MergeAdmissionState {
             expected_epoch: self.expected_epoch(),
             previous_view: self.previous_view(),
             latest_lane_snapshots: self.latest_lane_snapshots.clone(),
-            latest_execution_heights: self.latest_execution_heights.clone(),
         }
     }
     fn validate_next(&self, entry: &MergeLedgerEntry) -> Result<(), MergeLedgerCommitError> {
@@ -3739,30 +3784,20 @@ impl MergeAdmissionState {
         if let Some(batch) = entry.execution_batch.as_ref() {
             for execution in &batch.lanes {
                 let descriptor = &execution.proposal.descriptor;
-                // Relay settlement and Native participant controls can advance the unified
-                // WSV frontier between autonomous batches. This cache therefore rejects only
-                // autonomous replay/regression; live validation checks exact contiguity and
-                // predecessor identity against that WSV frontier, while startup recovery uses
-                // its reconstructed durable sequence.
-                let latest_height = self
-                    .latest_execution_heights
+                // Ordinary execution, relay settlement and Native controls can
+                // advance the shared lane between autonomous batches. Merge-only
+                // history is sparse: reject replay, and bind adjacent autonomous
+                // entries by exact descriptor identity. The canonical historical
+                // carrier certifies any intervening non-autonomous execution.
+                let latest = self
+                    .latest_execution_frontiers
                     .get(&(
                         descriptor.lane_id,
                         descriptor.dataspace_id,
                         descriptor.lane_incarnation,
                     ))
                     .copied();
-                if latest_height.is_some_and(|height| descriptor.lane_block_height <= height) {
-                    let expected_height = latest_height
-                        .and_then(|height| height.checked_add(1))
-                        .unwrap_or(u64::MAX);
-                    return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
-                        lane_id: descriptor.lane_id,
-                        dataspace_id: descriptor.dataspace_id,
-                        expected_height,
-                        attempted_height: descriptor.lane_block_height,
-                    });
-                }
+                validate_sparse_merge_execution_successor(latest, descriptor)?;
             }
         }
         Ok(())
@@ -3782,13 +3817,16 @@ impl MergeAdmissionState {
         if let Some(batch) = entry.execution_batch.as_ref() {
             for execution in &batch.lanes {
                 let descriptor = &execution.proposal.descriptor;
-                self.latest_execution_heights.insert(
+                self.latest_execution_frontiers.insert(
                     (
                         descriptor.lane_id,
                         descriptor.dataspace_id,
                         descriptor.lane_incarnation,
                     ),
-                    descriptor.lane_block_height,
+                    MergeExecutionFrontier {
+                        height: descriptor.lane_block_height,
+                        descriptor_hash: descriptor.descriptor_hash,
+                    },
                 );
             }
         }
@@ -3804,7 +3842,7 @@ impl MergeAdmissionState {
     fn prune_lane_progress(&mut self, lanes: &BTreeSet<LaneId>) {
         self.latest_lane_snapshots
             .retain(|(lane_id, _, _), _| !lanes.contains(lane_id));
-        self.latest_execution_heights
+        self.latest_execution_frontiers
             .retain(|(lane_id, _, _), _| !lanes.contains(lane_id));
     }
 }
@@ -32042,9 +32080,14 @@ impl State {
                     self.validate_merge_execution_batch(
                         &entry.active_lanes,
                         batch,
-                        &durable_admission.latest_execution_heights,
-                        false,
-                        None,
+                        // Kura authenticated every carrier record against its
+                        // exact retained global finality before this loop; the
+                        // entry QC and carrier header were verified above. Do
+                        // not replace that authority with a merge-only counter
+                        // or the final snapshot's later World frontier.
+                        MergeExecutionValidationAuthority::Historical(
+                            HistoricalMergeExecutionAuthority { entry },
+                        ),
                     )?;
                 }
                 Ok(())
@@ -36240,9 +36283,7 @@ impl State {
         self.validate_merge_execution_batch(
             &candidate.active_lanes,
             batch,
-            &consensus.admission.latest_execution_heights,
-            true,
-            Some(frozen_mode),
+            MergeExecutionValidationAuthority::Live(frozen_mode),
         )?;
         let sources = batch
             .lanes
@@ -42872,12 +42913,24 @@ impl State {
         &self,
         active_lanes: &[MergeLaneBinding],
         batch: &MergeExecutionBatch,
-        previous_heights: &BTreeMap<(LaneId, DataSpaceId, Hash), u64>,
-        validate_live_authority: bool,
-        frozen_mode: Option<ConsensusMode>,
+        validation_authority: MergeExecutionValidationAuthority<'_>,
     ) -> Result<(), MergeLedgerCommitError> {
         let invalid_batch =
             |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
+        let frozen_mode = match validation_authority {
+            MergeExecutionValidationAuthority::Live(mode) => Some(mode),
+            MergeExecutionValidationAuthority::Historical(authority) => {
+                if authority.entry.active_lanes != active_lanes
+                    || authority.entry.execution_batch.as_ref() != Some(batch)
+                {
+                    return Err(invalid_batch(
+                        "historical execution differs from its authenticated canonical carrier",
+                    ));
+                }
+                None
+            }
+        };
+        let validate_live_authority = frozen_mode.is_some();
         if batch.version != 1 {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "unsupported version {}",
@@ -43110,25 +43163,12 @@ impl State {
             if validate_live_authority {
                 Self::validate_merge_execution_predecessor_against_frontier(world, descriptor)?;
             }
-            if !validate_live_authority {
-                let expected_height = previous_heights
-                    .get(&(
-                        descriptor.lane_id,
-                        descriptor.dataspace_id,
-                        descriptor.lane_incarnation,
-                    ))
-                    .copied()
-                    .unwrap_or(0)
-                    .saturating_add(1);
-                if descriptor.lane_block_height != expected_height {
-                    return Err(MergeLedgerCommitError::NonContiguousLaneSnapshot {
-                        lane_id: descriptor.lane_id,
-                        dataspace_id: descriptor.dataspace_id,
-                        expected_height,
-                        attempted_height: descriptor.lane_block_height,
-                    });
-                }
-            }
+            // Historical execution is authorized by the complete signed entry
+            // and its exact globally finalized carrier. The proposal validator
+            // above requires intrinsic prev+1/hash shape; admission separately
+            // rejects autonomous replay and conflicting adjacent descriptors.
+            // Reconstructing that shared sequence from autonomous entries alone
+            // would invent a gap whenever ordinary or Native work intervenes.
             if execution.autonomous_network_id != expected_network_id {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                     "autonomous payload chain binding mismatch".to_owned(),
@@ -43555,9 +43595,7 @@ impl State {
             self.validate_merge_execution_batch(
                 &entry.active_lanes,
                 batch,
-                &consensus.admission.latest_execution_heights,
-                true,
-                Some(frozen_mode),
+                MergeExecutionValidationAuthority::Live(frozen_mode),
             )?;
         }
         Ok(())

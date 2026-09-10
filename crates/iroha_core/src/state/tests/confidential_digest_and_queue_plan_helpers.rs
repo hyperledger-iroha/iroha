@@ -142,9 +142,7 @@ state_test! { sync malformed_merge_execution_batch_rejects_empty_lane_set
         state.validate_merge_execution_batch(
             &[],
             &batch,
-            &BTreeMap::new(),
-            true,
-            Some(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "lane count is empty or exceeds the hard limit"
@@ -163,6 +161,48 @@ state_test! { sync merge_execution_canonical_order_is_route_first
         vec![LaneId::new(1), LaneId::new(2)],
         "proposal timing must not reorder the canonical lane/route prefix"
     );
+}
+
+state_test! { sync sparse_merge_execution_frontier_rejects_replay_conflict_and_malformed_predecessor
+    let (session, _) = sample_committed_lane_block_session_for_state_test(
+        LaneId::SINGLE, DataSpaceId::UNIVERSAL, Hash::new(b"sparse-merge-incarnation"), 7, 3,
+    );
+    let descriptor = session.proposal.descriptor;
+    let previous_hash = descriptor.previous_lane_block_descriptor_hash.expect("slot three predecessor");
+    let adjacent = MergeExecutionFrontier { height: 2, descriptor_hash: previous_hash };
+    validate_sparse_merge_execution_successor(Some(adjacent), &descriptor)
+        .expect("adjacent autonomous predecessor must match exactly");
+    validate_sparse_merge_execution_successor(None, &descriptor)
+        .expect("a first autonomous entry may follow certified ordinary slots");
+    validate_sparse_merge_execution_successor(
+        Some(MergeExecutionFrontier { height: 1, descriptor_hash: Hash::new(b"earlier-autonomous") }),
+        &descriptor,
+    ).expect("the canonical carrier owns an interleaved non-autonomous predecessor");
+    for height in [3, 4] {
+        assert!(matches!(
+            validate_sparse_merge_execution_successor(
+                Some(MergeExecutionFrontier { height, descriptor_hash: descriptor.descriptor_hash }),
+                &descriptor,
+            ),
+            Err(MergeLedgerCommitError::NonContiguousLaneSnapshot { .. })
+        ), "replay and regression must remain invalid");
+    }
+    assert!(matches!(
+        validate_sparse_merge_execution_successor(
+            Some(MergeExecutionFrontier { height: 2, descriptor_hash: Hash::new(b"conflicting-predecessor") }),
+            &descriptor,
+        ),
+        Err(MergeLedgerCommitError::ExecutionMarkerConflict(_))
+    ));
+    let mut missing = descriptor.clone();
+    missing.previous_lane_block_descriptor_hash = None;
+    assert!(validate_sparse_merge_execution_successor(None, &missing).is_err());
+    let mut skipped = descriptor.clone();
+    skipped.previous_lane_block_height = 1;
+    assert!(validate_sparse_merge_execution_successor(None, &skipped).is_err());
+    let mut overflowed = descriptor;
+    overflowed.previous_lane_block_height = u64::MAX;
+    assert!(validate_sparse_merge_execution_successor(None, &overflowed).is_err());
 }
 fn empty_merge_settlement(
     lane_id: LaneId,
