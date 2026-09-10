@@ -21,12 +21,7 @@ use iroha::{
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
-        prelude::{FindTransactions, QueryBuilderExt, SignedTransaction, TransactionEntrypoint},
-        query::{
-            CommittedTxFilters,
-            dsl::CompoundPredicate,
-            parameters::{FetchSize, Pagination},
-        },
+        prelude::{SignedTransaction, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };
@@ -1302,6 +1297,10 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
     match action {
         PreparedEnvelopeAction::Prepare(output_fd) => {
             require_inrou_binding_current(&binding)?;
+            let deadline = prepared_observation_deadline(
+                args.timeout_secs,
+                Some(binding.execution_expires_at_unix_ms),
+            )?;
             preflight_taira_network_identity(&public_root, context.config())?;
             prove_inrou_predecessor_applied(
                 context.config(),
@@ -1309,7 +1308,9 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
                 &public_root,
                 &binding,
                 &expected_fee_payment,
+                deadline,
             )?;
+            require_inrou_binding_current(&binding)?;
             let stage = crate::soracloud::load_taira_inrou_stage_identity(
                 context.config(),
                 &args.stage_dir,
@@ -1349,9 +1350,14 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
                 None,
                 None,
                 None,
+                deadline,
             )
         }
         PreparedEnvelopeAction::Submit(fd) => {
+            let deadline = prepared_observation_deadline(
+                args.timeout_secs,
+                Some(binding.execution_expires_at_unix_ms),
+            )?;
             let validated = load_and_validate_prepared_inrou(
                 context.config(),
                 args,
@@ -1361,16 +1367,39 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
                 &expected_fee_payment,
                 PreparedLifetimeCheck::LiveForward,
             )?;
+            let transaction = validated.prepared.decode_and_validate()?;
+            let ttl = transaction
+                .time_to_live()
+                .ok_or_else(|| eyre!("prepared Inrou transaction omits its required TTL"))?;
+            let expires_at_ms = u64::try_from(
+                transaction
+                    .creation_time()
+                    .checked_add(ttl)
+                    .ok_or_else(|| eyre!("prepared Inrou transaction expiry overflow"))?
+                    .as_millis(),
+            )?;
+            let deadline = deadline.min(prepared_observation_deadline(
+                args.timeout_secs,
+                Some(expires_at_ms),
+            )?);
             let outcome = submit_prepared_inrou_until(
                 context.config(),
                 &public_root,
-                args.timeout_secs,
+                deadline,
                 &validated.prepared,
                 &binding,
-            );
-            report_prepared_inrou_outcome(context.config(), &public_root, args, &validated, outcome)
+            )?;
+            report_prepared_inrou_outcome(
+                context.config(),
+                &public_root,
+                args,
+                &validated,
+                outcome,
+                deadline,
+            )
         }
         PreparedEnvelopeAction::Recover(fd) => {
+            let deadline = prepared_observation_deadline(args.timeout_secs, None)?;
             let validated = load_and_validate_prepared_inrou(
                 context.config(),
                 args,
@@ -1383,10 +1412,17 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
             let outcome = recover_prepared_inrou(
                 context.config(),
                 &public_root,
-                args.timeout_secs,
+                deadline,
                 &validated.prepared,
-            );
-            report_prepared_inrou_outcome(context.config(), &public_root, args, &validated, outcome)
+            )?;
+            report_prepared_inrou_outcome(
+                context.config(),
+                &public_root,
+                args,
+                &validated,
+                outcome,
+                deadline,
+            )
         }
     }
 }
@@ -1600,68 +1636,105 @@ fn validate_inrou_transaction_lifetime(
 fn submit_prepared_inrou_until(
     config: &Config,
     public_root: &str,
-    timeout_secs: u64,
+    deadline: Instant,
     prepared: &crate::soracloud::PreparedSoracloudTransactionV1,
     binding: &crate::soracloud::TairaMutationBindingV1,
-) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
-    let first = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
-    if !matches!(first, crate::soracloud::PreparedSoracloudRecoveryV1::Absent) {
-        return first;
-    }
-    if require_inrou_binding_current(binding).is_err() {
-        return crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
-            terminal_kind: "ExecutionExpiredBeforeSubmit".to_owned(),
+) -> Result<crate::soracloud::PreparedSoracloudRecoveryV1> {
+    let mut outcome = recover_prepared_inrou(config, public_root, deadline, prepared)?;
+    if matches!(
+        outcome,
+        crate::soracloud::PreparedSoracloudRecoveryV1::Absent
+    ) {
+        require_inrou_binding_current(binding)?;
+        if Instant::now() >= deadline {
+            return Ok(crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: "ObservationBudgetExhausted".to_owned(),
+            });
+        }
+        match crate::soracloud::submit_prepared_soracloud_transaction(
+            config,
+            public_root,
+            deadline,
+            prepared,
+        ) {
+            Ok(hash) if hex::encode(hash.as_ref()) == prepared.tx_hash_hex => {}
+            Ok(_) => {
+                eyre::bail!("submitted Soracloud hash differs from the exact prepared transaction")
+            }
+            Err(error)
+                if observation_transport_unavailable(&error)
+                    || error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<iroha::client::QueuePlanOutcomeUnknownError>()
+                            .is_some()
+                    }) => {}
+            Err(error) => return Err(error),
+        }
+        // The one submitted envelope is now reconciled read-only, even if dispatch
+        // returned an uncertain transport outcome. Never submit a second time.
+        outcome = crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+            terminal_kind: "AcceptedNotVisible".to_owned(),
         };
     }
-    let expected_hash = prepared.tx_hash_hex.clone();
-    match crate::soracloud::submit_prepared_soracloud_transaction(
-        config,
-        public_root,
-        timeout_secs,
-        prepared,
-    ) {
-        Ok(hash) if hex::encode(hash.as_ref()) == expected_hash => {}
-        Ok(_) => {
-            return crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
-                terminal_kind: "SubmittedHashMismatch".to_owned(),
-            };
-        }
-        Err(_) => return recover_prepared_inrou(config, public_root, timeout_secs, prepared),
-    }
-    let deadline = Instant::now()
-        .checked_add(Duration::from_secs(timeout_secs))
-        .unwrap_or_else(Instant::now);
     loop {
-        let outcome = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
         if !matches!(
             &outcome,
             crate::soracloud::PreparedSoracloudRecoveryV1::Absent
                 | crate::soracloud::PreparedSoracloudRecoveryV1::Pending { .. }
         ) || Instant::now() >= deadline
         {
-            return outcome;
+            return Ok(outcome);
         }
         std::thread::sleep(
             Duration::from_millis(200).min(deadline.saturating_duration_since(Instant::now())),
         );
+        if Instant::now() >= deadline {
+            return Ok(outcome);
+        }
+        outcome = recover_prepared_inrou(config, public_root, deadline, prepared)?;
     }
+}
+
+/// Only transport unavailability may retain a pending observation. Authorization,
+/// compatibility, decoding, and proof errors are immediately returned to the caller.
+fn observation_transport_unavailable(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|error| error.is_timeout() || error.is_connect() || error.is_body())
+            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::BrokenPipe
+                )
+            })
+    })
 }
 
 fn recover_prepared_inrou(
     config: &Config,
     public_root: &str,
-    timeout_secs: u64,
+    deadline: Instant,
     prepared: &crate::soracloud::PreparedSoracloudTransactionV1,
-) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
-    crate::soracloud::recover_prepared_soracloud_transaction(
+) -> Result<crate::soracloud::PreparedSoracloudRecoveryV1> {
+    match crate::soracloud::recover_prepared_soracloud_transaction(
         config,
         public_root,
-        timeout_secs,
+        deadline,
         prepared,
-    )
-    .unwrap_or_else(|_| crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-        terminal_kind: "ObservationUnavailable".to_owned(),
-    })
+    ) {
+        Err(error) if observation_transport_unavailable(&error) => {
+            Ok(crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: "ObservationUnavailable".to_owned(),
+            })
+        }
+        result => result,
+    }
 }
 
 fn report_prepared_inrou_outcome(
@@ -1670,8 +1743,9 @@ fn report_prepared_inrou_outcome(
     args: &InrouCanary,
     validated: &ValidatedPreparedInrouV1,
     outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
+    deadline: Instant,
 ) -> Result<Value> {
-    let outcome = qualify_applied_inrou_pin_outcome(config, public_root, args, outcome);
+    let outcome = qualify_applied_inrou_pin_outcome(config, public_root, args, outcome, deadline)?;
     match outcome {
         crate::soracloud::PreparedSoracloudRecoveryV1::Absent => prepared_inrou_report(
             config,
@@ -1684,6 +1758,7 @@ fn report_prepared_inrou_outcome(
             None,
             Some("Absent".to_owned()),
             None,
+            deadline,
         ),
         crate::soracloud::PreparedSoracloudRecoveryV1::Applied {
             block_height,
@@ -1699,6 +1774,7 @@ fn report_prepared_inrou_outcome(
             Some(block_height),
             Some(evidence_sha256),
             Some(validated),
+            deadline,
         ),
         crate::soracloud::PreparedSoracloudRecoveryV1::Pending { terminal_kind } => {
             prepared_inrou_report(
@@ -1712,6 +1788,7 @@ fn report_prepared_inrou_outcome(
                 None,
                 Some(terminal_kind),
                 None,
+                deadline,
             )
         }
         crate::soracloud::PreparedSoracloudRecoveryV1::Rejected { terminal_kind } => {
@@ -1726,6 +1803,7 @@ fn report_prepared_inrou_outcome(
                 None,
                 Some(terminal_kind),
                 None,
+                deadline,
             )
         }
     }
@@ -1736,45 +1814,57 @@ fn qualify_applied_inrou_pin_outcome(
     public_root: &str,
     args: &InrouCanary,
     outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
-) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
+    deadline: Instant,
+) -> Result<crate::soracloud::PreparedSoracloudRecoveryV1> {
     if args.operation == InrouCanaryOperation::ServiceMutation
         || !matches!(
             &outcome,
             crate::soracloud::PreparedSoracloudRecoveryV1::Applied { .. }
         )
     {
-        return outcome;
+        return Ok(outcome);
     }
-    match crate::soracloud::taira_inrou_canary_pin_readiness_v1(
-        config,
-        &args.stage_dir,
-        public_root,
-        args.timeout_secs,
-        args.mode,
-        args.operation.prepared_operation(),
-    ) {
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch)) if epoch > 0 => {
-            outcome
-        }
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_)) => {
-            crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
-                terminal_kind: "InvalidApprovalEpoch".to_owned(),
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Ok(crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+            terminal_kind: "PinObservationBudgetExhausted".to_owned(),
+        });
+    }
+    Ok(
+        match crate::soracloud::taira_inrou_canary_pin_readiness_v1(
+            config,
+            &args.stage_dir,
+            public_root,
+            remaining,
+            args.mode,
+            args.operation.prepared_operation(),
+        ) {
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch)) if epoch > 0 => {
+                outcome
             }
-        }
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending) => {
-            crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-                terminal_kind: "PinApprovalPending".to_owned(),
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_)) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
+                    terminal_kind: "InvalidApprovalEpoch".to_owned(),
+                }
             }
-        }
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing) => {
-            crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-                terminal_kind: "PinObservationMissing".to_owned(),
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "PinApprovalPending".to_owned(),
+                }
             }
-        }
-        Err(_) => crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-            terminal_kind: "ObservationUnavailable".to_owned(),
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "PinObservationMissing".to_owned(),
+                }
+            }
+            Err(error) if observation_transport_unavailable(&error) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "ObservationUnavailable".to_owned(),
+                }
+            }
+            Err(error) => return Err(error),
         },
-    }
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1789,6 +1879,7 @@ fn prepared_inrou_report(
     applied_block_height: Option<u64>,
     evidence: Option<String>,
     applied: Option<&ValidatedPreparedInrouV1>,
+    deadline: Instant,
 ) -> Result<Value> {
     let mut report = if args.operation == InrouCanaryOperation::ServiceMutation
         && outcome == "Applied"
@@ -1797,13 +1888,13 @@ fn prepared_inrou_report(
         let mut status_config = config.clone();
         status_config.torii_api_url = Url::parse(&format!("{public_root}/"))
             .wrap_err("failed to bind prepared Inrou status client")?;
-        status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
+        status_config.torii_request_timeout = deadline.saturating_duration_since(Instant::now());
         let status_client = IrohaClient::builder(status_config).build()?;
-        verify_inrou_check(
+        verify_inrou_check_until(
             public_root,
             &status_client,
             stage,
-            args.timeout_secs,
+            deadline,
             args.probe_scope,
         )?
     } else {
@@ -1907,6 +1998,7 @@ fn prove_inrou_predecessor_applied(
     public_root: &str,
     binding: &crate::soracloud::TairaMutationBindingV1,
     expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<()> {
     let fd = args
         .prerequisite_envelope_fd
@@ -2111,20 +2203,40 @@ fn prove_inrou_predecessor_applied(
     }
     let mut status_config = config.clone();
     status_config.torii_api_url = Url::parse(&format!("{public_root}/"))?;
-    status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
-    let client = IrohaClient::builder(status_config).build()?;
-    let status = client
-        .get_transaction_status_response_global(transaction.hash())?
-        .ok_or_else(|| eyre!("Inrou predecessor transaction is absent"))?;
-    if status.hash != transaction_hash
-        || status.scope != "global"
-        || status.status.kind != "Applied"
-        || !status.status.block_height.is_some_and(|height| height > 0)
-    {
-        eyre::bail!("Inrou predecessor has not reached exact global Applied state");
-    }
-    verify_exact_committed_transaction(&client, &transaction, &wire)?;
-    if expected_kind != "write_canary" {
+    await_predecessor_applied(deadline, Duration::from_millis(200), |request_budget| {
+        let mut bounded_config = status_config.clone();
+        bounded_config.torii_request_timeout = request_budget;
+        let client = IrohaClient::builder(bounded_config).build()?;
+        let Some(status) = client.get_transaction_status_response_global(transaction.hash())?
+        else {
+            return Ok(false);
+        };
+        if status.hash != transaction_hash || status.scope != "global" {
+            eyre::bail!("Inrou predecessor status differs from its exact identity or scope");
+        }
+        if prepared_recovery_status_is_final_failure(&status) {
+            eyre::bail!("Inrou predecessor is terminally {}", status.status.kind);
+        }
+        if !matches!(
+            status.status.kind.as_str(),
+            "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
+        ) {
+            eyre::bail!("Inrou predecessor has unsupported status kind");
+        }
+        if !prepared_recovery_status_is_final_applied(&status) {
+            return Ok(false);
+        }
+        if !status.status.block_height.is_some_and(|height| height > 0) {
+            eyre::bail!("Applied Inrou predecessor omits its positive block height");
+        }
+        match verify_exact_committed_transaction(&client, &transaction, &wire) {
+            Ok(()) => {}
+            Err(error) if exact_transaction_details_not_found(&error) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        if expected_kind == "write_canary" {
+            return Ok(true);
+        }
         let operation = match expected_kind {
             "inrou_bundle_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
             "inrou_guest_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
@@ -2137,23 +2249,20 @@ fn prove_inrou_predecessor_applied(
             config,
             &args.stage_dir,
             public_root,
-            args.timeout_secs,
+            request_budget.min(deadline.saturating_duration_since(Instant::now())),
             args.mode,
             operation,
         )? {
-            crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch) if epoch > 0 => {}
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch) if epoch > 0 => {
+                Ok(true)
+            }
             crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_) => {
                 eyre::bail!("Inrou predecessor pin has an invalid zero approval epoch")
             }
-            crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending => {
-                eyre::bail!("Inrou predecessor pin governance is still Pending")
-            }
-            crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing => {
-                eyre::bail!("Inrou predecessor pin approval is missing")
-            }
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending
+            | crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing => Ok(false),
         }
-    }
-    Ok(())
+    })
 }
 
 fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Result<Value> {
@@ -2210,19 +2319,8 @@ fn verify_exact_committed_transaction(
     expected_wire: &[u8],
 ) -> Result<()> {
     let entrypoint_hash = expected.hash_as_entrypoint();
-    let one = NonZeroU64::new(1).expect("nonzero exact transaction bound");
-    let committed = client
-        .query(FindTransactions::new())
-        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
-            entry_eq: Some(entrypoint_hash),
-            ..CommittedTxFilters::default()
-        }))
-        .with_pagination(Pagination::new(Some(one), 0))
-        .with_fetch_size(FetchSize::new(Some(one)))
-        .execute_all()?;
-    let [committed] = committed.as_slice() else {
-        eyre::bail!("Applied predecessor lacks one exact committed transaction proof");
-    };
+    let details = client.get_transaction_details(entrypoint_hash)?;
+    let committed = &details.transaction;
     let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
         eyre::bail!("Applied predecessor resolves to a non-external entrypoint");
     };
@@ -3356,22 +3454,13 @@ fn probe_inrou_service(
     public_root: &str,
     status_client: &IrohaClient,
     deployment: &InrouProbeIdentity,
-    timeout_secs: u64,
+    deadline: Instant,
     probe_scope: InrouProbeScope,
 ) -> Result<InrouProbeObservation> {
-    validate_inrou_canary_timeout(timeout_secs)?;
     probe_scope.validate_root(public_root)?;
-    let http = HttpClient::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(timeout_secs.min(5)))
-        .user_agent("iroha-taira-inrou-probe/1")
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .wrap_err("failed to build Taira Inrou verification HTTP client")?;
     let health_path =
         inrou_canary_health_path(&deployment.route_path_prefix, &deployment.healthcheck_path);
     let health_base = join_url(public_root, &health_path)?;
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut nonce = 0_u64;
     let mut status_ready = false;
     let mut active_adverts = 0_u64;
@@ -3390,12 +3479,28 @@ fn probe_inrou_service(
     while Instant::now() < deadline
         && (!status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready)
     {
+        // At most one signed status, one health, and four exact discovery reads.
+        let request_budget =
+            (deadline.saturating_duration_since(Instant::now()) / 6).min(Duration::from_secs(5));
+        if request_budget.is_zero() {
+            break;
+        }
+        let mut bounded_status = status_client.to_builder();
+        bounded_status.torii_request_timeout = request_budget;
+        let bounded_status = bounded_status.build()?;
+        let http = HttpClient::builder()
+            .no_proxy()
+            .timeout(request_budget)
+            .user_agent("iroha-taira-inrou-probe/1")
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .wrap_err("failed to build Taira Inrou verification HTTP client")?;
         status_ready = false;
         current_route_ready = false;
         active_adverts = 0;
         hosted_replicas = 0;
         local_placement = None;
-        match account_signed_soracloud_status(status_client) {
+        match account_signed_soracloud_status(&bounded_status) {
             Ok(response) => {
                 last_status_code = response.status;
                 match response
@@ -3435,7 +3540,10 @@ fn probe_inrou_service(
                     Err(error) => {
                         last_route_error = format!("{error:#}");
                         if !status_ready || !current_route_ready || identities.len() < 4 {
-                            std::thread::sleep(Duration::from_millis(200));
+                            std::thread::sleep(
+                                Duration::from_millis(200)
+                                    .min(deadline.saturating_duration_since(Instant::now())),
+                            );
                         }
                         continue;
                     }
@@ -3443,7 +3551,10 @@ fn probe_inrou_service(
                 if response.status != 200 {
                     last_route_error = format!("HTTP {}", response.status);
                     if !status_ready || !current_route_ready || identities.len() < 4 {
-                        std::thread::sleep(Duration::from_millis(200));
+                        std::thread::sleep(
+                            Duration::from_millis(200)
+                                .min(deadline.saturating_duration_since(Instant::now())),
+                        );
                     }
                     continue;
                 }
@@ -3489,7 +3600,9 @@ fn probe_inrou_service(
             }
         }
         if !status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready {
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(
+                Duration::from_millis(200).min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
     }
     let mut checks = Vec::new();
@@ -3597,14 +3710,26 @@ fn verify_inrou_check(
     timeout_secs: u64,
     probe_scope: InrouProbeScope,
 ) -> Result<Value> {
-    let expected = InrouProbeIdentity::from(stage);
-    let observation = probe_inrou_service(
+    validate_inrou_canary_timeout(timeout_secs)?;
+    verify_inrou_check_until(
         public_root,
         status_client,
-        &expected,
-        timeout_secs,
+        stage,
+        prepared_observation_deadline(timeout_secs, None)?,
         probe_scope,
-    )?;
+    )
+}
+
+fn verify_inrou_check_until(
+    public_root: &str,
+    status_client: &IrohaClient,
+    stage: &crate::soracloud::TairaInrouStageIdentity,
+    deadline: Instant,
+    probe_scope: InrouProbeScope,
+) -> Result<Value> {
+    let expected = InrouProbeIdentity::from(stage);
+    let observation =
+        probe_inrou_service(public_root, status_client, &expected, deadline, probe_scope)?;
     let observed_at_unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock predates the Unix epoch; refusing stale-looking Inrou evidence")?
@@ -3784,13 +3909,19 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
     match action {
         PreparedEnvelopeAction::Prepare(output) => {
             require_forward_binding_current(&binding)?;
+            let deadline = prepared_observation_deadline(
+                args.timeout_secs,
+                Some(binding.execution_expires_at_unix_ms),
+            )?;
             prove_predecessor_applied(
                 context.config(),
                 args,
                 &public_root,
                 &binding,
                 &expected_fee_payment,
+                deadline,
             )?;
+            require_forward_binding_current(&binding)?;
             let envelope = prepare_one_write_canary_operation(
                 context.config(),
                 args,
@@ -3902,6 +4033,7 @@ fn prove_predecessor_applied(
     public_root: &str,
     current_binding: &PreparedMutationBindingV1,
     expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<()> {
     let predecessor = match args.operation {
         WriteCanaryOperation::Onboarding => return Ok(()),
@@ -3940,20 +4072,20 @@ fn prove_predecessor_applied(
         account_id: config.account.clone(),
         key_pair: config.key_pair.clone(),
     };
-    let client =
-        IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?;
-    match classify_exact_prepared_operation(&client, &validated)? {
-        PreparedRecoveryClassification::Applied { .. } => Ok(()),
-        PreparedRecoveryClassification::Absent => {
-            eyre::bail!("predecessor transaction is absent; refusing to prepare the next operation")
+    let canary_config = write_canary_config(config, public_root, &signer)?;
+    await_predecessor_applied(deadline, Duration::from_millis(200), |request_budget| {
+        let mut bounded_config = canary_config.clone();
+        bounded_config.torii_request_timeout = request_budget;
+        let client = IrohaClient::builder(bounded_config).build()?;
+        match classify_exact_prepared_operation(&client, &validated)? {
+            PreparedRecoveryClassification::Applied { .. } => Ok(true),
+            PreparedRecoveryClassification::Absent
+            | PreparedRecoveryClassification::Pending { .. } => Ok(false),
+            PreparedRecoveryClassification::Rejected { terminal_kind } => eyre::bail!(
+                "predecessor transaction is terminally rejected (`{terminal_kind}`); refusing to prepare the next operation"
+            ),
         }
-        PreparedRecoveryClassification::Pending { terminal_kind } => eyre::bail!(
-            "predecessor transaction is not Applied (`{terminal_kind}`); refusing to prepare the next operation"
-        ),
-        PreparedRecoveryClassification::Rejected { terminal_kind } => eyre::bail!(
-            "predecessor transaction is terminally rejected (`{terminal_kind}`); refusing to prepare the next operation"
-        ),
-    }
+    })
 }
 
 fn prepare_final_canary_operation(
@@ -4721,8 +4853,17 @@ fn classify_exact_prepared_operation(
                 .block_height
                 .filter(|height| *height > 0)
                 .ok_or_else(|| eyre!("Applied prepared transaction omits its block height"))?;
-            let evidence =
-                verify_exact_committed_prepared_operation(client, validated)?.to_string();
+            let evidence = match verify_exact_committed_prepared_operation(client, validated) {
+                Ok(evidence) => evidence.to_string(),
+                Err(error) if exact_transaction_details_not_found(&error) => {
+                    // Global status may resolve at a peer ahead of this exact local
+                    // lookup. Keep polling the same hash until its proof is visible.
+                    return Ok(PreparedRecoveryClassification::Pending {
+                        terminal_kind: "AppliedEvidencePending".to_owned(),
+                    });
+                }
+                Err(error) => return Err(error),
+            };
             Ok(PreparedRecoveryClassification::Applied {
                 block_height: Some(block_height),
                 evidence,
@@ -4741,6 +4882,56 @@ fn classify_exact_prepared_operation(
         other => Err(eyre!(
             "prepared-transaction status response has unsupported kind `{other}`"
         )),
+    }
+}
+
+/// Only a typed absence from the exact details endpoint permits proof-visibility retry.
+pub(crate) fn exact_transaction_details_not_found(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<iroha::query::QueryError>(),
+            Some(iroha::query::QueryError::Validation(
+                iroha::data_model::ValidationFail::QueryFailed(
+                    iroha::data_model::query::error::QueryExecutionFail::NotFound
+                )
+            ))
+        )
+    })
+}
+
+fn prepared_observation_deadline(timeout_secs: u64, expires_at: Option<u64>) -> Result<Instant> {
+    let mut budget = Duration::from_secs(timeout_secs);
+    if let Some(expires_at) = expires_at {
+        budget = budget.min(Duration::from_millis(
+            expires_at.saturating_sub(current_unix_ms()?),
+        ));
+    }
+    Instant::now()
+        .checked_add(budget)
+        .ok_or_else(|| eyre!("prepared observation deadline overflow"))
+}
+
+/// A successor observes its retained predecessor under one original deadline.
+/// Each observation performs at most status, compatibility, exact details, and pin reads.
+fn await_predecessor_applied(
+    deadline: Instant,
+    poll_interval: Duration,
+    mut observe: impl FnMut(Duration) -> Result<bool>,
+) -> Result<()> {
+    if poll_interval.is_zero() {
+        eyre::bail!("predecessor poll interval must be positive");
+    }
+    loop {
+        let request_budget = deadline.saturating_duration_since(Instant::now()) / 4;
+        if request_budget.is_zero() {
+            eyre::bail!(
+                "predecessor has not reached exact Applied proof within the original deadline"
+            );
+        }
+        if observe(request_budget)? {
+            return Ok(());
+        }
+        std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -4803,20 +4994,10 @@ fn verify_exact_committed_prepared_operation(
     let operation_name = Name::from_str(PREPARED_OPERATION_METADATA)?;
     let expected_transaction = validated.transaction()?;
     let entrypoint_hash = expected_transaction.hash_as_entrypoint();
-    let one = NonZeroU64::new(1).expect("nonzero committed lookup bound");
-    let committed = client
-        .query(FindTransactions::new())
-        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
-            entry_eq: Some(entrypoint_hash),
-            ..CommittedTxFilters::default()
-        }))
-        .with_pagination(Pagination::new(Some(one), 0))
-        .with_fetch_size(FetchSize::new(Some(one)))
-        .execute_all()
+    let details = client
+        .get_transaction_details(entrypoint_hash)
         .wrap_err("read-only exact prepared-transaction proof query failed")?;
-    let [committed] = committed.as_slice() else {
-        eyre::bail!("Applied status lacks one exact bounded committed-transaction proof");
-    };
+    let committed = &details.transaction;
     if committed.result().is_err() {
         eyre::bail!("Applied status resolves to a failed committed transaction");
     }
@@ -5260,9 +5441,9 @@ fn await_exact_prepared_operation(
                         cause
                             .downcast_ref::<reqwest::Error>()
                             .is_some_and(reqwest::Error::is_timeout)
-                            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
-                                error.kind() == std::io::ErrorKind::TimedOut
-                            })
+                            || cause
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
                     }) =>
             {
                 // A shrinking deadline can cancel even a healthy read. Keep the
@@ -7903,13 +8084,10 @@ mod tests {
                         .body(response.body)
                         .expect("prepared status response"))
                 }
-                PreparedStatusPoll::Failure(kind) => {
-                    Err(PreparedStatusTransportError(std::io::Error::new(
-                        kind,
-                        "scripted prepared status failure",
-                    )))
-                        .wrap_err("prepared status transport failed")
-                }
+                PreparedStatusPoll::Failure(kind) => Err(PreparedStatusTransportError(
+                    std::io::Error::new(kind, "scripted prepared status failure"),
+                ))
+                .wrap_err("prepared status transport failed"),
             }
         }
 
@@ -7942,10 +8120,7 @@ mod tests {
     #[test]
     fn prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire() {
         use iroha::data_model::{
-            query::{
-                CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
-                QueryResponse,
-            },
+            query::CommittedTransaction,
             transaction::{DataTriggerSequence, TransactionResult},
         };
         let validated = queued_onboarding_fixture();
@@ -7961,17 +8136,14 @@ mod tests {
             result,
             merge_inclusion: None,
         };
-        let query = QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
-                vec![committed],
-            )),
-            remaining_items: Some(0),
-            has_more: false,
-            continue_cursor: None,
-        });
-        let query_bytes = norito::to_bytes(&query).unwrap();
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: transaction.hash_as_entrypoint().to_string(),
+            transaction: committed,
+            trigger_completions: Vec::new(),
+        };
+        let query_bytes = norito::to_bytes(&details).unwrap();
         let polls = AtomicUsize::new(0);
-        let server = spawn_mock_http(4, move |request| match path_only(&request.path) {
+        let server = spawn_mock_http(7, move |request| match path_only(&request.path) {
             "/v1/pipeline/transactions/status" => {
                 assert!(request.path.contains("scope=global"));
                 if polls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -7986,20 +8158,28 @@ mod tests {
                     "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
                 }),
             ),
-            "/v1/query" => MockResponse {
-                status: 200,
-                content_type: "application/x-norito",
-                headers: Vec::new(),
-                body: query_bytes.clone(),
-            },
+            "/v1/pipeline/transactions/details" => {
+                assert_eq!(request.header_values("accept"), ["application/x-norito"]);
+                assert_eq!(
+                    request.header_values("content-type"),
+                    ["application/x-norito"]
+                );
+                MockResponse {
+                    status: 200,
+                    content_type: "application/x-norito",
+                    headers: Vec::new(),
+                    body: query_bytes.clone(),
+                }
+            }
             other => panic!("confirmation must never submit: {other}"),
         });
         let mut config = crate::fallback_config();
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
         let outcome = await_exact_prepared_operation(
-            &IrohaClient::builder(config)
-                .build()
-                .expect("valid Taira fixture context"),
+            &client,
             &validated,
             PreparedRecoveryClassification::Absent,
             Instant::now() + Duration::from_secs(5),
@@ -8017,16 +8197,252 @@ mod tests {
                     .to_string(),
             }
         );
+        verify_exact_committed_transaction(
+            &client,
+            validated.transaction().unwrap(),
+            validated.wire().unwrap(),
+        )
+        .expect("Inrou predecessor verification uses the same exact details route");
+        let mut substituted_wire = validated.wire().unwrap().to_vec();
+        substituted_wire[0] ^= 1;
+        verify_exact_committed_transaction(
+            &client,
+            validated.transaction().unwrap(),
+            &substituted_wire,
+        )
+        .expect_err("an exact details response must not authorize substituted retained bytes");
         let requests = finish_mock(server);
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 7);
         assert_eq!(
             requests
                 .iter()
                 .filter(|request| request.method == "POST")
                 .count(),
-            1
+            3
         );
-        assert_eq!(path_only(&requests.last().unwrap().path), "/v1/query");
+        assert_eq!(
+            path_only(&requests.last().unwrap().path),
+            "/v1/pipeline/transactions/details"
+        );
+    }
+
+    #[test]
+    fn prepared_predecessor_wait_retries_delayed_exact_proof_with_one_deadline() {
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let result = iroha::data_model::transaction::TransactionResult::new(Ok(
+            iroha::data_model::transaction::DataTriggerSequence::default(),
+        ));
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: transaction.hash_as_entrypoint().to_string(),
+            transaction: iroha::data_model::query::CommittedTransaction {
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"exact proof block",
+                )),
+                entrypoint_hash: transaction.hash_as_entrypoint(),
+                entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                entrypoint: TransactionEntrypoint::External(transaction.clone()),
+                result_hash: result.hash(),
+                result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                result,
+                merge_inclusion: None,
+            },
+            trigger_completions: Vec::new(),
+        };
+        let proof_reads = AtomicUsize::new(0);
+        let server = spawn_mock_http(6, move |request| match path_only(&request.path) {
+            "/v1/pipeline/transactions/status" => {
+                prepared_status_response(&transaction, "Applied", "state")
+            }
+            "/v1/node/capabilities" => MockResponse::json(
+                200,
+                norito::json!({
+                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                }),
+            ),
+            "/v1/pipeline/transactions/details" => {
+                if proof_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    MockResponse {
+                        status: 404,
+                        content_type: "application/x-norito",
+                        headers: Vec::new(),
+                        body: norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+                            "transaction_details_not_found",
+                            "The exact committed transaction proof is not available.",
+                        ))
+                        .unwrap(),
+                    }
+                } else {
+                    MockResponse {
+                        status: 200,
+                        content_type: "application/x-norito",
+                        headers: Vec::new(),
+                        body: norito::to_bytes(&details).unwrap(),
+                    }
+                }
+            }
+            other => panic!("successor confirmation must read only exact proof: {other}"),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let mut budgets = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        await_predecessor_applied(deadline, Duration::from_millis(1), |budget| {
+            budgets.push(budget);
+            let mut config = config.clone();
+            config.torii_request_timeout = budget;
+            let client = IrohaClient::builder(config).build()?;
+            Ok(matches!(
+                classify_exact_prepared_operation(&client, &validated)?,
+                PreparedRecoveryClassification::Applied { .. }
+            ))
+        })
+        .expect("local proof may become visible after globally Applied status");
+        assert_eq!(budgets.len(), 2);
+        assert!(budgets[1] < budgets[0]);
+        assert!(budgets[0] <= Duration::from_secs(5) / 4);
+        assert_eq!(finish_mock(server).len(), 6);
+
+        let mut observations = 0;
+        await_predecessor_applied(Instant::now(), Duration::from_millis(1), |_| {
+            observations += 1;
+            Ok(true)
+        })
+        .expect_err("an expired deadline cannot trigger another network observation");
+        assert_eq!(observations, 0);
+        let error = await_predecessor_applied(deadline, Duration::from_millis(1), |_| {
+            observations += 1;
+            Err(eyre!("authenticated exact proof denied"))
+        })
+        .expect_err("semantic failures must terminate immediately");
+        assert_eq!(observations, 1);
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated exact proof denied")
+        );
+    }
+
+    #[test]
+    fn prepared_inrou_observation_preserves_auth_and_proof_errors() {
+        let denied = eyre::Report::new(iroha::query::QueryError::Validation(
+            iroha::data_model::ValidationFail::NotPermitted("private exact transaction".to_owned()),
+        ));
+        assert!(!observation_transport_unavailable(&denied));
+        assert!(!exact_transaction_details_not_found(&denied));
+        assert!(!observation_transport_unavailable(&eyre!(
+            "malformed committed proof"
+        )));
+        let truncated_decode = eyre::Report::new(iroha::query::QueryError::Other(
+            eyre::Report::new(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "truncated canonical frame",
+            )),
+        ));
+        assert!(!observation_transport_unavailable(&truncated_decode));
+        let absent = eyre::Report::new(iroha::query::QueryError::Validation(
+            iroha::data_model::ValidationFail::QueryFailed(
+                iroha::data_model::query::error::QueryExecutionFail::NotFound,
+            ),
+        ));
+        assert!(exact_transaction_details_not_found(&absent));
+        assert!(!observation_transport_unavailable(&absent));
+        let timeout = eyre::Report::new(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "read deadline",
+        ));
+        assert!(observation_transport_unavailable(&timeout));
+        assert!(!exact_transaction_details_not_found(&timeout));
+        assert!(prepared_observation_deadline(120, Some(1)).unwrap() <= Instant::now());
+    }
+
+    #[test]
+    fn prepared_applied_confirmation_waits_for_exact_details_visibility() {
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let server = spawn_mock_http(3, move |request| match path_only(&request.path) {
+            "/v1/pipeline/transactions/status" => {
+                prepared_status_response(&transaction, "Applied", "state")
+            }
+            "/v1/node/capabilities" => MockResponse::json(
+                200,
+                norito::json!({
+                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                }),
+            ),
+            "/v1/pipeline/transactions/details" => MockResponse {
+                status: 404,
+                content_type: "application/x-norito",
+                headers: Vec::new(),
+                body: norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+                    "transaction_details_not_found",
+                    "The exact committed transaction proof is not available.",
+                ))
+                .unwrap(),
+            },
+            other => panic!("confirmation must never submit or read global inventory: {other}"),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let outcome = classify_exact_prepared_operation(
+            &IrohaClient::builder(config).build().unwrap(),
+            &validated,
+        )
+        .expect("an advanced peer's global Applied status does not imply local proof visibility");
+        assert_eq!(
+            outcome,
+            PreparedRecoveryClassification::Pending {
+                terminal_kind: "AppliedEvidencePending".to_owned(),
+            }
+        );
+        assert_eq!(finish_mock(server).len(), 3);
+    }
+
+    #[test]
+    fn prepared_applied_confirmation_rejects_unauthorized_or_malformed_exact_details() {
+        let denied = norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+            "query_validation_failed",
+            "exact transaction is private",
+        ))
+        .unwrap();
+        for (status, body) in [
+            (403, denied.clone()),
+            (404, denied.clone()),
+            (404, b"untyped missing proof".to_vec()),
+            (200, denied[..denied.len() - 1].to_vec()),
+            (200, b"invalid canonical Norito proof".to_vec()),
+        ] {
+            let validated = queued_onboarding_fixture();
+            let transaction = validated.transaction().unwrap().clone();
+            let server = spawn_mock_http(3, move |request| match path_only(&request.path) {
+                "/v1/pipeline/transactions/status" => {
+                    prepared_status_response(&transaction, "Applied", "state")
+                }
+                "/v1/node/capabilities" => MockResponse::json(
+                    200,
+                    norito::json!({
+                        "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                    }),
+                ),
+                "/v1/pipeline/transactions/details" => MockResponse {
+                    status,
+                    content_type: "application/x-norito",
+                    headers: Vec::new(),
+                    body: body.clone(),
+                },
+                other => panic!("confirmation must use the exact read route: {other}"),
+            });
+            let mut config = crate::fallback_config();
+            config.torii_api_url = Url::parse(&server.base_url).unwrap();
+            let error = classify_exact_prepared_operation(
+                &IrohaClient::builder(config).build().unwrap(),
+                &validated,
+            )
+            .expect_err("authorization and malformed proof failures must not become Pending");
+            assert!(!observation_transport_unavailable(&error));
+            assert!(!exact_transaction_details_not_found(&error));
+            assert_eq!(finish_mock(server).len(), 3);
+        }
     }
 
     #[test]
@@ -8189,7 +8605,9 @@ mod tests {
         let (client, transport) = prepared_status_transport_client(
             &validated,
             Duration::from_secs(30),
-            &[PreparedStatusPoll::Failure(std::io::ErrorKind::ConnectionReset)],
+            &[PreparedStatusPoll::Failure(
+                std::io::ErrorKind::ConnectionReset,
+            )],
         );
         let error = await_exact_prepared_operation(
             &client,
@@ -8211,9 +8629,9 @@ mod tests {
         );
         let timeouts = transport.timeouts.lock().unwrap();
         assert_eq!(timeouts.len(), 1);
-        assert!(timeouts[0].is_some_and(|timeout| {
-            !timeout.is_zero() && timeout <= wait_budget / 3
-        }));
+        assert!(
+            timeouts[0].is_some_and(|timeout| { !timeout.is_zero() && timeout <= wait_budget / 3 })
+        );
     }
 
     #[test]
@@ -11060,7 +11478,7 @@ mod tests {
             &server.base_url,
             &client,
             &deployment,
-            3,
+            Instant::now() + Duration::from_secs(3),
             InrouProbeScope::Public,
         )
         .expect("probe converges after a final current route success");

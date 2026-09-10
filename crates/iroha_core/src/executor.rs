@@ -8430,6 +8430,66 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
+        "CanManageSoracloud"
+        | "CanBindSorafsAlias"
+        | "CanDeclareSorafsCapacity"
+        | "CanSubmitSorafsTelemetry"
+        | "CanFileSorafsCapacityDispute"
+        | "CanIssueSorafsReplicationOrder"
+        | "CanCompleteSorafsReplicationOrder"
+        | "CanSetSorafsPricing"
+        | "CanSetSorafsReservePolicy"
+        | "CanManageSorafsModeration"
+        | "CanManageSorafsPopRegistry"
+        | "CanOperateSorafsPopIssuer"
+        | "CanUpsertSorafsProviderCredit"
+        | "CanManageSorafsProofOutcomePolicy"
+        | "CanManageSorafsReputationJournalPolicy"
+        | "CanRecordSorafsReputationJournal"
+        | "CanResolveSorafsCapacityDispute" => {
+            if permission.payload() != &Json::new(()) {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the unit payload",
+                ));
+            }
+        }
+        "CanOperateSorafsRepair" => {
+            let token = executor_permission::sorafs::CanOperateSorafsRepair::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact provider scope",
+                ));
+            }
+        }
+        "CanRecordSorafsProofOutcome" => {
+            let token =
+                executor_permission::sorafs::CanRecordSorafsProofOutcome::try_from(permission)
+                    .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact provider scope",
+                ));
+            }
+        }
+        "CanGovernSoracloudFhe" => {
+            let scope = permission
+                .payload()
+                .try_into_any_norito::<iroha_data_model::soracloud::SoracloudFheGovernancePermissionScopeV1>()
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            scope
+                .validate()
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if permission.payload() != &Json::new(scope) {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact service and policy scope",
+                ));
+            }
+        }
         "CanManageRuntimeUpgrades" => validate_exact_unit_permission!(
             executor_permission::governance::CanManageRuntimeUpgrades
         ),
@@ -9493,6 +9553,12 @@ fn can_modify_asset_metadata_initial(
 }
 fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
+    if let Some(admission) =
+        crate::smartcontracts::isi::registered_native_instruction_initial_admission(instruction)
+    {
+        return admission
+            == crate::smartcontracts::isi::InitialNativeInstructionAdmission::CoreAuthorized;
+    }
     let any = instruction.as_any();
     macro_rules! is_any {
         ($($ty:ty),+ $(,)?) => {
@@ -9585,74 +9651,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes,
         iroha_data_model::isi::contract_alias::SetContractAlias,
-    ) {
-        return true;
-    }
-    // Orderbook handlers bind owner payload signatures and governed matcher
-    // authority in Core. Receipts remain relayable only under the provider's
-    // signature and the immutable channel's custody-release authority.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy,
-        iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder,
-        iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder,
-        iroha_data_model::isi::sorafs::MatchSorafsOrderbook,
-        iroha_data_model::isi::sorafs::MaintainSorafsOrderbook,
-        iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt,
-    ) {
-        return true;
-    }
-    // Reserve policy, operations, decisions, and provider requests retain their
-    // exact native permission, governed-account, and provider-owner checks.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsReservePolicy,
-        iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount,
-        iroha_data_model::isi::sorafs::RequestSorafsReserveMovement,
-        iroha_data_model::isi::sorafs::DecideSorafsReserveMovement,
-        iroha_data_model::isi::sorafs::ChargeSorafsReserveRent,
-        iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle,
-        iroha_data_model::isi::sorafs::DrawSorafsReserveCredit,
-        iroha_data_model::isi::sorafs::RepaySorafsReserveCredit,
-        iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal,
-        iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal,
-    ) {
-        return true;
-    }
-    // Repair ingress enforces provider-scoped worker permissions, current lease
-    // authority, and owner-only appeals in Core. Admit the complete lifecycle
-    // so an escalated task retains its native appeal path.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SubmitSorafsRepairTask,
-        iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction,
-        iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal,
-    ) {
-        return true;
-    }
-    // PoP registry mutations retain exact governance/issuer permissions, the
-    // current issuer account and signed canonical publication bindings in Core.
-    // Revocations only append committed nonces under the active version chain.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy,
-        iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch,
-        iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList,
-    ) {
-        return true;
-    }
-    // Moderation management retains exact governed permissions in Core. Public
-    // ingress binds the authenticated appellant, juror proof, ballot, or bond;
-    // expiry derives only the native grace-deadline outcome.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsModerationPolicy,
-        iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal,
-        iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility,
-        iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition,
-        iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment,
-        iroha_data_model::isi::sorafs::ActivateSorafsModerationCase,
-        iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit,
-        iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge,
-        iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge,
-        iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge,
-        iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal,
-        iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase,
     ) {
         return true;
     }
@@ -10280,6 +10278,14 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("only the asset-definition owner may change its alias");
     }
+    if matches!(
+        crate::smartcontracts::isi::registered_native_instruction_initial_admission(instruction),
+        Some(crate::smartcontracts::isi::InitialNativeInstructionAdmission::Closed)
+    ) {
+        return Err(ValidationFail::NotPermitted(
+            crate::smartcontracts::isi::INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON.to_owned(),
+        ));
+    }
     if !initial_native_instruction_is_explicitly_admitted(instruction)
         && !(is_genesis && initial_genesis_instruction_is_explicitly_admitted(instruction))
     {
@@ -10885,6 +10891,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageParliament",
     "CanSlashGovernanceLock",
     "CanRestituteGovernanceLock",
+    "CanManageSoracloud",
+    "CanGovernSoracloudFhe",
     "CanBindSorafsAlias",
     "CanDeclareSorafsCapacity",
     "CanSubmitSorafsTelemetry",

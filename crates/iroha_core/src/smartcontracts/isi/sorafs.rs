@@ -1665,16 +1665,22 @@ fn has_permission(
     authority: &AccountId,
     permission: &str,
 ) -> bool {
-    state_transaction
+    let matches = |grant: &Permission| {
+        // Borrow canonical JSON so null remains distinct from "null", including
+        // when the enclosing instruction has exhausted its decode allocation budget.
+        grant.name() == permission && grant.payload().get().as_str() == "null"
+    };
+    let direct = state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|perms| {
-            perms.iter().any(|grant| {
-                // Raw canonical JSON preserves the distinction between null and "null".
-                grant.name() == permission && grant.payload().get().as_str() == "null"
-            })
-        })
+        .is_some_and(|perms| perms.iter().any(matches));
+    direct
+        || state_transaction
+            .world
+            .account_roles_iter(authority)
+            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .any(|role| role.permissions().any(matches))
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -7810,6 +7816,7 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
 mod sorafs_tests {
     use super::*;
     include!("sorafs/permission_token_tests.rs");
+    include!("sorafs/initial_executor_tests.rs");
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
@@ -8765,7 +8772,7 @@ mod sorafs_tests {
     fn register_pin_manifest_allows_public_submission() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
@@ -8793,7 +8800,7 @@ mod sorafs_tests {
             )
             .expect("default public pin fee");
         register
-            .execute(&alice(), &mut stx)
+            .execute_initial(&alice(), &mut stx)
             .expect("public register must succeed");
         let record = stx
             .world
@@ -9203,7 +9210,7 @@ mod sorafs_tests {
     fn public_pin_cannot_reserve_alias_without_alias_permission() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanBindSorafsAlias");
@@ -9216,7 +9223,7 @@ mod sorafs_tests {
             alias: Some(alias.clone()),
             successor_of: None,
         }
-        .execute(&alice(), &mut stx)
+        .execute_initial(&alice(), &mut stx)
         .expect_err("permissionless public pins must not reserve governed aliases");
         assert!(matches!(
             error,
@@ -9243,7 +9250,7 @@ mod sorafs_tests {
     fn register_pin_manifest_rejects_unfunded_public_submission_without_side_effects() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         if let Some(perms) = stx.world.account_permissions.get_mut(&alice()) {
@@ -9259,7 +9266,7 @@ mod sorafs_tests {
             successor_of: None,
         };
         register
-            .execute(&alice(), &mut stx)
+            .execute_initial(&alice(), &mut stx)
             .expect_err("unfunded public pin registration must fail");
         assert!(
             stx.world.pin_manifests.get(&default_digest()).is_none(),
@@ -9313,7 +9320,7 @@ mod sorafs_tests {
     fn threshold_approval_may_be_relayed_without_broad_permission() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
@@ -9332,7 +9339,7 @@ mod sorafs_tests {
             council_envelope_digest: None,
         };
         approve
-            .execute(&bob(), &mut stx)
+            .execute_initial(&bob(), &mut stx)
             .expect("any authenticated account may relay a valid governed approval");
         assert!(matches!(
             stx.world
@@ -9347,7 +9354,7 @@ mod sorafs_tests {
     fn retire_pin_manifest_requires_exact_authenticated_submitter() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
@@ -9356,7 +9363,7 @@ mod sorafs_tests {
             alias: None,
             successor_of: None,
         }
-        .execute(&alice(), &mut stx)
+        .execute_initial(&alice(), &mut stx)
         .expect("public submitter registers its paid pin");
         let retire = RetirePinManifest {
             digest: default_digest(),
@@ -9364,18 +9371,18 @@ mod sorafs_tests {
         };
         let error = retire
             .clone()
-            .execute(&bob(), &mut stx)
+            .execute_initial(&bob(), &mut stx)
             .expect_err("an unrelated account must not retire another account's pin");
         assert!(smart_contract_error_message(&error).contains("authenticated submitter"));
         retire
-            .execute(&alice(), &mut stx)
+            .execute_initial(&alice(), &mut stx)
             .expect("the exact submitter may retire without a broad permission token");
     }
     #[test]
     fn bind_manifest_alias_requires_permission() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanBindSorafsAlias");
@@ -9386,7 +9393,7 @@ mod sorafs_tests {
             expiry_epoch: 12,
         };
         let error = bind
-            .execute(&alice(), &mut stx)
+            .execute_initial(&alice(), &mut stx)
             .expect_err("permissionless bind must fail");
         assert!(matches!(
             error,
@@ -13463,7 +13470,7 @@ mod sorafs_tests {
     #[test]
     fn bind_manifest_alias_registers_record() {
         let state = make_state();
-        let mut block = state.block(block_header());
+        let mut block = state.block(initial_sorafs_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
@@ -13474,7 +13481,8 @@ mod sorafs_tests {
             bound_epoch: 8,
             expiry_epoch: 16,
         };
-        bind.execute(&alice(), &mut stx).expect("bind alias");
+        bind.execute_initial(&alice(), &mut stx)
+            .expect("bind alias");
         let stored = stx
             .world
             .pin_manifests

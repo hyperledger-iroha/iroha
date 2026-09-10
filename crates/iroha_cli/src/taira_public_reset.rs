@@ -95,6 +95,8 @@ enum PublicResetCommand {
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
     ConfigRebase(config::ConfigRebase),
+    /// Rebind a retained client config to an explicitly checked new genesis identity.
+    ClientConfigRebase(config::ClientConfigRebase),
     /// Generate a dedicated runtime operator credential without exposing private key bytes.
     OperatorKeygen(config::OperatorKeygen),
     /// Assemble exact release inputs locally from an explicit inventory draft.
@@ -299,6 +301,10 @@ impl PublicReset {
             }
             PublicResetCommand::ConfigRebase(args) => {
                 config::config_rebase(args)?;
+                return Ok(());
+            }
+            PublicResetCommand::ClientConfigRebase(args) => {
+                config::client_config_rebase(args)?;
                 return Ok(());
             }
             PublicResetCommand::OperatorKeygen(args) => {

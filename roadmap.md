@@ -15,21 +15,7 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-Taira rollout requires qualification of the audited consensus recovery corrections.
-Prepare and Commit body work now have distinct durable identities; source review
-also covers retained results, obsolete-generation retirement, current certificate
-authority, exact publication fencing and cold replay. Execute the combined native
-regressions and prove application on all four validators before Linux preparation,
-then finish reset canaries, restart persistence, public cutover and application
-connectivity. Keep one warm build lane and reuse unchanged dependency artifacts;
-source guards must check semantics without freezing unrelated test-file bytes.
-Retain source-asset grammar, shared lifecycle and production configuration gates
-before Core compilation. Prove cold Ready Validate can establish exact Decision
-protection before its first Runtime turn and preserve conflict rejection.
-Carry the passing cold recovery checks through the explicit gated-ingress
-activation fixture and its complete response-persistence/replay sequence, then
-complete the remaining gates. Reclaim unused guest allocation and prove backing
-disk capacity before rollout.
+Taira rollout requires qualification of the audited consensus and deployment corrections. Preparation 30 passed the cold recovery and four-validator application checks; release84 then rolled back during candidate onboarding without touching the public edge. Carry the reviewed Initial-executor admission, exact permission/role checks, canonical proof error protocol and final-genesis deployment capability into one combined native test build. Preserve the standalone FSM, lifecycle, source inventory and configuration checks before heavy compilation. Qualify the new genesis and every validator/client network identity before reset; verify the deployer is funded for all three storage pins. Finish reset canaries, restart persistence, public cutover and application connectivity. Reuse the warm build lane and completed unchanged artifacts, and prove backing-disk capacity before rollout.
 
 ## Architecture and build ownership
 

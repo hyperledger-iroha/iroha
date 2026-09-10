@@ -19090,7 +19090,7 @@ fn deploy_soracloud_service_rejects_missing_replica_private_http_service_data_vo
     Ok(())
 }
 #[test]
-fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
+fn initial_executor_soracloud_lease_usage_and_runtime_preserve_exact_assignment()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let mut bundle = sample_bundle("portal", "1.0.0", 0);
@@ -19116,15 +19116,18 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
     bundle.service.handlers.clear();
     bundle.service.artifacts[0].handler_name = None;
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    soracloud_transaction!(state, block_header, state_block, stx);
-    isi::DeploySoracloudService {
-        bundle: bundle.clone(),
-        initial_service_configs: BTreeMap::new(),
-        initial_service_secrets: BTreeMap::new(),
-        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
-        provenance: bundle_provenance(&bundle),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, 2);
+    execute_initial_soracloud(
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+            provenance: bundle_provenance(&bundle),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
     let lease_started_height = stx
         .world
         .soracloud_service_deployments
@@ -19132,7 +19135,7 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         .and_then(|deployment| deployment.service_lease.as_ref())
         .expect("hosted service lease")
         .lease_started_height;
-    let runtime_state = sample_inrou_replica_runtime_state_for(
+    let mut runtime_state = sample_inrou_replica_runtime_state_for(
         bundle.service.service_name.clone(),
         &bundle.service.service_version,
         1,
@@ -19167,17 +19170,76 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         .and_then(|deployment| deployment.service_lease.as_ref())
         .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
         .expect("hosted service lease");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: runtime_state.placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    execute_initial_soracloud(
+        isi::ReportSoracloudServiceLeaseUsage {
+            service_name: bundle.service.service_name.clone(),
+            lease_started_height,
+            reporting_epoch,
+            active_service_version: bundle.service.service_version.clone(),
+            replica_slot: 1,
+            placement_incarnation: runtime_state.placement_incarnation,
+            replica_accounted_egress_bytes: 0,
+            finalize_reporter: false,
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
+    runtime_state.reporting_epoch = reporting_epoch;
+    runtime_state.materialized_bundle_hash = bundle.container.bundle_hash;
+    execute_initial_soracloud(
+        isi::SetSoracloudInrouReplicaRuntimeState {
+            state: runtime_state.clone(),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
+    let runtime_key = inrou_replica_runtime_key(
+        &runtime_state.service_name,
+        &runtime_state.service_version,
+        runtime_state.replica_slot,
+    );
+    let recorded_runtime = stx
+        .world
+        .soracloud_inrou_replica_runtime
+        .get(&runtime_key)
+        .cloned()
+        .expect("Initial executor must persist the assigned replica projection");
+    let mut wrong_bundle = runtime_state.clone();
+    wrong_bundle.materialized_bundle_hash = Hash::new(b"unadmitted-inrou-bundle");
+    assert_initial_soracloud_core_denial(
+        execute_initial_soracloud(
+            isi::SetSoracloudInrouReplicaRuntimeState {
+                state: wrong_bundle,
+            },
+            &ALICE_ID,
+            &mut stx,
+        )
+        .unwrap_err(),
+        "admitted bundle hash",
+    );
+    let clear = isi::ClearSoracloudInrouReplicaRuntimeState {
+        service_name: runtime_state.service_name.clone(),
+        service_version: runtime_state.service_version.clone(),
+        replica_slot: runtime_state.replica_slot,
+        expected_placement_incarnation: runtime_state.placement_incarnation,
+    };
+    let mut stale_clear = clear.clone();
+    stale_clear.expected_placement_incarnation = Hash::new(b"stale-incarnation");
+    assert_initial_soracloud_core_denial(
+        execute_initial_soracloud(stale_clear, &ALICE_ID, &mut stx).unwrap_err(),
+        "compare-and-swap incarnation is stale",
+    );
+    assert_eq!(
+        stx.world.soracloud_inrou_replica_runtime.get(&runtime_key),
+        Some(&recorded_runtime)
+    );
+    execute_initial_soracloud(clear, &ALICE_ID, &mut stx)?;
+    assert!(
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .get(&runtime_key)
+            .is_none()
+    );
     stx.apply();
     state_block.commit_world_overlay_for_testing()?;
 
@@ -19185,17 +19247,20 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         .checked_add(1)
         .expect("the test lease height has a successor");
     soracloud_transaction_at_height!(state, usage_header, usage_block, usage_tx, successor_height);
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: runtime_state.placement_incarnation,
-        replica_accounted_egress_bytes: 1024 * 1024,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut usage_tx)?;
+    execute_initial_soracloud(
+        isi::ReportSoracloudServiceLeaseUsage {
+            service_name: bundle.service.service_name.clone(),
+            lease_started_height,
+            reporting_epoch,
+            active_service_version: bundle.service.service_version.clone(),
+            replica_slot: 1,
+            placement_incarnation: runtime_state.placement_incarnation,
+            replica_accounted_egress_bytes: 1024 * 1024,
+            finalize_reporter: false,
+        },
+        &ALICE_ID,
+        &mut usage_tx,
+    )?;
     let deployment = usage_tx
         .world
         .soracloud_service_deployments
@@ -23557,3 +23622,5 @@ fn soracloud_uploaded_model_finalize_rejects_pin_metadata_changed_after_register
     Ok(())
 }
 include!("soracloud_uploaded_model_finalize_tail_tests.rs");
+
+include!("soracloud_initial_executor_tests.rs");

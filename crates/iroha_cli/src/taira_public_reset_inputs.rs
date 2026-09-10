@@ -247,7 +247,7 @@ fn derive_validator_identities(
             file,
             snapshot,
         };
-        let bytes = pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?;
+        let bytes = Zeroizing::new(pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?);
         validate_validator_genesis_config(
             &bytes,
             Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
@@ -264,6 +264,10 @@ fn derive_validator_identities(
             crate::soracloud::zeroize_taira_toml_table,
         ))
         .map_err(|_| eyre!("validator config failed current typed admission"))?;
+        validate_validator_pin_fee_asset(
+            &config.gov.sorafs_pin_fee_asset_id,
+            &inventory.faucet_policy.asset_definition_id,
+        )?;
         revalidate_pinned(&input, "validator config")?;
         host::stopped_runtime::validate_config_slot(
             &validator.slug,
@@ -304,6 +308,21 @@ fn derive_validator_identities(
         validator.config_fingerprint = shared.fingerprint().to_string();
     }
     revalidate_pinned(&genesis, "signed genesis")?;
+    Ok(())
+}
+
+fn validate_validator_pin_fee_asset(
+    configured: &iroha::data_model::asset::AssetDefinitionId,
+    faucet_asset: &str,
+) -> Result<()> {
+    let expected = faucet_asset
+        .parse::<iroha::data_model::asset::AssetDefinitionId>()
+        .map_err(|_| eyre!("inventory faucet asset is not a valid asset definition identity"))?;
+    if configured != &expected {
+        return Err(eyre!(
+            "validator SoraFS pin fee asset differs from the inventory faucet asset"
+        ));
+    }
     Ok(())
 }
 

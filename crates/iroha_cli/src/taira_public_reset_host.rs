@@ -11248,6 +11248,70 @@ fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
     Err(eyre!("{label} failed with {}: {stderr}", output.status))
 }
 
+/// A child report is authoritative only after the producing process exits successfully.
+/// Error messages can contain runtime inputs or server response bodies, so retain only
+/// the fixed CLI error kind and process metadata when reporting a failed child.
+fn parse_prepared_child_report(output: ProcessOutput, label: &str) -> Result<norito::json::Value> {
+    if !output.status.success() {
+        return Err(prepared_child_process_error(
+            &output,
+            label,
+            prepared_child_error_kind(&output),
+        ));
+    }
+    if output.stdout.len() > MAX_PROCESS_OUTPUT {
+        return Err(prepared_child_process_error(&output, label, "protocol"));
+    }
+    // Do not attach the JSON parser error: its text may quote untrusted output.
+    json::from_slice(&output.stdout)
+        .map_err(|_| prepared_child_process_error(&output, label, "protocol"))
+}
+
+fn prepared_child_error_kind(output: &ProcessOutput) -> &'static str {
+    let classify = || -> Option<&'static str> {
+        if output.stderr.len() > MAX_PROCESS_OUTPUT {
+            return None;
+        }
+        let value: norito::json::Value = json::from_slice(&output.stderr).ok()?;
+        let root = value.as_object()?;
+        let error = root.get("error")?.as_object()?;
+        if root.len() != 1 || error.len() != 3 || error.get("message")?.as_str().is_none() {
+            return None;
+        }
+        let (kind, expected_exit) = match error.get("kind")?.as_str()? {
+            "config" => ("config", 3),
+            "input" => ("input", 4),
+            "command" => ("command", 1),
+            "internal" => ("internal", 7),
+            _ => return None,
+        };
+        (error.get("exit_code")?.as_i64()? == i64::from(expected_exit)
+            && output.status.code() == Some(expected_exit))
+        .then_some(kind)
+    };
+    classify().unwrap_or("unclassified")
+}
+
+fn prepared_child_process_error(output: &ProcessOutput, label: &str, kind: &str) -> eyre::Report {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt as _;
+        output.status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let exit_code = output
+        .status
+        .code()
+        .map_or_else(|| "none".to_owned(), |code| code.to_string());
+    let signal = signal.map_or_else(|| "none".to_owned(), |signal| signal.to_string());
+    eyre!(
+        "{label} failed: kind={kind} exit_code={exit_code} signal={signal} stdout_bytes={} stderr_bytes={}",
+        output.stdout.len(),
+        output.stderr.len()
+    )
+}
+
 fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Vec<u8>> {
     if !output.status.success()
         && let Ok(value) = json::from_slice::<norito::json::Value>(&output.stdout)
@@ -13568,7 +13632,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
 
     fn run_local_cli_process_until(
         &mut self,
-        args: Vec<OsString>,
+        mut args: Vec<OsString>,
         mut inherited_files: Vec<File>,
         deadline: Instant,
         recovery_only: bool,
@@ -13591,6 +13655,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .stream_file(&self.admitted.inventory.validators[0].slug, "iroha_cli")?;
         let cli = inherited_file_path(&cli_file)?;
         inherited_files.push(cli_file);
+        // All owned CLI calls use explicit config custody or the config-free doctor.
+        // Machine mode removes the startup banner from structured stderr diagnostics.
+        args.insert(0, OsString::from("--machine"));
         self.runner.run(&ProcessSpec {
             program: cli,
             args,
@@ -13963,7 +14030,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         inherited_files.push(file);
         let process =
             self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
-        let value = parse_json_report(&process.stdout, "exact prepared write child")?;
+        let value = parse_prepared_child_report(process, "exact prepared write child")?;
         let outcome = value
             .as_object()
             .and_then(|object| object.get("recovery_outcome"))
@@ -14400,7 +14467,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         inherited_files.push(file);
         let process =
             self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
-        let value = parse_json_report(&process.stdout, "exact prepared Inrou child")?;
+        let value = parse_prepared_child_report(process, "exact prepared Inrou child")?;
         let outcome = value
             .as_object()
             .and_then(|object| object.get("recovery_outcome"))
@@ -18137,6 +18204,202 @@ mod tests {
             .to_string();
         assert!(error.contains("status: HTTP 502"));
         assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_rejects_failed_exit_even_with_authenticated_applied_report() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        let (host_admission, prepared, bytes, _, _) =
+            authenticated_proof_required_fixture("https://taira.sora.org");
+        let stdout = proof_required_evidence(&host_admission, &prepared);
+        let report = json::from_slice(&stdout).expect("Applied report JSON");
+        let mut admitted = admitted_reset_fixture();
+        admitted.inventory = host_admission.inventory;
+        admitted.inventory_sha256 = host_admission.inventory_sha256;
+        admitted.authorization = host_admission.authorization;
+        admitted.authorization_sha256 = host_admission.authorization_sha256;
+        let retained = RetainedPreparedMutation {
+            state: "submitted".to_owned(),
+            bytes,
+            sha256: prepared.prepared_sha256,
+            transaction_hash: String::new(),
+        };
+        validate_prepared_write_report(
+            &report,
+            &admitted,
+            &prepared.phase,
+            "onboarding",
+            &prepared.idempotency_key,
+            "Applied",
+            Some(&retained),
+        )
+        .expect("the report would otherwise be accepted as exact Applied evidence");
+        for (raw_status, expected_status) in [
+            (1 << 8, "exit_code=1 signal=none"),
+            (9, "exit_code=none signal=9"),
+        ] {
+            for label in ["exact prepared write child", "exact prepared Inrou child"] {
+                let error = parse_prepared_child_report(
+                    ProcessOutput {
+                        status: ExitStatus::from_raw(raw_status),
+                        stdout: stdout.clone(),
+                        stderr: b"child-secret-must-not-escape".to_vec(),
+                    },
+                    label,
+                )
+                .expect_err("a failed producer cannot authorize its Applied report")
+                .to_string();
+                assert!(error.contains(expected_status));
+                assert!(error.contains(&format!("stdout_bytes={}", stdout.len())));
+                assert!(!error.contains("child-secret-must-not-escape"));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_failure_reports_matching_fixed_cli_kind_without_message() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let private_message = "runtime-secret-and-server-response-must-not-escape";
+        for (context, kind, exit_code) in [
+            (crate::MainError::Config, "config", 3),
+            (
+                crate::MainError::CliArgs(private_message.to_owned()),
+                "input",
+                4,
+            ),
+            (
+                crate::MainError::Command(private_message.to_owned()),
+                "command",
+                1,
+            ),
+            (crate::MainError::SerializeConfig, "internal", 7),
+        ] {
+            let rendered = crate::render_cli_error(
+                &error_stack::Report::new(context),
+                crate::CliOutputFormat::Json,
+            );
+            assert_eq!(rendered.kind.exit_code(), exit_code);
+            let stderr = rendered.output.into_bytes();
+            let stderr_len = stderr.len();
+            let error = parse_prepared_child_report(
+                ProcessOutput {
+                    status: ExitStatus::from_raw(exit_code << 8),
+                    stdout: Vec::new(),
+                    stderr,
+                },
+                "exact prepared write child",
+            )
+            .expect_err("stderr-only CLI error")
+            .to_string();
+            assert!(error.contains(&format!("kind={kind} exit_code={exit_code} signal=none")));
+            assert!(error.contains(&format!("stdout_bytes=0 stderr_bytes={stderr_len}")));
+            assert!(!error.contains("runtime-secret") && !error.contains("server-response"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_failure_does_not_trust_unknown_or_mismatched_error_kind() {
+        use std::os::unix::process::ExitStatusExt as _;
+        for stderr in [
+            br#"{"error":{"kind":"runtime-secret","exit_code":1,"message":"private"}}"#.as_slice(),
+            br#"{"error":{"kind":"config","exit_code":3,"message":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":4,"message":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","extra":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private"},"extra":"private"}"#,
+            b"startup banner\nprivate malformed error",
+        ] {
+            let error = parse_prepared_child_report(
+                ProcessOutput {
+                    status: ExitStatus::from_raw(1 << 8),
+                    stdout: Vec::new(),
+                    stderr: stderr.to_vec(),
+                },
+                "exact prepared Inrou child",
+            )
+            .expect_err("untrusted stderr is not an error classification")
+            .to_string();
+            assert!(error.contains("kind=unclassified exit_code=1 signal=none"));
+            assert!(!error.contains("runtime-secret") && !error.contains("private"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_zero_exit_protocol_failure_never_echoes_output() {
+        use std::os::unix::process::ExitStatusExt as _;
+        for stdout in [
+            Vec::new(),
+            br#"{"runtime-secret":"private""#.to_vec(),
+            b"private non-JSON output".to_vec(),
+            vec![b'x'; MAX_PROCESS_OUTPUT + 1],
+        ] {
+            let stdout_len = stdout.len();
+            let error = parse_prepared_child_report(
+                ProcessOutput {
+                    status: ExitStatus::from_raw(0),
+                    stdout,
+                    stderr: b"private stderr".to_vec(),
+                },
+                "exact prepared write child",
+            )
+            .expect_err("empty, malformed or oversized output is a protocol failure")
+            .to_string();
+            assert!(error.contains("kind=protocol exit_code=0 signal=none"));
+            assert!(error.contains(&format!("stdout_bytes={stdout_len}")));
+            assert!(!error.contains("runtime-secret") && !error.contains("private"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_zero_exit_preserves_typed_write_and_inrou_outcomes() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let admitted = admitted_reset_fixture();
+        for outcome in ["Applied", "Pending", "Rejected"] {
+            for (label, mut report) in [
+                (
+                    "exact prepared write child",
+                    prepared_write_report_fixture(&admitted, "onboarding", &"3".repeat(64)),
+                ),
+                (
+                    "exact prepared Inrou child",
+                    prepared_inrou_report_fixture(&admitted, &"3".repeat(64)),
+                ),
+            ] {
+                let object = report.as_object_mut().expect("prepared report object");
+                object.insert("recovery_outcome".to_owned(), outcome.into());
+                object.insert(
+                    "evidence".to_owned(),
+                    match outcome {
+                        "Applied" => "4".repeat(64).into(),
+                        "Pending" => "Queued".into(),
+                        "Rejected" => "Rejected".into(),
+                        _ => unreachable!(),
+                    },
+                );
+                if outcome == "Applied" {
+                    object.insert("applied_block_height".to_owned(), 7_u64.into());
+                }
+                let parsed = parse_prepared_child_report(
+                    ProcessOutput {
+                        status: ExitStatus::from_raw(0),
+                        stdout: json::to_vec(&report).expect("typed prepared report"),
+                        stderr: Vec::new(),
+                    },
+                    label,
+                )
+                .expect("typed outcomes remain available to exact envelope validation");
+                assert_eq!(parsed, report);
+                assert_eq!(
+                    parsed.get("recovery_outcome").and_then(json::Value::as_str),
+                    Some(outcome)
+                );
+            }
+        }
     }
 
     #[derive(Debug, clap::Parser)]

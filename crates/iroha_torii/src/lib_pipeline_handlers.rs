@@ -1589,14 +1589,50 @@ fn transaction_details_authority_is_involved(
     authority: &AccountId,
     transaction: &CommittedTransaction,
 ) -> bool {
-    transaction.entrypoint().authority() == authority
+    let already_involved = transaction.entrypoint().authority() == authority
         || transaction
             .result()
             .batch_transfer_outcomes()
             .iter()
             .any(|outcome| {
                 outcome.asset.account() == authority || &outcome.destination == authority
-            })
+            });
+    if already_involved {
+        return true;
+    }
+    // Only successful committed native execution establishes these beneficiaries.
+    // A rejected instruction merely naming an account must not disclose its payload.
+    if transaction.result().is_err() {
+        return false;
+    }
+    let TransactionEntrypoint::External(entrypoint) = transaction.entrypoint() else {
+        return false;
+    };
+    let iroha_data_model::transaction::Executable::Instructions(instructions) =
+        entrypoint.instructions()
+    else {
+        return false;
+    };
+    instructions.iter().any(|instruction| {
+        use iroha_data_model::{
+            alias_setup::AliasIntentV1,
+            isi::{RegisterBox, TransferBox, alias_setup::EnsureAlias},
+        };
+        let instruction = instruction.as_any();
+        if let Some(RegisterBox::Account(register)) = instruction.downcast_ref::<RegisterBox>() {
+            return &register.object.id == authority;
+        }
+        if let Some(ensure) = instruction.downcast_ref::<EnsureAlias>() {
+            return matches!(
+                &ensure.intent,
+                AliasIntentV1::AccountAlias(intent) if &intent.target_account == authority
+            );
+        }
+        matches!(
+            instruction.downcast_ref::<TransferBox>(),
+            Some(TransferBox::Asset(transfer)) if transfer.destination() == authority
+        )
+    })
 }
 fn canonical_carrier_hash_for_indexed_transaction_identity(
     app: &AppState,
@@ -1653,16 +1689,20 @@ fn canonical_carrier_hash_for_indexed_transaction_identity(
             ))
         })
 }
+/// This code is reserved for absence of the one authenticated committed proof.
+/// Generic route/account failures must never masquerade as delayed proof visibility.
+fn transaction_details_not_found_error() -> Error {
+    Error::AppNotFound {
+        code: "transaction_details_not_found",
+        message: "The exact committed transaction proof is not available.".to_owned(),
+    }
+}
 fn pipeline_transaction_details_response(
     app: &SharedAppState,
     authority: &AccountId,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<PipelineTransactionDetailsResponse, Error> {
     use iroha_data_model::query::{CommittedTxFilters, dsl::CompoundPredicate};
-    let block_height = app
-        .state
-        .committed_entrypoint_height(&entrypoint_hash)
-        .ok_or_else(pipeline_status_not_found_error)?;
     let state_view = app.state.view();
     let world = state_view.world();
     world.account(authority).map_err(|_| {
@@ -1672,6 +1712,10 @@ fn pipeline_transaction_details_response(
     })?;
     let is_operator = transaction_details_operator_authority(world, authority);
     drop(state_view);
+    let block_height = app
+        .state
+        .committed_entrypoint_height(&entrypoint_hash)
+        .ok_or_else(transaction_details_not_found_error)?;
     let canonical_entrypoint_hash = canonical_carrier_hash_for_indexed_transaction_identity(
         app.as_ref(),
         block_height,
@@ -1690,7 +1734,7 @@ fn pipeline_transaction_details_response(
         .map_err(pipeline_status_projection_error)?;
     if transactions.len() != 1 {
         return if transactions.is_empty() {
-            Err(pipeline_status_not_found_error())
+            Err(transaction_details_not_found_error())
         } else {
             Err(pipeline_status_projection_error(format!(
                 "entrypoint hash resolved to {} committed transactions",

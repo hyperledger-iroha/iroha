@@ -2,7 +2,7 @@
 
 Run either `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile focused configuration, crypto, P2P, CLI, Core, proof, Torii and consensus
+release build. Both compile focused configuration, crypto, P2P, CLI, daemon, Core, proof, Torii and consensus
 harnesses plus native network binaries with six Cargo jobs
 and report build, stage and test durations. Python 3.11+, the repository Rust
 toolchain, and previously fetched dependencies are required; Cargo runs offline.
@@ -29,12 +29,39 @@ defaults, malformed collection values and the maintained Taira Nexus profile.
 It loads no runtime signers and has no Core or test-network dependency. These
 four unchanged contracts execute before the shared Core/library build, so schema
 failures stop before that compilation. Storage-budget and ambient-client isolation
-checks remain in the test-network harness. The complete native census stays at
-263 cases. The configuration target uses the same source capture, Cargo environment,
+checks remain in the test-network harness. The gate computes and reports the
+complete native census from its required test selections. The configuration target uses the same source capture, Cargo environment,
 warm target, profile and inherited locks; it retains all package defaults. Its real
 model/crypto/codec dependency graph may require a separate first warm compilation
 when its feature union differs from the later node graph. No first-run or total
 runtime improvement is claimed without measurement.
+
+The combined native test build selects the exact `iroha_cli --bin iroha`
+and `irohad --lib` test harnesses. The daemon cases execute signed genesis
+and check the deployment account in its final staged state, including role and
+revocation semantics; the deployment flag is restricted to offline `--check-config`. A single Cargo invocation unifies the selected packages and their
+default/dev-dependency features; it does not add feature overrides. The CLI test
+copy stays under the original immutable artifact owner while the separate
+production `iroha3d`/`iroha` build and four-validator test run, then executes
+without another Cargo test build. Its manifest, bin target kind and test profile
+distinguish it from the Rust SDK's `iroha` library harness and the production CLI.
+An earlier failure releases the unused CLI copy through the existing owner;
+production binaries remain retained. Configuration and proof checks retain their
+existing separate gates. Adding the CLI changes the combined test feature union,
+so the first run must warm and qualify that union; latency savings require actual
+measurement and are not inferred from these orchestration checks.
+
+Core checks cover the complete Soracloud and SoraFS instruction inventories at
+the Initial executor boundary. Dispatch and admission come from the same typed
+registry; unsupported operations remain explicitly closed. Before Cargo,
+`check_taira_initial_executor.py --repo . --self-test` compares every wire type
+with that registry and checks mutations which remove or alter reviewed entries. The selected cases
+exercise validator identity, role grants and revocation, pin fees and ownership,
+and rejection before state mutation. Exact transaction confirmation uses the
+dedicated details endpoint, with separate coverage for restricted history access
+and failed child processes that attempt to return successful reports. A real
+Torii socket-to-SDK regression checks the canonical ErrorEnvelope response;
+only the dedicated proof-absence code plus HTTP 404 becomes retryable absence.
 
 The same library batch includes Rust SDK envelope verification and Torii's exact
 retained-payload, detached-signature and canonical response checks. The public

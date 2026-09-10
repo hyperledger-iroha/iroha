@@ -92,10 +92,32 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
         .downcast_ref::<T>()
         .map(|isi| isi.clone().execute(authority, state_transaction))
 }
+/// Fixed rejection for explicitly unavailable native operations, including at genesis.
+pub(crate) const INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON: &str =
+    "native instruction is explicitly closed; Core execution is unavailable";
+fn unavailable_instruction<T: 'static>(
+    instruction: &InstructionBox,
+    _authority: &AccountId,
+    _state_transaction: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    instruction.as_any().is::<T>().then(|| {
+        Err(Error::InvariantViolation(
+            INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON.into(),
+        ))
+    })
+}
+/// Explicit Initial-executor disposition reviewed alongside a native handler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InitialNativeInstructionAdmission {
+    /// The native handler enforces the instruction's exact authority and state constraints.
+    CoreAuthorized,
+    /// The operation is registered for decoding but is not available for execution.
+    Closed,
+}
 macro_rules! define_instruction_handlers {
-    ($(dispatch_instruction::<$instruction:ty $(,)?>),* $(,)?) => {
+    ($($handler:ident::<$instruction:ty $(,)?> $(=> $admission:ident)?),* $(,)?) => {
         const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
-            $(dispatch_instruction::<$instruction>),*
+            $($handler::<$instruction>),*
         ];
         #[cfg(test)]
         trait NativeInstructionRegistered {}
@@ -121,6 +143,31 @@ macro_rules! define_instruction_handlers {
         #[cfg(test)]
         fn registered_native_instruction_type_names() -> Vec<&'static str> {
             vec![$(core::any::type_name::<$instruction>()),*]
+        }
+        /// Match only concrete instruction types whose Initial disposition was reviewed here.
+        ///
+        /// Unannotated handlers do not acquire admission by being registered. They remain subject
+        /// to the Initial executor's other explicit native parity gates.
+        pub(crate) fn registered_native_instruction_initial_admission(
+            instruction: &InstructionBox,
+        ) -> Option<InitialNativeInstructionAdmission> {
+            $(
+                $(
+                    if instruction.as_any().downcast_ref::<$instruction>().is_some() {
+                        return Some(InitialNativeInstructionAdmission::$admission);
+                    }
+                )?
+            )*
+            None
+        }
+        #[cfg(test)]
+        fn registered_native_instruction_initial_dispositions()
+            -> Vec<(&'static str, InitialNativeInstructionAdmission)>
+        {
+            vec![$($( (
+                core::any::type_name::<$instruction>(),
+                InitialNativeInstructionAdmission::$admission,
+            ), )?)*]
         }
     };
 }
@@ -217,71 +264,76 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::defi::UpdateDefiMarginAccount>,
     dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiRwaMarket>,
     dispatch_instruction::<iroha_data_model::isi::defi::ReportDefiRwaNav>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::BindManifestAlias>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterProviderOwner>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDeclaration>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordCapacityTelemetry>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::BindManifestAlias> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterProviderOwner> => Closed,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::UnregisterProviderOwner> => Closed,
+    // These wire operations have no implemented Core citizen-bond semantics. Keep decoding
+    // available while explicitly denying every runtime write, independently of the executor.
+    unavailable_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsCitizenBond> => Closed,
+    unavailable_instruction::<iroha_data_model::isi::sorafs::RotateSorafsCitizenBondAuthorization> => Closed,
+    unavailable_instruction::<iroha_data_model::isi::sorafs::RequestSorafsCitizenBondExit> => Closed,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDeclaration> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordCapacityTelemetry> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder> => CoreAuthorized,
     dispatch_instruction::<
         iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority,
-    >,
+    > => CoreAuthorized,
     dispatch_instruction::<
         iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority,
-    >,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsReservePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RequestSorafsReserveMovement>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::DecideSorafsReserveMovement>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ChargeSorafsReserveRent>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::DrawSorafsReserveCredit>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RepaySorafsReserveCredit>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairTask>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome>,
+    > => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsReservePolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RequestSorafsReserveMovement> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::DecideSorafsReserveMovement> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ChargeSorafsReserveRent> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::DrawSorafsReserveCredit> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RepaySorafsReserveCredit> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairTask> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome> => CoreAuthorized,
     dispatch_instruction::<
         iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy
-    >,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry>,
+    > => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry> => CoreAuthorized,
     dispatch_instruction::<
         iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry
-    >,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsModerationPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ActivateSorafsModerationCase>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase>,
+    > => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsModerationPolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ActivateSorafsModerationCase> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::content::RetireContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::soradns::SubmitDirectoryDraft>,
@@ -355,55 +407,55 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::vpn::OpenVpnLeaseEscrow>,
     dispatch_instruction::<iroha_data_model::isi::vpn::SettleVpnLease>,
     dispatch_instruction::<iroha_data_model::isi::vpn::RefundExpiredVpnLease>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudService>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAppInfra>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudService>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceConfig>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceConfig>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceSecret>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceSecret>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::MutateSoracloudState>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudFhePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RotateSoracloudFhePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudFhePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudFheJob>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::LeaveSoracloudHfSharedLease>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudHfSharedLease>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudAgentPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RequestSoracloudAgentWalletSpend>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ApproveSoracloudAgentWalletSpend>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::EnqueueSoracloudAgentMessage>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::AcknowledgeSoracloudAgentMessage>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::AllowSoracloudAgentAutonomyArtifact>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudAgentAutonomy>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudAgentAutonomyExecution>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::StartSoracloudTrainingJob>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::CheckpointSoracloudTrainingJob>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RetrySoracloudTrainingJob>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelArtifact>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelWeight>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::PromoteSoracloudModelWeight>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudModelWeight>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudUploadedModelBundle>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::FinalizeSoracloudUploadedModelBundle>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvanceSoracloudRollout>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
-    dispatch_instruction::<iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudService> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAppInfra> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudService> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceConfig> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceConfig> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceSecret> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceSecret> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::MutateSoracloudState> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudFhePolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RotateSoracloudFhePolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudFhePolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudFheJob> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::LeaveSoracloudHfSharedLease> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudHfSharedLease> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudAgentPolicy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RequestSoracloudAgentWalletSpend> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ApproveSoracloudAgentWalletSpend> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::EnqueueSoracloudAgentMessage> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AcknowledgeSoracloudAgentMessage> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AllowSoracloudAgentAutonomyArtifact> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudAgentAutonomy> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudAgentAutonomyExecution> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::StartSoracloudTrainingJob> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::CheckpointSoracloudTrainingJob> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RetrySoracloudTrainingJob> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelArtifact> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelWeight> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::PromoteSoracloudModelWeight> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudModelWeight> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudUploadedModelBundle> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::FinalizeSoracloudUploadedModelBundle> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvanceSoracloudRollout> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage> => Closed,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult> => Closed,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,
@@ -630,6 +682,78 @@ mod registry_dispatch_tests {
         registered_native_instruction_type_names().contains(&type_name)
     }
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
+    fn assert_reviewed_initial_family(family: &str, expected_closed: BTreeSet<&str>) {
+        let wire_types: BTreeSet<_> = iroha_data_model::isi::registry::default()
+            .names()
+            .filter(|name| name.starts_with(family))
+            .collect();
+        let dispatch_types: BTreeSet<_> = registered_native_instruction_type_names()
+            .into_iter()
+            .filter(|name| name.starts_with(family))
+            .collect();
+        let dispositions: Vec<_> = registered_native_instruction_initial_dispositions()
+            .into_iter()
+            .filter(|(name, _)| name.starts_with(family))
+            .collect();
+        let reviewed_types: BTreeSet<_> = dispositions.iter().map(|(name, _)| *name).collect();
+        assert!(
+            !wire_types.is_empty(),
+            "the canonical reviewed family must be found"
+        );
+        assert_eq!(
+            wire_types, dispatch_types,
+            "every wire type needs a native handler"
+        );
+        assert_eq!(
+            dispatch_types, reviewed_types,
+            "every reviewed-family handler needs an explicit reviewed Initial disposition"
+        );
+        assert_eq!(
+            dispositions.len(),
+            reviewed_types.len(),
+            "duplicate disposition"
+        );
+        let closed_types: BTreeSet<_> = dispositions
+            .into_iter()
+            .filter_map(|(name, admission)| {
+                (admission == InitialNativeInstructionAdmission::Closed).then_some(name)
+            })
+            .collect();
+        assert_eq!(
+            closed_types, expected_closed,
+            "closed native operations must not acquire admission"
+        );
+    }
+    #[test]
+    fn every_soracloud_wire_instruction_has_a_reviewed_initial_disposition() {
+        assert_reviewed_initial_family(
+            "iroha_data_model::isi::soracloud::",
+            BTreeSet::from([
+                core::any::type_name::<
+                    iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage,
+                >(),
+                core::any::type_name::<
+                    iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult,
+                >(),
+            ]),
+        );
+    }
+    #[test]
+    fn every_sorafs_wire_instruction_has_a_reviewed_initial_disposition() {
+        assert_reviewed_initial_family(
+            "iroha_data_model::isi::sorafs::",
+            BTreeSet::from([
+                core::any::type_name::<iroha_data_model::isi::sorafs::RegisterProviderOwner>(),
+                core::any::type_name::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>(),
+                core::any::type_name::<iroha_data_model::isi::sorafs::RegisterSorafsCitizenBond>(),
+                core::any::type_name::<
+                    iroha_data_model::isi::sorafs::RotateSorafsCitizenBondAuthorization,
+                >(),
+                core::any::type_name::<iroha_data_model::isi::sorafs::RequestSorafsCitizenBondExit>(
+                ),
+            ]),
+        );
+    }
     #[test]
     fn game_and_committee_peer_instructions_have_native_handlers() {
         use iroha_data_model::isi::{game, register::RegisterCommitteePeerWithPop};

@@ -2,7 +2,9 @@
 use super::{asset::isi::assert_numeric_spec_with, *};
 use crate::{
     smartcontracts::{Execute, isi::staking::validator_election_eligible_at_height},
-    state::{StateReadOnly, StateTransaction, public_lane_validator_record_matches_key},
+    state::{
+        StateReadOnly, StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key,
+    },
 };
 #[cfg(all(test, feature = "zk-stark"))]
 use iroha_crypto::fhe_bfv::{
@@ -263,26 +265,33 @@ fn verify_signature_for_signer(
     }
     signature.verify(signer, payload)
 }
+/// Whether a registered account holds the exact SoraCloud management capability.
+///
+/// Both runtime authorization and offline genesis qualification use the final
+/// world state: only direct grants and permissions in currently assigned, live
+/// roles count. A same-named token with a different payload never authorizes.
+pub fn soracloud_management_authority_is_authorized(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> bool {
+    let Ok(permissions) = world.account_permissions_iter(authority) else {
+        return false;
+    };
+    let required = Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(()));
+    permissions.into_iter().any(|actual| actual == &required)
+        || world.account_roles_iter(authority).any(|role_id| {
+            world
+                .roles()
+                .get(role_id)
+                .is_some_and(|role| role.permissions().any(|actual| actual == &required))
+        })
+}
+
 fn require_soracloud_permission(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let required = Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(()));
-    let has_direct = state_transaction
-        .world
-        .account_permissions_iter(authority)
-        .is_ok_and(|permissions| permissions.into_iter().any(|actual| actual == &required));
-    let has_role = state_transaction
-        .world
-        .account_roles_iter(authority)
-        .any(|role_id| {
-            state_transaction
-                .world
-                .roles
-                .get(role_id)
-                .is_some_and(|role| role.permissions().any(|actual| actual == &required))
-        });
-    if has_direct || has_role {
+    if soracloud_management_authority_is_authorized(&state_transaction.world, authority) {
         Ok(())
     } else {
         Err(InstructionExecutionError::InvariantViolation(

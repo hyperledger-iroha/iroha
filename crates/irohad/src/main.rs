@@ -837,6 +837,10 @@ pub struct StartupArgs {
     /// Validate configuration and available genesis, then exit without binding network sockets.
     #[arg(long)]
     pub check_config: bool,
+    /// Require this registered account to retain SoraCloud deployment authority
+    /// after executing the exact signed genesis during offline validation.
+    #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
+    pub require_genesis_inrou_deployment_authority: Option<String>,
     /// Enables trace logs of configuration reading & parsing.
     ///
     /// Might be useful for configuration troubleshooting.
@@ -13849,7 +13853,13 @@ fn run_main_with_config_guard(
         })?;
     }
     if args.startup.check_config {
-        validate_config_for_check(&config, genesis.as_ref())?;
+        validate_config_for_check(
+            &config,
+            genesis.as_ref(),
+            args.startup
+                .require_genesis_inrou_deployment_authority
+                .as_deref(),
+        )?;
         if genesis.is_some() {
             println!("Ready: configuration and available genesis are valid");
         } else {
@@ -13900,7 +13910,7 @@ fn run_main_with_config_guard(
                 .attach("deployment runtime authority requires the exact local signed genesis")
         })?;
         let (authenticated_genesis, _) =
-            validate_available_genesis_for_check(&config, local_genesis)?;
+            validate_available_genesis_for_check(&config, local_genesis, None)?;
         factory(&config, &authenticated_genesis, runtime_deps)
             .map_err(|error| Report::new(MainError::Config).attach(error))?
     } else {
@@ -14033,14 +14043,36 @@ fn run_main_with_config_guard(
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
+    required_inrou_deployment_authority: Option<&str>,
 ) -> ReportResult<(), MainError> {
+    let _discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        *config.common.chain_discriminant.value(),
+    );
+    let required_authority = required_inrou_deployment_authority
+        .map(|literal| {
+            let account = AccountId::parse_encoded(literal).map_err(|_| {
+                Report::new(MainError::Config)
+                    .attach("required Inrou deployment authority must be a canonical account ID for the configured chain")
+            })?;
+            if account.to_string() != literal {
+                return Err(Report::new(MainError::Config)
+                    .attach("required Inrou deployment authority must be a canonical account ID for the configured chain"));
+            }
+            Ok(account)
+        })
+        .transpose()?;
+    if required_authority.is_some() && genesis.is_none() {
+        return Err(Report::new(MainError::Config).attach(
+            "required Inrou deployment authority cannot be qualified without the signed genesis",
+        ));
+    }
     validate_config_offline(config).change_context(MainError::Config)?;
     IrohaRuntimeProviderBindingsV1::try_from_config(config)
         .map_err(Report::new)
         .change_context(MainError::Config)
         .attach("failed to validate the public runtime-provider binding catalog")?;
     if let Some(genesis) = genesis {
-        validate_available_genesis_for_check(config, genesis)?;
+        validate_available_genesis_for_check(config, genesis, required_authority.as_ref())?;
     }
     Ok(())
 }
@@ -14048,6 +14080,7 @@ fn validate_config_for_check(
 fn validate_available_genesis_for_check(
     config: &Config,
     genesis: &GenesisBlock,
+    required_inrou_deployment_authority: Option<&AccountId>,
 ) -> ReportResult<(iroha_core::sumeragi::GenesisV2Bootstrap, u64), MainError> {
     let configured_key = &config.genesis.public_key;
     let embedded_key =
@@ -14099,6 +14132,7 @@ fn validate_available_genesis_for_check(
         signed_mode,
         signed_parameters,
         block_cadence_ms,
+        required_inrou_deployment_authority,
     )
     .map(|validated_genesis| (validated_genesis, block_cadence_ms))
 }
@@ -14194,6 +14228,7 @@ fn validate_genesis_execution_offline(
     signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     _signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
+    required_inrou_deployment_authority: Option<&AccountId>,
 ) -> ReportResult<iroha_core::sumeragi::GenesisV2Bootstrap, MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
         Report::new(MainError::Config).attach(format!(
@@ -14260,6 +14295,16 @@ fn validate_genesis_execution_offline(
         Report::new(MainError::Config)
             .attach(format!("genesis instruction execution failed: {error}"))
     })?;
+    if required_inrou_deployment_authority.is_some_and(|authority| {
+        !iroha_core::smartcontracts::isi::soracloud::soracloud_management_authority_is_authorized(
+            staged.world(),
+            authority,
+        )
+    }) {
+        return Err(Report::new(MainError::Config).attach(
+            "required Inrou deployment authority is absent or lacks exact CanManageSoracloud in final genesis state",
+        ));
+    }
     let staged_block_cadence_ms = staged
         .world()
         .parameters()
@@ -18273,6 +18318,26 @@ mod tests {
         #[allow(unused_imports)]
         use super::*;
         #[test]
+        fn inrou_deployment_authority_requires_offline_check_config() {
+            let flag = "--require-genesis-inrou-deployment-authority";
+            let error = Args::try_parse_from(["iroha3d", flag, "public-account"])
+                .expect_err("deployment qualification must not become a runtime option");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+            let parsed =
+                Args::try_parse_from(["iroha3d", "--check-config", flag, "public-account"])
+                    .expect("account parsing is deferred until the configured chain is known");
+            assert_eq!(
+                parsed
+                    .startup
+                    .require_genesis_inrou_deployment_authority
+                    .as_deref(),
+                Some("public-account"),
+            );
+        }
+        #[test]
         fn whitespace_only_arguments_are_ignored() {
             let parsed = parse_args_from(vec![
                 OsString::from("iroha3d"),
@@ -18897,8 +18962,216 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                None,
             )
             .expect("valid genesis should execute in the disposable overlay");
+        }
+        #[test]
+        fn check_config_offline_accepts_final_inrou_deployment_capability() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let genesis_authority = AccountId::new(
+                KeyPair::try_from_seed(
+                    b"offline-genesis-validation-authority".to_vec(),
+                    Algorithm::Ed25519,
+                )
+                .unwrap()
+                .public_key()
+                .clone(),
+            );
+            let deployment_authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let permission = Permission::new("CanManageSoracloud".into(), Json::new(()));
+            let register: InstructionBox =
+                Register::account(Account::new(deployment_authority.clone())).into();
+            let cases: Vec<(&str, AccountId, Vec<InstructionBox>)> = vec![
+                (
+                    "existing genesis account",
+                    genesis_authority.clone(),
+                    vec![Grant::account_permission(permission.clone(), genesis_authority).into()],
+                ),
+                (
+                    "dedicated direct grant",
+                    deployment_authority.clone(),
+                    vec![
+                        register.clone(),
+                        Grant::account_permission(permission.clone(), deployment_authority.clone())
+                            .into(),
+                    ],
+                ),
+                (
+                    "live assigned role",
+                    deployment_authority.clone(),
+                    vec![
+                        register,
+                        Register::role(
+                            Role::new(
+                                "offline_inrou_deployer".parse().unwrap(),
+                                deployment_authority,
+                            )
+                            .add_permission(permission),
+                        )
+                        .into(),
+                    ],
+                ),
+            ];
+            for (label, authority, instructions) in cases {
+                let fixture = offline_semantic_genesis_fixture(instructions);
+                validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    Some(&authority),
+                )
+                .unwrap_or_else(|error| panic!("{label} must qualify: {error:?}"));
+            }
+        }
+        #[test]
+        fn check_config_offline_rejects_absent_or_revoked_inrou_deployment_capability() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let permission = Permission::new("CanManageSoracloud".into(), Json::new(()));
+            let register: InstructionBox =
+                Register::account(Account::new(authority.clone())).into();
+            let grant: InstructionBox =
+                Grant::account_permission(permission.clone(), authority.clone()).into();
+            let role_id: RoleId = "offline_inrou_deployer".parse().unwrap();
+            let role: InstructionBox = Register::role(
+                Role::new(role_id.clone(), authority.clone()).add_permission(permission.clone()),
+            )
+            .into();
+            let cases: Vec<(&str, Vec<InstructionBox>)> = vec![
+                ("missing account", vec![]),
+                ("missing permission", vec![register.clone()]),
+                (
+                    "direct grant then revoke",
+                    vec![
+                        register.clone(),
+                        grant,
+                        Revoke::account_permission(permission.clone(), authority.clone()).into(),
+                    ],
+                ),
+                (
+                    "revoked role membership",
+                    vec![
+                        register.clone(),
+                        role.clone(),
+                        Revoke::account_role(role_id.clone(), authority.clone()).into(),
+                    ],
+                ),
+                (
+                    "deleted role",
+                    vec![
+                        register.clone(),
+                        role.clone(),
+                        Unregister::role(role_id.clone()).into(),
+                    ],
+                ),
+                (
+                    "revoked role permission",
+                    vec![
+                        register,
+                        role,
+                        Revoke::role_permission(permission, role_id).into(),
+                    ],
+                ),
+            ];
+            for (label, instructions) in cases {
+                let fixture = offline_semantic_genesis_fixture(instructions);
+                let error = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    Some(&authority),
+                )
+                .err()
+                .unwrap_or_else(|| panic!("{label} must fail final-state qualification"));
+                assert!(
+                    format!("{error:?}")
+                        .contains("lacks exact CanManageSoracloud in final genesis state"),
+                    "{label} must execute successfully before failing the final capability check: {error:?}",
+                );
+            }
+        }
+        #[test]
+        fn check_config_offline_rejects_malformed_inrou_management_grants() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let malformed = Permission::new("CanManageSoracloud".into(), Json::new(false));
+            let grants: [InstructionBox; 2] = [
+                Grant::account_permission(malformed.clone(), authority.clone()).into(),
+                Register::role(
+                    Role::new("offline_inrou_deployer".parse().unwrap(), authority.clone())
+                        .add_permission(malformed),
+                )
+                .into(),
+            ];
+            for grant in grants {
+                let fixture = offline_semantic_genesis_fixture([
+                    Register::account(Account::new(authority.clone())).into(),
+                    grant,
+                ]);
+                let error = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    Some(&authority),
+                )
+                .err()
+                .expect("same-named malformed token must never qualify");
+                assert!(format!("{error:?}").contains("genesis instruction execution failed"));
+            }
+        }
+        #[test]
+        fn check_config_inrou_authority_requires_canonical_account_and_signed_genesis() {
+            let config = sample_config();
+            let _discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                *config.common.chain_discriminant.value(),
+            );
+            let account = AccountId::new(config.genesis.public_key.clone()).to_string();
+            let error = validate_config_for_check(&config, None, Some(&account))
+                .expect_err("an unavailable genesis cannot satisfy deployment qualification");
+            assert!(
+                format!("{error:?}").contains("cannot be qualified without the signed genesis")
+            );
+            for invalid in [
+                "not-an-account".to_owned(),
+                format!(" {account}"),
+                format!("{account}@domain"),
+            ] {
+                let error = validate_config_for_check(&config, None, Some(&invalid)).expect_err(
+                    "the authority must use the configured chain's canonical account encoding",
+                );
+                assert!(
+                    format!("{error:?}")
+                        .contains("must be a canonical account ID for the configured chain")
+                );
+            }
         }
         #[test]
         fn check_config_accepts_taira_without_offline_backend_settings() {
@@ -18906,14 +19179,14 @@ mod tests {
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-            validate_config_for_check(&config, None)
+            validate_config_for_check(&config, None, None)
                 .expect("Taira has universal offline primitives without backend enablement");
         }
         #[test]
         fn check_config_qualifies_the_fixed_moderation_strict_ingress() {
             let mut exact = sample_config();
             configure_exact_moderation_strict_ingress(&mut exact);
-            assert!(validate_config_for_check(&exact, None).is_ok());
+            assert!(validate_config_for_check(&exact, None, None).is_ok());
             for (mutation, expected) in [
                 (0, "runtime-provider binding is substituted"),
                 (1, "runtime-provider binding is stale or revoked"),
@@ -18931,7 +19204,7 @@ mod tests {
                 } else {
                     moderation.strict_ingress_revision += 1;
                 }
-                let report = validate_config_for_check(&invalid, None)
+                let report = validate_config_for_check(&invalid, None, None)
                     .expect_err("invalid fixed ingress binding must fail check-config");
                 assert!(format!("{report:#}").contains(expected));
             }
@@ -18954,6 +19227,7 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                None,
             )
             .err()
             .expect("duplicate genesis registration must fail semantic execution");
@@ -19206,6 +19480,7 @@ mod tests {
                 genesis_manifest_json: Some(manifest_path),
                 startup: StartupArgs {
                     check_config: false,
+                    require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
                 },
@@ -19243,6 +19518,7 @@ mod tests {
                 genesis_manifest_json,
                 startup: StartupArgs {
                     check_config: false,
+                    require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
                 },

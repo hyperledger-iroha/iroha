@@ -141,7 +141,7 @@ no runtime keys, tokens, SSH, import, activation or publication options.
 
 Validate the local orchestration without Cargo or network:
 
-    python3 -B -m unittest discover -s pytests/scripts -p 'test_taira_release*.py'
+    PYTHONPATH=scripts python3 -B -m unittest discover -s pytests/scripts -p 'test_taira_release*.py'
 
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
