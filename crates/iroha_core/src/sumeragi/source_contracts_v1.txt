@@ -1224,6 +1224,8 @@ region|adapter_recovered_validation_high|adapter|at|pub(crate) fn recovered_vali
 region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the full current-view Prepare observed durably before validation
 region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
 region|actual_consumer_factory|leader_wire_consumer|at|pub(super) fn from_adapter(|before|pub(crate) fn matches_geometry(
+region|consumer_frozen_context|adapter|at|fn frozen_wire_context_id(&self)|before|/// Return the reducer body state for one wire identity in seam tests.
+region|consumer_adapter_constructor|adapter|at|fn open_with_aggregator_and_publication_with_capacity(|before|/// Return the tag which must accompany a new asynchronous operation.
 region|actual_consumer_publication|worker|at|fn finish_runtime_step_reconciliation(|before|fn complete_leader_wire_runtime_terminal(
 region|leader_wire_exact_entered_view|leader_wire_consumer|at|pub(crate) fn matches_entered_view(|before|fn protects_commit_vote(
 region|runtime_high_accessor|runtime|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the exact Decision key reconstructed by safety-WAL replay.
@@ -1337,7 +1339,14 @@ required|actual_consumer_factory|decision_durable: durable.decision().is_some()|
 required|actual_consumer_factory|highest_prepare_view: durable.highest_prepare().map(\pqc\p qc.round().view())|actual consumer must retain the durable Prepare frontier
 required|actual_consumer_factory|installed_timeout_view: durable.last_timeout().map(\ptc\p tc.round().view())|actual consumer must retain the installed timeout frontier
 required|actual_consumer_factory|protected_lock,|actual consumer must retain the exact durable lock
-required|actual_consumer_factory|context_id: adapter.wire_context.id()|cold leader-wire authority must retain the actual adapter context
+required|actual_consumer_factory|context_id: adapter.frozen_wire_context_id()|cold leader-wire authority must retain the actual verified registry context
+required|consumer_frozen_context|self.registry\n            .context_id\n            .expect("adapter registry retains its verified height context")|frozen consumer identity must come from this adapter's verified registry
+required|consumer_adapter_constructor|let VerifiedHeightContext {\n            context: wire_context,\n            proofs_of_possession,\n            parent_verification,\n        } = verified_context;|consumer adapter must consume the verified height context
+required|consumer_adapter_constructor|let mut registry = WireRegistry::new(&wire_context)?;|consumer registry must be constructed from the same verified wire context
+required|consumer_adapter_constructor|let context = registry.core_context(&wire_context)?;|consumer reducer context must be checked against the same verified registry
+required|consumer_adapter_constructor|let mut adapter = Self {\n            wire_context,|consumer adapter must retain the verified wire context
+required|consumer_adapter_constructor|\n            registry,\n            fingerprints,|consumer adapter must retain the same authenticated registry
+order|consumer_adapter_constructor|4|} = verified_context;|let mut registry = WireRegistry::new(&wire_context)?;|let context = registry.core_context(&wire_context)?;|let mut adapter = Self {|consumer context must be authenticated before the adapter is constructed
 required|actual_consumer_factory|height: adapter.wire_context.height|cold leader-wire authority must retain the actual adapter height
 required|actual_consumer_factory|owner: adapter.fingerprints.node.into()|cold leader-wire authority must retain the actual adapter owner
 required|actual_consumer_factory|protected_commit_statement,|actual consumer must retain the exact protected Commit statement

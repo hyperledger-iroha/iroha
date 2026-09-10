@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 663_558
-EXPECTED_ASSET_SHA256 = "cdd396f6fad65a4b48af197ab378482b5c36d06618c75584cf7009f6af74bfd7"
+EXPECTED_ASSET_LENGTH = 665_281
+EXPECTED_ASSET_SHA256 = "d936e5124728bd78eba84ec671b37538f7bae3622755ab1828a46fd05f7ae58b"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -46,7 +46,7 @@ MIGRATED_TESTS = {
 # The FIFO case retains the authenticated physical ordering checks from both
 # branches. Pin the combined cases; the 55th case still owns body retirement.
 NEW_CASE_CONTRACT_COUNTS = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 174,
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 181,
     "registry_remains_inert_and_scheduler_free": 89,
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
@@ -56,7 +56,7 @@ NEW_CASE_CONTRACT_COUNTS = {
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
 }
 MIGRATED_CASE_SHA256 = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "77882a8e8fd37e5df2d4257614823819ada01e155c93502c4fd0c3e3a9e3d6df",
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "a64fc75b6813b66d8616225b7c45c9c54b6104c2bea774f0037900ea978e71a9",
     "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
@@ -170,6 +170,8 @@ BOUNDARY_CASE_REGIONS = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": (
         "leader_wire_replay_lock_authority",
         "actual_consumer_factory",
+        "consumer_frozen_context",
+        "consumer_adapter_constructor",
         "actual_consumer_publication",
         "leader_wire_live_runtime_cut",
         "leader_wire_live_lock_authority",
@@ -195,6 +197,24 @@ BOUNDARY_SOURCE_PATHS = {
     "queue": "crates/iroha_core/src/queue.rs",
 }
 BOUNDARY_MUTATIONS = (
+    (
+        "actual consumer rejects a foreign context",
+        "leader_wire_consumer",
+        "context_id: adapter.frozen_wire_context_id()",
+        "context_id: foreign_context.id()",
+    ),
+    (
+        "registry construction retains the verified context",
+        "adapter",
+        "let mut registry = WireRegistry::new(&wire_context)?;",
+        "let mut registry = WireRegistry::new(&foreign_context)?;",
+    ),
+    (
+        "frozen consumer identity retains the actual registry",
+        "adapter",
+        'self.registry\n            .context_id\n            .expect("adapter registry retains its verified height context")',
+        'foreign_registry.context_id.expect("foreign context")',
+    ),
     (
         "physical global FIFO inversion",
         "queue",
