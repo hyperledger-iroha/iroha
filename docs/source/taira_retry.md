@@ -9,7 +9,10 @@ build or transfer unchanged binaries or source.
 
 For a changed release, freeze the source once and run `scripts/taira_release.py
 prepare` with the existing repository `target/` lane. Preparation runs the native
-CLI regressions before the Linux build. Use the routine development check while
+CLI regressions first after the combined native test build, starting with the
+canary command composition checks before the consensus regressions. Every
+independent test still completes before the four-peer gate and Linux build.
+Use the routine development check while
 editing; a separate cold development check adds a second dependency build to a
 release that already runs the same gate. Keep each lane's Cargo home, profile and
 source location consistent so subsequent builds reuse its artifacts.

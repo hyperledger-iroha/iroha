@@ -12369,11 +12369,7 @@ fn inherited_client_config_args(
     input: &super::PinnedInput,
     label: &str,
 ) -> Result<(Vec<OsString>, File)> {
-    revalidate_pinned(input, label)?;
-    let file = input
-        .file
-        .try_clone()
-        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
+    let file = inherited_input_file(input, label)?;
     Ok((
         vec![
             "--config-fd".into(),
@@ -12599,13 +12595,13 @@ impl ParentHeldSshInputs {
     }
 }
 
-fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
+/// Retain an input for FD-only child arguments without creating a procfs path.
+fn inherited_input_file(input: &super::PinnedInput, label: &str) -> Result<File> {
     revalidate_pinned(input, label)?;
-    let file = input
+    input
         .file
         .try_clone()
-        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
-    Ok((inherited_file_path(&file)?, file))
+        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))
 }
 
 #[cfg(target_os = "linux")]
@@ -14184,7 +14180,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             ]);
         }
         if kind == "onboarding" && action != WriteCanaryChildAction::Recover {
-            let (_token_path, token_file) = inherited_input_path(
+            let token_file = inherited_input_file(
                 self.runtime
                     .onboarding_token
                     .as_ref()

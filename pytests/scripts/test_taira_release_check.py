@@ -158,6 +158,11 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_selection_has_no_duplicate_test_names(self):
         names = [name for _, tests in gate.STAGES for name in tests]
         self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(gate.STAGES[0], ("core canary command composition", (
+            "taira_public_reset::host::tests::coordinator_write_canary_argv_passes_child_validation_for_all_core_actions",
+            "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
+            "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
+        )))
         self.assertIn(
             "taira_public_reset::host::tests::candidate_operator_status_child_binds_both_inherited_signers",
             names,
@@ -267,10 +272,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_torii_contract_failure_prevents_overall_pass_and_keeps_same_custody(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        results = [subprocess.CompletedProcess([], 0, "route: test\n", ""),
-                   subprocess.CompletedProcess([], 101, "test route ... FAILED\n", ""),
-                   subprocess.CompletedProcess([], 0, "cli: test\n", ""),
-                   subprocess.CompletedProcess([], 0, "test cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
+        results = [subprocess.CompletedProcess([], 0, "cli: test\n", ""),
+                   subprocess.CompletedProcess([], 0, "test cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", ""),
+                   subprocess.CompletedProcess([], 0, "route: test\n", ""),
+                   subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
         output = io.StringIO()
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})) as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
@@ -295,11 +300,11 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                             for call in run.call_args_list))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
-    def test_failed_core_progress_stops_before_torii_or_release_success(self):
+    def test_cli_contract_infrastructure_failure_stops_before_core_or_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         output = io.StringIO()
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
-                "core": "/warm/core", "test-network": "/warm/fixture"})) as compile, \
+                "cli": "/warm/cli", "core": "/warm/core", "test-network": "/warm/fixture"})) as compile, \
              patch.object(gate, "run_network_checks") as network, \
              patch.object(gate, "CRYPTO_STAGES", ()), \
              patch.object(gate, "P2P_STAGES", ()), \
@@ -310,7 +315,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")})
-        self.assertEqual(run.call_args.args[3], gate.CORE_STAGES)
+        self.assertEqual(run.call_args.args[3], gate.STAGES)
         self.assertEqual(run.call_args.args[4], (77,))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
@@ -329,17 +334,17 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in names[:-2] + ("cli",)])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli",) + names[:-2]])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES, gate.STAGES])
+                         [gate.STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES])
 
     def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         names = ("crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
-        for failed, outcomes, expected in (("crypto", [gate.CheckError("crypto failed")], ["crypto"]),
-                                           ("p2p", [None, gate.CheckError("p2p failed")], ["crypto", "p2p"]),
-                                           ("fixture", [None, None, None, gate.CheckError("fixture failed")],
-                                            ["crypto", "p2p", "core", "test-network"])):
+        for failed, outcomes, expected in (("crypto", [None, gate.CheckError("crypto failed")], ["cli", "crypto"]),
+                                           ("p2p", [None, None, gate.CheckError("p2p failed")], ["cli", "crypto", "p2p"]),
+                                           ("fixture", [None, None, None, None, gate.CheckError("fixture failed")],
+                                            ["cli", "crypto", "p2p", "core", "test-network"])):
             output = io.StringIO()
             with self.subTest(failed=failed), \
                  patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
@@ -487,7 +492,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), environment=self.env,
                                 source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(events, ["fsm", "source", "config-build", "config-pass", "library-build",
-                                  *["/warm/" + name for name in libraries[:-2] + ("cli",)]])
+                                  *["/warm/" + name for name in ("cli",) + libraries[:-2]]])
 
     def test_configuration_build_or_schema_failure_stops_before_core_and_network(self):
         for phase in ("build", "schema"):
@@ -971,9 +976,9 @@ class NativeArtifactIsolationTests(unittest.TestCase):
     def test_failed_early_run_preserves_original_failure_and_releases_only_owned_batch(self):
         for replaced in (False, True):
             with self.subTest(replaced=replaced):
-                rows = {name: self.artifact(name)[1] for name in ("core", "client")}
+                rows = {name: self.artifact(name)[1] for name in ("cli", "client")}
                 copies = self.isolate(rows)
-                copied = Path(copies["core"])
+                copied = Path(copies["cli"])
                 def failed_stage(*args):
                     if replaced:
                         copied.parent.chmod(0o700)
@@ -981,7 +986,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                         copied.write_bytes(b"foreign replacement")
                         copied.chmod(0o500)
                         copied.parent.chmod(0o500)
-                    raise gate.CheckError("early Core fixture failed")
+                    raise gate.CheckError("early CLI fixture failed")
                 errors = io.StringIO()
                 with contextlib.ExitStack() as stack:
                     for name in ("CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "NETWORK_STAGES"):
@@ -992,12 +997,12 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     network = stack.enter_context(patch.object(gate, "compile_network_binaries"))
                     stack.enter_context(patch.object(gate, "run_stages", side_effect=failed_stage))
                     stack.enter_context(contextlib.redirect_stderr(errors))
-                    with self.assertRaisesRegex(gate.CheckError, "early Core fixture failed"):
+                    with self.assertRaisesRegex(gate.CheckError, "early CLI fixture failed"):
                         gate.run_checks(self.source, environment=self.env | {"CARGO_HOME": "/isolated"},
                                         source_commit="a" * 40)
                 if replaced:
                     self.assertEqual(copied.read_bytes(), b"foreign replacement")
-                    self.assertIn("changed before release: core", errors.getvalue())
+                    self.assertIn("changed before release: cli", errors.getvalue())
                 else:
                     self.assertFalse(copied.exists())
                 self.assertFalse(Path(copies["client"]).exists())

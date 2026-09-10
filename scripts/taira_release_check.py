@@ -36,6 +36,11 @@ import time
 
 
 STAGES = (
+    ("core canary command composition", (
+        "taira_public_reset::host::tests::coordinator_write_canary_argv_passes_child_validation_for_all_core_actions",
+        "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
+        "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
+    )),
     ("explicit core testnet qualification", (
         "taira_public_reset::executor_model::tests::qualification_scope_is_required_and_canonical_in_all_authority_documents",
         "taira_public_reset::executor_model::tests::qualification_scope_is_bound_before_normal_and_recovery_signature_admission",
@@ -202,9 +207,6 @@ STAGES = (
         "taira_public_reset::executor_model::tests::abandonment_partial_rollback_resumes_only_remaining_hosts_with_original_digest",
     )),
     ("server-prepared transaction confirmation", (
-        "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
-        "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
-        "taira_public_reset::host::tests::coordinator_write_canary_argv_passes_child_validation_for_all_core_actions",
         "taira::tests::prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire",
         "taira::tests::prepared_applied_confirmation_waits_for_exact_details_visibility",
         "taira::tests::prepared_applied_confirmation_rejects_unauthorized_or_malformed_exact_details",
@@ -1167,7 +1169,9 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     # Build early library/HTTP, network and CLI test harnesses in one Cargo graph.
     # A separate CLI test build after the production node build changes the
     # package/dev-dependency feature union and recompiles shared dependencies.
-    # Run every independent immutable test copy, including CLI, before starting
+    # Run CLI contracts first so deployment argv defects surface before the
+    # expensive consensus regressions, without changing the combined Cargo graph.
+    # Run every independent immutable test copy before starting
     # the shipping binary graph or four-peer fixture. Aggregate test failures;
     # missing tests, artifact custody failures and other infrastructure errors
     # still stop immediately. Production binaries use a separate graph below.
@@ -1185,7 +1189,7 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             failures = []
-            independent_stages = early_stages + ((("cli", STAGES),) if STAGES else ())
+            independent_stages = ((("cli", STAGES),) if STAGES else ()) + early_stages
             checkpoint_enabled = update_independent_checks is not None
             evidence = independent_check_evidence(harnesses, independent_stages) if checkpoint_enabled else None
             reuse_independent = checkpoint_enabled and completed_independent_checks == evidence

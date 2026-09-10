@@ -83,10 +83,10 @@ class CollectIndependentRegressionTests(unittest.TestCase):
         self.assertIsInstance(error, gate.SelectedRegressionFailures)
         self.assertEqual(len(error.failures), 3)
         self.assertTrue(all(name + "_first" in str(error) for name in ("core", "torii", "cli")))
-        self.assertEqual(executed, [name + suffix for name, _ in self.groups for suffix in ("_first", "_second")])
-        self.assertEqual(released, [name for name, _ in self.groups])
+        self.assertEqual(executed, [name + suffix for name, _ in self.groups[-1:] + self.groups[:-1] for suffix in ("_first", "_second")])
+        self.assertEqual(released, [name for name, _ in self.groups[-1:] + self.groups[:-1]])
 
-    def test_zero_exit_ignored_test_is_a_failure_and_does_not_hide_later_cli_regression(self):
+    def test_cli_failure_does_not_hide_later_zero_exit_ignored_test(self):
         error, executed, released = self.run_fixtures(failed=("cli",), ignored=("daemon",))
         self.assertIsInstance(error, gate.SelectedRegressionFailures)
         self.assertEqual(len(error.failures), 2)
@@ -99,15 +99,15 @@ class CollectIndependentRegressionTests(unittest.TestCase):
         error, executed, released = self.run_fixtures(missing="core")
         self.assertNotIsInstance(error, gate.SelectedRegressionFailures)
         self.assertIn("required regressions missing", str(error))
-        self.assertEqual(executed, [name + suffix for name in ("crypto", "p2p") for suffix in ("_first", "_second")])
-        self.assertEqual(released, ["crypto", "p2p"])
+        self.assertEqual(executed, [name + suffix for name in ("cli", "crypto", "p2p") for suffix in ("_first", "_second")])
+        self.assertEqual(released, ["cli", "crypto", "p2p"])
 
     def test_artifact_release_failure_stops_immediately_even_after_collected_regression(self):
         error, executed, released = self.run_fixtures(failed=("core",), custody_failure="core")
         self.assertNotIsInstance(error, gate.SelectedRegressionFailures)
         self.assertIn("native test copy changed", str(error))
-        self.assertEqual(executed, [name + suffix for name in ("crypto", "p2p", "core") for suffix in ("_first", "_second")])
-        self.assertEqual(released, ["crypto", "p2p"])
+        self.assertEqual(executed, [name + suffix for name in ("cli", "crypto", "p2p", "core") for suffix in ("_first", "_second")])
+        self.assertEqual(released, ["cli", "crypto", "p2p"])
 
 
 if __name__ == "__main__":

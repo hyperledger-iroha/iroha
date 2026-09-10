@@ -110,7 +110,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.failures.write_text("network_first\n")
         with self.assertRaisesRegex(release.PrepareError, "network_first"):
             self.prepare()
-        self.assertEqual(self.ran(), ["core_first", "cli_first", "network_first"])
+        self.assertEqual(self.ran(), ["cli_first", "core_first", "network_first"])
         self.assertTrue(self.checkpoint.is_file())
         self.assertEqual(stat.S_IMODE(self.checkpoint.stat().st_mode), 0o400)
         self.assertFalse((self.fixture.out / "checks.json").exists())
@@ -122,7 +122,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.fail_network_once()
         original = self.checkpoint.read_bytes()
         result, _, build = self.prepare()
-        self.assertEqual(self.ran(), ["core_first", "cli_first", "network_first", "network_first"])
+        self.assertEqual(self.ran(), ["cli_first", "core_first", "network_first", "network_first"])
         self.assertEqual(self.events, ["combined compile", "network", "combined compile", "network"])
         self.assertEqual(build.call_count, 1)
         self.assertEqual(result["attempt"], "attempts/000002")
@@ -202,7 +202,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.fail_network_once()
         with patch.object(gate, "CORE_STAGES", (("core", ("core_first", "core_extra")),)):
             self.prepare()
-        self.assertEqual(self.ran()[3:], ["core_first", "core_extra", "cli_first", "network_first"])
+        self.assertEqual(self.ran()[3:], ["cli_first", "core_first", "core_extra", "network_first"])
         self.assertTrue((self.fixture.out / "attempts/000002/retired-independent-checks.json").is_file())
 
     def test_changed_binary_cannot_reuse_success_and_failed_rerun_cannot_revive_it(self):
@@ -215,18 +215,18 @@ class IndependentCheckpointTests(unittest.TestCase):
             self.prepare()
         self.assertFalse(self.checkpoint.exists())
         self.assertEqual(self.network.call_count, 1)
-        self.assertEqual(self.ran()[3:], ["core_first", "cli_first"])
+        self.assertEqual(self.ran()[3:], ["cli_first", "core_first"])
         self.assertTrue((self.fixture.out / "attempts/000002/retired-independent-checks.json").is_file())
         path.write_bytes(original)
         self.failures.write_text("")
         self.prepare()
-        self.assertEqual(self.ran()[5:], ["core_first", "cli_first", "network_first"])
+        self.assertEqual(self.ran()[5:], ["cli_first", "core_first", "network_first"])
 
     def test_changed_actual_cargo_target_metadata_reruns_independent_tests(self):
         self.fail_network_once()
         self.artifacts["cli"]["profile"]["opt_level"] = "1"
         self.prepare()
-        self.assertEqual(self.ran()[3:], ["core_first", "cli_first", "network_first"])
+        self.assertEqual(self.ran()[3:], ["cli_first", "core_first", "network_first"])
 
     def replace_record(self, record):
         self.checkpoint.rename(self.fixture.out / "retained-fixture-checkpoint.json")
@@ -238,7 +238,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         record["evidence"].pop("artifacts")
         self.replace_record(record)
         self.prepare()
-        self.assertEqual(self.ran()[3:], ["core_first", "cli_first", "network_first"])
+        self.assertEqual(self.ran()[3:], ["cli_first", "core_first", "network_first"])
         self.assertEqual(len(release.read_record(self.checkpoint)["evidence"]["artifacts"]), 2)
 
     def test_incomplete_record_envelope_stops_before_native_or_linux_work(self):
@@ -256,7 +256,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         snapshots = iter([[], [{"path": "changed"}]])
         with self.assertRaisesRegex(release.PrepareError, "captured source changed"):
             self.prepare(snapshot=lambda _: next(snapshots))
-        self.assertEqual(self.ran(), ["core_first", "cli_first"])
+        self.assertEqual(self.ran(), ["cli_first", "core_first"])
         self.assertFalse(self.checkpoint.exists())
         self.network.assert_not_called()
         self.assertFalse((self.fixture.out / "checks.json").exists())
@@ -272,7 +272,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         with patch.object(gate, "run_stages", side_effect=change_tool_after_tests):
             with self.assertRaisesRegex(release.PrepareError, "reviewed executable"):
                 self.prepare()
-        self.assertEqual(self.ran(), ["core_first", "cli_first"])
+        self.assertEqual(self.ran(), ["cli_first", "core_first"])
         self.assertFalse(self.checkpoint.exists())
         self.network.assert_not_called()
         self.assertFalse((self.fixture.out / "checks.json").exists())
