@@ -180,13 +180,25 @@ class ObservationTests(unittest.TestCase):
     def response(self,node,path,headers,deadline):
         self.paths.append(path)
         if path=='/status/blocks':return 12
-        challenge=list(bytes.fromhex(headers['x-iroha-finality-challenge']));self.challenges.append(challenge)
+        challenge=bytes.fromhex(headers['x-iroha-finality-challenge']).hex().upper();self.challenges.append(challenge)
         status={'protocol_version':4,'restart_required':False,'last_committed_height':12,**{n:'hash:'+'A'*64+'#0000' for n in ('node_fingerprint','build_fingerprint','config_fingerprint')}}
         return {'body':{'version':1,'challenge':challenge,'network_id':self.network,'node_id':'peer','genesis_block_hash':self.network,'status':status,'genesis_finality_proof':{},'finality_proof':{}}}
     def observe(self):return s.observe_attested_status(Node,{},self.row,self.network,'b'*64)
     def test_status_is_derived_only_from_fresh_challenge_attestation(self):
-        with mock.patch.object(s,'_get',side_effect=self.response):node,status,attestation=self.observe()
+        challenge=bytes(range(32))
+        with mock.patch.object(s,'_get',side_effect=self.response),mock.patch.object(s.secrets,'token_bytes',return_value=challenge):node,status,attestation=self.observe()
         self.assertIs(node,self.node);self.assertIs(status,attestation['body']['status']);self.assertEqual(self.paths,['/status/blocks','/v1/bridge/finality/attestation/12'])
+        self.assertEqual(attestation['body']['challenge'],'000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F')
+    def test_only_canonical_exact_challenge_is_accepted(self):
+        challenge=bytes(range(32));canonical=challenge.hex().upper()
+        for value in (list(challenge),canonical.lower(),canonical[:-1],canonical+'00','G'*64,'F'*64):
+            def get(*args):
+                result=self.response(*args)
+                if isinstance(result,dict):result['body']['challenge']=value
+                return result
+            with self.subTest(value=value),mock.patch.object(s,'_get',side_effect=get) as call,mock.patch.object(s.secrets,'token_bytes',return_value=challenge):
+                with self.assertRaisesRegex(s.SeedObservationError,'^attestation identity differs$'):self.observe()
+                self.assertEqual(call.call_count,2)
     def test_transient_retry_restarts_height_and_fresh_challenge(self):
         failed=[]
         def get(*args):

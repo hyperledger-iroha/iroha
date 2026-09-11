@@ -193,7 +193,9 @@ It performs no retirement, assembly, authorization or apply.
 
 Seed verification uses `taira_seed_observation.py` to read the public committed
 height and request a fresh challenge-bound finality attestation. The attestation
-supplies the applied status; the check needs no operator credentials. It retains
+supplies the applied status; the check needs no operator credentials. The observer
+requires the producer's canonical 64-character uppercase hexadecimal JSON challenge
+string, and its test fixture uses that same wire format. It retains
 process, executable, listener and configuration identity checks. Only native
 `sha256sum` consumes the held configuration descriptor; Python never reads the
 private TOML. Transient startup responses have three attempts within a shared
