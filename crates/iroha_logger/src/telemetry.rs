@@ -1,7 +1,7 @@
 //! Module with telemetry layer for tracing
 use crate::layer::{EventInspectorTrait, EventSubscriber};
 use derive_more::{Deref, DerefMut};
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::json::{Value, native::Map as JsonMap};
 use std::{borrow::Cow, error::Error, fmt::Debug};
 use tokio::sync::mpsc;

@@ -27,7 +27,7 @@ use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolu
 #[cfg(test)]
 use iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1;
 use iroha_data_model::{
-    DataSpaceId, NetworkId, ValidationFail,
+    NetworkId, ValidationFail,
     account::rekey::AccountAlias,
     asset::{AssetBalancePolicy, AssetBalanceScope},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
@@ -89,6 +89,11 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     bigint::BigInt,
@@ -4234,7 +4239,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
     /// Set the human-readable chain label returned by the chain-id sysvar.
-    pub fn set_chain_id(&mut self, chain: &iroha_data_model::ChainId) {
+    pub fn set_chain_id(&mut self, chain: &iroha_model_base::chain::ChainId) {
         self.default
             .set_chain_id_bytes(chain.to_string().into_bytes());
         self.chain_id_bytes = chain.to_string().into_bytes();
@@ -15836,7 +15841,7 @@ seiyaku PrivilegedBinding {
                 .expect("canonical test network id"),
             &host.authority,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::ActivateContractInstance {
@@ -15867,7 +15872,7 @@ seiyaku PrivilegedBinding {
                 .expect("canonical test network id"),
             &host.authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::DeactivateContractInstance {
@@ -17186,6 +17191,7 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;

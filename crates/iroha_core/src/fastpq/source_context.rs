@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    fastpq::{FastpqSourceExecutionKindV1, FastpqSourceLaneV1, FastpqSourceStatementContextV1},
-    nexus::{DataSpaceId, LaneId},
+use iroha_data_model::fastpq::{
+    FastpqSourceExecutionKindV1, FastpqSourceLaneV1, FastpqSourceStatementContextV1,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use thiserror::Error;
 
 pub use iroha_data_model::fastpq::FastpqSourceRouteV1 as FastpqCapturedSourceRoute;

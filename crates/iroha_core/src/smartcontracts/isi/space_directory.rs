@@ -13,13 +13,14 @@ use iroha_data_model::{
             RevokeSpaceDirectoryManifest,
         },
     },
-    nexus::{DataSpaceId, UniversalAccountId},
+    nexus::UniversalAccountId,
     permission::{Permission, Permissions},
 };
 use iroha_executor_data_model::permission::nexus::{
     CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
     CanPublishSpaceDirectoryManifestForUaid,
 };
+use iroha_model_base::topology::DataSpaceId;
 impl Execute for PublishSpaceDirectoryManifest {
     fn execute(
         self,
@@ -296,7 +297,7 @@ fn uaid_is_bound_to_account_domain(
     state_transaction: &StateTransaction<'_, '_>,
     uaid: UniversalAccountId,
     dataspace: DataSpaceId,
-    domain: &iroha_data_model::domain::DomainId,
+    domain: &iroha_model_base::domain::DomainId,
 ) -> bool {
     let Some(account_id) = state_transaction.world.uaid_accounts.get(&uaid) else {
         return false;
@@ -356,16 +357,17 @@ mod tests {
     use iroha_data_model::{
         account::NewAccount,
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::{
             EventBox,
             data::{DataEvent, space_directory::SpaceDirectoryEvent},
         },
-        metadata::Metadata,
         nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceMetadata, ManifestVersion},
         permission::Permissions,
         prelude::Register,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
     use std::collections::BTreeSet;

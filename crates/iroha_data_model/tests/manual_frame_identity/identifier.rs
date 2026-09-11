@@ -2,13 +2,14 @@
 
 use crate::frame_identity_test_support::record;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
-use iroha_data_model::{account, asset, domain, id::IdBox, nexus, nft, peer, permission, rwa};
+use iroha_data_model::{account, asset, id::IdBox, nft, permission, rwa};
 use iroha_primitives::json::Json;
 use norito::codec::Encode as _;
 use norito::json::Value;
 
 fn variants() -> Vec<IdBox> {
-    let domain = domain::DomainId::try_new("vault", "sora").expect("qualified fixture domain");
+    let domain = iroha_model_base::domain::DomainId::try_new("vault", "sora")
+        .expect("qualified fixture domain");
     let key =
         KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519).expect("public fixture seed");
     let account = account::AccountId::new(key.public_key().clone());
@@ -24,8 +25,10 @@ fn variants() -> Vec<IdBox> {
             domain,
             Hash::new(b"public-id-box-rwa-fixture"),
         )),
-        IdBox::PeerId(peer::PeerId::new(key.public_key().clone())),
-        IdBox::LaneId(nexus::LaneId::new(7)),
+        IdBox::PeerId(iroha_model_base::peer::PeerId::new(
+            key.public_key().clone(),
+        )),
+        IdBox::LaneId(iroha_model_base::topology::LaneId::new(7)),
         IdBox::TriggerId("settlement".parse().unwrap()),
         IdBox::RoleId("auditor".parse().unwrap()),
         IdBox::Permission(permission::Permission::new(

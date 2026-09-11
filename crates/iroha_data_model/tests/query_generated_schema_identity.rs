@@ -7,12 +7,12 @@ use iroha_data_model::{
     account::{AccountAlias, AccountAliasDomain, address::ChainDiscriminantGuard},
     da::types::StorageTicketId,
     escrow::{AssetEscrowStatus, EscrowId},
-    nexus::{DataSpaceId, FeeSponsorProgramId, LaneId, LaneRelayEnvelopeRef, UniversalAccountId},
+    nexus::{FeeSponsorProgramId, LaneRelayEnvelopeRef, UniversalAccountId},
     oracle::{
         DefiOracleAttestationKey, FeedId, KeyedHash, OracleChangeId, OracleDisputeId,
         OracleProviderKey,
     },
-    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NftId},
+    prelude::{AccountId, AssetDefinitionId, AssetId, NftId},
     proof::{ProofId, ProofStatus},
     query,
     sorafs::{
@@ -36,6 +36,8 @@ use iroha_data_model::{
         reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{self, JsonDeserialize, JsonSerialize, Value},

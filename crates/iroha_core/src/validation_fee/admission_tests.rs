@@ -56,11 +56,11 @@ fn moderation_challenge_custody_paths_are_classified_as_state_derived_ds_effects
             ModerationChallengeDecisionV1::Rejected,
         )
         .into(),
-        ExpireSorafsModerationChallenge::new(
-            "case-1".to_owned(),
-            "round-1".to_owned(),
-            "challenge-1".to_owned(),
-        )
+        ExpireSorafsModerationChallenge {
+            case_id: "case-1".to_owned(),
+            round_id: "round-1".to_owned(),
+            challenge_id: "challenge-1".to_owned(),
+        }
         .into(),
         FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned()).into(),
     ];

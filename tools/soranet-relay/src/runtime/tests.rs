@@ -32,19 +32,15 @@ mod tests {
     };
     use iroha_data_model::{
         account::AccountId,
-        metadata::Metadata,
         soranet::{
-            incentives::{
-                BandwidthConfidenceV1, RelayBandwidthProofPayloadV1, RelayBandwidthProofV1,
-            },
+            incentives::{BandwidthConfidenceV1, RelayBandwidthProofPayloadV1, RelayBandwidthProofV1},
             privacy_metrics::{
                 SoranetPowFailureReasonV1, SoranetPrivacyModeV1, SoranetPrivacyThrottleScopeV1,
             },
-            vpn::{
-                VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
-            },
+            vpn::{VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1},
         },
     };
+    use iroha_model_base::metadata::Metadata;
 
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Encode;

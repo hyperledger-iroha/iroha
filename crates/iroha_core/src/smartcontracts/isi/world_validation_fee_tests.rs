@@ -1232,12 +1232,13 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     use iroha_data_model::{
         isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
         nexus::{
-            DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
             FeeSponsorProgramRevisionKey, ProofBlob,
         },
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
+    use iroha_model_base::topology::DataSpaceId;
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -1312,10 +1313,11 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
     use iroha_data_model::{
         isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
         nexus::{
-            DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
             FeeSponsorProgramRevisionKey, FeeSponsorVault, FeeSponsorVaultKey, ProofBlob,
         },
     };
+    use iroha_model_base::topology::DataSpaceId;
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -1406,10 +1408,11 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
             StageFeeSponsorProgramRevision,
         },
         nexus::{
-            DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
             FeeSponsorProgramRevisionKey, ProofBlob,
         },
     };
+    use iroha_model_base::topology::DataSpaceId;
     let state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),

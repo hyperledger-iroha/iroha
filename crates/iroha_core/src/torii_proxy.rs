@@ -2,10 +2,10 @@
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     NetworkId,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use std::fmt;
 /// Schema version for deadline-bound Torii proxy requests.
@@ -1492,10 +1492,10 @@ mod tests {
     #[test]
     fn queue_plan_synced_request_identity_is_semantic_and_exact_network_bound() {
         let shared_chain_label = "queue-plan-request-chain";
-        let chain_a: iroha_data_model::ChainId = shared_chain_label
+        let chain_a: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
-        let chain_b: iroha_data_model::ChainId = shared_chain_label
+        let chain_b: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
         assert_eq!(chain_a, chain_b);
@@ -1720,10 +1720,10 @@ mod tests {
     #[test]
     fn queue_plan_certificate_rejects_same_label_different_genesis() {
         let shared_chain_label = "queue-plan-shared-label";
-        let chain_a: iroha_data_model::ChainId = shared_chain_label
+        let chain_a: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
-        let chain_b: iroha_data_model::ChainId = shared_chain_label
+        let chain_b: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
         assert_eq!(chain_a, chain_b);

@@ -4,14 +4,15 @@ use clap::Parser;
 use eyre::eyre;
 use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
-    ChainId, Level,
+    Level,
     account::AccountId,
     events::{EventFilterBox, data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter},
     isi::Log,
-    metadata::Metadata,
     transaction::Executable,
 };
 use iroha_i18n::{Bundle, Language, Localizer};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use std::{
     fs,
     num::NonZeroU64,
@@ -406,7 +407,7 @@ fn run_context_returns_invalid_client_configuration() {
 }
 fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
     let _domain =
-        iroha::data_model::domain::DomainId::try_new(domain_literal, "universal").expect("domain");
+        iroha_model_base::domain::DomainId::try_new(domain_literal, "universal").expect("domain");
     let key_pair = fixture_key_pair(seed);
     AccountId::new(key_pair.public_key().clone())
 }
@@ -1639,7 +1640,7 @@ fn parse_asset_balance_scope_literal_accepts_dataspace() {
     assert_eq!(
         parsed,
         iroha::data_model::asset::AssetBalanceScope::Dataspace(
-            iroha::data_model::nexus::DataSpaceId::new(7)
+            iroha_model_base::topology::DataSpaceId::new(7)
         )
     );
 }
@@ -1934,7 +1935,8 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
         thread,
     };
 
-    use iroha::data_model::nexus::{DataSpaceId, FeeDebitSource};
+    use iroha::data_model::nexus::FeeDebitSource;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
 
     let invoke = |next_block_height, response_content_type: &'static str| {

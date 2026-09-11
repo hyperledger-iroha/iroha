@@ -51,6 +51,7 @@ pub mod peer {
 /// Permission tokens scoped to domains.
 pub mod domain {
     use super::*;
+    use iroha_model_base::domain::DomainId;
     permission! {
         /// Permission to register a new domain.
         #[derive(Copy)]
@@ -74,6 +75,8 @@ pub mod domain {
 /// Permission tokens scoped to asset definitions.
 pub mod asset_definition {
     use super::*;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     /// Scope carried by asset-definition-alias management permissions.
     #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
     #[allow(variant_size_differences)]
@@ -250,6 +253,8 @@ pub mod asset_definition {
 /// Permission tokens scoped to accounts.
 pub mod account {
     use super::*;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     /// Scope carried by account-alias permissions.
     #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
     #[allow(variant_size_differences)]
@@ -475,6 +480,7 @@ pub mod account {
 /// Permission tokens governing reads from ledger state.
 pub mod query {
     use super::*;
+    use iroha_model_base::topology::DataSpaceId;
     permission! {
         /// Permission to read ledger-wide state, including account rosters,
         /// balances, transactions, blocks, and other global records.
@@ -585,7 +591,7 @@ pub mod asset {
             /// Canonical on-chain alias domain of accounts whose daily limit may be managed.
             pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
             /// Exact dataspace containing the canonical on-chain account alias.
-            pub account_dataspace: iroha_data_model::nexus::DataSpaceId,
+            pub account_dataspace: iroha_model_base::topology::DataSpaceId,
         }
     }
     permission! {
@@ -619,6 +625,7 @@ pub mod kagemusha {
 /// Permission tokens covering NFT operations.
 pub mod nft {
     use super::*;
+    use iroha_model_base::domain::DomainId;
     permission! {
         /// Permission to register an NFT for the given domain.
         pub struct CanRegisterNft {
@@ -871,6 +878,8 @@ pub mod dpn {
 /// Nexus / Space Directory permissions.
 pub mod nexus {
     use super::*;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     permission! {
         /// Permission to publish capability manifests for a dataspace.
         #[derive(Copy)]
@@ -1165,9 +1174,10 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;
     use iroha_data_model::{
-        AccountId, DomainId, account::rekey::AccountAliasDomain, asset::AssetDefinitionId,
-        nexus::DataSpaceId,
+        AccountId, account::rekey::AccountAliasDomain, asset::AssetDefinitionId,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
         let perm = CanRegisterAccount {

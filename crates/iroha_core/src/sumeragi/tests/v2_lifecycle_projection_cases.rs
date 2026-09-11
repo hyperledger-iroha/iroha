@@ -18,10 +18,8 @@ use crate::sumeragi::{
     v2_transport::authenticate_certified_body_request,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
-use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock},
-    peer::PeerId,
-};
+use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+use iroha_model_base::peer::PeerId;
 use std::{collections::BTreeSet, num::NonZeroU64};
 use tempfile::TempDir;
 struct Fixture {

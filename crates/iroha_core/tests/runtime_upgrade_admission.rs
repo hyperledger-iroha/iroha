@@ -16,6 +16,8 @@ use iroha_data_model::{
     runtime::{RuntimeUpgradeRecord, RuntimeUpgradeStatus},
 };
 use iroha_executor_data_model::permission::governance::CanManageRuntimeUpgrades;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

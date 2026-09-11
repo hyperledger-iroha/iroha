@@ -378,8 +378,7 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app
-            .tx_preauth_rate_limiter
+        !app.tx_preauth_rate_limiter
             .allow(&transaction_api_token_preauth_key(
                 limits::ApiTokenPrincipal::from_token("batch-token"),
             ))
@@ -441,8 +440,7 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(app.queue.active_len(), 0);
     assert!(
-        !app
-            .tx_preauth_rate_limiter
+        !app.tx_preauth_rate_limiter
             .allow(&transaction_api_token_preauth_key(
                 limits::ApiTokenPrincipal::from_token("batch-distinct-token"),
             ))
@@ -804,7 +802,7 @@ fn signed_query_scope_rejects_cross_kind_target_payload_collisions() {
         "derive cross-kind query collision authority fixture key",
     );
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id,
         "asset-definition".parse().expect("asset definition name"),
@@ -1042,7 +1040,7 @@ fn iterable_target_account_query_builders_capture_target_payload() {
 #[test]
 fn iterable_target_domain_query_builders_capture_target_payload() {
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id,
         "asset-definition".parse().expect("asset definition name"),
@@ -1055,7 +1053,7 @@ fn signed_query_scope_classifies_find_asset_by_id_as_target_account() {
     let account_id = checked_torii_test_account_id(0xd9, "derive asset-by-id account fixture key");
     let authority = checked_torii_test_account_id(0xda, "derive asset-by-id authority fixture key");
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1082,7 +1080,7 @@ fn signed_query_scope_classifies_find_asset_definition_by_id_as_target_domain() 
     let authority =
         checked_torii_test_account_id(0xdb, "derive asset-definition scope authority key");
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1108,7 +1106,7 @@ async fn signed_query_scope_for_app_keeps_opaque_find_asset_by_id_targeted_to_ac
     let authority =
         checked_torii_test_account_id(0xdd, "derive opaque asset-by-id authority fixture key");
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1140,7 +1138,7 @@ async fn signed_query_scope_for_app_classifies_opaque_find_asset_definition_by_i
     let authority =
         checked_torii_test_account_id(0xde, "derive opaque asset-definition authority fixture key");
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1171,7 +1169,7 @@ async fn signed_query_scope_for_app_classifies_opaque_find_accounts_with_asset_a
     let authority =
         checked_torii_test_account_id(0xdf, "derive accounts-with-asset authority fixture key");
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1207,7 +1205,7 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route() {
         iroha_data_model::query::QueryRequest::Singular(
             iroha_data_model::query::SingularQueryBox::FindDomainById(
                 iroha_data_model::query::domain::prelude::FindDomainById::new(
-                    iroha_data_model::domain::DomainId::try_new("hbl", "restricted")
+                    iroha_model_base::domain::DomainId::try_new("hbl", "restricted")
                         .expect("domain id"),
                 ),
             ),
@@ -1233,7 +1231,7 @@ async fn resolve_signed_query_routing_for_app_uses_target_domain_route_for_opaqu
     let (restricted_lane, restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1295,7 +1293,7 @@ fn signed_query_scope_classifies_target_account_queries() {
         DataSpaceId::new(10),
     );
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "asset-definition".parse().expect("asset definition name"),
@@ -1646,7 +1644,7 @@ async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
     assert_eq!(alias_routes.len(), 1);
     assert_eq!(alias_routes[0].dataspace_id, restricted_dataspace);
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
     let domain_routes =
         super::torii_target_domain_routes(app.as_ref(), &domain_id).expect("domain routes");
     assert_eq!(domain_routes.len(), 1);

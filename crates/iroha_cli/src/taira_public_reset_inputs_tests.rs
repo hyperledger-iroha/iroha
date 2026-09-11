@@ -178,9 +178,15 @@ fn authorization_cannot_extend_the_bounded_plan() {
     .unwrap();
     envelope.signature_hex = hex::encode(signature.payload());
     assert_eq!(
-        verify_authorization(&inventory, &sha256_hex(&bytes), &envelope, &trusted, issued_at)
-            .expect_err("even the trusted owner cannot sign a longer execution lease")
-            .to_string(),
+        verify_authorization(
+            &inventory,
+            &sha256_hex(&bytes),
+            &envelope,
+            &trusted,
+            issued_at
+        )
+        .expect_err("even the trusted owner cannot sign a longer execution lease")
+        .to_string(),
         "authorization execution lease does not exactly cover the bounded execution plan",
     );
 
@@ -210,15 +216,9 @@ fn authorization_cannot_overflow_admission_or_execution_expiry() {
         .expect("the last representable execution expiry is signable");
     assert_eq!(envelope.claims.execution_expires_at_unix_ms, u64::MAX);
     assert_eq!(
-        sign_inventory(
-            &inventory,
-            &bytes,
-            &trusted,
-            &key,
-            last_issued_at + 1,
-        )
-        .expect_err("one millisecond later overflows the execution expiry")
-        .to_string(),
+        sign_inventory(&inventory, &bytes, &trusted, &key, last_issued_at + 1,)
+            .expect_err("one millisecond later overflows the execution expiry")
+            .to_string(),
         "execution expiry overflow",
     );
     assert_eq!(

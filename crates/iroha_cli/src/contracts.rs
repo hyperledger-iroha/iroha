@@ -14,7 +14,6 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{
         isi::contract_alias::SetContractAlias,
-        metadata::Metadata,
         prelude::*,
         transaction::{IvmBytecode, TransactionBuilder},
     },
@@ -24,6 +23,8 @@ use iroha_core::{
     smartcontracts::ivm::{cache::ProgramSummary, host::CoreHost},
 };
 use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::state_path::StatePath;
 use ivm::host::IVMHost;
 use ivm::kotodama::compiler::CompilerOptions as KotodamaCompilerOptions;
 use ivm::kotodama::driver::{
@@ -2587,16 +2588,16 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
 fn resolve_contract_dataspace_id_hint(
     dataspace: &str,
     dataspace_id: Option<u64>,
-) -> Result<iroha::data_model::nexus::DataSpaceId> {
+) -> Result<iroha_model_base::topology::DataSpaceId> {
     if let Some(dataspace_id) = dataspace_id {
-        return Ok(iroha::data_model::nexus::DataSpaceId::new(dataspace_id));
+        return Ok(iroha_model_base::topology::DataSpaceId::new(dataspace_id));
     }
     let trimmed = dataspace.trim();
     if trimmed.is_empty() {
         return Err(eyre!("--dataspace must not be empty"));
     }
     if let Ok(raw) = trimmed.parse::<u64>() {
-        return Ok(iroha::data_model::nexus::DataSpaceId::new(raw));
+        return Ok(iroha_model_base::topology::DataSpaceId::new(raw));
     }
     let raw = match trimmed {
         "universal" => 0,
@@ -2608,7 +2609,7 @@ fn resolve_contract_dataspace_id_hint(
             ));
         }
     };
-    Ok(iroha::data_model::nexus::DataSpaceId::new(raw))
+    Ok(iroha_model_base::topology::DataSpaceId::new(raw))
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedContractTarget {
@@ -3626,6 +3627,9 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use ivm::kotodama::session::{CompileRequest, CompilerSession};
     use std::fs;
     use tempfile::tempdir;
@@ -5633,7 +5637,7 @@ mod tests {
                 .expect("canonical test network id"),
             &authority,
             1,
-            iroha::data_model::nexus::DataSpaceId::new(0),
+            iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("contract address");
         let resolved = resolve_contract_target(ContractTargetArgs {

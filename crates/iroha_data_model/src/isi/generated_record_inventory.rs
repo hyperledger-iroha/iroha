@@ -5,7 +5,7 @@ use crate::{
     account::Account,
     asset::AssetDefinitionId,
     asset::{Asset, AssetDefinition},
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{Burn, Grant, Mint, Register, RemoveKeyValue, Revoke, SetKeyValue, Transfer, Unregister},
     nft::{Nft, NftId},
     peer::Peer,
@@ -14,6 +14,7 @@ use crate::{
     rwa::Rwa,
     trigger::Trigger,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 
 macro_rules! record {

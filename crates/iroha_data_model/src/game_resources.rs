@@ -135,6 +135,11 @@ record! {
 /// Require a bounded NFT identity with exactly one lossless canonical text/JSON representation.
 /// Domain construction and decoding enforce label boundaries; game admission also checks
 /// the complete NFT spelling and its byte bound.
+///
+/// # Errors
+///
+/// Returns an error if the NFT text exceeds the protocol byte bound or cannot be parsed
+/// back into exactly the supplied identity.
 pub fn validate_game_nft_identity_v1(nft: &NftId) -> Result<(), &'static str> {
     let literal = nft.to_string();
     if literal.len() > GAME_RESOURCE_MAX_NFT_ID_BYTES_V1 {
@@ -164,6 +169,12 @@ fn validate_fields<'a>(
     Ok(())
 }
 /// Pure validation; never sorts, deduplicates or mutates wallet authorizations.
+///
+/// # Errors
+///
+/// Returns an error when the clause count or encoded clause size exceeds its bound, an NFT
+/// lacks a bounded lossless text identity, roles are not unique and strictly increasing, or
+/// an NFT occurs more than once.
 pub fn validate_resource_clauses_v1(
     clauses: &[GameResourceReservationClauseV1],
 ) -> Result<(), &'static str> {
@@ -184,6 +195,12 @@ pub fn validate_resource_clauses_v1(
     Ok(())
 }
 /// Validate a compiled adapter's bounded request before comparing authorization.
+///
+/// # Errors
+///
+/// Returns an error when the requirement count or encoded requirement size exceeds its
+/// bound, an NFT lacks a bounded lossless text identity, roles are not unique and strictly
+/// increasing, or an NFT occurs more than once.
 pub fn validate_resource_requirements_v1(
     requirements: &[GameResourceRequirementV1],
 ) -> Result<(), &'static str> {
@@ -204,6 +221,12 @@ pub fn validate_resource_requirements_v1(
     Ok(())
 }
 /// Require an exact match; opaque application data never supplies missing clauses.
+///
+/// # Errors
+///
+/// Propagates clause/requirement validation errors. Also returns an error if their lengths
+/// differ or any ordered pair differs in NFT identity, expected metadata hash, role or
+/// return policy.
 pub fn match_resource_requirements_v1(
     clauses: &[GameResourceReservationClauseV1],
     requirements: &[GameResourceRequirementV1],
@@ -228,6 +251,14 @@ impl GameResourceReservationSetV1 {
     /// Decode callers must separately enforce framing/allocation limits before
     /// creating this value. Core must also verify exact roster, phase, ownership,
     /// metadata, custody derivation and inverse reservation indexes in WSV.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported version or exceeded record, slot,
+    /// per-participant resource, identifier or encoded-size bound; invalid NFT text;
+    /// unordered/repeated slot-role pairs; repeated NFT/custody identities; inconsistent
+    /// owner-to-slot assignments; custody overlapping a participant owner; invalid
+    /// reservation/release heights; or non-atomic release state.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.version != 1 || self.records.len() > GAME_MAX_RESOURCE_RECORDS_V1 {
             return Err("invalid game resource set version or record count");
@@ -295,6 +326,12 @@ impl GameResourceReservationSetV1 {
     }
 
     /// Check original owners against the separately retained permanent roster.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`Self::validate`] errors. Also rejects an oversized or duplicate owner
+    /// roster, an owner identifier exceeding its byte bound, a record whose slot does not
+    /// name its original owner, or custody equal to any participant owner.
     pub fn validate_for_owners(
         &self,
         participant_owners: &[AccountId],
@@ -403,7 +440,7 @@ mod tests {
             ("art", "gallery-universal", "gallery-universal"),
         ] {
             assert!(
-                crate::domain::DomainId::try_new(
+                iroha_model_base::domain::DomainId::try_new(
                     domain.replace('-', "."),
                     dataspace.replace('-', ".")
                 )
@@ -411,7 +448,7 @@ mod tests {
             );
             let mut canonical = retained();
             canonical.records[0].nft_id = NftId::new(
-                crate::domain::DomainId::try_new(domain, dataspace).unwrap(),
+                iroha_model_base::domain::DomainId::try_new(domain, dataspace).unwrap(),
                 "kit".parse().unwrap(),
             );
             canonical.validate().unwrap();
@@ -419,7 +456,7 @@ mod tests {
         }
         let mut control = retained();
         control.records[0].nft_id = NftId::new(
-            crate::domain::DomainId::try_new("art", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("art", "universal").unwrap(),
             "kit".parse().unwrap(),
         );
         control.validate().unwrap();

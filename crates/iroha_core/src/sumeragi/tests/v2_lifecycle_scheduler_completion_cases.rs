@@ -539,7 +539,8 @@ mod recovered_sign_capacity_tests {
         work_registry::ReadyRecoveredLifecycleSignAttestationV1,
     };
     use iroha_crypto::{Hash, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use iroha_data_model::block::consensus_v2 as wire;
+    use iroha_model_base::peer::PeerId;
     use std::{
         collections::{BTreeMap, BTreeSet},
         sync::Arc,

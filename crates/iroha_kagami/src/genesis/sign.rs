@@ -36,6 +36,10 @@ use iroha_genesis::{
     GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction,
     SIGNED_GENESIS_MAX_BYTES_V1, validate_genesis_manifest_json,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::time::TimeSource;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1624,7 +1628,7 @@ mod tests {
     use crate::genesis::CompleteTestGenesisBuilder as _;
     use iroha_crypto::{Algorithm, HashOf, KeyPair as CryptoKeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
-        ChainId, NetworkId,
+        NetworkId,
         asset::AssetDefinitionAlias,
         block::{BlockHeader, SignedBlock, decode_framed_signed_block},
         isi::{
@@ -1642,6 +1646,7 @@ mod tests {
         transaction::Executable,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::chain::ChainId;
     use std::{
         fs,
         io::{BufWriter, Write},

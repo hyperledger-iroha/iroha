@@ -2,9 +2,10 @@
 
 #[test]
 fn captured_codec_schema_identities() {
-    crate::captured_schema_tests::assert_bidirectional::<super::Node>(
+    crate::captured_schema_tests::Case::bidirectional::<super::Node>(
         "iroha_data_model::query::tx_predicate::wire::Node",
-    );
+    )
+    .check();
 }
 
 pub(in crate::query::tx_predicate) fn generic_membership_identity_records()

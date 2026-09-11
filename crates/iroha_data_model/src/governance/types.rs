@@ -3023,9 +3023,81 @@ impl GovernanceCertificateV1 {
     /// checks and never infers a missing result.
     ///
     /// # Errors
-    /// Returns GovernanceCertificateErrorV1 for an inert, duplicated,
+    /// Returns `GovernanceCertificateErrorV1` for an inert, duplicated,
     /// reordered, incomplete, non-approving, or temporally invalid certificate.
     pub fn validate(&self) -> Result<(), GovernanceCertificateErrorV1> {
+        self.validate_certificate_context()?;
+        let mut body_instance_ids = BTreeSet::new();
+        let mut election_attempt_ids = BTreeSet::new();
+        let mut sortition_request_ids = BTreeSet::new();
+        let mut ballot_attempt_ids = BTreeSet::new();
+        let mut tle_session_ids = BTreeSet::new();
+        let mut sortition_pulse_ids = BTreeSet::new();
+        let mut release_pulse_ids = BTreeSet::new();
+        let mut release_slots = BTreeSet::new();
+        let mut previous_body = None;
+        let mut policy = None;
+        let mut confirmation = None;
+
+        for binding in &self.body_bindings {
+            if previous_body.is_some_and(|previous| previous >= binding.body) {
+                return Err(GovernanceCertificateErrorV1::NonCanonicalBodyOrder);
+            }
+            previous_body = Some(binding.body);
+            self.validate_body_identity(binding)?;
+            sortition_pulse_ids.insert(binding.beacon_pulse_id);
+            if !body_instance_ids.insert(binding.body_instance_id)
+                || !election_attempt_ids.insert(binding.election_attempt_id)
+                || !sortition_request_ids.insert(binding.sortition_request_id)
+            {
+                return Err(GovernanceCertificateErrorV1::DuplicateBinding);
+            }
+
+            self.validate_body_evidence(binding)?;
+            if let Some(ballot) = binding.ballot {
+                Self::validate_ballot_identity(binding, &ballot)?;
+                if !ballot_attempt_ids.insert(ballot.ballot_attempt_id)
+                    || !tle_session_ids.insert(ballot.tle_session_id)
+                    || !release_pulse_ids.insert(ballot.release_pulse_id)
+                    || !release_slots
+                        .insert((ballot.release_beacon_session_id, ballot.release_height))
+                {
+                    return Err(GovernanceCertificateErrorV1::DuplicateBinding);
+                }
+                Self::validate_ballot_lifecycle(binding, &ballot)?;
+                self.validate_ballot_outcome(binding, &ballot)?;
+            }
+
+            match binding.body {
+                ParliamentBody::PolicyJury => policy = Some(binding),
+                ParliamentBody::ConfirmationJury => confirmation = Some(binding),
+                _ => {}
+            }
+        }
+
+        if !sortition_pulse_ids.is_disjoint(&release_pulse_ids) {
+            return Err(GovernanceCertificateErrorV1::DuplicateBinding);
+        }
+
+        let policy = policy.ok_or(GovernanceCertificateErrorV1::MissingPolicyJury)?;
+        let policy_ballot = policy
+            .ballot
+            .ok_or(GovernanceCertificateErrorV1::MissingBindingBallot)?;
+        let requires_confirmation = policy_ballot.tally.requires_confirmation()?;
+        match (requires_confirmation, confirmation) {
+            (false, None) => {}
+            (true, Some(confirmation))
+                if (if confirmation.election_attempt_sequence == 0 {
+                    confirmation.sortition_request.request_height == policy.result_height
+                } else {
+                    confirmation.sortition_request.request_height > policy.result_height
+                }) && confirmation.beacon_pulse_id != policy.beacon_pulse_id => {}
+            _ => return Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
+        }
+        Ok(())
+    }
+
+    fn validate_certificate_context(&self) -> Result<(), GovernanceCertificateErrorV1> {
         if self.proposal_content_id.as_bytes() == &[0; 32]
             || self.governance_attempt_id.as_bytes() == &[0; 32]
             || self.effect_preimage_hash == [0; 32]
@@ -3068,244 +3140,223 @@ impl GovernanceCertificateV1 {
                 }
             }
         }
+        Ok(())
+    }
 
-        let mut body_instance_ids = BTreeSet::new();
-        let mut election_attempt_ids = BTreeSet::new();
-        let mut sortition_request_ids = BTreeSet::new();
-        let mut ballot_attempt_ids = BTreeSet::new();
-        let mut tle_session_ids = BTreeSet::new();
-        let mut sortition_pulse_ids = BTreeSet::new();
-        let mut release_pulse_ids = BTreeSet::new();
-        let mut release_slots = BTreeSet::new();
-        let mut previous_body = None;
-        let mut policy = None;
-        let mut confirmation = None;
-
-        for binding in &self.body_bindings {
-            if previous_body.is_some_and(|previous| previous >= binding.body) {
-                return Err(GovernanceCertificateErrorV1::NonCanonicalBodyOrder);
-            }
-            previous_body = Some(binding.body);
-            let request = &binding.sortition_request;
-            if binding.body_instance_id.as_bytes() == &[0; 32]
-                || binding.election_attempt_id.as_bytes() == &[0; 32]
-                || binding.sortition_request_id.as_bytes() == &[0; 32]
-                || binding.beacon_session_id.as_bytes() == &[0; 32]
-                || binding.beacon_pulse_id.as_bytes() == &[0; 32]
-                || binding.roster_root == [0; 32]
-                || binding.assignment_root == [0; 32]
-                || binding.result_root == [0; 32]
-                || binding.original_seats == 0
-            {
-                return Err(GovernanceCertificateErrorV1::ZeroBinding);
-            }
-            if request.validate(None).is_err()
-                || request.id != binding.sortition_request_id
-                || request.governance_attempt_id != self.governance_attempt_id
-                || request.body_election_attempt_id != binding.election_attempt_id
-                || request.body != binding.body
-                || request.beacon_session_id != binding.beacon_session_id
-            {
-                return Err(GovernanceCertificateErrorV1::SortitionRequestMismatch);
-            }
-            if binding.original_seats > request.target_seats
-                || binding.original_seats > request.candidate_count
-            {
-                return Err(GovernanceCertificateErrorV1::InvalidSeatCount);
-            }
-            if binding.election_attempt_sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
-                return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
-            }
-            if binding.election_attempt_id
-                != BodyElectionAttemptId::derive_v1(
-                    self.governance_attempt_id,
-                    binding.body,
-                    binding.election_attempt_sequence,
-                )
-                || binding.body_instance_id
-                    != BodyInstanceId::derive_v1(binding.election_attempt_id, binding.roster_root)
-            {
-                return Err(GovernanceCertificateErrorV1::NonCanonicalIdentifier);
-            }
-            if binding.result_height <= request.pulse_height
-                || binding.result_height > self.certified_at_height
-            {
-                return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
-            }
-            sortition_pulse_ids.insert(binding.beacon_pulse_id);
-            if !body_instance_ids.insert(binding.body_instance_id)
-                || !election_attempt_ids.insert(binding.election_attempt_id)
-                || !sortition_request_ids.insert(binding.sortition_request_id)
-            {
-                return Err(GovernanceCertificateErrorV1::DuplicateBinding);
-            }
-
-            if matches!(
+    fn validate_body_identity(
+        &self,
+        binding: &ParliamentBodyCertificateBindingV1,
+    ) -> Result<(), GovernanceCertificateErrorV1> {
+        let request = &binding.sortition_request;
+        if binding.body_instance_id.as_bytes() == &[0; 32]
+            || binding.election_attempt_id.as_bytes() == &[0; 32]
+            || binding.sortition_request_id.as_bytes() == &[0; 32]
+            || binding.beacon_session_id.as_bytes() == &[0; 32]
+            || binding.beacon_pulse_id.as_bytes() == &[0; 32]
+            || binding.roster_root == [0; 32]
+            || binding.assignment_root == [0; 32]
+            || binding.result_root == [0; 32]
+            || binding.original_seats == 0
+        {
+            return Err(GovernanceCertificateErrorV1::ZeroBinding);
+        }
+        if request.validate(None).is_err()
+            || (
+                request.id,
+                request.governance_attempt_id,
+                request.body_election_attempt_id,
+                request.body,
+                request.beacon_session_id,
+            ) != (
+                binding.sortition_request_id,
+                self.governance_attempt_id,
+                binding.election_attempt_id,
                 binding.body,
-                ParliamentBody::PolicyJury | ParliamentBody::ConfirmationJury
-            ) {
-                if binding.ballot.is_none() || binding.public_finding.is_some() {
-                    return Err(GovernanceCertificateErrorV1::MissingBindingBallot);
-                }
-            } else if binding.public_finding.is_none() || binding.ballot.is_some() {
-                return Err(GovernanceCertificateErrorV1::MissingPublicFinding);
+                binding.beacon_session_id,
+            )
+        {
+            return Err(GovernanceCertificateErrorV1::SortitionRequestMismatch);
+        }
+        if binding.original_seats > request.target_seats
+            || binding.original_seats > request.candidate_count
+        {
+            return Err(GovernanceCertificateErrorV1::InvalidSeatCount);
+        }
+        if binding.election_attempt_sequence > MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
+            return Err(GovernanceCertificateErrorV1::RetryLimitExceeded);
+        }
+        if binding.election_attempt_id
+            != BodyElectionAttemptId::derive_v1(
+                self.governance_attempt_id,
+                binding.body,
+                binding.election_attempt_sequence,
+            )
+            || binding.body_instance_id
+                != BodyInstanceId::derive_v1(binding.election_attempt_id, binding.roster_root)
+        {
+            return Err(GovernanceCertificateErrorV1::NonCanonicalIdentifier);
+        }
+        if binding.result_height <= request.pulse_height
+            || binding.result_height > self.certified_at_height
+        {
+            return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
+        }
+        Ok(())
+    }
+
+    fn validate_body_evidence(
+        &self,
+        binding: &ParliamentBodyCertificateBindingV1,
+    ) -> Result<(), GovernanceCertificateErrorV1> {
+        if matches!(
+            binding.body,
+            ParliamentBody::PolicyJury | ParliamentBody::ConfirmationJury
+        ) {
+            if binding.ballot.is_none() || binding.public_finding.is_some() {
+                return Err(GovernanceCertificateErrorV1::MissingBindingBallot);
             }
-            if let Some(public_finding) = binding.public_finding.as_ref() {
-                let quorum = parliament_quorum_seats_v1(binding.original_seats);
-                let endorsements = u32::try_from(public_finding.endorsing_assignments.len())
-                    .map_err(|_| GovernanceCertificateErrorV1::InvalidPublicFinding)?;
-                if public_finding.endorsement_root == [0; 32]
-                    || public_finding.quorum != quorum
-                    || public_finding.endorsements != quorum
-                    || endorsements != public_finding.endorsements
-                    || public_finding
-                        .endorsing_assignments
-                        .iter()
-                        .any(|assignment| assignment.as_bytes() == &[0; 32])
-                    || !public_finding
-                        .endorsing_assignments
-                        .windows(2)
-                        .all(|pair| pair[0] < pair[1])
-                    || public_finding.endorsement_root
-                        != parliament_public_finding_endorsement_root_v1(
-                            self.governance_attempt_id,
-                            binding.body_instance_id,
-                            binding.result_root,
-                            &public_finding.endorsing_assignments,
-                        )
-                {
-                    return Err(GovernanceCertificateErrorV1::InvalidPublicFinding);
-                }
-            }
-            if let Some(ballot) = binding.ballot {
-                if ballot.ballot_attempt_id.as_bytes() == &[0; 32]
-                    || ballot.tle_session_id.as_bytes() == &[0; 32]
-                    || ballot.tle_key_session_id.as_bytes() == &[0; 32]
-                    || ballot.registration_root == [0; 32]
-                    || ballot.dropout_root == [0; 32]
-                    || ballot.survivor_root == [0; 32]
-                    || ballot.corpus_root == [0; 32]
-                    || ballot.no_recovery_root == [0; 32]
-                    || ballot.timed_commitment_root == [0; 32]
-                    || ballot.release_beacon_session_id.as_bytes() == &[0; 32]
-                    || ballot.release_pulse_id.as_bytes() == &[0; 32]
-                    || ballot.opening_root == [0; 32]
-                {
-                    return Err(GovernanceCertificateErrorV1::ZeroBinding);
-                }
-                if ballot.ballot_attempt_id
-                    != BallotAttemptId::derive_v1(
-                        binding.body_instance_id,
-                        ballot.ballot_attempt_sequence,
-                    )
-                    || ballot.tle_session_id
-                        != TleSessionId::derive_v1(
-                            ballot.ballot_attempt_id,
-                            ballot.tle_key_session_id,
-                            ballot.release_beacon_session_id,
-                            ballot.release_height,
-                        )
-                {
-                    return Err(GovernanceCertificateErrorV1::NonCanonicalIdentifier);
-                }
-                if !ballot_attempt_ids.insert(ballot.ballot_attempt_id)
-                    || !tle_session_ids.insert(ballot.tle_session_id)
-                    || !release_pulse_ids.insert(ballot.release_pulse_id)
-                    || !release_slots
-                        .insert((ballot.release_beacon_session_id, ballot.release_height))
-                {
-                    return Err(GovernanceCertificateErrorV1::DuplicateBinding);
-                }
-                if ballot.registered_at_height == 0
-                    || ballot.registered_at_height <= request.pulse_height
-                    || ballot.registration_close_height <= ballot.registered_at_height
-                    || ballot.survivor_freeze_height <= ballot.registration_close_height
-                    || ballot.commitment_close_height <= ballot.survivor_freeze_height
-                    || ballot.release_height <= ballot.commitment_close_height
-                    || ballot.opening_deadline_height <= ballot.release_height
-                    || ballot.registration_closed_at_height != ballot.registration_close_height
-                    || ballot.survivors_frozen_at_height != ballot.survivor_freeze_height
-                    || ballot.commitment_closed_at_height <= ballot.survivor_freeze_height
-                    || ballot.commitment_closed_at_height > ballot.commitment_close_height
-                    || ballot
-                        .registration_close_height
-                        .saturating_sub(ballot.registered_at_height)
-                        < u64::from(ballot.max_corpus_entries).saturating_add(1)
-                    || ballot
-                        .survivor_freeze_height
-                        .saturating_sub(ballot.registration_close_height)
-                        < u64::from(ballot.max_corpus_entries)
-                    || ballot
-                        .commitment_close_height
-                        .saturating_sub(ballot.survivor_freeze_height)
-                        < parliament_timed_ovn_required_chunk_blocks_v1(ballot.max_corpus_entries)
-                    || ballot.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
-                    || ballot.ballot_attempt_sequence > ballot.max_ballot_retries
-                    || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
-                        .contains(&ballot.max_corpus_entries)
-                    || ballot.max_corpus_entries < binding.original_seats
-                    || ballot.tally.accepted_ballots > ballot.max_corpus_entries
-                    || ballot.tally.original_seats != binding.original_seats
-                    || ballot.opening_height < ballot.release_height
-                    || ballot.opening_height > ballot.opening_deadline_height
-                    || binding.result_height < ballot.opening_height
-                    || binding.result_height > ballot.opening_deadline_height
-                {
-                    return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
-                }
-                let decision = ballot.tally.decision()?;
-                if decision != ballot.outcome {
-                    return Err(GovernanceCertificateErrorV1::TallyOutcomeMismatch);
-                }
-                if binding.result_root
-                    != parliament_ballot_result_root_v1(
+        } else if binding.public_finding.is_none() || binding.ballot.is_some() {
+            return Err(GovernanceCertificateErrorV1::MissingPublicFinding);
+        }
+        if let Some(public_finding) = binding.public_finding.as_ref() {
+            let quorum = parliament_quorum_seats_v1(binding.original_seats);
+            let endorsements = u32::try_from(public_finding.endorsing_assignments.len())
+                .map_err(|_| GovernanceCertificateErrorV1::InvalidPublicFinding)?;
+            if public_finding.endorsement_root == [0; 32]
+                || public_finding.quorum != quorum
+                || public_finding.endorsements != quorum
+                || endorsements != public_finding.endorsements
+                || public_finding
+                    .endorsing_assignments
+                    .iter()
+                    .any(|assignment| assignment.as_bytes() == &[0; 32])
+                || !public_finding
+                    .endorsing_assignments
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                || public_finding.endorsement_root
+                    != parliament_public_finding_endorsement_root_v1(
                         self.governance_attempt_id,
                         binding.body_instance_id,
-                        ballot.ballot_attempt_id,
-                        ballot.opening_root,
-                        ballot.tally,
-                        ballot.outcome,
-                        binding.result_height,
+                        binding.result_root,
+                        &public_finding.endorsing_assignments,
                     )
-                {
-                    return Err(GovernanceCertificateErrorV1::BallotResultRootMismatch);
-                }
-                if decision != ParliamentAggregateOutcomeV1::Approved {
-                    return Err(GovernanceCertificateErrorV1::NonApprovingBallot);
-                }
-                if self.risk_tier == RiskTierV1::Emergency
-                    && binding.body == ParliamentBody::PolicyJury
-                    && ballot.tally.aye < parliament_quorum_seats_v1(binding.original_seats)
-                {
-                    return Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold);
-                }
-            }
-
-            match binding.body {
-                ParliamentBody::PolicyJury => policy = Some(binding),
-                ParliamentBody::ConfirmationJury => confirmation = Some(binding),
-                _ => {}
+            {
+                return Err(GovernanceCertificateErrorV1::InvalidPublicFinding);
             }
         }
+        Ok(())
+    }
 
-        if !sortition_pulse_ids.is_disjoint(&release_pulse_ids) {
-            return Err(GovernanceCertificateErrorV1::DuplicateBinding);
+    fn validate_ballot_identity(
+        binding: &ParliamentBodyCertificateBindingV1,
+        ballot: &ParliamentBallotCertificateBindingV1,
+    ) -> Result<(), GovernanceCertificateErrorV1> {
+        if ballot.ballot_attempt_id.as_bytes() == &[0; 32]
+            || ballot.tle_session_id.as_bytes() == &[0; 32]
+            || ballot.tle_key_session_id.as_bytes() == &[0; 32]
+            || ballot.registration_root == [0; 32]
+            || ballot.dropout_root == [0; 32]
+            || ballot.survivor_root == [0; 32]
+            || ballot.corpus_root == [0; 32]
+            || ballot.no_recovery_root == [0; 32]
+            || ballot.timed_commitment_root == [0; 32]
+            || ballot.release_beacon_session_id.as_bytes() == &[0; 32]
+            || ballot.release_pulse_id.as_bytes() == &[0; 32]
+            || ballot.opening_root == [0; 32]
+        {
+            return Err(GovernanceCertificateErrorV1::ZeroBinding);
         }
+        if ballot.ballot_attempt_id
+            != BallotAttemptId::derive_v1(binding.body_instance_id, ballot.ballot_attempt_sequence)
+            || ballot.tle_session_id
+                != TleSessionId::derive_v1(
+                    ballot.ballot_attempt_id,
+                    ballot.tle_key_session_id,
+                    ballot.release_beacon_session_id,
+                    ballot.release_height,
+                )
+        {
+            return Err(GovernanceCertificateErrorV1::NonCanonicalIdentifier);
+        }
+        Ok(())
+    }
 
-        let policy = policy.ok_or(GovernanceCertificateErrorV1::MissingPolicyJury)?;
-        let policy_ballot = policy
-            .ballot
-            .ok_or(GovernanceCertificateErrorV1::MissingBindingBallot)?;
-        let requires_confirmation = policy_ballot.tally.requires_confirmation()?;
-        match (requires_confirmation, confirmation) {
-            (false, None) => {}
-            (true, Some(confirmation))
-                if (if confirmation.election_attempt_sequence == 0 {
-                    confirmation.sortition_request.request_height == policy.result_height
-                } else {
-                    confirmation.sortition_request.request_height > policy.result_height
-                }) && confirmation.beacon_pulse_id != policy.beacon_pulse_id => {}
-            _ => return Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
+    fn validate_ballot_lifecycle(
+        binding: &ParliamentBodyCertificateBindingV1,
+        ballot: &ParliamentBallotCertificateBindingV1,
+    ) -> Result<(), GovernanceCertificateErrorV1> {
+        let request = &binding.sortition_request;
+        let registration_not_after_sortition = ballot.registered_at_height <= request.pulse_height;
+        if ballot.registered_at_height == 0
+            || registration_not_after_sortition
+            || ballot.registration_close_height <= ballot.registered_at_height
+            || ballot.survivor_freeze_height <= ballot.registration_close_height
+            || ballot.commitment_close_height <= ballot.survivor_freeze_height
+            || ballot.release_height <= ballot.commitment_close_height
+            || ballot.opening_deadline_height <= ballot.release_height
+            || ballot.registration_closed_at_height != ballot.registration_close_height
+            || ballot.survivors_frozen_at_height != ballot.survivor_freeze_height
+            || ballot.commitment_closed_at_height <= ballot.survivor_freeze_height
+            || ballot.commitment_closed_at_height > ballot.commitment_close_height
+            || ballot
+                .registration_close_height
+                .saturating_sub(ballot.registered_at_height)
+                < u64::from(ballot.max_corpus_entries).saturating_add(1)
+            || ballot
+                .survivor_freeze_height
+                .saturating_sub(ballot.registration_close_height)
+                < u64::from(ballot.max_corpus_entries)
+            || ballot
+                .commitment_close_height
+                .saturating_sub(ballot.survivor_freeze_height)
+                < parliament_timed_ovn_required_chunk_blocks_v1(ballot.max_corpus_entries)
+            || ballot.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
+            || ballot.ballot_attempt_sequence > ballot.max_ballot_retries
+            || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1).contains(&ballot.max_corpus_entries)
+            || !(binding.original_seats..).contains(&ballot.max_corpus_entries)
+            || ballot.tally.accepted_ballots > ballot.max_corpus_entries
+            || ballot.tally.original_seats != binding.original_seats
+            || ballot.opening_height < ballot.release_height
+            || ballot.opening_height > ballot.opening_deadline_height
+            || !(ballot.opening_height..=ballot.opening_deadline_height)
+                .contains(&binding.result_height)
+        {
+            return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
+        }
+        Ok(())
+    }
+
+    fn validate_ballot_outcome(
+        &self,
+        binding: &ParliamentBodyCertificateBindingV1,
+        ballot: &ParliamentBallotCertificateBindingV1,
+    ) -> Result<(), GovernanceCertificateErrorV1> {
+        let decision = ballot.tally.decision()?;
+        if decision != ballot.outcome {
+            return Err(GovernanceCertificateErrorV1::TallyOutcomeMismatch);
+        }
+        if binding.result_root
+            != parliament_ballot_result_root_v1(
+                self.governance_attempt_id,
+                binding.body_instance_id,
+                ballot.ballot_attempt_id,
+                ballot.opening_root,
+                ballot.tally,
+                ballot.outcome,
+                binding.result_height,
+            )
+        {
+            return Err(GovernanceCertificateErrorV1::BallotResultRootMismatch);
+        }
+        if decision != ParliamentAggregateOutcomeV1::Approved {
+            return Err(GovernanceCertificateErrorV1::NonApprovingBallot);
+        }
+        if self.risk_tier == RiskTierV1::Emergency
+            && binding.body == ParliamentBody::PolicyJury
+            && ballot.tally.aye < parliament_quorum_seats_v1(binding.original_seats)
+        {
+            return Err(GovernanceCertificateErrorV1::EmergencyPolicyJuryThreshold);
         }
         Ok(())
     }
@@ -3386,7 +3437,8 @@ impl ProposalKind {
             Self::DeployContract(_)
             | Self::ValidationFeePolicy(_)
             | Self::ValidationFeePayoutLifecycle(_)
-            | Self::GlobalDataTriggerPermissionGovernance(_) => None,
+            | Self::GlobalDataTriggerPermissionGovernance(_)
+            | Self::SorafsProviderGovernance(_) => None,
             Self::ContractLifecycleGovernance(proposal) => (proposal.expected_revision > maximum)
                 .then_some(
                     "contract lifecycle expected revision exceeds the exact JSON integer maximum",
@@ -3422,7 +3474,6 @@ impl ProposalKind {
             Self::MusubiRegistryGovernance(action) => {
                 action.first_release_exact_json_u64_invariant_error(maximum)
             }
-            Self::SorafsProviderGovernance(_) => None,
         }
     }
 

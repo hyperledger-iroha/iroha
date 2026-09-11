@@ -43,17 +43,15 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     block::BlockHeader,
     nexus::{
-        AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
-        LaneStorageProfile, LaneVisibility, PublicLaneValidatorStatus, UniversalAccountId,
+        AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, LaneCatalog, LaneStorageProfile,
+        LaneVisibility, PublicLaneValidatorStatus, UniversalAccountId,
     },
-    peer::PeerId,
     proof::ProofStatus,
     query::QueryOutput,
 };
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::{
     account::AccountId,
-    domain::DomainId,
     isi::settlement::{
         SettlementAtomicity, SettlementExecutionOrder, SettlementId, SettlementPlan,
     },
@@ -62,7 +60,13 @@ use iroha_data_model::{
 use iroha_data_model::{events::data::sorafs::SorafsProofHealthAlert, oracle::OraclePenaltyKind};
 use iroha_futures::supervisor::{Child, OnShutdown};
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
+use iroha_model_base::domain::DomainId;
+#[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_model_base::name::Name;
+#[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
+use iroha_model_base::peer::PeerId;
+#[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_p2p::OnlinePeers;
 use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "telemetry")]
@@ -3181,7 +3185,7 @@ impl StateTelemetry {
     /// Record a Kaigi relay registration event.
     pub fn record_kaigi_relay_registration(
         &self,
-        domain: &iroha_data_model::domain::DomainId,
+        domain: &iroha_model_base::domain::DomainId,
         bandwidth_class: u8,
     ) {
         if self.is_enabled() {
@@ -3199,7 +3203,7 @@ impl StateTelemetry {
     /// Record a Kaigi relay manifest update.
     pub fn record_kaigi_manifest_update(
         &self,
-        domain: &iroha_data_model::domain::DomainId,
+        domain: &iroha_model_base::domain::DomainId,
         action: &'static str,
         hop_count: u32,
     ) {
@@ -5169,7 +5173,7 @@ impl Telemetry {
     /// Record a consensus membership mismatch against a peer for the given height/view.
     pub fn note_membership_mismatch(
         &self,
-        peer: &iroha_data_model::peer::PeerId,
+        peer: &iroha_model_base::peer::PeerId,
         height: u64,
         view: u64,
     ) {
@@ -5192,7 +5196,7 @@ impl Telemetry {
         }
     }
     /// Clear the active membership mismatch gauge for a peer when alignment is confirmed.
-    pub fn clear_membership_mismatch(&self, peer: &iroha_data_model::peer::PeerId) {
+    pub fn clear_membership_mismatch(&self, peer: &iroha_model_base::peer::PeerId) {
         if self.enabled {
             let peer_label = peer.to_string();
             self.metrics
@@ -5281,7 +5285,7 @@ impl Telemetry {
         }
     }
     /// Increment post-to-peer counter labeled by peer id (collector routing/backpressure insight)
-    pub fn inc_post_to_peer(&self, peer: &iroha_data_model::peer::PeerId) {
+    pub fn inc_post_to_peer(&self, peer: &iroha_model_base::peer::PeerId) {
         if self.enabled {
             let label = peer.to_string();
             self.metrics
@@ -5592,7 +5596,7 @@ impl Telemetry {
         .sumeragi_bg_post_drop_total.with_label_values(&[kind]).inc();]
     }
     /// Increment per-peer background-post queue depth for Post tasks.
-    pub fn inc_bg_post_queue_depth_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
+    pub fn inc_bg_post_queue_depth_for_peer(&self, peer: &iroha_model_base::peer::PeerId) {
         if self.enabled {
             let label = peer.to_string();
             let g = self
@@ -5613,7 +5617,7 @@ impl Telemetry {
         }
     }
     /// Decrement per-peer background-post queue depth for Post tasks.
-    pub fn dec_bg_post_queue_depth_for_peer(&self, peer: &iroha_data_model::peer::PeerId) {
+    pub fn dec_bg_post_queue_depth_for_peer(&self, peer: &iroha_model_base::peer::PeerId) {
         if self.enabled {
             let label = peer.to_string();
             let g = self
@@ -7179,11 +7183,10 @@ mod tests {
         isi::{InstructionBox, Log, Register, Transfer},
         nexus::{
             AssetPermissionManifest, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
-            DataSpaceId, DataSpaceMetadata, LaneConfig, LaneId, ManifestVersion,
-            UniversalAccountId,
+            DataSpaceMetadata, LaneConfig, ManifestVersion, UniversalAccountId,
         },
         oracle::KeyedHash,
-        peer::{Peer, PeerId},
+        peer::Peer,
         prelude::TransactionBuilder,
         trigger::prelude::{Action, Repeats, Trigger, TriggerId},
     };
@@ -7191,6 +7194,8 @@ mod tests {
     use iroha_data_model::{
         events::data::sorafs::SorafsProofHealthAlert, sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
@@ -7976,13 +7981,11 @@ mod tests {
     #[tokio::test]
     async fn status_exposes_tx_gossip_targets_with_aliases() {
         use super::StateTelemetry;
-        use iroha_data_model::{
-            nexus::{
-                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-                LaneVisibility,
-            },
-            peer::PeerId,
+        use iroha_data_model::nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility,
         };
+        use iroha_model_base::peer::PeerId;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use iroha_test_samples::PEER_KEYPAIR;
         use nonzero_ext::nonzero;
         let metrics = Arc::new(Metrics::default());

@@ -30,6 +30,10 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::oracle::CanRegisterOracleFeed;
 use iroha_executor_data_model::permission::settlement::CanManageFxCorridors;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID,

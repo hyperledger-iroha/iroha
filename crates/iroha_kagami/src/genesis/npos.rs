@@ -36,9 +36,9 @@ mod tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiParameter},
         },
-        prelude::*,
     };
     use iroha_genesis::{GenesisBuilder, RawGenesisTransaction};
+    use iroha_model_base::chain::ChainId;
     use iroha_test_samples::ALICE_ID;
     use std::{fs, path::PathBuf};
     use tempfile::NamedTempFile;

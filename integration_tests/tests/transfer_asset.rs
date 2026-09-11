@@ -11,6 +11,7 @@ use iroha::{
         prelude::*,
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};

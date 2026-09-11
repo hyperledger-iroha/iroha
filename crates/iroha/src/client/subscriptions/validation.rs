@@ -7,7 +7,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{ExecuteTrigger, Grant, InstructionBox, Register, RegisterBox, SetKeyValue, Unregister},
-    metadata::Metadata,
     nft::{Nft, NftId},
     permission::Permission,
     subscription::{
@@ -22,6 +21,7 @@ use iroha_data_model::{
     trigger::{Trigger, TriggerId},
 };
 use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::json::Json;
 use iroha_torii_shared::subscriptions::{
     SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1, SubscriptionActionRequest, SubscriptionActionResponse,

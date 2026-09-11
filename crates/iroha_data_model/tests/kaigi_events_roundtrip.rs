@@ -6,11 +6,12 @@ use iroha_data_model::{
         KaigiRelayRegistrationSummary, KaigiRelayUnregistrationSummary, KaigiStatusSummary,
     },
     prelude::{
-        AccountId, Decode, DomainEvent, DomainId, Encode, KaigiId, KaigiParticipantCommitment,
+        AccountId, Decode, DomainEvent, Encode, KaigiId, KaigiParticipantCommitment,
         KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiRelayHealthSummary,
         KaigiRelayManifestSummary, KaigiRosterSummary, KaigiStatus, KaigiUsageSummary,
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 fn sample_domain_id() -> DomainId {
     DomainId::try_new("kaigi_domain", "universal").expect("domain id")

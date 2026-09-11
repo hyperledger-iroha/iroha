@@ -1,5 +1,6 @@
 //! Roundtrip coverage for AXT proof envelopes.
-use iroha_data_model::nexus::{AxtFastpqBinding, AxtProofEnvelope, DataSpaceId};
+use iroha_data_model::nexus::{AxtFastpqBinding, AxtProofEnvelope};
+use iroha_model_base::topology::DataSpaceId;
 fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
     AxtFastpqBinding {
         parameter: "fastpq-state-transition-stark-v1".to_string(),

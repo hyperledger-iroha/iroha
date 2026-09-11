@@ -6,9 +6,9 @@ use iroha::blocking::Client;
 use iroha::data_model::{
     Level,
     isi::{Log, SetParameter},
-    metadata::Metadata,
     parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
 use nonzero_ext::nonzero;
 use std::{

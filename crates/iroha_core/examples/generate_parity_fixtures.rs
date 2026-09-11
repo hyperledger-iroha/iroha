@@ -10,6 +10,9 @@ use iroha_core::{
     state::StateReadOnly,
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::time::TimeSource;
 use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
 // use mv::storage::StorageReadOnly; // not needed in example
@@ -152,7 +155,7 @@ fn run_block_and_events(
     );
     let cb = vb.commit_unchecked().unpack(|_| {});
     // Apply block effects without re-executing transactions.
-    let events = sb.apply_without_execution(&cb, Vec::<iroha_data_model::peer::PeerId>::new());
+    let events = sb.apply_without_execution(&cb, Vec::<iroha_model_base::peer::PeerId>::new());
     sb.commit().expect("commit parity fixture state");
     Ok((events, state))
 }

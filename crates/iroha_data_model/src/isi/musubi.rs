@@ -758,7 +758,6 @@ mod tests {
             MusubiResolutionProofV1, MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
             MusubiVerificationLockV1, musubi_provider_bundle_attestation_set_digest_v1,
         },
-        nexus::DataSpaceId,
         sorafs::{
             capacity::ProviderId,
             pin_registry::{
@@ -768,6 +767,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_model_base::topology::DataSpaceId;
     fn package() -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),

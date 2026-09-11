@@ -22,7 +22,11 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance,
     smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use reqwest::StatusCode;
 use std::time::{Duration, Instant};
@@ -252,7 +256,7 @@ fn contract_probe_alias_management_permission() -> CanManageAccountAlias {
                 "contract_state_probe@universal"
                     .parse()
                     .expect("canonical contract probe alias permission"),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
         ),
     }
@@ -291,7 +295,7 @@ fn contract_v1_deployment_grants_only_the_exact_hajimari_invocation() {
             &network,
             &iroha_test_samples::ALICE_ID,
             nonce,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("derive exact fixture address")
     };
@@ -378,7 +382,7 @@ fn contract_v1_alias_permission_is_exact() {
     assert_eq!(alias.canonical_text(), "contract_state_probe@universal");
     assert_eq!(
         alias.dataspace_id,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
     );
 }
 
@@ -448,7 +452,7 @@ fn contract_v1_four_validator_probe_compiles_final_syntax() {
         ))),
         &iroha_test_samples::ALICE_ID,
         0,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("derive probe address");
     let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -1556,10 +1560,8 @@ fn contract_rbc_autonomous_join_fixture() -> (
     Hash,
 ) {
     use iroha_core::lane_consensus::LaneExecutablePayloadV1;
-    use iroha_data_model::{
-        block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
-        nexus::{DataSpaceId, LaneId},
-    };
+    use iroha_data_model::block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let mut validators = (1..=4)
         .map(|seed| {
             PeerId::new(
@@ -2352,7 +2354,7 @@ fn deploy_contract_locally_signed_with_registration(
         client.client().network_id(),
         client.client().account(),
         deploy_nonce,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .map_err(|error| eyre!("derive contract address: {error}"))?;
     let mut metadata = Metadata::default();

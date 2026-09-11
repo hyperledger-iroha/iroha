@@ -21,7 +21,7 @@ use iroha_config::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
 use iroha_data_model::{
-    ChainId, Level, Registrable,
+    Level, Registrable,
     account::{
         AccountAlias, AccountAliasDomain, AccountDetails, AccountId, AccountRekeyRecord,
         AccountValue,
@@ -34,17 +34,19 @@ use iroha_data_model::{
         },
         consensus_v2 as wire_v2,
     },
-    domain::DomainId,
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
-    metadata::Metadata,
     nexus::{
-        AssetPermissionManifest, DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig,
-        ManifestVersion, UniversalAccountId,
+        AssetPermissionManifest, LaneCatalog, LaneConfig as ModelLaneConfig, ManifestVersion,
+        UniversalAccountId,
     },
-    peer::PeerId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::TransactionBuilder,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use std::{

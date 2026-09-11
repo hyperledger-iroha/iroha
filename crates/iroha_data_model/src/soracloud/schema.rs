@@ -1811,6 +1811,13 @@ pub struct SoraServiceLeaseReporterAssignmentV1 {
 }
 impl SoraServiceLeaseReporterAssignmentV1 {
     /// Validate immutable reporter-assignment evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, invalid service-version text or
+    /// zero reconciliation timestamp. Propagates placement errors for zero slot/lease
+    /// height, an invalid incarnation digest, noncanonical peer text or a validator account
+    /// without a single signatory.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease reporter assignment",
@@ -1894,6 +1901,12 @@ pub struct SoraServiceLeaseUsageAuditV1 {
 }
 impl SoraServiceLeaseUsageAuditV1 {
     /// Validate structural lease-usage audit material.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version or zero reporting epoch, and
+    /// propagates invalid reporter-assignment evidence, including its service version,
+    /// placement and reconciliation timestamp.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease usage audit",
@@ -2170,6 +2183,26 @@ impl SoraServiceLeaseStateV1 {
                 "must not be empty when provided",
             ));
         }
+        self.validate_egress_checkpoints()?;
+        let recomputed_accounted_egress_bytes =
+            self.recomputed_accounted_egress_bytes().ok_or_else(|| {
+                invalid_field(
+                    "sora service lease state",
+                    "accounted_egress_bytes",
+                    "settled and current-epoch egress total overflows u128",
+                )
+            })?;
+        if self.accounted_egress_bytes != recomputed_accounted_egress_bytes {
+            return Err(invalid_field(
+                "sora service lease state",
+                "accounted_egress_bytes",
+                "must equal the exact settled and current-epoch checkpoint sum",
+            ));
+        }
+        Ok(())
+    }
+    // Bind every reporter to this economic lease before comparing its aggregate total.
+    fn validate_egress_checkpoints(&self) -> Result<(), SoracloudManifestError> {
         for checkpoint in &self.egress_reporter_checkpoints {
             if checkpoint.reporting_epoch != self.reporting_epoch {
                 return Err(invalid_field(
@@ -2240,23 +2273,9 @@ impl SoraServiceLeaseStateV1 {
                 "must be strictly sorted by reporting epoch, revision, slot, incarnation, and validator",
             ));
         }
-        let recomputed_accounted_egress_bytes =
-            self.recomputed_accounted_egress_bytes().ok_or_else(|| {
-                invalid_field(
-                    "sora service lease state",
-                    "accounted_egress_bytes",
-                    "settled and current-epoch egress total overflows u128",
-                )
-            })?;
-        if self.accounted_egress_bytes != recomputed_accounted_egress_bytes {
-            return Err(invalid_field(
-                "sora service lease state",
-                "accounted_egress_bytes",
-                "must equal the exact settled and current-epoch checkpoint sum",
-            ));
-        }
         Ok(())
     }
+
     /// Exact number of canonical blocks elapsed under the current lease.
     #[must_use]
     pub fn billed_blocks_at(&self, current_height: u64) -> u64 {
@@ -2285,7 +2304,8 @@ impl SoraServiceLeaseStateV1 {
         let storage_cost = self
             .storage_price_per_gib_block
             .try_mul_decimal(&Numeric::new(storage_units, 0))?;
-        let egress_mib = u128::from(self.accounted_egress_bytes)
+        let egress_mib = self
+            .accounted_egress_bytes
             .div_ceil(u128::from(SORA_NETWORK_BYTES_PER_MIB));
         let egress_cost = self
             .egress_price_per_mib

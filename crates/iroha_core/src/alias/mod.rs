@@ -12,8 +12,6 @@ use iroha_data_model::{
     },
     alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
     asset::ResolvedAssetDefinitionAliasV1,
-    domain::DomainId,
-    nexus::DataSpaceId,
     permission::Permission,
 };
 use iroha_executor_data_model::permission::account::{
@@ -22,7 +20,9 @@ use iroha_executor_data_model::permission::account::{
 use iroha_executor_data_model::permission::asset_definition::{
     AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use std::{

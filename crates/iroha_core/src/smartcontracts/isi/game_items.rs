@@ -302,6 +302,7 @@ mod tests {
         isi::Register,
         nft::{Nft, NftId},
     };
+    use iroha_model_base::metadata::Metadata;
 
     fn reserve_fixture_item(
         st: &mut StateTransaction<'_, '_>,
@@ -338,7 +339,8 @@ mod tests {
     }
     #[test]
     fn oversized_native_nft_cannot_be_reserved_into_an_unsettleable_admission() {
-        use iroha_data_model::domain::{Domain, DomainId};
+        use iroha_data_model::domain::Domain;
+        use iroha_model_base::domain::DomainId;
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
@@ -369,7 +371,8 @@ mod tests {
     }
     #[test]
     fn ambiguous_short_native_nfts_cannot_move_into_wager_custody() {
-        use iroha_data_model::domain::{Domain, DomainId};
+        use iroha_data_model::domain::Domain;
+        use iroha_model_base::domain::DomainId;
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());

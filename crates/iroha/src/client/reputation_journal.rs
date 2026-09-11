@@ -190,7 +190,6 @@ mod tests {
                 SetSorafsReputationJournalAuthorityPolicy,
             },
         },
-        metadata::Metadata,
         query::{
             QueryRequest, QueryResponse, SignedQuery, SingularQueryBox, SingularQueryOutputBox,
         },
@@ -209,6 +208,7 @@ mod tests {
         },
         transaction::{Executable, FeePaymentIntent, SignedTransaction},
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_version::codec::DecodeVersioned as _;
     use std::sync::{Arc, Mutex};
     const SOURCE_TIME_MS: u64 = 1_700_000_000_000;

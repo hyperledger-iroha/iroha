@@ -75,9 +75,11 @@ impl FinalizedNextEpochSnapshot {
         }
         let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
         if mint_roster.validate().is_err()
-            || mint_roster.network_id != context.network_id
-            || mint_roster.epoch != self.epoch
-            || mint_roster.validators.len() != self.roster.len()
+            || (
+                mint_roster.network_id,
+                mint_roster.epoch,
+                mint_roster.validators.len(),
+            ) != (context.network_id, self.epoch, self.roster.len())
             || mint_roster
                 .validators
                 .iter()
@@ -738,11 +740,12 @@ impl std::error::Error for V2FinalityValidationError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NetworkId;
     use crate::block::consensus_v2::{
         ConsensusRound, DataAvailabilityLayout, PayloadEncoding, ValidatorIndex,
     };
-    use crate::{NetworkId, peer::PeerId};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::peer::PeerId;
     use norito::codec::{DecodeAll, Encode};
     use std::num::NonZeroU64;
     fn network_id(seed: u8) -> NetworkId {
@@ -1142,6 +1145,125 @@ mod tests {
                 Err(V2FinalityValidationError::CertificateContextMismatch)
             );
         }
+    }
+
+    fn seven_validator_roster() -> Vec<ValidatorPower> {
+        let mut validators = roster();
+        validators.extend((5_u8..=7).map(|seed| {
+            let pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive additional fixture validator");
+            ValidatorPower {
+                validator: PeerId::new(pair.public_key().clone()),
+                power: 1,
+            }
+        }));
+        validators.sort_by(|left, right| left.validator.cmp(&right.validator));
+        validators
+    }
+
+    #[test]
+    fn height_context_binds_each_mint_roster_coordinate() {
+        context().validate().expect("valid height fixture");
+        for coordinate in 0..3 {
+            let mut changed = context();
+            match coordinate {
+                0 => changed.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1),
+                1 => changed.kagemusha_mint_finality_epoch_roster.epoch += 1,
+                2 => {
+                    changed.roster = seven_validator_roster();
+                    changed.quorum = DualQuorum::from_roster(&changed.roster).unwrap();
+                    changed.kagemusha_mint_finality_epoch_roster = mint_finality_roster(
+                        changed.network_id,
+                        changed.epoch,
+                        &changed.roster[..4],
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let mint = &changed.kagemusha_mint_finality_epoch_roster;
+            mint.validate().expect("independently valid mint roster");
+            assert!(
+                mint.validators
+                    .iter()
+                    .zip(&changed.roster)
+                    .all(|(mint, consensus)| mint.validator == consensus.validator)
+            );
+            changed.kagemusha_mint_finality_epoch_id = mint.finality_epoch_id().unwrap();
+            assert_eq!(
+                changed.validate(),
+                Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster),
+                "coordinate {coordinate} must be bound independently of the digest and zipped prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn next_epoch_binds_each_mint_roster_coordinate() {
+        let context = context();
+        let baseline = context.next_epoch_snapshot.as_ref().unwrap();
+        baseline
+            .validate_against(&context)
+            .expect("valid successor fixture");
+        for coordinate in 0..3 {
+            let mut changed = baseline.clone();
+            match coordinate {
+                0 => changed.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1),
+                1 => changed.kagemusha_mint_finality_epoch_roster.epoch += 1,
+                2 => {
+                    changed.roster = seven_validator_roster();
+                    changed.quorum = DualQuorum::from_roster(&changed.roster).unwrap();
+                    changed.validator_set_pops = vec![vec![0xC2]; changed.roster.len()];
+                    changed.kagemusha_mint_finality_epoch_roster = mint_finality_roster(
+                        context.network_id,
+                        changed.epoch,
+                        &changed.roster[..4],
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let mint = &changed.kagemusha_mint_finality_epoch_roster;
+            mint.validate()
+                .expect("independently valid successor mint roster");
+            assert!(
+                mint.validators
+                    .iter()
+                    .zip(&changed.roster)
+                    .all(|(mint, consensus)| mint.validator == consensus.validator)
+            );
+            changed.kagemusha_mint_finality_epoch_id = mint.finality_epoch_id().unwrap();
+            assert_eq!(
+                changed.validate_against(&context),
+                Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster),
+                "coordinate {coordinate}"
+            );
+        }
+    }
+
+    #[test]
+    fn mint_roster_binding_preserves_validation_precedence() {
+        let mut context = context();
+        context.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1);
+        context.protocol_version = PROTOCOL_VERSION + 1;
+        assert_eq!(
+            context.validate(),
+            Err(ValidationError::UnsupportedProtocolVersion {
+                expected: PROTOCOL_VERSION,
+                actual: PROTOCOL_VERSION + 1,
+            })
+        );
+        let mut snapshot = context.next_epoch_snapshot.clone().unwrap();
+        snapshot.kagemusha_mint_finality_epoch_roster.network_id = network_id(0xB1);
+        snapshot.epoch += 1;
+        assert_eq!(
+            snapshot.validate_against(&context),
+            Err(ValidationError::InvalidNextEpoch)
+        );
+        snapshot.epoch -= 1;
+        snapshot.mode = ConsensusMode::Npos;
+        assert_eq!(
+            snapshot.validate_against(&context),
+            Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster)
+        );
     }
 }
 

@@ -9,7 +9,7 @@ use crate::durable_transaction_forwarder::{
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     isi::{
         InstructionBox,
@@ -26,6 +26,7 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction},
 };
+use iroha_model_base::chain::ChainId;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{RepairReportV1, RepairSlashProposalV1, RepairTicketId};
 use std::{
@@ -1785,7 +1786,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        ChainId, Level, NetworkId,
+        Level, NetworkId,
         account::AccountId,
         block::BlockHeader,
         isi::{
@@ -1794,6 +1795,7 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::chain::ChainId;
     use sorafs_manifest::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
         RepairManualCauseV1,

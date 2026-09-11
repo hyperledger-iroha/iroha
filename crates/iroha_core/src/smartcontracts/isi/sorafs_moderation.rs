@@ -7682,7 +7682,7 @@ mod tests {
                     &initial_signer,
                     MultisigInstructionBox::Register(MultisigRegister::with_account(
                         registration_seed,
-                        None::<iroha_data_model::domain::DomainId>,
+                        None::<iroha_model_base::domain::DomainId>,
                         multisig_spec,
                     )),
                 )
@@ -7709,7 +7709,7 @@ mod tests {
         let old_custody = immutable_policy.challenge_escrow_account.clone();
         let old_definition = immutable_policy.challenge_voting_asset_id.clone();
         let replacement_definition = AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("replacement", "preactivation")
+            iroha_model_base::domain::DomainId::try_new("replacement", "preactivation")
                 .expect("replacement moderation domain"),
             "bond".parse().expect("replacement moderation asset name"),
         );
@@ -7962,11 +7962,11 @@ mod tests {
             ),
             (
                 outsider.clone(),
-                ExpireSorafsModerationChallenge::new(
-                    "absent".to_owned(),
-                    "round-1".to_owned(),
-                    "challenge-1".to_owned(),
-                )
+                ExpireSorafsModerationChallenge {
+                    case_id: "absent".to_owned(),
+                    round_id: "round-1".to_owned(),
+                    challenge_id: "challenge-1".to_owned(),
+                }
                 .into(),
                 "does not exist",
             ),
@@ -8779,7 +8779,7 @@ mod tests {
             })
             .expect("finalize the case before rotating the active policy reference");
         let replacement_definition = AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("replacement", "moderation")
+            iroha_model_base::domain::DomainId::try_new("replacement", "moderation")
                 .expect("replacement domain"),
             "bond".parse().expect("replacement asset name"),
         );
@@ -9139,11 +9139,11 @@ mod tests {
         let expiry_authority = fixture.juror_id(0);
         fixture
             .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
-                ExpireSorafsModerationChallenge::new(
-                    "case-1".to_owned(),
-                    "round-1".to_owned(),
-                    "challenge-retains-account".to_owned(),
-                )
+                ExpireSorafsModerationChallenge {
+                    case_id: "case-1".to_owned(),
+                    round_id: "round-1".to_owned(),
+                    challenge_id: "challenge-retains-account".to_owned(),
+                }
                 .execute(&expiry_authority, transaction)
             })
             .expect("permissionless expiry refunds the retained challenger");
@@ -9185,7 +9185,7 @@ mod tests {
                     &initial_signer,
                     MultisigInstructionBox::Register(MultisigRegister::with_account(
                         registration_seed,
-                        None::<iroha_data_model::domain::DomainId>,
+                        None::<iroha_model_base::domain::DomainId>,
                         spec,
                     )),
                 )
@@ -9529,21 +9529,21 @@ mod tests {
             .unwrap();
         fixture
             .run(REVEAL_AT + 1, |transaction| {
-                ExpireSorafsModerationChallenge::new(
-                    "case-1".to_owned(),
-                    "round-1".to_owned(),
-                    "challenge-unresolved".to_owned(),
-                )
+                ExpireSorafsModerationChallenge {
+                    case_id: "case-1".to_owned(),
+                    round_id: "round-1".to_owned(),
+                    challenge_id: "challenge-unresolved".to_owned(),
+                }
                 .execute(&juror, transaction)
             })
             .unwrap();
         fixture
             .run(REVEAL_AT + 2, |transaction| {
-                ExpireSorafsModerationChallenge::new(
-                    "case-1".to_owned(),
-                    "round-1".to_owned(),
-                    "challenge-unresolved".to_owned(),
-                )
+                ExpireSorafsModerationChallenge {
+                    case_id: "case-1".to_owned(),
+                    round_id: "round-1".to_owned(),
+                    challenge_id: "challenge-unresolved".to_owned(),
+                }
                 .execute(&juror, transaction)
             })
             .unwrap();
@@ -9555,11 +9555,11 @@ mod tests {
             .unwrap();
         fixture
             .run(FINALIZE_AT + 1, |transaction| {
-                ExpireSorafsModerationChallenge::new(
-                    "case-1".to_owned(),
-                    "round-1".to_owned(),
-                    "challenge-swept".to_owned(),
-                )
+                ExpireSorafsModerationChallenge {
+                    case_id: "case-1".to_owned(),
+                    round_id: "round-1".to_owned(),
+                    challenge_id: "challenge-swept".to_owned(),
+                }
                 .execute(&juror, transaction)
             })
             .unwrap();
@@ -9863,11 +9863,11 @@ mod tests {
             if decision == ModerationChallengeDecisionV1::Expired {
                 fixture
                     .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
-                        ExpireSorafsModerationChallenge::new(
-                            "case-1".to_owned(),
-                            "round-1".to_owned(),
-                            challenge_id.clone(),
-                        )
+                        ExpireSorafsModerationChallenge {
+                            case_id: "case-1".to_owned(),
+                            round_id: "round-1".to_owned(),
+                            challenge_id: challenge_id.clone(),
+                        }
                         .execute(&manager, transaction)
                     })
                     .expect("retained expiry refund overrides ordinary account controls");

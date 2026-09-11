@@ -16,9 +16,10 @@ use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountAddressErrorCode, AccountId},
     asset::AssetDefinition,
-    domain::{Domain, DomainId},
-    peer::PeerId,
+    domain::Domain,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{
@@ -1367,7 +1368,7 @@ fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyP
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
     let torii = Torii::new_with_handle(
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),

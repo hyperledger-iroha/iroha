@@ -121,14 +121,14 @@ fn assert_identity<T: NoritoSchema>(nominal: &str) -> &'static Value {
 }
 
 /// Check an existing serializer against its fixed nominal, root and hash.
-pub(crate) fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str) {
+fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str) {
     let row = assert_identity::<T>(nominal);
     let hash = expected_hash(row, "serialize_hash");
     assert_eq!(norito::schema::identity::frame_hash::<T>(), hash);
 }
 
 /// Check an existing decoder without requiring a serializer or constructing a value.
-pub(crate) fn assert_deserialize<T>(nominal: &str)
+fn assert_deserialize<T>(nominal: &str)
 where
     T: NoritoSchema + for<'a> NoritoDeserialize<'a>,
 {
@@ -138,12 +138,58 @@ where
 }
 
 /// Check both independently generated codec directions without adding either codec.
-pub(crate) fn assert_bidirectional<T>(nominal: &str)
+fn assert_bidirectional<T>(nominal: &str)
 where
     T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
 {
     assert_serialize::<T>(nominal);
     assert_deserialize::<T>(nominal);
+}
+
+/// One compiler-captured codec owner and its supported assertion directions.
+///
+/// Inventories are static data; walking them preserves declaration order without
+/// materializing a per-test stack array or one enormous generated test body.
+pub struct Case {
+    nominal: &'static str,
+    assertion: fn(&str),
+}
+
+impl Case {
+    /// Bind a serializer to its independently captured nominal identity.
+    pub const fn serialize<T: NoritoSchema + NoritoSerialize>(nominal: &'static str) -> Self {
+        Self {
+            nominal,
+            assertion: assert_serialize::<T>,
+        }
+    }
+
+    /// Bind a decoder without requiring a serializer or constructing a value.
+    pub const fn deserialize<T>(nominal: &'static str) -> Self
+    where
+        T: NoritoSchema + for<'a> NoritoDeserialize<'a>,
+    {
+        Self {
+            nominal,
+            assertion: assert_deserialize::<T>,
+        }
+    }
+
+    /// Bind both existing codec directions without adding either implementation.
+    pub const fn bidirectional<T>(nominal: &'static str) -> Self
+    where
+        T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
+    {
+        Self {
+            nominal,
+            assertion: assert_bidirectional::<T>,
+        }
+    }
+
+    /// Assert the captured nominal identity, frame identity, and directional hashes.
+    pub fn check(&self) {
+        (self.assertion)(self.nominal);
+    }
 }
 
 #[test]

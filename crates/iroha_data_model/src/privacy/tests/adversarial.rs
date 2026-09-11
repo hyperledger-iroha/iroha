@@ -1,7 +1,8 @@
 #[test]
 fn public_balance_scope_never_accepts_universal_as_a_partition() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let universal = AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL);
+    let universal =
+        AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
     for protocol in [
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1,

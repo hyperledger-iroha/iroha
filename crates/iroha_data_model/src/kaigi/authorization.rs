@@ -144,11 +144,9 @@ impl Write for BoundedIdentityFrameV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard},
-        domain::DomainId,
-    };
+    use crate::account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use std::str::FromStr;
 

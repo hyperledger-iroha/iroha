@@ -2,8 +2,8 @@
 #[cfg(test)]
 use crate::ProgramMetadata;
 use crate::{
-    AccountId, AssetDefinitionId, DomainId, IVM, IVMHost, MockWorldStateView, PermissionToken,
-    PointerType, TraceMode, WsvHost,
+    AccountId, AssetDefinitionId, IVM, IVMHost, MockWorldStateView, PermissionToken, PointerType,
+    TraceMode, WsvHost,
     kotodama::{
         ast::{Expr, FixtureAction, FixtureDecl, FunctionKind, Item, Program, SourceUnitKind},
         compiler::{CompileReport, CompilerMode, CompilerOptions},
@@ -23,10 +23,10 @@ use iroha_data_model::prelude::Mintable;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::{AssetBalanceScope, AssetId},
-    nexus::DataSpaceId,
     smart_contract::ContractAddress,
 };
-use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::{domain::DomainId, name::Name};
 #[cfg(test)]
 use iroha_primitives::numeric_abi::QuantityValueV1;
 use iroha_primitives::{
@@ -2989,5 +2989,7 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     include!("koto_test_driver_tests.rs");
 }

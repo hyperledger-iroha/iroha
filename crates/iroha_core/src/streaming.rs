@@ -22,21 +22,21 @@ use iroha_crypto::{
         StreamingSession, StreamingSessionSnapshot,
     },
 };
+#[cfg(test)]
+use iroha_data_model::soranet::ticket::{TicketBodyV1, TicketEnvelopeV1, TicketScopeV1};
 use iroha_data_model::{
-    domain::DomainId,
     events::{
         EventBox,
         data::{DataEvent, prelude as data_events},
     },
-    peer::{Peer, PeerId},
+    peer::Peer,
     soranet::ticket::TicketCommitmentError,
 };
-#[cfg(test)]
-use iroha_data_model::{
-    metadata::Metadata,
-    soranet::ticket::{TicketBodyV1, TicketEnvelopeV1, TicketScopeV1},
-};
 use iroha_logger::warn;
+use iroha_model_base::domain::DomainId;
+#[cfg(test)]
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 #[cfg(feature = "quic")]
 use iroha_p2p::streaming::{CapabilityNegotiation, StreamingConnection};
 use iroha_p2p::{Post, Priority};
@@ -2853,7 +2853,9 @@ mod tests {
             TransportCapabilityResolutionSnapshot,
         },
     };
-    use iroha_data_model::{domain::DomainId, events::SharedDataEvent, peer::PeerId};
+    use iroha_data_model::events::SharedDataEvent;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::addr::SocketAddr;
     use norito::streaming::{
         CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme,
@@ -3326,8 +3328,8 @@ mod tests {
         let ticket = data_events::StreamingTicketRecord {
             ticket_id: iroha_crypto::Hash::prehashed(hash_with(ticket_seed)),
             owner,
-            dsid: iroha_data_model::nexus::DataSpaceId::new(7),
-            lane_id: iroha_data_model::nexus::LaneId::new(5),
+            dsid: iroha_model_base::topology::DataSpaceId::new(7),
+            lane_id: iroha_model_base::topology::LaneId::new(5),
             settlement_bucket: 2_048,
             start_slot: 21_000,
             expire_slot: 24_000,

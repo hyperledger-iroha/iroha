@@ -36,7 +36,6 @@ use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     kagemusha::{
         KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1,
@@ -51,6 +50,7 @@ use iroha_data_model::{
     },
     nexus::AxtAssetIncarnationV1,
 };
+use iroha_model_base::domain::DomainId;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use rand_core_06::OsRng;
 use sha2::{Digest as _, Sha256};

@@ -24,7 +24,7 @@ fn fixture_groups(owner: &str) -> Vec<norito::json::Value> {
         .collect()
 }
 
-fn check_frame<T>(row: &norito::json::Value, value: T)
+fn check_frame<T>(row: &norito::json::Value, value: &T)
 where
     T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de> + std::fmt::Debug + Eq,
 {
@@ -46,8 +46,8 @@ where
     let _ambient = norito::core::DecodeFlagsGuard::enter(
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
     );
-    assert_eq!(norito::encode_canonical(&value).unwrap(), captured);
-    assert_eq!(norito::decode_canonical::<T>(&captured).unwrap(), value);
+    assert_eq!(norito::encode_canonical(value).unwrap(), captured);
+    assert_eq!(&norito::decode_canonical::<T>(&captured).unwrap(), value);
     for length in [0, captured.len() / 2, captured.len() - 1] {
         assert!(norito::decode_canonical::<T>(&captured[..length]).is_err());
     }
@@ -76,11 +76,11 @@ where
     {
         assert_eq!(row["shape"].as_str(), Some(expected));
     }
-    check_frame(&frames[0], value.clone());
-    check_frame(&frames[1], None::<T>);
-    check_frame(&frames[2], Some(value.clone()));
-    check_frame(&frames[3], Vec::<T>::new());
-    check_frame(&frames[4], vec![value.clone(), value]);
+    check_frame(&frames[0], &value);
+    check_frame(&frames[1], &None::<T>);
+    check_frame(&frames[2], &Some(value.clone()));
+    check_frame(&frames[3], &Vec::<T>::new());
+    check_frame(&frames[4], &vec![value.clone(), value]);
 }
 
 fn boolean() -> EntrypointValueTypeV1 {

@@ -3,6 +3,7 @@
 use eyre::{Result, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::data_model::{parameter::BlockParameter, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use rand::{SeedableRng, prelude::IteratorRandom};

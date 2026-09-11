@@ -30,7 +30,7 @@ use iroha::{
             BlockHeader,
             consensus::{NativeAmxReceipt, SumeragiDiagnosticsStatus},
         },
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register,
             privacy::RegisterPrivacyProtocolActivationV1,
@@ -44,10 +44,9 @@ use iroha::{
             },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
         nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId, LaneId,
-            LaneVisibility, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, LaneVisibility,
+            PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
             PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
             PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -64,7 +63,6 @@ use iroha::{
             PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
             PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementRouteV1,
         },
-        peer::PeerId,
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
@@ -115,6 +113,10 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance, settlement::CanExecuteSettlement,
 };
 use iroha_genesis::GenesisTopologyEntry;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{
     CommitteeValidatorP2pBootstrap, Network, NetworkBuilder, NetworkPeer,

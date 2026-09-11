@@ -14,11 +14,11 @@ use iroha::{
             governance::{ProposeSccpRouteGovernance, RegisterCitizen},
             verifying_keys,
         },
-        metadata::Metadata,
         proof::VerifyingKeyId,
         transaction::{Executable, FeePaymentIntent, SignedTransaction},
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_sccp::{
@@ -668,11 +668,12 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::data_model::{ChainId, account::AccountId};
+    use iroha::data_model::account::AccountId;
     use iroha_config::parameters::defaults::sorafs::gateway::{
         DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::chain::ChainId;
     use iroha_service_model::soranet::AnonymityPolicy;
     use iroha_service_model::soranet::RolloutPhase;
     use sorafs_manifest::alias_cache::AliasCachePolicy;

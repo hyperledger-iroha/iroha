@@ -9,9 +9,9 @@ use iroha_data_model::{
         confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         types::{BlobDigest, StorageTicketId},
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::topology::LaneId;
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
@@ -137,13 +137,11 @@ impl ConfidentialComputeStore {
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::{
-        da::{
-            commitment::{DaProofScheme, RetentionClass},
-            types::{BlobDigest, StorageTicketId},
-        },
-        nexus::LaneId,
+    use iroha_data_model::da::{
+        commitment::{DaProofScheme, RetentionClass},
+        types::{BlobDigest, StorageTicketId},
     };
+    use iroha_model_base::topology::LaneId;
     fn policy(version: u32) -> ConfidentialComputePolicy {
         ConfidentialComputePolicy::new(
             ConfidentialComputeMechanism::Encryption,

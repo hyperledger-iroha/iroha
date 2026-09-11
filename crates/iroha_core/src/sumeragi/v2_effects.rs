@@ -158,8 +158,8 @@ use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
     merge::MergeLedgerEntry,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 #[cfg(test)]
 use norito::codec::Encode as _;
 use std::{

@@ -1,13 +1,11 @@
 use super::*;
 use crate::{
-    account::AccountId,
-    asset::AssetId,
-    block::consensus::Evidence,
-    metadata::Metadata,
-    nexus::{LaneId, PublicLaneRewardShare},
-    peer::PeerId,
+    account::AccountId, asset::AssetId, block::consensus::Evidence, nexus::PublicLaneRewardShare,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use std::string::String;
 isi! {
@@ -123,10 +121,9 @@ isi! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        peer::PeerId,
-        prelude::{AccountId, Algorithm, DomainId, KeyPair},
-    };
+    use crate::prelude::{AccountId, Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     fn sample_account() -> AccountId {
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let key_pair = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)
@@ -700,6 +697,8 @@ mod slice_tests {
     }
     #[test]
     fn forged_bond_lane_id_packed_layout_is_rejected_without_unwind() {
+        const WIRE_ID: &str = "iroha.instruction.v1::staking::BondPublicLaneStake";
+
         let bond = BondPublicLaneStake {
             lane_id: LaneId::SINGLE,
             validator: account(0x41),
@@ -751,7 +750,6 @@ mod slice_tests {
             encoded_flags,
         )
         .expect("frame forged bond");
-        const WIRE_ID: &str = "iroha.instruction.v1::staking::BondPublicLaneStake";
         let registry =
             crate::isi::InstructionRegistry::new().register_with_id::<BondPublicLaneStake>(WIRE_ID);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -774,15 +772,17 @@ mod json_tests {
     use super::{
         ActivatePublicLaneValidator, RebindPublicLaneValidatorPeer, RegisterPublicLaneValidator,
     };
-    use crate::{
-        account::AccountId, domain::DomainId, metadata::Metadata, nexus::LaneId, peer::PeerId,
-    };
+    use crate::account::AccountId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     use norito::json::value::{from_value, to_value};
     #[test]
     fn register_public_lane_validator_json_roundtrip() {
-        let _domain: crate::domain::DomainId =
+        let _domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
         let validator_key = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::Ed25519)
             .expect("derive checked staking JSON validator fixture keypair");
@@ -808,7 +808,7 @@ mod json_tests {
     }
     #[test]
     fn activate_public_lane_validator_json_roundtrip() {
-        let _domain: crate::domain::DomainId =
+        let _domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
         let validator_key = KeyPair::try_from_seed(vec![0xB1; 32], Algorithm::Ed25519)
             .expect("derive checked staking JSON active validator fixture keypair");
@@ -821,7 +821,7 @@ mod json_tests {
     }
     #[test]
     fn rebind_public_lane_validator_peer_json_roundtrip() {
-        let _domain: crate::domain::DomainId =
+        let _domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
         let validator_key = KeyPair::try_from_seed(vec![0xC1; 32], Algorithm::Ed25519)
             .expect("derive checked staking JSON rebind validator fixture keypair");

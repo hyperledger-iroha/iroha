@@ -1,9 +1,10 @@
 //! Regression guard for the public AXT descriptor/manifest fixtures.
 use hex::encode;
 use iroha_data_model::nexus::{
-    AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, TouchManifest,
+    AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, TouchManifest,
     compute_descriptor_binding, validate_descriptor,
 };
+use iroha_model_base::topology::DataSpaceId;
 use norito::{decode_from_bytes, json};
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct DescriptorFixture {

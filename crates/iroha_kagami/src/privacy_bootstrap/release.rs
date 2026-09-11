@@ -2028,9 +2028,7 @@ mod tests {
         account::address::AccountAddress,
         alias_setup::ResolvedAccountAliasV1,
         block::BlockHeader,
-        domain::DomainId,
         isi::{RegisterBox, UnregisterBox},
-        nexus::DataSpaceId,
         permission::Permission,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
@@ -2041,6 +2039,8 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::fs;
     const PLAN_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");

@@ -11,6 +11,8 @@ use iroha_core::{
     state::{State, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, sync::Arc};

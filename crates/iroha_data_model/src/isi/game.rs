@@ -1,7 +1,7 @@
 //! Generic deterministic multiplayer sessions and reusable compiled execution-proof instructions.
 use super::*;
 isi! {
- /// Native OpenGameSessionV1 operation with complete authorization in Core.
+ /// Native `OpenGameSessionV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::OpenGameSessionV1")]
@@ -82,56 +82,44 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenGameSessionV1 {
         ))
     }
 }
-isi! {
- /// Native JoinGameSessionV1 operation with complete authorization in Core.
- #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
- #[norito (deny_unknown_fields)]
- #[norito_schema(name = "iroha_data_model::isi::game::JoinGameSessionV1")]
- pub struct JoinGameSessionV1 {
-  /// Exact session id for this operation.
-  pub session_id: iroha_crypto::Hash,
-  /// Exact input key for this operation.
-  pub input_key: iroha_crypto::PublicKey,
-  /// Exact application data for this operation.
-  pub application_data: Vec<u8>,
-  /// Explicit temporary equipment authorization; empty is required for stock games.
-  pub resources: Vec<crate::game::GameResourceReservationClauseV1>,
-  /// Exact invitation for this operation.
-  pub invitation: Option<iroha_crypto::Signature>,
-  /// Wallet-approved immutable manifest; a different ledger manifest rejects entry.
-  pub expected_manifest_hash: iroha_crypto::Hash,
-  /// Wallet-approved asset definition for the exact entry debit.
-  pub expected_asset_definition: crate::asset::AssetDefinitionId,
-  /// Wallet-approved exact entry debit, including zero for a free session.
-  pub expected_stake: iroha_primitives::numeric::Quantity,
- }
+/// Native `JoinGameSessionV1` operation with complete authorization in Core.
+/// Construct with named fields so the wallet-approved entry terms are explicit.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+)]
+#[getset(get = "pub")]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::isi::game::JoinGameSessionV1")]
+pub struct JoinGameSessionV1 {
+    /// Exact session id for this operation.
+    pub session_id: iroha_crypto::Hash,
+    /// Exact input key for this operation.
+    pub input_key: iroha_crypto::PublicKey,
+    /// Exact application data for this operation.
+    pub application_data: Vec<u8>,
+    /// Explicit temporary equipment authorization; empty is required for stock games.
+    pub resources: Vec<crate::game::GameResourceReservationClauseV1>,
+    /// Exact invitation for this operation.
+    pub invitation: Option<iroha_crypto::Signature>,
+    /// Wallet-approved immutable manifest; a different ledger manifest rejects entry.
+    pub expected_manifest_hash: iroha_crypto::Hash,
+    /// Wallet-approved asset definition for the exact entry debit.
+    pub expected_asset_definition: crate::asset::AssetDefinitionId,
+    /// Wallet-approved exact entry debit, including zero for a free session.
+    pub expected_stake: iroha_primitives::numeric::Quantity,
 }
 impl crate::seal::Instruction for JoinGameSessionV1 {}
-impl JoinGameSessionV1 {
-    /// Authorize an input key and exact immutable entry terms.
-    #[must_use]
-    pub fn new(
-        session_id: iroha_crypto::Hash,
-        input_key: iroha_crypto::PublicKey,
-        application_data: Vec<u8>,
-        resources: Vec<crate::game::GameResourceReservationClauseV1>,
-        invitation: Option<iroha_crypto::Signature>,
-        expected_manifest_hash: iroha_crypto::Hash,
-        expected_asset_definition: crate::asset::AssetDefinitionId,
-        expected_stake: iroha_primitives::numeric::Quantity,
-    ) -> Self {
-        Self {
-            session_id,
-            input_key,
-            application_data,
-            resources,
-            invitation,
-            expected_manifest_hash,
-            expected_asset_definition,
-            expected_stake,
-        }
-    }
-}
 impl<'a> norito::core::DecodeFromSlice<'a> for JoinGameSessionV1 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -191,7 +179,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for JoinGameSessionV1 {
     }
 }
 isi! {
- /// Native StartGameSessionV1 operation with complete authorization in Core.
+ /// Native `StartGameSessionV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::StartGameSessionV1")]
@@ -228,7 +216,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StartGameSessionV1 {
     }
 }
 isi! {
- /// Native CommitGameCheckpointV1 operation with complete authorization in Core.
+ /// Native `CommitGameCheckpointV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::CommitGameCheckpointV1")]
@@ -292,7 +280,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitGameCheckpointV1 {
     }
 }
 isi! {
- /// Native ChallengeGameSessionV1 operation with complete authorization in Core.
+ /// Native `ChallengeGameSessionV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::ChallengeGameSessionV1")]
@@ -365,7 +353,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ChallengeGameSessionV1 {
     }
 }
 isi! {
- /// Native CommitGameInputsV1 operation with complete authorization in Core.
+ /// Native `CommitGameInputsV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::CommitGameInputsV1")]
@@ -402,7 +390,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitGameInputsV1 {
     }
 }
 isi! {
- /// Native RevealGameInputsV1 operation with complete authorization in Core.
+ /// Native `RevealGameInputsV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::RevealGameInputsV1")]
@@ -439,7 +427,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevealGameInputsV1 {
     }
 }
 isi! {
- /// Native AdvanceGameDeadlineV1 operation with complete authorization in Core.
+ /// Native `AdvanceGameDeadlineV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::AdvanceGameDeadlineV1")]
@@ -476,7 +464,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AdvanceGameDeadlineV1 {
     }
 }
 isi! {
- /// Native SettleGameSessionV1 operation with complete authorization in Core.
+ /// Native `SettleGameSessionV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::SettleGameSessionV1")]
@@ -539,7 +527,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettleGameSessionV1 {
     }
 }
 isi! {
- /// Native ExpireGameSessionV1 operation with complete authorization in Core.
+ /// Native `ExpireGameSessionV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::ExpireGameSessionV1")]
@@ -649,7 +637,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExpireGameSessionV1 {
     }
 }
 isi! {
- /// Native RegisterExecutionProofProfileV1 operation with complete authorization in Core.
+ /// Native `RegisterExecutionProofProfileV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::RegisterExecutionProofProfileV1")]
@@ -686,7 +674,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterExecutionProofProfileV1 {
     }
 }
 isi! {
- /// Native VerifyExecutionProofV1 operation with complete authorization in Core.
+ /// Native `VerifyExecutionProofV1` operation with complete authorization in Core.
  #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
  #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::VerifyExecutionProofV1")]

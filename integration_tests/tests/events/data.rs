@@ -19,6 +19,7 @@ use iroha::{
 use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, domain::CanModifyDomainMetadata,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::collections::BTreeSet;

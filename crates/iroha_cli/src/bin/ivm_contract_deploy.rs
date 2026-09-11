@@ -23,7 +23,6 @@ use iroha::{
             CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
             SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
         },
-        metadata::Metadata,
         prelude::*,
         smart_contract::ContractAlias,
         transaction::{FeePaymentIntent, TransactionBuilder},
@@ -33,7 +32,10 @@ use iroha_config::parameters::defaults::sorafs::gateway::{
     DEFAULT_ANONYMITY_POLICY, DEFAULT_ROLLOUT_PHASE,
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;

@@ -73,10 +73,10 @@ use iroha_data_model::{
         execution_context::ExternalExecutionContext,
     },
     merge::{LaneDrainFrontierV1, MergeLedgerEntry},
-    nexus::{DataSpaceId, LaneId},
     transaction::signed::TransactionEntrypoint,
 };
 use iroha_model_base::state_path::StatePath;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, DecodeAll, Encode};
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
 use rustix::fs::{
@@ -13372,6 +13372,7 @@ include!("lane_geometry/catalog_validation.rs");
 include!("lane_geometry/retirement_bounds.rs");
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::topology::DataSpaceId;
     include!("lane_geometry_tests/00_support.rs");
     include!("lane_geometry/native_amx_retained_window_tests.rs");
     include!("lane_geometry_tests/00_retirement.rs");

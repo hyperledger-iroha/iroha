@@ -2,10 +2,10 @@
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
-    domain::prelude::DomainId,
     nft::NftId,
     smart_contract::manifest::{AccessSetHints, ContractManifest},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use ivm_abi::pointer_abi::{PointerType, validate_tlv_bytes};
 use norito::{

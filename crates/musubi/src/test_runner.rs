@@ -1173,14 +1173,12 @@ mod tests {
         lockfile::LockedRootV1,
         workspace::{Workspace, load_workspace},
     };
-    use iroha_data_model::{
-        musubi::{
-            ArchiveId, MusubiAbiBindingV1, MusubiContentDigestV1, MusubiPackageIdV1,
-            MusubiPackageScopeV1, MusubiRegistrySnapshotV1, MusubiReleaseDigestV1,
-            MusubiReleaseIdV1, MusubiVerificationNodeV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        ArchiveId, MusubiAbiBindingV1, MusubiContentDigestV1, MusubiPackageIdV1,
+        MusubiPackageScopeV1, MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiReleaseIdV1,
+        MusubiVerificationNodeV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use ivm::kotodama::{
         linker::{ModuleBuildGraph, SourcePackageGraphRequest},
         session::CompilerSession,

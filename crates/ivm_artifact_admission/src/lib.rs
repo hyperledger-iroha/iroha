@@ -7,14 +7,14 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
-    domain::DomainId,
-    nexus::DataSpaceId,
     nft::NftId,
     prelude::{DecimalValueV1, IntValueV1, Json, QuantityValueV1},
     smart_contract::manifest::{ContractManifest, StateDescriptor},
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use ivm_abi::{
     SyscallPolicy, VMError,
     axt::{
@@ -721,7 +721,8 @@ pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{nexus::LaneId, smart_contract::manifest::EntryPointKind};
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+    use iroha_model_base::topology::LaneId;
     use ivm_abi::{
         axt::{
             AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,

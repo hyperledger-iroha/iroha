@@ -36,6 +36,8 @@ pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::{Numeric, Quantity};
     fn xor_quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(
@@ -1349,7 +1351,7 @@ mod tests {
             ),
         ));
         assert_default_registry_decodes(crate::isi::staking::ClaimPublicLaneRewards {
-            lane_id: crate::nexus::LaneId::SINGLE,
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
             account: account(0xA4),
             upto_epoch: Some(9),
         });

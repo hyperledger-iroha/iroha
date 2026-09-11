@@ -46,7 +46,7 @@ mod model {
     )]
     pub struct SpaceDirectoryManifestActivated {
         /// Dataspace hosting the manifest.
-        pub dataspace: crate::nexus::DataSpaceId,
+        pub dataspace: iroha_model_base::topology::DataSpaceId,
         /// UAID that owns the manifest.
         pub uaid: crate::nexus::UniversalAccountId,
         /// Canonical hash of the manifest payload.
@@ -68,7 +68,7 @@ mod model {
     )]
     pub struct SpaceDirectoryManifestExpired {
         /// Dataspace hosting the manifest.
-        pub dataspace: crate::nexus::DataSpaceId,
+        pub dataspace: iroha_model_base::topology::DataSpaceId,
         /// UAID associated with the manifest.
         pub uaid: crate::nexus::UniversalAccountId,
         /// Canonical hash for the expired manifest.
@@ -87,7 +87,7 @@ mod model {
     )]
     pub struct SpaceDirectoryManifestRevoked {
         /// Dataspace hosting the manifest.
-        pub dataspace: crate::nexus::DataSpaceId,
+        pub dataspace: iroha_model_base::topology::DataSpaceId,
         /// UAID associated with the manifest.
         pub uaid: crate::nexus::UniversalAccountId,
         /// Canonical hash for the revoked manifest.

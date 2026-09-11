@@ -486,8 +486,9 @@ mod tests {
     use iroha::{
         config::{Config, DEFAULT_TORII_REQUEST_TIMEOUT},
         crypto::{Algorithm, Hash, HashOf, KeyPair},
-        data_model::{NetworkId, account::AccountId, block::BlockHeader, prelude::ChainId},
+        data_model::{NetworkId, account::AccountId, block::BlockHeader},
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_service_model::soranet::RolloutPhase;
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use std::time::Duration;

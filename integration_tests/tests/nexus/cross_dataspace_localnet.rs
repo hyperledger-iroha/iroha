@@ -21,7 +21,7 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         da::commitment::DaProofPolicyBundle,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -35,9 +35,7 @@ use iroha::{
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-        metadata::Metadata,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
-        peer::PeerId,
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneVisibility},
         permission::Permission,
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Quantity},
         query::block::prelude::FindBlocks,
@@ -72,6 +70,10 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, unexecuted_genesis_factory_with_post_topology,
 };
@@ -7338,7 +7340,7 @@ mod tests {
         DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH, ExpectedLaneValidatorBinding,
         FAULT_SOAK_DURATION_SECS, KeyPair, LANE_VALIDATOR_COUNT, LaneDomainProgress,
         LanePayloadOwnershipProgress, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX,
-        OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RegisterPublicLaneValidator, RoutedJsonGetResponse,
+        OBSERVER_QUERY_TIMEOUT_CAP, RegisterPublicLaneValidator, RoutedJsonGetResponse,
         TOTAL_PEERS, VALIDATORS_PER_LANE, applied_lane_domain_progress,
         bounded_observer_request_timeout, committed_lane_block_has_expected_quorum,
         committed_tx_outcome_quorum, copy_kura_tree_with_limits, cross_dataspace_gas_account_id,
@@ -7375,10 +7377,11 @@ mod tests {
             PayloadEncoding, ValidatorPower,
         },
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
-        nexus::{DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
     use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::json::Value as JsonValue;
     use reqwest::header::{HeaderMap, HeaderValue};
     use std::{

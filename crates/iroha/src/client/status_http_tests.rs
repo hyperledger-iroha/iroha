@@ -69,13 +69,14 @@ fn assert_default_status(actual: &NodeStatus) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn status_uses_async_transport_and_one_catalog_route_with_exact_negotiation() {
+    fn require_send(_: impl Send) {}
+
     let (client, requests, completed) = attach(
         |_| Ok(status_response()),
         Duration::from_millis(15),
         Duration::from_secs(1),
         WireFormatPreference::JsonPreferred,
     );
-    fn require_send(_: impl Send) {}
     let capability = client.status();
     require_send(capability.get());
     let (result, ticked) = tokio::join!(capability.get(), async {

@@ -26,7 +26,7 @@ fn account(_domain: &str, public_key: &str) -> AccountId {
 #[test]
 fn bare_domain_tlv_payload_defaults_to_universal_dataspace() {
     let payload = common::payload_for_type(PointerType::DomainId, b"wonder");
-    let domain: iroha_data_model::DomainId =
+    let domain: iroha_model_base::domain::DomainId =
         norito::decode_from_bytes(&payload).expect("decode DomainId payload");
     assert_eq!(domain.to_string(), "wonder.universal");
 }

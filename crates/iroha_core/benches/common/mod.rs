@@ -5,7 +5,7 @@ use iroha_data_model::account::AccountId;
 /// Create new account from a random keypair in the given domain
 pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
     let key_pair = KeyPair::random();
-    let domain: iroha_data_model::domain::DomainId = domain
+    let domain: iroha_model_base::domain::DomainId = domain
         .to_string()
         .parse()
         .expect("domain name should be valid");

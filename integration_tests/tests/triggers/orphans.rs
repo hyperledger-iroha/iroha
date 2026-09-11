@@ -6,6 +6,7 @@ use iroha::{
     data_model::{prelude::*, query::trigger::FindTriggers},
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use std::time::{Duration, Instant};

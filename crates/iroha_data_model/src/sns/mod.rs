@@ -1,13 +1,11 @@
 //! Sora Name Service data structures for registrar APIs.
 
+use crate::account::{AccountAddress, AccountId};
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    account::{AccountAddress, AccountId},
-    metadata::Metadata,
-};
 use blake3::Hasher;
 use derive_more::Display;
 use iroha_crypto::PublicKey;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
@@ -610,7 +608,7 @@ mod tests {
     use super::{DOMAIN_NAME_SUFFIX_ID, NameRecordV1, NameSelectorV1};
     use super::{TokenValue, fixtures};
 
-    use crate::metadata::Metadata;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     #[derive(Encode, norito::NoritoSchema)]

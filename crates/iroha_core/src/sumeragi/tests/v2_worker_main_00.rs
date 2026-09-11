@@ -34,7 +34,6 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
-    DataSpaceId, LaneId,
     block::{
         BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
@@ -47,6 +46,7 @@ use iroha_data_model::{
         LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
     },
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mv::storage::StorageReadOnly;
 use std::{
     num::NonZeroU64,
@@ -883,7 +883,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("sumeragi-v2-worker-display-name"),
+        iroha_model_base::chain::ChainId::from("sumeragi-v2-worker-display-name"),
         context.network_id,
     ));
     let kura_replica_advert_refresh = Arc::new(

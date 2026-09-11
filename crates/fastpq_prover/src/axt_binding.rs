@@ -10,7 +10,6 @@ use crate::{
 use iroha_crypto::Hash;
 pub use iroha_data_model::nexus::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES;
 use iroha_data_model::{
-    DataSpaceId,
     account::AccountId,
     asset::id::AssetDefinitionId,
     fastpq::{
@@ -24,6 +23,7 @@ use iroha_data_model::{
     },
     transaction::signed::TransactionEntrypoint,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
@@ -1819,10 +1819,11 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::id::AssetDefinitionId,
-        domain::DomainId,
         fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
-        nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId},
+        nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     fn finalized_transaction(seed: u8) -> TransactionEntrypoint {
         let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);

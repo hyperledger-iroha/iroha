@@ -21,13 +21,10 @@ use iroha_data_model::{
     NetworkId, Registrable,
     account::{AccountAddress, AccountId},
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
     isi::{
         ActivatePublicLaneValidator, RegisterPublicLaneValidator, register::RegisterPeerWithPop,
     },
     level::Level,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
     sns::{NameControllerV1, NameRecordV1},
@@ -35,6 +32,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii::{json_entry, json_object};
 use iroha_torii_shared::{
@@ -64,7 +64,7 @@ struct OnboardingTestContext {
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
     _data_dir: tempfile::TempDir,
 }
 impl OnboardingTestContext {
@@ -107,7 +107,7 @@ fn install_universal_parent_lease(world: &mut World, authority: &AccountId) {
     let controller = NameControllerV1::account(
         &AccountAddress::from_account_id(authority).expect("onboarding authority address"),
     );
-    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -228,7 +228,7 @@ fn build_onboarding_test_context_at(
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         })]),
     );
-    let chain_id = iroha_data_model::ChainId::from("onboarding-test-chain");
+    let chain_id = iroha_model_base::chain::ChainId::from("onboarding-test-chain");
     let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         world,
         kura.clone(),

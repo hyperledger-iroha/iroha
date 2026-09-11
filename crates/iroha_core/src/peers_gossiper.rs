@@ -6,11 +6,9 @@
 use crate::{IrohaNetwork, NetworkMessage};
 use iroha_config::parameters::actual::TrustedPeers;
 use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{
-    NetworkId,
-    peer::{Peer, PeerId},
-};
+use iroha_data_model::{NetworkId, peer::Peer};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     Broadcast, PeerTransportCapabilities, UpdatePeerCapabilities, UpdatePeers, UpdateTopology,
     UpdateTrustedPeers, UpdateValidatorTopology,

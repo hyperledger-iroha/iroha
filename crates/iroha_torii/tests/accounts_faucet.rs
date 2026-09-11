@@ -17,12 +17,12 @@ use iroha_data_model::{
     Registrable,
     account::AccountId,
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
-    domain::DomainId,
     level::Level,
-    peer::PeerId,
     prelude::{Account, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_torii::{Torii, json_entry, json_object};
 use iroha_version::codec::DecodeVersioned as _;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
@@ -35,7 +35,7 @@ struct FaucetTestContext {
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
     asset_definition_id: AssetDefinitionId,
     authority_id: AccountId,
     authority_key_pair: KeyPair,
@@ -134,7 +134,7 @@ fn build_faucet_test_context_with_registration(
     if register_user {
         accounts.push(Account::new(user_id.clone()).build(&authority_id));
     }
-    let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
     let network_id = iroha_torii::test_utils::signed_query_network_id();
     let mut world = World::with([domain], accounts, [asset_definition]);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -425,7 +425,7 @@ fn solve_faucet_pow(
 }
 fn advance_faucet_state_chain(
     state: &Arc<State>,
-    chain_id: &iroha_data_model::ChainId,
+    chain_id: &iroha_model_base::chain::ChainId,
     authority_id: &AccountId,
     authority_key_pair: &KeyPair,
     blocks: u64,

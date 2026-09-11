@@ -9,13 +9,14 @@ use super::*;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PrivateSettlementAbortReasonV1, PrivateSettlementCommitBundleV1,
         PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementPoolGovernanceV1,
         PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1,
     },
     privacy::{PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1, PrivacyCommitmentV1, PrivacyPoolIdV1},
 };
+use iroha_model_base::topology::DataSpaceId;
 
 /// Structural failure for a public private-settlement pool activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -502,6 +503,19 @@ isi! {
     }
 }
 
+impl crate::seal::Instruction for FinalizeAtomicPrivateSettlementV1 {}
+
+impl FinalizeAtomicPrivateSettlementV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.private_settlement.finalize_atomic_bundle.v1";
+
+    /// Construct a global finalization carrier.
+    #[must_use]
+    pub const fn new(commit_bundle: PrivateSettlementCommitBundleV1) -> Self {
+        Self { commit_bundle }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod generated_identity_values;
 #[cfg(test)]
@@ -513,7 +527,7 @@ mod tests {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             route: PrivateSettlementRouteV1 {
                 dataspace_id: DataSpaceId::new(7),
-                lane_id: crate::nexus::LaneId::new(9),
+                lane_id: iroha_model_base::topology::LaneId::new(9),
                 lane_incarnation: iroha_crypto::Hash::new([0x11]),
             },
             pool_id: PrivacyPoolIdV1::new([0x22; 32]),
@@ -653,18 +667,5 @@ mod tests {
             registry.wire_id(core::any::type_name::<AbortAtomicPrivateSettlementV1>()),
             Some(AbortAtomicPrivateSettlementV1::WIRE_ID)
         );
-    }
-}
-
-impl crate::seal::Instruction for FinalizeAtomicPrivateSettlementV1 {}
-
-impl FinalizeAtomicPrivateSettlementV1 {
-    /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.private_settlement.finalize_atomic_bundle.v1";
-
-    /// Construct a global finalization carrier.
-    #[must_use]
-    pub const fn new(commit_bundle: PrivateSettlementCommitBundleV1) -> Self {
-        Self { commit_bundle }
     }
 }

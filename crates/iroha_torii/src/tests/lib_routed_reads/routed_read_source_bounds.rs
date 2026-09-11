@@ -103,7 +103,7 @@ fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
         "derive routed asset-definition source fixture",
     );
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("issuer", "universal").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("issuer", "universal").expect("domain id");
     let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id,
         "usd".parse().expect("asset name"),
@@ -218,7 +218,7 @@ fn contract_alias_borrowed_json_matches_owned_dto_at_exact_cap() {
             .expect("canonical network id"),
         &authority,
         0,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("contract address");
     let contract_alias: iroha_data_model::smart_contract::ContractAlias =
@@ -280,7 +280,7 @@ fn explorer_asset_definition_borrowed_json_matches_owned_dto_at_exact_cap() {
         "derive routed explorer asset-definition source fixture",
     );
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("issuer", "universal").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("issuer", "universal").expect("domain id");
     let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id,
         "eur".parse().expect("asset name"),

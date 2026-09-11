@@ -7,13 +7,13 @@
 use hex::encode as hex_encode;
 use iroha_data_model::{
     account::AccountId,
-    metadata::Metadata,
     soranet::{
         RelayId,
         incentives::RelayRewardInstructionV1,
         prelude::{Digest32, RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayEpochMetricsV1},
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use soranet_incentives::{
@@ -436,9 +436,10 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        asset::AssetDefinitionId, domain::DomainId, metadata::Metadata,
-        soranet::incentives::RelayComplianceStatusV1,
+        asset::AssetDefinitionId, soranet::incentives::RelayComplianceStatusV1,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use std::convert::TryFrom;
     use tempfile::tempdir;

@@ -281,8 +281,9 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
 mod tests {
     use super::*;
     use iroha::crypto::{Hash, HashOf};
-    use iroha::data_model::{ChainId, NetworkId};
+    use iroha::data_model::NetworkId;
     use iroha::{client::Client as AsyncClient, config::Config};
+    use iroha_model_base::chain::ChainId;
     use iroha_service_model::soranet::AnonymityPolicy;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;

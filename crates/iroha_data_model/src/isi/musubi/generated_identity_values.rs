@@ -14,7 +14,7 @@ use super::{
 use norito::json::Value;
 
 /// Build the missing Musubi generated-record capture rows from canonical typed fixtures.
-pub(crate) fn values() -> Vec<Value> {
+pub fn values() -> Vec<Value> {
     let document = fixture_values::instruction_document();
     let cases = document
         .get("cases")

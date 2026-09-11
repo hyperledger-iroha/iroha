@@ -24,7 +24,7 @@ fn make_raw_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
+    let _domain = iroha_model_base::domain::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
@@ -47,7 +47,7 @@ fn grant_revoke_permission_with_tlv() {
     );
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::with_balances(&[(

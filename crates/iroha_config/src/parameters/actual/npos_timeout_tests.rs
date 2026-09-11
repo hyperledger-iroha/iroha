@@ -1,7 +1,6 @@
 use super::*;
-use iroha_data_model::nexus::{
-    LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility, ShardId,
-};
+use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata, LaneVisibility};
+use iroha_model_base::{topology::LaneId, topology::ShardId};
 use iroha_primitives::{addr::socket_addr, unique_vec};
 use std::num::NonZeroU32;
 fn checked_random_keypair() -> KeyPair {

@@ -94,7 +94,7 @@ fn seed_account_alias_lease(
                 u64::MAX,
                 u64::MAX,
                 u64::MAX,
-                iroha_data_model::metadata::Metadata::default(),
+                iroha_model_base::metadata::Metadata::default(),
             );
             tx.world
                 .smart_contract_state
@@ -114,7 +114,7 @@ fn seed_account_alias_lease(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     tx.world.smart_contract_state.insert(
         crate::sns::record_storage_key(&selector),

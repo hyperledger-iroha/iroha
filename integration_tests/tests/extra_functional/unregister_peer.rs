@@ -6,6 +6,7 @@ use iroha::{
     blocking::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;

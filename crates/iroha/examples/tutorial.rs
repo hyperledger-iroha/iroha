@@ -1,7 +1,7 @@
 //! This file contains examples from the Rust tutorial.
 use eyre::{Error, WrapErr};
 use iroha::config::{Config, LoadPath};
-use iroha::data_model::DomainId;
+use iroha_model_base::domain::DomainId;
 // #region rust_config_crates
 // #endregion rust_config_crates
 fn main() {
@@ -47,11 +47,10 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
         blocking::Client,
         client::AccountTransactionDraft,
         crypto::KeyPair,
-        data_model::{
-            metadata::Metadata,
-            prelude::{Account, AccountId, DomainId, InstructionBox, Register},
-        },
+        data_model::prelude::{Account, AccountId, InstructionBox, Register},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     // #endregion register_account_crates
     // Create an Iroha client
     let client = Client::new(config)?;

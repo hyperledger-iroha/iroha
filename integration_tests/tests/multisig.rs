@@ -19,6 +19,8 @@ use iroha::{
     },
     executor_data_model::isi::multisig::*,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{

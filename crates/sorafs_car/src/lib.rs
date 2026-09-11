@@ -6699,17 +6699,14 @@ mod tests {
     }
     #[cfg(feature = "manifest")]
     fn sample_manifest() -> DaManifestV1 {
-        use iroha_data_model::{
-            da::{
-                manifest::{ChunkCommitment, ChunkRole},
-                types::{
-                    BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
-                    ExtraMetadata, MetadataEntry, MetadataVisibility, RetentionPolicy,
-                    StorageTicketId,
-                },
+        use iroha_data_model::da::{
+            manifest::{ChunkCommitment, ChunkRole},
+            types::{
+                BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile,
+                ExtraMetadata, MetadataEntry, MetadataVisibility, RetentionPolicy, StorageTicketId,
             },
-            nexus::LaneId,
         };
+        use iroha_model_base::topology::LaneId;
         let chunk_digest = ChunkDigest::new([0xAA; 32]);
         let data_chunk = ChunkCommitment::new_with_role(0, 0, 8, chunk_digest, ChunkRole::Data, 0);
         let parity_chunk = ChunkCommitment::new_with_role(

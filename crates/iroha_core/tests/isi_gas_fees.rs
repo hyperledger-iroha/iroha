@@ -14,7 +14,11 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use iroha_data_model::transaction::signed::TransactionSignatureError;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
@@ -945,7 +949,7 @@ fn ivm_syscall_charges_fees() {
     let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
-    let contract_route = iroha_data_model::nexus::DataSpaceId::new(10);
+    let contract_route = iroha_model_base::topology::DataSpaceId::new(10);
     state_tx.current_dataspace_id = Some(contract_route);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     executor

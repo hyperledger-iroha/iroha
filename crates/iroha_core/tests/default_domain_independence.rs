@@ -1,9 +1,7 @@
 //! Regression guards for domainless universal accounts and explicit domain state.
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{
-    account::{AccountAddress, AccountId},
-    domain::DomainId,
-};
+use iroha_data_model::account::{AccountAddress, AccountId};
+use iroha_model_base::domain::DomainId;
 use std::{fs, path::Path};
 #[test]
 fn universal_account_address_is_independent_of_explicit_domain_context() {

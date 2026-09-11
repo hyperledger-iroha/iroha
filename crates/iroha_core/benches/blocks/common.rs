@@ -23,6 +23,8 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use std::{
     num::{NonZeroU16, NonZeroU64},
     sync::Arc,
@@ -388,7 +390,7 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
     #[allow(unused_imports)]
-    use iroha_data_model::peer::PeerId;
+    use iroha_model_base::peer::PeerId;
     #[allow(unused_imports)]
     use tokio::runtime::Runtime;
     #[test]

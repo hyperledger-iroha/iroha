@@ -6,8 +6,8 @@ use iroha_data_model::{
         Instruction,
         settlement::{DvpIsi, PvpIsi, SettlementInstructionBox},
     },
-    nexus::DataSpaceId,
 };
+use iroha_model_base::topology::DataSpaceId;
 use std::collections::BTreeSet;
 
 /// Return the two asset definitions carried by a direct or boxed DVP/PVP instruction.

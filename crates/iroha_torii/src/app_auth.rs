@@ -2355,9 +2355,9 @@ mod tests {
         block::BlockHeader,
         domain::Domain,
         isi::Register,
-        prelude::DomainId,
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
@@ -2548,7 +2548,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

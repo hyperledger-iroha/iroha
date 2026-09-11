@@ -3,6 +3,7 @@
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
 use iroha_data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, Memory, PointerType, ProgramMetadata, syscalls};
 fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> Vec<u8> {

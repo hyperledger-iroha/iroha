@@ -17074,6 +17074,8 @@ pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_relea
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     include!("soracloud_tests.rs");
     mod agent_apartment;
 }

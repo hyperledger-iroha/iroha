@@ -1,6 +1,6 @@
 //! Kotodama lending demo: a minimal borrow/mint flow on IVM.
 use iroha_crypto::Hash;
-use iroha_data_model::DomainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::{

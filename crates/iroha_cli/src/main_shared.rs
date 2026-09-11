@@ -1,3 +1,4 @@
+use iroha_model_base::chain::ChainId;
 mod address;
 mod audit;
 #[cfg(feature = "bridge")]
@@ -47,6 +48,8 @@ use iroha_config::parameters::defaults;
 use iroha_config_base::toml::{FromFileError, TomlSource};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_i18n::{Bundle, Localizer, detect_language};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::FeeQuoteResponse;
 use std::num::NonZeroU64;
@@ -3707,6 +3710,7 @@ mod rwa {
 mod peer {
     use super::*;
     use iroha::data_model::isi::register::RegisterPeerWithPop;
+    use iroha_model_base::peer::PeerId;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// List registered peers expected to connect with each other
@@ -4745,8 +4749,9 @@ mod query {
 }
 mod transaction {
     use super::*;
+    use iroha::data_model::{Level as LogLevel, isi::Log};
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
-use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, };
     use std::{
         sync::{
             Arc, LazyLock, Mutex,
@@ -6726,7 +6731,7 @@ mod repo {
         query::repo::prelude::FindRepoAgreements,
         repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
-    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::metadata::Metadata;
     use std::time::{SystemTime, UNIX_EPOCH};
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -6964,9 +6969,7 @@ mod repo {
 mod settlement {
     use super::*;
     use clap::ValueEnum;
-    use iroha_model_base::name::Name;
-use iroha::data_model::{
-        domain::DomainId,
+    use iroha::data_model::{
         isi::{
             InstructionBox,
             settlement::{
@@ -6976,12 +6979,14 @@ use iroha::data_model::{
                 SettlementPlan,
             },
         },
-        metadata::Metadata,
-        nexus::DataSpaceId,
         oracle::{FeedConfigVersion, FeedEvent, FeedId},
-        prelude::{AssetDefinitionId, },
+        prelude::AssetDefinitionId,
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use std::collections::BTreeSet;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -7852,7 +7857,7 @@ use iroha::data_model::{
             use super::*;
             use iroha::crypto::{Algorithm, KeyPair};
             use iroha_core::iso_bridge::reference_data::DatasetKind;
-            use iroha_data_model::domain::DomainId;
+            use iroha_model_base::domain::DomainId;
             use iroha_primitives::numeric::Quantity;
             use std::io::Write;
             use tempfile::NamedTempFile;
@@ -8201,7 +8206,7 @@ fn parse_asset_balance_scope_literal(
             .parse::<u64>()
             .map_err(|_| eyre!("asset balance scope must be `global` or `dataspace:<id>`"))?;
         return Ok(iroha::data_model::asset::AssetBalanceScope::Dataspace(
-            iroha::data_model::nexus::DataSpaceId::new(dataspace),
+            iroha_model_base::topology::DataSpaceId::new(dataspace),
         ));
     }
     Err(eyre!(
@@ -8436,12 +8441,12 @@ mod multisig_json_tests {
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         account::AccountId,
-        domain::DomainId,
         isi::{CustomInstruction, InstructionBox},
     };
     use iroha::executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigRegister, MultisigSpec,
     };
+    use iroha_model_base::domain::DomainId;
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
     fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -8494,11 +8499,9 @@ mod cli_integration_harness_tests {
         builder::{QueryBuilder, QueryExecutor},
         parameters::{FetchSize, Pagination, Sorting},
     };
-    use iroha::data_model::{
-        domain::{Domain, DomainId},
-        prelude::FindDomains,
-    };
+    use iroha::data_model::{domain::Domain, prelude::FindDomains};
     use iroha_crypto::Algorithm;
+    use iroha_model_base::domain::DomainId;
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9667,7 +9670,6 @@ mod cli_integration_harness {
     use iroha::data_model::{
         account::AccountId,
         asset::{Asset, AssetId},
-        domain::DomainId,
         executor::ExecutorDataModel,
         parameter::Parameters,
         proof::{ProofId, ProofRecord},
@@ -9678,6 +9680,7 @@ mod cli_integration_harness {
         smart_contract::manifest::ContractManifest,
     };
     use iroha_crypto::{Algorithm, Hash};
+    use iroha_model_base::domain::DomainId;
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
     use std::collections::BTreeMap;
@@ -9820,7 +9823,7 @@ mod cli_integration_harness {
         },
         #[cfg(feature = "ids_projection")]
         DomainIds {
-            ids: Vec<iroha::data_model::domain::DomainId>,
+            ids: Vec<iroha_model_base::domain::DomainId>,
             idx: usize,
             fetch: usize,
         },
@@ -10292,10 +10295,11 @@ mod cli_integration_harness {
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection() {
-        use iroha::data_model::domain::{Domain, DomainId};
+        use iroha::data_model::domain::Domain;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self};
+        use iroha_model_base::domain::DomainId;
         let owner_w1 = sample_account_id("w1", 1);
         let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
@@ -10559,10 +10563,11 @@ mod cli_integration_harness {
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection_batched() {
-        use iroha::data_model::domain::{Domain, DomainId};
+        use iroha::data_model::domain::Domain;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self};
+        use iroha_model_base::domain::DomainId;
         use std::num::NonZeroU64;
         let owner_d1 = sample_account_id("d1", 1);
         let owner_d2 = sample_account_id("d2", 2);

@@ -13,6 +13,7 @@ bench = []
 fastpq-gpu = ["dep:block", "dep:metal", "dep:zeroize"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 fastpq_isi = { path = "../fastpq_isi" }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }

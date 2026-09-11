@@ -16,8 +16,7 @@ mod inventory;
 #[path = "kaigi_record_identity_tests.rs"]
 mod kaigi_records;
 
-#[path = "../../tests/support/fixture_json.rs"]
-mod fixture_json;
+use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -41,7 +40,7 @@ where
 }
 
 /// Render the declared identity and complete root and container frames for comparison.
-pub(crate) fn capture<T>(value: T) -> Value
+pub fn capture<T>(value: T) -> Value
 where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de> + Clone + Debug + PartialEq,
 {

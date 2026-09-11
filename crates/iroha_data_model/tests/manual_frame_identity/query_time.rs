@@ -56,7 +56,7 @@ where
 }
 
 /// Capture actual frames for a factory family without adding public model traits.
-pub(super) fn family<T>(
+pub fn family<T>(
     rows: &mut Vec<Value>,
     name: &str,
     factories: &[fn() -> T],
@@ -76,11 +76,11 @@ pub(super) fn family<T>(
             rows,
             &format!("{name}/option_{index}"),
             &Some(make()),
-            |option| option.as_ref().map(inspect).unwrap_or(Value::Null),
+            |option| option.as_ref().map_or(Value::Null, inspect),
         );
     }
     record(rows, &format!("{name}/option_none"), &None::<T>, |option| {
-        option.as_ref().map(inspect).unwrap_or(Value::Null)
+        option.as_ref().map_or(Value::Null, inspect)
     });
     let inspect_vec = |values: &Vec<T>| Value::Array(values.iter().map(inspect).collect());
     record(
@@ -94,7 +94,7 @@ pub(super) fn family<T>(
 }
 
 /// Check the existing JSON API and return its canonical JSON text.
-pub(super) fn checked_json<T: JsonSerialize + JsonDeserialize + ncore::SerializePayload>(
+pub fn checked_json<T: JsonSerialize + JsonDeserialize + ncore::SerializePayload>(
     value: &T,
 ) -> Value {
     let json = norito::json::to_json(value).unwrap();
@@ -140,7 +140,7 @@ fn append_field<T: ncore::SerializePayload>(bytes: &mut Vec<u8>, value: &T) {
 }
 
 /// Construct a public erased domain query using the canonical registry owner.
-pub(super) fn domain_query() -> QueryBox<QueryOutputBatchBox> {
+pub fn domain_query() -> QueryBox<QueryOutputBatchBox> {
     Box::new(ErasedIterQuery::<Domain>::new(
         CompoundPredicate::PASS,
         SelectorTuple::default(),
@@ -161,50 +161,54 @@ fn inspect_query(value: &QueryBox<QueryOutputBatchBox>) -> Value {
         <(String, Vec<u8>)>::decode_all(&mut value.encode().as_slice()).unwrap();
     assert_eq!(inner_bytes, value.encode_bytes());
     let (expected_id, concrete_nominal_name, concrete_payload, predicate, selector) =
-        if let Some(inner) = iter_query_inner::<Domain>(value) {
-            assert_eq!(
-                value.type_name_key(),
-                std::any::type_name::<ErasedIterQuery<Domain>>()
-            );
-            assert_eq!(inner.payload(), FindDomains.encode());
-            assert_eq!(
-                inner.predicate().encode(),
-                CompoundPredicate::<Domain>::PASS.encode()
-            );
-            assert_eq!(
-                inner.selector().encode(),
-                SelectorTuple::<Domain>::default().encode()
-            );
-            (
-                "iroha.query.v1::iterable::domain::Domain",
-                <ErasedIterQuery<Domain> as norito::NoritoSchema>::nominal_name(),
-                inner.payload(),
-                inner.predicate().encode(),
-                inner.selector().encode(),
-            )
-        } else {
-            let inner = iter_query_inner::<Account>(value).expect("fixture account query downcast");
-            assert_eq!(
-                value.type_name_key(),
-                std::any::type_name::<ErasedIterQuery<Account>>()
-            );
-            assert_eq!(inner.payload(), FindAccounts.encode());
-            assert_eq!(
-                inner.predicate().encode(),
-                CompoundPredicate::<Account>::PASS.encode()
-            );
-            assert_eq!(
-                inner.selector().encode(),
-                SelectorTuple::<Account>::default().encode()
-            );
-            (
-                "iroha.query.v1::iterable::account::Account",
-                <ErasedIterQuery<Account> as norito::NoritoSchema>::nominal_name(),
-                inner.payload(),
-                inner.predicate().encode(),
-                inner.selector().encode(),
-            )
-        };
+        iter_query_inner::<Domain>(value).map_or_else(
+            || {
+                let inner =
+                    iter_query_inner::<Account>(value).expect("fixture account query downcast");
+                assert_eq!(
+                    value.type_name_key(),
+                    std::any::type_name::<ErasedIterQuery<Account>>()
+                );
+                assert_eq!(inner.payload(), FindAccounts.encode());
+                assert_eq!(
+                    inner.predicate().encode(),
+                    CompoundPredicate::<Account>::PASS.encode()
+                );
+                assert_eq!(
+                    inner.selector().encode(),
+                    SelectorTuple::<Account>::default().encode()
+                );
+                (
+                    "iroha.query.v1::iterable::account::Account",
+                    <ErasedIterQuery<Account> as norito::NoritoSchema>::nominal_name(),
+                    inner.payload(),
+                    inner.predicate().encode(),
+                    inner.selector().encode(),
+                )
+            },
+            |inner| {
+                assert_eq!(
+                    value.type_name_key(),
+                    std::any::type_name::<ErasedIterQuery<Domain>>()
+                );
+                assert_eq!(inner.payload(), FindDomains.encode());
+                assert_eq!(
+                    inner.predicate().encode(),
+                    CompoundPredicate::<Domain>::PASS.encode()
+                );
+                assert_eq!(
+                    inner.selector().encode(),
+                    SelectorTuple::<Domain>::default().encode()
+                );
+                (
+                    "iroha.query.v1::iterable::domain::Domain",
+                    <ErasedIterQuery<Domain> as norito::NoritoSchema>::nominal_name(),
+                    inner.payload(),
+                    inner.predicate().encode(),
+                    inner.selector().encode(),
+                )
+            },
+        );
     // These stable IDs are taken from define_builtin_query_registry!, not a
     // guessed Rust nominal identity or a new registry installed by this test.
     assert_eq!(wire_id, expected_id);
@@ -263,7 +267,7 @@ fn network() -> NetworkId {
 }
 
 /// Construct a deterministic opaque cursor wire fixture through its public JSON API.
-pub(super) fn cursor() -> ForwardCursor {
+pub fn cursor() -> ForwardCursor {
     // A fixed opaque server-token wire fixture; no test issues a live continuation
     // or treats this synthetic value as portable between Torii instances.
     norito::json::from_json(r#"{"query":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","cursor":1,"gas_budget":5}"#)
@@ -291,15 +295,15 @@ fn request(kind: u8) -> QueryRequestWithAuthority {
 }
 
 /// Construct an unsigned singular request with a complete explicit signing context.
-pub(super) fn request_singular() -> QueryRequestWithAuthority {
+pub fn request_singular() -> QueryRequestWithAuthority {
     request(0)
 }
 /// Construct an unsigned iterable request with a complete explicit signing context.
-pub(super) fn request_start() -> QueryRequestWithAuthority {
+pub fn request_start() -> QueryRequestWithAuthority {
     request(1)
 }
 /// Construct an unsigned continuation request with a complete explicit signing context.
-pub(super) fn request_continue() -> QueryRequestWithAuthority {
+pub fn request_continue() -> QueryRequestWithAuthority {
     request(2)
 }
 
@@ -567,7 +571,7 @@ fn signed_context_and_rejections() {
 }
 
 /// Construct a valid one-column, two-row query batch.
-pub(super) fn one_column() -> QueryOutputBatchBoxTuple {
+pub fn one_column() -> QueryOutputBatchBoxTuple {
     QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::String(vec![
         "first".into(),
         "second".into(),
@@ -575,7 +579,7 @@ pub(super) fn one_column() -> QueryOutputBatchBoxTuple {
     .unwrap()
 }
 /// Construct a valid two-column, two-row query batch.
-pub(super) fn two_columns() -> QueryOutputBatchBoxTuple {
+pub fn two_columns() -> QueryOutputBatchBoxTuple {
     QueryOutputBatchBoxTuple::new(vec![
         QueryOutputBatchBox::String(vec!["first".into(), "second".into()]),
         QueryOutputBatchBox::Name(vec!["alpha".parse().unwrap(), "beta".parse().unwrap()]),
@@ -583,7 +587,7 @@ pub(super) fn two_columns() -> QueryOutputBatchBoxTuple {
     .unwrap()
 }
 /// Construct a valid two-column batch with no rows.
-pub(super) fn empty_rows() -> QueryOutputBatchBoxTuple {
+pub fn empty_rows() -> QueryOutputBatchBoxTuple {
     QueryOutputBatchBoxTuple::new(vec![
         QueryOutputBatchBox::String(Vec::new()),
         QueryOutputBatchBox::Name(Vec::new()),
@@ -596,7 +600,10 @@ fn inspect_batch(value: &QueryOutputBatchBoxTuple) -> Value {
     for column in value.columns() {
         assert_eq!(column.len(), value.len());
     }
-    assert_eq!(value.is_empty(), value.len() == 0);
+    assert_eq!(
+        value.is_empty(),
+        value.columns().iter().all(QueryOutputBatchBox::is_empty)
+    );
     norito::json!({ "json": (checked_json(value)), "columns": (value.column_count()), "rows": (value.len()) })
 }
 fn batch_payload(columns: &Vec<QueryOutputBatchBox>) -> Vec<u8> {
@@ -683,15 +690,15 @@ fn batch_rejections() {
 }
 
 /// Construct a singular parameters response through its public enum.
-pub(super) fn response_singular() -> QueryResponse {
+pub fn response_singular() -> QueryResponse {
     QueryResponse::Singular(SingularQueryOutputBox::Parameters(Parameters::default()))
 }
 /// Construct an iterable response carrying an exact remaining count.
-pub(super) fn response_exact() -> QueryResponse {
+pub fn response_exact() -> QueryResponse {
     QueryResponse::Iterable(QueryOutput::new(two_columns(), 3, Some(cursor())))
 }
 /// Construct an iterable response with an intentionally omitted count.
-pub(super) fn response_bounded() -> QueryResponse {
+pub fn response_bounded() -> QueryResponse {
     QueryResponse::Iterable(QueryOutput::new_bounded(empty_rows(), false, None))
 }
 fn inspect_response(value: &QueryResponse) -> Value {
@@ -736,7 +743,7 @@ fn inspect_time(value: &TimeInterval) -> Value {
 }
 fn time_rejections() {
     for json in [
-        r#"{}"#,
+        r"{}",
         r#"{"since_ms":0}"#,
         r#"{"length_ms":0}"#,
         r#"{"since_ms":-1,"length_ms":0}"#,

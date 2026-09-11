@@ -1077,7 +1077,7 @@ impl PreparedCertifiedResponseCandidate {
     fn matches_authenticated_response(
         &self,
         response: &wire::CertifiedBodyResponse,
-        responder: &iroha_data_model::peer::PeerId,
+        responder: &iroha_model_base::peer::PeerId,
     ) -> bool {
         match self {
             Self::Ordinary(candidate) => {
@@ -1109,7 +1109,7 @@ impl PreparedClaimedResponseFamily {
         &self,
     ) -> Option<(
         &wire::CertifiedBodyResponse,
-        &iroha_data_model::peer::PeerId,
+        &iroha_model_base::peer::PeerId,
     )> {
         let BlockMessage::V2(message) = self.inbound.message() else {
             return None;
@@ -1170,7 +1170,7 @@ impl CertifiedFetchReadyAuthority {
 pub(super) struct CertifiedFetchCompletionAuthority<'a> {
     ready: CertifiedFetchReadyAuthority,
     response_hash: HashOf<wire::CertifiedBodyResponse>,
-    authenticated_responder: &'a iroha_data_model::peer::PeerId,
+    authenticated_responder: &'a iroha_model_base::peer::PeerId,
     authenticated_response: &'a wire::CertifiedBodyResponse,
     candidate_pending: &'a crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
 }
@@ -1192,7 +1192,7 @@ impl CertifiedFetchCompletionAuthority<'_> {
         self.ready.causal_root
     }
     /// Borrow the authenticated outer responder bound by the selector.
-    pub(super) const fn authenticated_responder(&self) -> &iroha_data_model::peer::PeerId {
+    pub(super) const fn authenticated_responder(&self) -> &iroha_model_base::peer::PeerId {
         self.authenticated_responder
     }
     /// Borrow the complete signed response retained by the queue witness.

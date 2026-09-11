@@ -2,8 +2,9 @@
 use crate::{
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-    domain::{Domain, DomainId},
+    domain::Domain,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use std::{
     collections::btree_map::{BTreeMap, Entry},
@@ -293,14 +294,12 @@ fn verify_asset_totals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        asset::{
-            Mintable,
-            definition::{AssetBalancePolicy, AssetConfidentialPolicy},
-        },
-        metadata::Metadata,
+    use crate::asset::{
+        Mintable,
+        definition::{AssetBalancePolicy, AssetConfidentialPolicy},
     };
     use iroha_crypto::KeyPair;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::{NumericSpec, Quantity};
     use std::collections::BTreeSet;
     fn checked_random_keypair() -> KeyPair {

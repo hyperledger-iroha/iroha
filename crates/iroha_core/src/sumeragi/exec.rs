@@ -10,9 +10,10 @@ use iroha_data_model::{
         consensus_v2 as wire,
     },
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, compute_settlement_hash},
+    nexus::{LaneFinalityStatement, compute_settlement_hash},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::collections::{BTreeMap, BTreeSet};
 fn witness_pairs(witness: &ExecWitness) -> (Vec<KvPair>, Vec<KvPair>) {
     let reads = witness
@@ -767,13 +768,13 @@ mod tests {
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1, KagemushaReserveReceiptV1,
             KagemushaReserveReceiptWitnessV1,
         },
-        peer::PeerId,
         transaction::{
             FeePaymentIntent,
             signed::{TransactionBuilder, TransactionEntrypoint, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
     };
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroU64, time::Duration};
     const MANIFEST_APPLICATION_HEIGHT: u64 = 40;
@@ -1274,7 +1275,7 @@ mod tests {
             Hash::new(b"kagemusha-execution-commitment"),
         ));
         let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain"),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("asset name"),
         );
         let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(

@@ -23,6 +23,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use std::sync::LazyLock;
@@ -350,6 +351,7 @@ mod tests {
         account::admission::ImplicitAccountCreationFee, parameter::Parameters,
         permission::Permissions,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
     use std::collections::BTreeMap;

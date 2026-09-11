@@ -321,7 +321,8 @@ impl Registrable for NewRole {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{domain::DomainId, permission::Permission};
+    use crate::permission::Permission;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     #[test]
     fn role_json_roundtrip() {
@@ -397,7 +398,7 @@ mod tests {
         let name: Name = "auditor".parse().expect("role name");
         let id = RoleId::new(name);
         let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
-        let _domain: crate::domain::DomainId =
+        let _domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("test fixture Ed25519 key generation should succeed");

@@ -23,7 +23,7 @@ use iroha_data_model::{
     account::{AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
     block::{BlockHeader, SignedBlock},
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{
         self, CustomInstruction, ExecuteTrigger, GrantBox, Instruction as IsiInstruction,
         InstructionBox, Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox,
@@ -33,7 +33,6 @@ use iroha_data_model::{
         mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
-    metadata::Metadata,
     nft::{NftEntry, NftId},
     peer::Peer,
     rwa::RwaEntry,
@@ -43,6 +42,8 @@ use iroha_data_model::{
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_torii_shared::qr::{EcLevel, QrCode, QrError};
 use mv::storage::StorageReadOnly;
@@ -2573,10 +2574,8 @@ mod tests {
         asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId, definition::MintabilityTokens},
         block::{BlockHeader, builder::BlockBuilder},
         common::{Owned, Ref},
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{Register, Transfer},
-        metadata::Metadata,
-        nexus::DataSpaceId,
         nft::{NftData, NftId},
         smart_contract::ContractAddress,
         transaction::{
@@ -2586,6 +2585,9 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use std::{iter, num::NonZeroU32, str::FromStr, time::Duration as StdDuration};
@@ -2652,7 +2654,7 @@ mod tests {
             limit: EXPLORER_CURSOR_MAX_LIMIT,
         };
         let visibility = DataspaceReadVisibility::new(
-            std::collections::BTreeSet::from([iroha_data_model::nexus::DataSpaceId::UNIVERSAL]),
+            std::collections::BTreeSet::from([iroha_model_base::topology::DataSpaceId::UNIVERSAL]),
             false,
         );
         let domain_page =

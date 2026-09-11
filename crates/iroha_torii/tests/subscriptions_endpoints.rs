@@ -18,16 +18,14 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
-    ChainId, Registrable,
+    Registrable,
     account::Account,
     asset::{AssetDefinition, AssetDefinitionId},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     events::time::{ExecutionTime, Schedule, TimeEventFilter},
     isi::{InstructionBox, Register},
-    metadata::Metadata,
     nft::{Nft, NftId},
-    peer::PeerId,
     prelude::Repeats,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
@@ -38,7 +36,11 @@ use iroha_data_model::{
     },
     trigger::{Trigger, TriggerId, action::Action},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},

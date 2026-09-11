@@ -170,7 +170,7 @@ fn independent_zero_accepted_legs_publish_no_occurrence() {
     {
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0x83);
-        tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::new(999));
+        tx.current_lane_id = Some(iroha_model_base::topology::LaneId::new(999));
         TransferAssetBatch::independent(vec![
             entry(
                 "one",

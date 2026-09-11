@@ -1699,7 +1699,6 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         sorafs::{
             pin_registry::StorageClass,
             reserve::{
@@ -1710,6 +1709,7 @@ mod tests {
         },
         transaction::SignedTransaction,
     };
+    use iroha_model_base::domain::DomainId;
     fn cursor(height: u64, seed: u8) -> ReserveFinalizedCursorV1 {
         ReserveFinalizedCursorV1 {
             height,

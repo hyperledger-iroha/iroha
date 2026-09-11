@@ -6,13 +6,14 @@ use crate::{
 use iroha_crypto::{Hash, privacy::LaneCommitmentId};
 use iroha_data_model::{
     account::AccountId,
-    domain::DomainId,
     nexus::{
-        DataSpaceId, LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-        LaneId, MAX_ACTIVE_EXECUTION_LANES, ParticipantSelector, UniversalAccountId,
+        LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+        MAX_ACTIVE_EXECUTION_LANES, ParticipantSelector, UniversalAccountId,
     },
 };
 use iroha_logger::warn;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{DecodeAll, Encode};
 use norito::{DecodeLimits, with_decode_limits};
 use std::{
@@ -814,9 +815,10 @@ mod tests {
     };
     use iroha_data_model::{
         account::AccountId,
-        metadata::Metadata,
-        nexus::{AuditControls, DataSpaceId, JurisdictionSet, LaneStorageProfile, LaneVisibility},
+        nexus::{AuditControls, JurisdictionSet, LaneStorageProfile, LaneVisibility},
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use std::{collections::BTreeSet, fs, path::PathBuf};
     fn account(name: &str, domain: &str) -> AccountId {
         let seed_literal = format!("{name}::{domain}");
@@ -1347,9 +1349,9 @@ mod tests {
     fn selector_matches_authority_domain() {
         let alpha = account("alice", "wonderland");
         let retail_domain =
-            iroha_data_model::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
+            iroha_model_base::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
         let other_domain =
-            iroha_data_model::domain::DomainId::try_new("ubl", "paynet").expect("domain id");
+            iroha_model_base::domain::DomainId::try_new("ubl", "paynet").expect("domain id");
         let policy = LaneCompliancePolicy {
             allow: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -1392,7 +1394,7 @@ mod tests {
     fn selector_matches_authority_domain_prefix() {
         let alpha = account("alice", "wonderland");
         let retail_domain =
-            iroha_data_model::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
+            iroha_model_base::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
         let policy = LaneCompliancePolicy {
             allow: vec![LaneComplianceRule {
                 selector: ParticipantSelector {

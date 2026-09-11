@@ -23,8 +23,8 @@ use iroha_data_model::{
     NetworkId,
     isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
     parameter::{Parameter, system::KagemushaMintFinalityNextEpochParameterV1},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use zeroize::Zeroize;
 
 use crate::Outcome;

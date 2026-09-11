@@ -900,7 +900,6 @@ mod tests {
         IntoKeyValue,
         account::{Account, AccountId, OpaqueAccountId},
         block::BlockHeader,
-        domain::DomainId,
         identifier::{
             IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId,
             IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
@@ -909,7 +908,6 @@ mod tests {
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
         isi::ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
-        metadata::Metadata,
         nexus::UniversalAccountId,
         prelude::Domain,
         ram_lfe::{
@@ -917,6 +915,8 @@ mod tests {
             RamLfeProgramId, RamLfeProgramPolicy, RamLfeReceiptAttestation,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     fn test_state() -> State {

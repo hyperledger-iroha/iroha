@@ -2,10 +2,11 @@
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     id::NetworkId,
-    nexus::{DataSpaceCatalog, DataSpaceId},
+    nexus::DataSpaceCatalog,
 };
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
@@ -487,18 +488,17 @@ impl ContractLifecycleControlV1 {
         ) {
             return Err("Parliament contract origin identifiers must be non-zero");
         }
-        if let Some(hold) = &self.emergency_hold {
-            if hold.incident_digest == [0; 32]
+        if let Some(hold) = &self.emergency_hold
+            && (hold.incident_digest == [0; 32]
                 || hold.proposal_content_id == [0; 32]
                 || hold.governance_attempt_id == [0; 32]
                 || hold.reason.trim().is_empty()
                 || hold.imposed_at_height == 0
                 || hold.expires_at_height <= hold.imposed_at_height
                 || hold.expires_at_height - hold.imposed_at_height
-                    > MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1
-            {
-                return Err("invalid contract emergency hold");
-            }
+                    > MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1)
+        {
+            return Err("invalid contract emergency hold");
         }
         Ok(())
     }
@@ -996,8 +996,9 @@ pub mod prelude {
 #[cfg(test)]
 mod contract_address_tests {
     use super::*;
-    use crate::{block::BlockHeader, id::ChainId};
+    use crate::block::BlockHeader;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::chain::ChainId;
     fn network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
@@ -1418,11 +1419,11 @@ pub mod manifest {
     use crate::{
         account::AccountId,
         events::EventFilterBox,
-        metadata::Metadata,
         smart_contract::entrypoint::{EntrypointArgumentSchemaV1, EntrypointValueTypeV1},
         trigger::{TriggerId, action::Repeats},
     };
     use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
+    use iroha_model_base::metadata::Metadata;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
 
@@ -2280,7 +2281,7 @@ pub mod manifest {
                 descriptor
             );
             for forged in [
-                json.replacen("{", "{\"unexpected\":true,", 1),
+                json.replacen('{', "{\"unexpected\":true,", 1),
                 json.replacen("\"name\":", "\"unexpected\":true,\"name\":", 1),
             ] {
                 assert!(norito::json::from_str::<ContractErrorTypeDescriptor>(&forged).is_err());

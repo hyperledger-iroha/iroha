@@ -3,6 +3,9 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{blocking::Client, data_model::prelude::*};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;

@@ -59,12 +59,12 @@ fn assert_direction<T: NoritoSchema>(nominal: &str, direction: &str) {
 }
 
 /// Check a frame writer against the original serializer observation.
-pub(crate) fn assert_serialize<T: NoritoSerialize>(nominal: &str) {
+pub fn assert_serialize<T: NoritoSerialize>(nominal: &str) {
     assert_direction::<T>(nominal, "serialize");
 }
 
 /// Check both frame contracts against their independent original observations.
-pub(crate) fn assert_bidirectional<T>(nominal: &str)
+pub fn assert_bidirectional<T>(nominal: &str)
 where
     T: NoritoSerialize + for<'a> NoritoDeserialize<'a>,
 {

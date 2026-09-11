@@ -1,10 +1,8 @@
 use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path};
 
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
-use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
-    peer::PeerId,
-};
+use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use tempfile::TempDir;
 
 use super::*;
@@ -94,9 +92,7 @@ impl RecoveryFixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id(network);
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 1, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,

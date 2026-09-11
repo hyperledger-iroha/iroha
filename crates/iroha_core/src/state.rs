@@ -114,7 +114,6 @@ use iroha_data_model::{
         MergeLaneBinding, MergeLaneExecution, MergeLaneSignerProof, MergeLaneSnapshot,
         MergeLedgerEntry,
     },
-    metadata::Metadata,
     musubi::{
         ArchiveId, MUSUBI_MAX_PENDING_INVITATIONS_V1, MusubiAliasHistoryEntryV1,
         MusubiAliasHistoryKeyV1, MusubiAliasNameV1, MusubiAliasRecordV1,
@@ -137,12 +136,12 @@ use iroha_data_model::{
         AUTOSCALE_META_MANAGED, AxtAssetIncarnationV1, AxtEnvelopeRecord, AxtHandleBudgetKey,
         AxtHandleBudgetRecord, AxtHandleCounterError, AxtHandleCounterRecord, AxtHandleFragment,
         AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
-        AxtPolicySnapshotValidationError, AxtReplayRecord, DataSpaceCatalog, DataSpaceId,
-        DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
-        FeeDebitSource, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorEnrollment,
+        AxtPolicySnapshotValidationError, AxtReplayRecord, DataSpaceCatalog, DomainCommittee,
+        DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord, FeeDebitSource,
+        FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorEnrollment,
         FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
         FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
-        FeeSponsorVault, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
+        FeeSponsorVault, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
         LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord, PublicLaneStakeShare,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
@@ -159,7 +158,6 @@ use iroha_data_model::{
         CustomParameterId, Parameters,
         system::{KagemushaMintFinalityNextEpochParameterV1, SumeragiNposParameters},
     },
-    peer::PeerId,
     permission::{Permission, Permissions},
     prelude::*,
     query::error::{CanonicalHistoryError, FindError, QueryExecutionFail},
@@ -206,7 +204,11 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 use iroha_model_base::{error::ParseError, name::Name, state_path::StatePath};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -2509,7 +2511,7 @@ mod queue_plan_pending_frame_identity_tests {
         );
         let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5));
         let plan = RoutingPlan::single(route);
-        let validator_set = vec![iroha_data_model::peer::PeerId::new(
+        let validator_set = vec![iroha_model_base::peer::PeerId::new(
             validator.public_key().clone(),
         )];
         let context = QueuePlanAdmissionContextV1 {
@@ -12141,7 +12143,7 @@ pub struct State {
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier from configuration, exposed through the display sysvar.
-    pub chain_id: iroha_data_model::ChainId,
+    pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain derived from `genesis.expected_hash`; binds VRF prehashes.
     pub network_id: iroha_data_model::NetworkId,
     /// Typed v2 trust root parsed from a snapshot but not yet authorized by snapshot policy.
@@ -13072,7 +13074,7 @@ pub struct StateBlock<'state> {
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
-    pub chain_id: iroha_data_model::ChainId,
+    pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain for this block.
     pub network_id: iroha_data_model::NetworkId,
     /// Accumulated settlement receipts for transactions in this block.
@@ -14365,7 +14367,7 @@ pub struct StateTransaction<'block, 'state> {
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier snapshot exposed through the display sysvar.
-    pub chain_id: iroha_data_model::ChainId,
+    pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain for this transaction; binds VRF prehashes.
     pub network_id: iroha_data_model::NetworkId,
     /// Accumulator used to record settlement receipts for this block.
@@ -14754,7 +14756,7 @@ pub struct StateView<'state> {
     /// Settlement engine snapshot for this view.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
-    pub chain_id: iroha_data_model::ChainId,
+    pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
     /// Creation timestamp to catch long-lived view guards.
@@ -14813,7 +14815,7 @@ pub struct StateQueryView<'state> {
     /// Content configuration snapshot for this view.
     pub content: iroha_config::parameters::actual::Content,
     /// Chain identifier for this view.
-    pub chain_id: iroha_data_model::ChainId,
+    pub chain_id: iroha_model_base::chain::ChainId,
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
 }
@@ -15740,9 +15742,9 @@ mod stake_snapshot_tests {
     use iroha_data_model::{
         account::AccountId as DMAccountId,
         consensus::{ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::unique_vec::UniqueVec;
     fn seed_consensus_key(
         world_block: &mut WorldBlock<'_>,
@@ -17224,11 +17226,12 @@ mod storage_migration_tests {
             AccountAlias, AccountAliasDomain, AccountDetails, AccountId,
             AccountRekeyTransitionProvenance,
         },
-        domain::DomainId,
-        metadata::Metadata,
-        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use std::{
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
@@ -18063,9 +18066,9 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_tx_hash:
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// Lane used by the transaction currently being merged.
-    pub(crate) current_lane_id: Option<iroha_data_model::nexus::LaneId>,
+    pub(crate) current_lane_id: Option<iroha_model_base::topology::LaneId>,
     /// Dataspace used by the transaction currently being merged.
-    pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
+    pub(crate) current_dataspace_id: Option<iroha_model_base::topology::DataSpaceId>,
 }
 impl DetachedStateTransactionDelta {
     pub(crate) fn single_transfer_delta(
@@ -28802,7 +28805,7 @@ impl State {
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
         exact_durable_height: usize,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> core::result::Result<Self, MergeLedgerCommitError> {
@@ -29507,7 +29510,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
         Self::try_new_with_chain(
@@ -29531,7 +29534,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Result<Self, MergeLedgerCommitError> {
         Self::try_new_with_chain_and_network_id(
@@ -29558,7 +29561,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Result<Self, MergeLedgerCommitError> {
@@ -29598,7 +29601,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         telemetry: StateTelemetry,
     ) -> Result<Self, MergeLedgerCommitError> {
         #[cfg(feature = "telemetry")]
@@ -29622,7 +29625,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
     ) -> Result<Self, MergeLedgerCommitError> {
         Self::try_new_with_chain_and_network_id(
@@ -29693,7 +29696,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
     ) -> Self {
         let mut s = Self::try_new_with_chain(
             world,
@@ -29893,7 +29896,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
     ) -> Self {
         let mut s = Self::try_new_with_chain(
             world,
@@ -29919,7 +29922,7 @@ impl State {
         world: World,
         kura: Arc<Kura>,
         query_handle: LiveQueryStoreHandle,
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
     ) -> Self {
         let mut s = Self::try_new_with_chain_and_network_id(
@@ -31573,7 +31576,7 @@ impl State {
     ///
     /// This avoids acquiring a full [`StateView`] when only the chain id is needed.
     #[must_use]
-    pub fn chain_id_ref(&self) -> &iroha_data_model::ChainId {
+    pub fn chain_id_ref(&self) -> &iroha_model_base::chain::ChainId {
         &self.chain_id
     }
     /// Borrow the exact genesis-derived transaction security domain.
@@ -48380,40 +48383,42 @@ fn lane_topology_diff<'a>(
         relabelled,
     }
 }
-static DEFAULT_TEST_IDENTITIES: LazyLock<(iroha_data_model::ChainId, iroha_data_model::NetworkId)> =
-    LazyLock::new(|| {
-        use iroha_config::{base::read::ConfigReader, parameters::user};
-        let config_path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
-        let reader = ConfigReader::new()
-            .read_toml_with_extends(&config_path)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to read default testing config `{}`: {err:?}",
-                    config_path.display()
-                )
-            });
-        let user_config = reader
-            .read_and_complete::<user::Root>()
-            .unwrap_or_else(|err| {
-                panic!(
-                    "default testing config `{}` is incomplete: {err:?}",
-                    config_path.display()
-                )
-            });
-        let config: iroha_config::parameters::actual::Root =
-            user_config.parse().unwrap_or_else(|err| {
-                panic!(
-                    "failed to parse default testing config `{}`: {err}",
-                    config_path.display()
-                )
-            });
-        (
-            config.common.chain,
-            iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
-        )
-    });
-static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_data_model::ChainId> =
+static DEFAULT_TEST_IDENTITIES: LazyLock<(
+    iroha_model_base::chain::ChainId,
+    iroha_data_model::NetworkId,
+)> = LazyLock::new(|| {
+    use iroha_config::{base::read::ConfigReader, parameters::user};
+    let config_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+    let reader = ConfigReader::new()
+        .read_toml_with_extends(&config_path)
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to read default testing config `{}`: {err:?}",
+                config_path.display()
+            )
+        });
+    let user_config = reader
+        .read_and_complete::<user::Root>()
+        .unwrap_or_else(|err| {
+            panic!(
+                "default testing config `{}` is incomplete: {err:?}",
+                config_path.display()
+            )
+        });
+    let config: iroha_config::parameters::actual::Root =
+        user_config.parse().unwrap_or_else(|err| {
+            panic!(
+                "failed to parse default testing config `{}`: {err}",
+                config_path.display()
+            )
+        });
+    (
+        config.common.chain,
+        iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
+    )
+});
+static DEFAULT_TEST_CHAIN_ID: LazyLock<iroha_model_base::chain::ChainId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.0.clone());
 static DEFAULT_TEST_NETWORK_ID: LazyLock<iroha_data_model::NetworkId> =
     LazyLock::new(|| DEFAULT_TEST_IDENTITIES.1);
@@ -48750,7 +48755,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
     /// Immutable governed SCCP registry for this state snapshot.
     fn sccp_registry(&self) -> &ValidatedSccpRegistryV1;
     /// Chain identifier bound to this state view.
-    fn chain_id(&self) -> &iroha_data_model::ChainId;
+    fn chain_id(&self) -> &iroha_model_base::chain::ChainId;
     /// Exact genesis-derived security domain bound to this state view.
     fn network_id(&self) -> &iroha_data_model::NetworkId;
     /// Snapshot of per-dataspace AXT policies available to hosts/admission.
@@ -49015,7 +49020,7 @@ macro_rules! impl_state_ro {
             fn sccp_registry(&self) -> &ValidatedSccpRegistryV1 {
                 &self.sccp_registry
             }
-            fn chain_id(&self) -> &iroha_data_model::ChainId {
+            fn chain_id(&self) -> &iroha_model_base::chain::ChainId {
                 &self.chain_id
             }
             fn network_id(&self) -> &iroha_data_model::NetworkId {
@@ -49494,7 +49499,7 @@ fn canonicalize_sccp_registry(registry: &mut SccpOnChainRegistryV1) {
 /// not be able to opt into Taira SCCP authority by choosing a familiar display
 /// name or the retired pre-release chain identifier.
 pub(crate) fn sccp_local_sora_network_for_chain_id(
-    chain_id: &iroha_data_model::ChainId,
+    chain_id: &iroha_model_base::chain::ChainId,
 ) -> Option<iroha_data_model::bridge::SccpNetworkV1> {
     use iroha_data_model::bridge::SccpNetworkV1;
     match chain_id.as_str() {
@@ -49505,7 +49510,7 @@ pub(crate) fn sccp_local_sora_network_for_chain_id(
 /// Require every governed inbound lane to terminate at this chain's exact SORA profile.
 pub(crate) fn validate_sccp_registry_local_profile(
     registry: &ValidatedSccpRegistryV1,
-    chain_id: &iroha_data_model::ChainId,
+    chain_id: &iroha_model_base::chain::ChainId,
 ) -> core::result::Result<(), String> {
     if registry.lanes().is_empty() {
         return Ok(());
@@ -49898,7 +49903,7 @@ fn sccp_sora_replay_domain_for_route(
 fn validate_sccp_state_view(
     world: &impl WorldReadOnly,
     registry: &ValidatedSccpRegistryV1,
-    chain_id: &iroha_data_model::ChainId,
+    chain_id: &iroha_model_base::chain::ChainId,
     network_id: &iroha_data_model::NetworkId,
     committed_height: usize,
     kura: &Kura,
@@ -57554,6 +57559,7 @@ mod musubi_replication_shortfall_telemetry_tests {
 }
 #[cfg(test)]
 mod state_commit_lock_order_tests {
+    use iroha_model_base::topology::LaneId;
     include!("state/state_commit_lock_order_tests.rs");
 }
 #[cfg(test)]
@@ -57639,6 +57645,7 @@ mod tiered_snapshot_diff_tests {
         AssetHandleIssuerPayloadV1, AxtBinding, AxtHandleIssuerContextV1, GroupBinding,
         HandleBudget, HandleSubject,
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_test_samples::ALICE_ID;
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1;
     fn authenticated_sccp_archive_kura() -> Arc<Kura> {
@@ -60548,6 +60555,8 @@ mod tiered_snapshot_diff_tests {
 }
 #[cfg(test)]
 mod transfer_transcript_tests {
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     include!("state/transfer_transcript_tests.rs");
 }
 #[cfg(test)]
@@ -60569,12 +60578,12 @@ mod fastpq_tx_set_hash_tests {
         domain::Domain,
         fastpq::{TransferDeltaTranscript, TransferTranscript},
         isi::Log,
-        nexus::DataSpaceId,
         permission::Permission,
         role::{Role, RoleId},
         transaction::TransactionBuilder,
     };
     use iroha_logger::Level;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
     use nonzero_ext::nonzero;
@@ -65828,6 +65837,7 @@ impl StateTransaction<'_, '_> {
 }
 /// Bounds for `range` queries
 mod range_bounds {
+    use iroha_model_base::domain::DomainId;
     include!("state/range_bounds.rs");
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -65956,6 +65966,10 @@ pub(crate) struct SnapshotSpaceDirectoryManifestSet {
     pub encoded_hex: String,
 }
 pub(crate) mod deserialize {
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::topology::LaneId;
     include!("state/deserialize_core.rs");
     include!("state/deserialize_world.rs");
 }

@@ -31,7 +31,6 @@ use iroha_data_model::{
         ReleaseAssetEscrow, ResolveEscrowDispute,
     },
     permission::Permission,
-    prelude::*,
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
         error::{FindError, QueryExecutionFail},
@@ -46,6 +45,7 @@ use iroha_data_model::{
         is_reserved_orderbook_escrow_id_v1,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -2435,16 +2435,23 @@ mod tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
     use iroha_data_model::{
+        Registrable,
         asset::{
-            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
-            AssetSubjectBindingV1, AssetTransferAvailability, definition::AssetConfidentialPolicy,
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, Asset, AssetDefinition,
+            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferAvailability,
+            definition::AssetConfidentialPolicy,
         },
+        domain::Domain,
         events::{EventBox, data::prelude as data_pre},
-        isi::SetAssetTransferAvailability,
+        isi::{
+            Burn, SetAssetTransferAvailability, Transfer, Unregister,
+            account_recovery::ReplaceAccountController,
+        },
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::{Permission as _, escrow::CanResolveEscrowDispute};
-    use iroha_primitives::json::Json;
+    use iroha_model_base::domain::DomainId;
+    use iroha_primitives::{json::Json, numeric::Numeric};
     use std::collections::BTreeMap;
     fn fixture_account(label: &str) -> AccountId {
         let seed: Vec<u8> = label.as_bytes().iter().copied().cycle().take(32).collect();
@@ -3054,7 +3061,7 @@ mod tests {
         let observer = fixture_account("lock-home-observer");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("lock-definition-home");
-        let home_dataspace = iroha_data_model::nexus::DataSpaceId::new(7);
+        let home_dataspace = iroha_model_base::topology::DataSpaceId::new(7);
         let asset_definition_entry = AssetDefinition::numeric(
             asset_definition.clone(),
             "XOR".to_owned(),
@@ -3113,8 +3120,8 @@ mod tests {
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = catalog.clone();
         tx.world.dataspace_catalog = catalog;
-        tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
-        tx.world.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+        tx.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
         seed_test_call_hash(&mut tx, 0xC9);
         OpenAssetLock::new(
             escrow_id,
@@ -3152,7 +3159,7 @@ mod tests {
             asset_definition.clone(),
             record.custody.clone(),
             iroha_data_model::asset::AssetBalanceScope::Dataspace(
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
         );
         assert!(

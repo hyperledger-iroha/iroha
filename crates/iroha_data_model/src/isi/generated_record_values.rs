@@ -16,11 +16,12 @@ use crate::{
         confidential, content, runtime_upgrade, smart_contract_code, soradns, sorafs, staking,
         transfer, transparent,
     },
-    metadata::Metadata,
-    nexus::{DataSpaceId, LaneId, PublicLaneRewardRole, PublicLaneRewardShare},
+    nexus::{PublicLaneRewardRole, PublicLaneRewardShare},
     runtime::{RuntimeUpgradeId, RuntimeUpgradeManifest},
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
 fn keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("deterministic fixture key")

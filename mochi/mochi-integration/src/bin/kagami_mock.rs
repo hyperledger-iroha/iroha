@@ -3,8 +3,9 @@ use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId, isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
-    parameter::system::SumeragiConsensusMode, prelude::ChainId,
+    parameter::system::SumeragiConsensusMode,
 };
+use iroha_model_base::chain::ChainId;
 use mochi_core::{GenesisProfile, sign_kagami_stub_genesis_from_config};
 use mochi_integration::kagami_default_manifest_json;
 use std::{env, fs, path::PathBuf, process};
@@ -367,9 +368,9 @@ mod tests {
         isi::kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
         },
-        peer::PeerId,
     };
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+    use iroha_model_base::peer::PeerId;
     use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
     const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";

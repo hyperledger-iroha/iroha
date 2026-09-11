@@ -13,6 +13,8 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, time::Duration};

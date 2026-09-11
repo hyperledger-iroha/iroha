@@ -1900,17 +1900,15 @@ pub(crate) mod tests {
         sidecar_store::tests::{SidecarFixtureV1, sidecar_fixture},
     };
     use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::{
-        nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_INPUT_SLOTS_V1,
-            PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PrivateSettlementAuditPolicyV1,
-            PrivateSettlementAuthorityCatalogV1, PrivateSettlementCommitteeAuthorityV1,
-            PrivateSettlementDeltaV1, PrivateSettlementLegReceiptV1,
-            PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
-            PrivateSettlementPoolGovernanceLifecycleV1,
-        },
-        peer::PeerId,
+    use iroha_data_model::nexus::{
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_INPUT_SLOTS_V1,
+        PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PrivateSettlementAuditPolicyV1,
+        PrivateSettlementAuthorityCatalogV1, PrivateSettlementCommitteeAuthorityV1,
+        PrivateSettlementDeltaV1, PrivateSettlementLegReceiptV1,
+        PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
+        PrivateSettlementPoolGovernanceLifecycleV1,
     };
+    use iroha_model_base::peer::PeerId;
 
     /// Verify one declared owner frame, reconstruction, and strict malformed-frame rejection.
     pub(crate) fn assert_private_settlement_frame_v1<T>(value: &T, nominal: &str)
@@ -3360,10 +3358,10 @@ pub(crate) mod tests {
     fn state_transaction_applies_all_legs_only_at_atomic_commit_boundaries() {
         use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
         use iroha_data_model::{
-            ChainId,
             block::BlockHeader,
             nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
         };
+        use iroha_model_base::chain::ChainId;
         use std::num::{NonZeroU32, NonZeroU64};
 
         let (mut private_state, receipt, sidecar_fixture) = fixture();

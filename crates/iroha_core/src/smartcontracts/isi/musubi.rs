@@ -19,7 +19,6 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
     block::BlockHeader,
-    domain::DomainId,
     events::data::{DataEvent, musubi::prelude::*},
     governance::types::{GovernanceAttemptStatusV1, ProposalContentId, ProposalKind},
     isi::{
@@ -30,6 +29,8 @@ use iroha_data_model::{
     query::{error::QueryExecutionFail, musubi::prelude::*},
     sorafs::pin_registry::ReplicationOrderStatus,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
@@ -4451,6 +4452,7 @@ fn emit_musubi_event(event: MusubiEvent, state_transaction: &mut StateTransactio
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::topology::DataSpaceId;
     include!("musubi/archive_replay_tests.rs");
     include!("musubi/governance_tests.rs");
 }

@@ -19,7 +19,6 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     asset::AssetBalanceScope,
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
         PrivacyConsensusLimitsV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
@@ -34,6 +33,7 @@ use iroha_data_model::{
     },
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
+use iroha_model_base::metadata::Metadata;
 /// Exact public-transfer input for the disabled native ZK-ACE candidate.
 ///
 /// The governed policy is owned and validated at construction. Its asset,
@@ -81,7 +81,7 @@ impl ZkAcePrivacyTransferV1 {
         }
         if matches!(
             public_balance_scope,
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
         ) {
             return Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope);
         }
@@ -835,13 +835,11 @@ mod tests {
     use super::*;
     use iroha_core::privacy_engines::zk_ace::ZkAceTryRngCoreV1;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        domain::DomainId,
-        privacy::{
-            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyDigestV1,
-            PrivacyZkAceIdentityCommitmentV1, PrivacyZkAcePolicyRecordDigestV1,
-        },
+    use iroha_data_model::privacy::{
+        PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyDigestV1,
+        PrivacyZkAceIdentityCommitmentV1, PrivacyZkAcePolicyRecordDigestV1,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn key_pair(seed: u8) -> KeyPair {
@@ -995,7 +993,7 @@ mod tests {
                 active.clone(),
                 source.clone(),
                 destination.clone(),
-                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
+                AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL,),
                 1,
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::UniversalDataspaceScope)

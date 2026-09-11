@@ -267,6 +267,7 @@ jobs:
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py \
+            scripts/tests/check_sccp_vendor_generated_test.py \
             scripts/tests/check_nexus_provisioning_templates_test.py \
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
@@ -297,6 +298,7 @@ jobs:
             scripts.tests.obsolete_developer_test_retirement_source_test \
             scripts.tests.shared_proc_macro_emitter_source_test
           python3 scripts/check_generated_artifacts.py
+          python3 scripts/check_sccp_vendor_generated.py
           python3 scripts/check_nexus_provisioning_templates.py
       - name: Classify the PR reverse-dependency closure
         id: classify

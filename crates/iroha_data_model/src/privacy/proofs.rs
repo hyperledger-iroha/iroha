@@ -1442,15 +1442,15 @@ mod exact12_fixture {
     use crate::{
         NetworkId,
         block::BlockHeader,
-        domain::DomainId,
         isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
-        metadata::Metadata,
         transaction::{
             Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain,
             TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_version::codec::EncodeVersioned as _;
     use std::{
@@ -2138,8 +2138,8 @@ mod exact12_fixture {
             _ => proof_for(protocol_id),
         };
         Ok(PrivacyProofEnvelopeV1 {
-            wire_magic: Default::default(),
-            catalog_commitment: Default::default(),
+            wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
+            catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
             protocol_id,
             proof_system_id: protocol_id.expected_proof_system(),
             engine_id: protocol_id.expected_engine(),

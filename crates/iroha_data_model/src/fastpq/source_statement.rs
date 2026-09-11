@@ -8,12 +8,9 @@
 
 use std::num::NonZeroU64;
 
-use crate::{
-    NetworkId,
-    execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
-    nexus::{DataSpaceId, LaneId},
-};
+use crate::{NetworkId, execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1};
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize};
 
@@ -510,11 +507,11 @@ pub fn verify_fastpq_ordinary_source_statement_membership_v1(
         || manifest.executed_entry_count > max_executed_entries
         || manifest.statement_count > max_statements
         || (manifest.executed_entry_count == 0 && manifest.statement_count != 0)
-        || leaf.entry_index >= manifest.executed_entry_count
+        || !(0..manifest.executed_entry_count).contains(&leaf.entry_index)
         || leaf.entry_transcript_count == 0
         || leaf.entry_transcript_count > manifest.statement_count
         || leaf.transcript_index >= leaf.entry_transcript_count
-        || leaf.statement_index >= manifest.statement_count
+        || !(0..manifest.statement_count).contains(&leaf.statement_index)
         || proof.leaf_index() != leaf.statement_index
         || proof.audit_path().len() > 32
     {
@@ -598,14 +595,14 @@ mod tests {
                 entry_index: i * 2,
                 transcript_index: 0,
                 entry_transcript_count: 1,
-                entry_hash: Hash::new([i as u8]),
+                entry_hash: Hash::new([u8::try_from(i).expect("fixture value fits u8")]),
                 execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
                 route: FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
                     lane_id: LaneId::new(2),
                     lane_incarnation: Hash::new(b"source lane incarnation"),
                 }),
                 dataspace_id: DataSpaceId::new(4),
-                statement_digest: [i as u8 + 9; 32],
+                statement_digest: [u8::try_from(i).expect("fixture value fits u8") + 9; 32],
             })
             .collect()
     }
@@ -645,7 +642,7 @@ mod tests {
                 statement_index: index,
                 transcript_index: index,
                 entry_transcript_count: 3,
-                statement_digest: [index as u8; 32],
+                statement_digest: [u8::try_from(index).expect("fixture value fits u8"); 32],
                 ..base
             })
             .collect::<Vec<_>>();
@@ -704,7 +701,7 @@ mod tests {
             }
             // Renumbering the statement positions cannot hide an omitted occurrence.
             for (index, leaf) in changed.iter_mut().enumerate() {
-                leaf.statement_index = index as u32;
+                leaf.statement_index = u32::try_from(index).expect("fixture value fits u32");
             }
             assert!(
                 build_test_manifest(base.source, 2, &changed, 2, 3,).is_none(),
@@ -739,7 +736,9 @@ mod tests {
                 &leaves[index],
                 &leaves[index],
                 &manifest,
-                &tree.get_proof(index as u32).unwrap(),
+                &tree
+                    .get_proof(u32::try_from(index).expect("fixture value fits u32"))
+                    .unwrap(),
                 5,
                 3,
             ));
@@ -1169,6 +1168,43 @@ mod tests {
             let frame = norito::encode_canonical(&old).unwrap();
             assert!(
                 norito::decode_canonical::<FastpqOrdinarySourceStatementLeafV1>(&frame).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_membership_entry_range_is_half_open_without_overflow() {
+        let baseline = leaves()[0];
+        let baseline_manifest = build_test_manifest(baseline.source, 1, &[baseline], 1, 1).unwrap();
+        for (count, index, expected) in [
+            (0, 0, false),
+            (1, 0, true),
+            (1, 1, false),
+            (u32::MAX, u32::MAX - 1, true),
+            (u32::MAX, u32::MAX, false),
+        ] {
+            let mut leaf = baseline;
+            leaf.entry_index = index;
+            let tree: MerkleTree<_> =
+                [fastpq_ordinary_source_statement_leaf_hash_v1(&leaf).unwrap()]
+                    .into_iter()
+                    .collect();
+            let mut manifest = baseline_manifest;
+            // This verifier receives an already authenticated entry commitment; build
+            // the actual leaf root independently to isolate its index/count boundary.
+            manifest.executed_entry_count = count;
+            manifest.statement_root = Hash::from(tree.root().unwrap());
+            assert_eq!(
+                verify_fastpq_ordinary_source_statement_membership_v1(
+                    &leaf,
+                    &leaf,
+                    &manifest,
+                    &tree.get_proof(0).unwrap(),
+                    u32::MAX,
+                    1,
+                ),
+                expected,
+                "entry {index} of {count}"
             );
         }
     }

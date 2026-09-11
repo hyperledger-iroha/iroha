@@ -38,7 +38,6 @@ use iroha_config::parameters::actual::FastpqExecutionMode;
 use iroha_config::parameters::actual::{Fastpq, FastpqPoseidonMode};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    DataSpaceId,
     account::AccountId,
     asset::id::AssetDefinitionId,
     block::{BlockHeader, consensus::ExecWitness},
@@ -51,6 +50,7 @@ use iroha_data_model::{
     },
     role::{Role, RoleId},
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon as halo2_poseidon;
 use norito::{codec::Encode as NoritoEncode, to_bytes};
@@ -1333,11 +1333,11 @@ mod tests {
             BlockHeader,
             consensus::{ExecKv, ExecWitness},
         },
-        domain::DomainId,
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::decode_from_bytes;

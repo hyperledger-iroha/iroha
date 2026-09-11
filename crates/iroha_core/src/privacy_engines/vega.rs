@@ -22,7 +22,6 @@ use core::{fmt, num::NonZeroU32, time::Duration};
 use iroha_crypto::{Hash, PrivateKey, PublicKey as IrohaPublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
     prelude::{AccountId, NetworkId},
     privacy::{
         PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyP256PointV1, PrivacyProofBytesV1,
@@ -42,6 +41,7 @@ use iroha_data_model::{
         signed::TransactionSignatureError,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_zkp_halo2::vega::{
     VEGA_MDL_ACTION_INDEX_V1, VegaFieldError, VegaMdlFigure9ErrorV1, VegaMdlProofContextV1,
     VegaMdlProofErrorV1, VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1,

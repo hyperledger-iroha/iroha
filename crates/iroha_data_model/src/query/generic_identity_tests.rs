@@ -12,13 +12,14 @@ use super::{
     dsl::{CompoundPredicate, SelectorTuple},
     tx_predicate::CommittedTxPredicate,
 };
-use crate::{account::Account, asset::AssetDefinitionId, domain::DomainId};
+use crate::{account::Account, asset::AssetDefinitionId};
+use iroha_model_base::domain::DomainId;
 
-pub(crate) fn record<T>(value: T) -> Value
+pub fn record<T>(value: &T) -> Value
 where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
-    let frame = norito::encode_canonical(&value).expect("encode query identity fixture");
+    let frame = norito::encode_canonical(value).expect("encode query identity fixture");
     let decoded: T = norito::decode_from_bytes(&frame).expect("decode query identity fixture");
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
     let expected_hash = norito::schema::identity::frame_hash::<T>();
@@ -38,7 +39,7 @@ where
     for end in [0, norito::core::Header::SIZE - 1, frame.len() - 1] {
         assert!(norito::decode_from_bytes::<T>(&frame[..end]).is_err());
     }
-    let raw = norito::codec::encode_adaptive(&value);
+    let raw = norito::codec::encode_adaptive(value);
     norito::json!({
         "nominal": (T::nominal_name()),
         "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
@@ -48,16 +49,16 @@ where
     })
 }
 
-pub(crate) fn family<T>(label: &str, make: impl Fn() -> T) -> Value
+pub fn family<T>(label: &str, make: impl Fn() -> T) -> Value
 where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
     norito::json!({
         "case": label,
-        "root": (record(make())),
-        "vec": (record(vec![make(), make()])),
-        "option": (record(Some(make()))),
-        "map": (record(BTreeMap::from([(7_u32, make()), (31, make())]))),
+        "root": (record(&make())),
+        "vec": (record(&vec![make(), make()])),
+        "option": (record(&Some(make()))),
+        "map": (record(&BTreeMap::from([(7_u32, make()), (31, make())]))),
     })
 }
 
@@ -313,21 +314,21 @@ fn captured_query_hash_markers_retain_their_codec_identities() {
     );
 }
 
-fn reject_other_marker<T, U>(left: T, right: U)
+fn reject_other_marker<T, U>(left: &T, right: &U)
 where
     T: NoritoSchema + NoritoSerialize,
     U: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
     assert_eq!(
-        norito::codec::encode_adaptive(&left),
-        norito::codec::encode_adaptive(&right),
+        norito::codec::encode_adaptive(left),
+        norito::codec::encode_adaptive(right),
         "the payload cannot distinguish these item markers"
     );
     assert_ne!(
         norito::schema::identity::frame_hash::<T>(),
         norito::schema::identity::frame_hash::<U>()
     );
-    let frame = norito::encode_canonical(&left).unwrap();
+    let frame = norito::encode_canonical(left).unwrap();
     assert!(matches!(
         norito::decode_from_bytes::<U>(&frame),
         Err(norito::core::Error::SchemaMismatch)
@@ -348,12 +349,12 @@ fn identical_query_payloads_cannot_cross_item_marker_frames() {
     }
     macro_rules! check {
         ($left:expr, $right:expr) => {
-            reject_other_marker($left, $right);
-            reject_other_marker(vec![$left, $left], vec![$right, $right]);
-            reject_other_marker(Some($left), Some($right));
+            reject_other_marker(&$left, &$right);
+            reject_other_marker(&vec![$left, $left], &vec![$right, $right]);
+            reject_other_marker(&Some($left), &Some($right));
             reject_other_marker(
-                BTreeMap::from([(7_u32, $left)]),
-                BTreeMap::from([(7_u32, $right)]),
+                &BTreeMap::from([(7_u32, $left)]),
+                &BTreeMap::from([(7_u32, $right)]),
             );
         };
     }

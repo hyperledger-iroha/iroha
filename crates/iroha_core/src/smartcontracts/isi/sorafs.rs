@@ -15,7 +15,6 @@ use iroha_data_model::{
         SorafsRepairLedgerEventKind,
     },
     isi::error::{InstructionExecutionError, InvalidParameterError},
-    metadata::Metadata,
     musubi::{
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1,
         MusubiReplicationOrderArchiveBindingV1, MusubiReplicationOrderLocationReferenceV1,
@@ -68,6 +67,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
@@ -7824,6 +7824,7 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
 #[cfg(test)]
 mod sorafs_tests {
     use super::*;
+    use iroha_model_base::domain::DomainId;
     include!("sorafs/permission_token_tests.rs");
     use crate::{
         kura::Kura,
@@ -7853,7 +7854,6 @@ mod sorafs_tests {
                 UpsertProviderCredit,
             },
         },
-        metadata::Metadata,
         musubi::{
             ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
             MusubiArchiveLocationIdV1, MusubiArchiveRecordV1, MusubiContentDigestV1,
@@ -7885,6 +7885,7 @@ mod sorafs_tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use iroha_primitives::{bigint::BigInt, json::Json};
     use nonzero_ext::nonzero;

@@ -26,6 +26,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;

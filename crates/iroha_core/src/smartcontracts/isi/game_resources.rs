@@ -194,6 +194,7 @@ mod tests {
         isi::Register,
         nft::{Nft, NftId},
     };
+    use iroha_model_base::metadata::Metadata;
 
     fn register(st: &mut StateTransaction<'_, '_>, owner: &AccountId, name: &str) -> (NftId, Hash) {
         let nft_id: NftId = format!("{name}$session.universal").parse().unwrap();
@@ -269,16 +270,16 @@ mod tests {
             dnf_at_tick: None,
         };
         assert!(prepare_admission(&st, &session, &participant, &[clause.clone()]).is_err());
-        let error = JoinGameSessionV1::new(
-            session.session_id,
-            participant.input_key,
-            vec![0],
-            vec![clause],
-            None,
-            session.manifest_hash,
-            session.asset_definition.clone(),
-            Quantity::zero(),
-        )
+        let error = JoinGameSessionV1 {
+            session_id: session.session_id,
+            input_key: participant.input_key,
+            application_data: vec![0],
+            resources: vec![clause],
+            invitation: None,
+            expected_manifest_hash: session.manifest_hash,
+            expected_asset_definition: session.asset_definition.clone(),
+            expected_stake: Quantity::zero(),
+        }
         .execute(&outsider, &mut st)
         .unwrap_err();
         assert!(error.to_string().contains("qualification"), "{error}");

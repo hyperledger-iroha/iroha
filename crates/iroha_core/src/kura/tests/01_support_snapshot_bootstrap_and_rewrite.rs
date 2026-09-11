@@ -41,7 +41,7 @@ use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
 };
 use iroha_data_model::{
-    ChainId, Level,
+    Level,
     account::Account,
     asset::AssetDefinitionId,
     block::{
@@ -58,14 +58,10 @@ use iroha_data_model::{
         },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{InstructionBox, Log, Upgrade},
     merge::MergeQuorumCertificate,
-    nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
-        LaneVisibility,
-    },
-    peer::PeerId,
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile, LaneVisibility},
     prelude::{Executor, IvmBytecode},
     transaction::{
         Executable, TransactionBuilder,
@@ -74,6 +70,10 @@ use iroha_data_model::{
     trigger::DataTriggerSequence,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{
     SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,

@@ -3,6 +3,7 @@
 use iroha_data_model::asset::AssetDefinitionId;
 use iroha_executor_data_model::json_macros::{JsonDeserialize, JsonSerialize};
 use iroha_executor_data_model_derive::{Parameter, Permission};
+use iroha_model_base::domain::DomainId;
 use iroha_schema::IntoSchema;
 #[derive(Default, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Parameter)]
 struct CustomParameter {

@@ -18,7 +18,6 @@ use iroha_core::{
 use iroha_data_model::{
     Level,
     isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
-    metadata::Metadata,
     permission::Permission,
     privacy::{
         PrivacyCapabilityReadinessV1, PrivacyCapabilityRowV1, PrivacyCapabilityUnavailableReasonV1,
@@ -30,6 +29,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use std::{
     num::{NonZeroU32, NonZeroU64},

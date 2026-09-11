@@ -9,12 +9,14 @@ use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, codec::Encode as 
 use crate::{
     account::{Account, AccountId, NewAccount, OpaqueAccountId, rekey},
     block::SignedBlock,
-    domain::{Domain, DomainId, NewDomain},
+    domain::{Domain, NewDomain},
     isi::Log,
-    metadata::Metadata,
-    nexus::{DataSpaceId, UniversalAccountId},
+    nexus::UniversalAccountId,
     transaction::{DataTriggerSequence, FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 
 fn assert_identity<T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>>(
     nominal: &str,

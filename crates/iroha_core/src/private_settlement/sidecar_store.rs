@@ -47,9 +47,9 @@ use iroha_data_model::{
         validate_private_settlement_audit_approval_v1,
         validate_private_settlement_audit_approvals_v1,
     },
-    peer::PeerId,
     privacy::{PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1},
 };
+use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -3803,9 +3803,8 @@ pub(crate) mod tests {
         NetworkId,
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
         nexus::{
-            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, LaneId, PrivateSettlementAuditAadV1,
+            ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
             PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
             PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -3827,6 +3826,8 @@ pub(crate) mod tests {
         },
         transaction::FeePaymentIntent,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use rand_08::{SeedableRng as _, rngs::StdRng};
 
     pub(crate) struct SidecarFixtureV1 {

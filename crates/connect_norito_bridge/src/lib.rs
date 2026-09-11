@@ -32,7 +32,6 @@ use iroha_data_model::{
         CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1, ConfidentialMemoEnvelopeV1,
     },
     da::manifest::DaManifestV1,
-    domain::DomainId,
     governance::{
         is_valid_governance_selector_v1,
         types::{AbiVersion, ContractAbiHash, ContractCodeHash},
@@ -53,8 +52,6 @@ use iroha_data_model::{
         KagemushaMintCreditV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
         KagemushaRedemptionVoucherV1, validate_kagemusha_complete_exchange_shape_v1,
     },
-    metadata::Metadata,
-    nexus::DataSpaceId,
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -75,7 +72,10 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{
     connect as proto, connect_sdk,
@@ -5911,7 +5911,6 @@ mod detached_transaction_scaffold_tests {
     use super::*;
     use iroha_data_model::{
         asset::AssetId,
-        nexus::DataSpaceId,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         smart_contract::ContractAddress,
         transaction::{
@@ -5919,6 +5918,7 @@ mod detached_transaction_scaffold_tests {
             signed::{MultisigSignatures, TransactionBuilder},
         },
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::{num::NonZeroU32, ptr};
     fn detached_test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<

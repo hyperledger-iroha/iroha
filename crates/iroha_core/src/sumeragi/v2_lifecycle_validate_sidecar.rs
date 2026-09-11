@@ -911,8 +911,8 @@ mod tests {
             consensus_v2::{HeightContext, HeightContextId},
         },
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
     use tempfile::TempDir;
 
     fn identity_fixture() -> LifecycleValidateSidecarRegistrationIdentityV1 {

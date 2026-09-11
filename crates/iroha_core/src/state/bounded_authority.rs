@@ -4,12 +4,9 @@ use super::{
 };
 use crate::governance::manifest::{LANE_MANIFEST_MAX_VALIDATORS_V1, ManifestValidatorBinding};
 use iroha_config::parameters::actual::LaneValidatorMode;
-use iroha_data_model::{
-    account::AccountId,
-    consensus::MAX_LANE_CONSENSUS_VALIDATORS,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
-};
+use iroha_data_model::{account::AccountId, consensus::MAX_LANE_CONSENSUS_VALIDATORS};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 pub(super) struct LaneAuthorityInputs {

@@ -30,13 +30,11 @@ use iroha_data_model::{
         InstructionBox,
         nexus::{RegisterVerifiedFeeSponsorVaultAllocation, RegisterVerifiedLaneRelay},
     },
-    metadata::Metadata,
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, DataSpaceId, FeeSponsorAssetBudget,
-        FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
-        FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope,
-        MAX_ACTIVE_EXECUTION_LANES, ProofBlob,
+        AxtEffectBinding, AxtFastpqBinding, FeeSponsorAssetBudget, FeeSponsorEligibility,
+        FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey,
+        FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE,
+        LaneFastpqProofMaterial, LaneRelayEnvelope, MAX_ACTIVE_EXECUTION_LANES, ProofBlob,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
@@ -46,6 +44,8 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
@@ -1706,10 +1706,11 @@ mod tests {
     use iroha_data_model::{
         Level,
         block::{BlockHeader, consensus::LaneBlockCommitment},
-        domain::DomainId,
         isi::Log,
-        nexus::{LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
+        nexus::{LaneFinalityAuthorityV1, LaneRelayEnvelope},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
     fn test_fastpq() -> Fastpq {

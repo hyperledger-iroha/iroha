@@ -4511,8 +4511,7 @@ impl SoraDeploymentBundleV1 {
                         manifest: "sora deployment bundle",
                         field: "container.runtime",
                         reason: format!(
-                            "deterministic services require `Ivm`, found `{:?}`",
-                            container_runtime
+                            "deterministic services require `Ivm`, found `{container_runtime:?}`"
                         ),
                     });
                 }
@@ -4523,8 +4522,7 @@ impl SoraDeploymentBundleV1 {
                         manifest: "sora deployment bundle",
                         field: "container.runtime",
                         reason: format!(
-                            "http services require `Inrou`, found `{:?}`",
-                            container_runtime
+                            "http services require `Inrou`, found `{container_runtime:?}`"
                         ),
                     });
                 }

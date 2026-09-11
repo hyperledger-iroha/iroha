@@ -40,7 +40,6 @@ impl MusubiResolverReleaseRowV1 {
     /// # Errors
     ///
     /// Returns an error if canonical JSON encoding fails or exceeds `maximum` bytes.
-
     pub fn canonical_json_len_bounded(
         &self,
         maximum: usize,

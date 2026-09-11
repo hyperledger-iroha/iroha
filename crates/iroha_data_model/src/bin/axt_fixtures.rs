@@ -9,20 +9,20 @@ use iroha_data_model::{
     NetworkId,
     asset::id::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     nexus::{
         AssetHandle, AssetHandleDraft, AxtAssetIncarnationV1, AxtBinding, AxtDescriptorBuilder,
         AxtEffectBinding, AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1,
-        AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, DataSpaceId,
-        GroupBinding, HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp,
-        TouchManifest, UniversalAccountId, compute_descriptor_binding,
-        compute_remote_spend_intent_commitment_v1,
+        AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, GroupBinding,
+        HandleBudget, HandleSubject, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
+        UniversalAccountId, compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
     },
     testing::axt::{
         DescriptorFixture, EnvelopeFixture, HandleFixtures, PoseidonConstantsFixture,
         PoseidonParamsFixture,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_zkp_halo2::poseidon::{poseidon2_params_width3, poseidon2_params_width6};
 use norito::{json, to_bytes};

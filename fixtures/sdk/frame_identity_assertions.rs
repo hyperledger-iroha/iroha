@@ -47,20 +47,18 @@ fn assert_direction<T: NoritoSchema>(nominal: &str, direction: &str) {
 }
 
 /// Check the serializer's independently observed original frame identity.
-pub(crate) fn assert_serialize<T: NoritoSerialize>(nominal: &str) {
+pub fn assert_serialize<T: NoritoSerialize>(nominal: &str) {
     assert_direction::<T>(nominal, "serialize");
 }
 
 /// Check both independently observed original framing directions.
-pub(crate) fn assert_bidirectional<T: NoritoSerialize + for<'de> NoritoDeserialize<'de>>(
-    nominal: &str,
-) {
+pub fn assert_bidirectional<T: NoritoSerialize + for<'de> NoritoDeserialize<'de>>(nominal: &str) {
     assert_serialize::<T>(nominal);
     assert_direction::<T>(nominal, "deserialize");
 }
 
 /// Require exact package coverage without duplicate or unverified observations.
-pub(crate) fn assert_package_complete(package: &str, owners: usize, directions: usize) {
+pub fn assert_package_complete(package: &str, owners: usize, directions: usize) {
     let mut names = std::collections::BTreeSet::new();
     let mut keys = std::collections::BTreeSet::new();
     for row in fixture()

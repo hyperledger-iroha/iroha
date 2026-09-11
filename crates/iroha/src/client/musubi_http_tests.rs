@@ -24,9 +24,9 @@ use iroha_data_model::{
         MusubiProviderBundleAttestationKeyV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
         MusubiResolverIndexQueryV1, MusubiSearchPageRequestV1, MusubiSearchQueryV1,
     },
-    nexus::DataSpaceId,
     sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
 };
+use iroha_model_base::topology::DataSpaceId;
 use std::{
     sync::{
         Arc, Mutex,
@@ -45,6 +45,15 @@ fn package_query() -> MusubiExactPackageQueryV1 {
             MusubiPackageScopeV1::DataspaceRoot,
             "demo".parse().unwrap(),
         ),
+    }
+}
+
+fn release_query(package: MusubiPackageIdV1) -> MusubiExactReleaseQueryV1 {
+    MusubiExactReleaseQueryV1 {
+        release: MusubiReleaseIdV1 {
+            package,
+            version: "1.0.0".parse().unwrap(),
+        },
     }
 }
 
@@ -211,13 +220,44 @@ async fn public_musubi_query_rejects_legacy_witness_injection_before_dispatch() 
     assert!(requests.lock().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn all_public_musubi_routes_have_one_typed_request_and_exact_signature() {
+fn missing_query_client() -> (Client, Requests) {
     let (client, requests, _) = attach(
         |_| Ok(Response::builder().status(404).body(Vec::new()).unwrap()),
         Duration::ZERO,
         Duration::from_secs(1),
     );
+    (client, requests)
+}
+
+fn assert_last_signed_query<T: norito::json::JsonSerialize>(
+    client: &Client,
+    requests: &Requests,
+    request: &T,
+) {
+    let requests = requests.lock().unwrap();
+    let sent = requests.last().unwrap();
+    assert_eq!(sent.body, norito::json::to_vec(request).unwrap());
+    assert_signed(client, sent);
+}
+
+fn assert_musubi_route_catalog(requests: &Requests) {
+    let requests = requests.lock().unwrap();
+    let mut actual: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+    actual.sort_unstable();
+    let mut expected: Vec<_> = iroha_torii_shared::route_catalog::CATALOGED_ROUTES
+        .iter()
+        .filter(|route| route.stable_route_id().starts_with("musubi.v1.query."))
+        .map(|route| route.path())
+        .collect();
+    expected.sort_unstable();
+    assert_eq!(actual.len(), 12);
+    assert_eq!(actual, expected);
+    assert!(actual.contains(&"/v1/musubi/queries/provider-bundle-attestation"));
+}
+
+#[tokio::test]
+async fn all_public_musubi_routes_have_one_typed_request_and_exact_signature() {
+    let (client, requests) = missing_query_client();
     let account = client.account_client().unwrap();
     let musubi = account.musubi();
     let package = package_query().package;
@@ -232,22 +272,11 @@ async fn all_public_musubi_routes_have_one_typed_request_and_exact_signature() {
                 musubi.$method(&request).await.unwrap(),
                 QueryResult::NotFound
             ));
-            let requests = requests.lock().unwrap();
-            let sent = requests.last().unwrap();
-            assert_eq!(sent.body, norito::json::to_vec(&request).unwrap());
-            assert_signed(&client, sent);
+            assert_last_signed_query(&client, &requests, &request);
         }};
     }
     query!(exact_package, package_query());
-    query!(
-        exact_release,
-        MusubiExactReleaseQueryV1 {
-            release: MusubiReleaseIdV1 {
-                package: package.clone(),
-                version: "1.0.0".parse().unwrap()
-            }
-        }
-    );
+    query!(exact_release, release_query(package.clone()));
     query!(
         provider_bundle_attestation,
         MusubiProviderBundleAttestationKeyV1 {
@@ -323,18 +352,7 @@ async fn all_public_musubi_routes_have_one_typed_request_and_exact_signature() {
             }
         }
     );
-    let requests = requests.lock().unwrap();
-    let mut actual: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
-    actual.sort_unstable();
-    let mut expected: Vec<_> = iroha_torii_shared::route_catalog::CATALOGED_ROUTES
-        .iter()
-        .filter(|route| route.stable_route_id().starts_with("musubi.v1.query."))
-        .map(|route| route.path())
-        .collect();
-    expected.sort_unstable();
-    assert_eq!(actual.len(), 12);
-    assert_eq!(actual, expected);
-    assert!(actual.contains(&"/v1/musubi/queries/provider-bundle-attestation"));
+    assert_musubi_route_catalog(&requests);
 }
 
 #[tokio::test]
@@ -360,6 +378,8 @@ async fn public_musubi_query_surfaces_missing_and_stale_cursor() {
 
 #[tokio::test]
 async fn musubi_dispatch_is_responsive_cancellable_and_deadline_bounded() {
+    fn send_future<F: std::future::Future + Send>(_: &F) {}
+
     let outer_discriminant = chain_discriminant();
     let (client, requests, completed) = attach(
         |_| Ok(Response::builder().status(404).body(Vec::new()).unwrap()),
@@ -370,7 +390,6 @@ async fn musubi_dispatch_is_responsive_cancellable_and_deadline_bounded() {
     let query = package_query();
     let capability = account.musubi();
     let operation = capability.exact_package(&query);
-    fn send_future<F: std::future::Future + Send>(_: &F) {}
     send_future(&operation);
     let observer = async {
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -501,6 +520,21 @@ fn musubi_blocking_account_clones_share_runtime_and_reject_async_entry() {
 
 #[tokio::test]
 async fn musubi_contexts_isolate_endpoint_network_authority_and_address_decoding() {
+    fn replace_response(client: &Client, requests: Requests) -> Client {
+        let record = package_record(client);
+        let discriminant = client.account_chain_discriminant;
+        client
+            .to_builder()
+            .http_transport(Arc::new(AsyncOnlyTransport {
+                responder: Box::new(move |_| Ok(json(&record, discriminant))),
+                requests,
+                completed: Arc::new(AtomicUsize::new(0)),
+                delay: Duration::from_millis(2),
+            }))
+            .build()
+            .unwrap()
+    }
+
     let (first, first_requests, _) = attach(
         |_| panic!("replaced before dispatch"),
         Duration::ZERO,
@@ -520,22 +554,9 @@ async fn musubi_contexts_isolate_endpoint_network_authority_and_address_decoding
     second_builder.account_chain_discriminant = 753;
     let second = second_builder.build().unwrap();
     let second_requests = Arc::new(Mutex::new(Vec::new()));
-    fn replace_response(client: Client, requests: Requests) -> Client {
-        let record = package_record(&client);
-        let discriminant = client.account_chain_discriminant;
-        client
-            .to_builder()
-            .http_transport(Arc::new(AsyncOnlyTransport {
-                responder: Box::new(move |_| Ok(json(&record, discriminant))),
-                requests,
-                completed: Arc::new(AtomicUsize::new(0)),
-                delay: Duration::from_millis(2),
-            }))
-            .build()
-            .unwrap()
-    }
-    let first = replace_response(first, first_requests.clone());
-    let second = replace_response(second, second_requests.clone());
+
+    let first = replace_response(&first, first_requests.clone());
+    let second = replace_response(&second, second_requests.clone());
     let first_account = first.account_client().unwrap();
     let second_account = second.account_client().unwrap();
     let first_capability = first_account.musubi();

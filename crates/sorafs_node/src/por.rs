@@ -1,13 +1,11 @@
 //! PoR challenge/proof tracking for the embedded storage node.
 use crate::store::StoredManifest;
 use ed25519_dalek::{Signature, VerifyingKey};
-use iroha_data_model::{
-    metadata::Metadata,
-    sorafs::{
-        moderation_ledger::sorafs_repair_task_id_v1,
-        reputation::{PorTerminalFailureKindV1, PorTerminalOutcomeV1, PorTerminalStatusV1},
-    },
+use iroha_data_model::sorafs::{
+    moderation_ledger::sorafs_repair_task_id_v1,
+    reputation::{PorTerminalFailureKindV1, PorTerminalOutcomeV1, PorTerminalStatusV1},
 };
+use iroha_model_base::metadata::Metadata;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
 use rand::{RngCore, SeedableRng};
@@ -3919,7 +3917,7 @@ mod tests {
         sample_proof, sample_provider_key, sample_verdict,
     };
     use ed25519_dalek::{Signer, SigningKey};
-    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     use std::{

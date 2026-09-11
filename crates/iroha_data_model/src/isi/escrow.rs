@@ -544,12 +544,12 @@ impl_escrow_decode_from_slice!(ExpireAssetLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
     use crate::isi::test_support::{
         assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use core::num::{NonZeroU32, NonZeroU64};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::{codec::Encode, core::DecodeFromSlice};

@@ -24,16 +24,18 @@ use iroha_crypto::{
     PublicKey, Signature,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     asset::AssetId,
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
     bridge::SccpRegistryV1,
-    nexus::{LaneCatalog, LaneId},
+    nexus::LaneCatalog,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::chain::ChainId;
 use iroha_model_base::state_path::StatePath;
+use iroha_model_base::topology::LaneId;
 use mv::{
     cell::Cell,
     storage::{Storage, StorageReadOnly},
@@ -4900,6 +4902,7 @@ pub(crate) fn publish_signed_snapshot_payload_for_physical_test(
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::topology::LaneId;
     include!("snapshot/support_policy_tests.rs");
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");

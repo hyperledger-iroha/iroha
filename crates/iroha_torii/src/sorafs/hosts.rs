@@ -1,5 +1,5 @@
 //! Deterministic host mapping backed by canonical manifest helpers.
-use iroha_data_model::prelude::ChainId;
+use iroha_model_base::chain::ChainId;
 use sorafs_manifest::hosts::{
     DirectCarLocator, HostMappingInput as ManifestHostInput, HostMappingSummary as ManifestSummary,
 };

@@ -478,8 +478,8 @@ fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
     assert!(
         QUERY_FANOUT_ROUTE_OVERHEAD_BYTES
             >= core::mem::size_of::<(
-                iroha_data_model::nexus::DataSpaceId,
-                iroha_data_model::nexus::LaneId,
+                iroha_model_base::topology::DataSpaceId,
+                iroha_model_base::topology::LaneId,
             )>() + core::mem::size_of::<RoutingDecision>(),
         "the per-route charge must cover map payload plus the collected route"
     );

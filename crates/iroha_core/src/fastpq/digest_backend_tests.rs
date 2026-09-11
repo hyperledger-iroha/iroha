@@ -1,7 +1,8 @@
 //! Accelerator cardinality, pending-preimage identity and atomic digest installation.
 
 use super::*;
-use iroha_data_model::{domain::DomainId, fastpq::TransferSmtWitness};
+use iroha_data_model::fastpq::TransferSmtWitness;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use std::{cell::Cell, rc::Rc, sync::MutexGuard};
 

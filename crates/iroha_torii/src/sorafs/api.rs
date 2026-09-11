@@ -48,7 +48,7 @@ use iroha_data_model::events::data::sorafs::SorafsOrderbookLedgerEvent;
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     block::BlockHeader,
@@ -132,6 +132,7 @@ use iroha_executor_data_model::permission::sorafs::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, warn};
+use iroha_model_base::chain::ChainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::sorafs_moderation_api::{
     SORAFS_MODERATION_DEAD_LETTER_APPLY_RESPONSE_SCHEMA_V1,
@@ -27077,7 +27078,7 @@ mod gateway_policy_violation_tests {
             5,
             None,
             None,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         let signature = checked_test_signature(keypair.private_key(), record.digest.as_bytes())
             .payload()
@@ -31901,13 +31902,11 @@ mod advert_tests {
         asset::{Asset, AssetDefinition, AssetId},
         block::BlockHeader,
         domain::Domain,
-        domain::DomainId,
         isi::sorafs::{
             SetSorafsProofOutcomeSignerPolicy, SorafsPdpProofOutcomeSubmissionV1,
             SorafsPotrProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
             SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome,
         },
-        metadata::Metadata,
         permission::{Permission, Permissions},
         soracloud::{
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
@@ -31944,6 +31943,8 @@ mod advert_tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::CanManageSorafsProofOutcomePolicy;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::state_path::StatePath;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;

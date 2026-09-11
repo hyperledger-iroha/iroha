@@ -466,8 +466,8 @@ mod tests {
             MUSUBI_MAX_PAGE_SIZE_V1, MusubiFinalizedCursorV1, MusubiPackageIdV1,
             MusubiPackageScopeV1, MusubiQueryHashV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
         },
-        nexus::DataSpaceId,
     };
+    use iroha_model_base::topology::DataSpaceId;
     fn release() -> MusubiReleaseIdV1 {
         MusubiReleaseIdV1::new(
             MusubiPackageIdV1::new(

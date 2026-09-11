@@ -23,11 +23,12 @@ mod tests {
         Execute, Iroha,
         data_model::ValidationFail,
         data_model::executor::Result as ExecResult,
-        data_model::prelude::{AccountId, BlockHeader, LaneId},
+        data_model::prelude::{AccountId, BlockHeader},
         prelude::{Context, Visit},
     };
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::LaneId;
     fn checked_bridge_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked executor bridge Ed25519 fixture keypair")

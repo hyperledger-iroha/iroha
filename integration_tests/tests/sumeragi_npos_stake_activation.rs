@@ -14,12 +14,15 @@ use iroha::data_model::{
         Log, Mint, Register,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    metadata::Metadata,
     parameter::system::SumeragiNposParameters,
     prelude::*,
 };
 use iroha_config::parameters::defaults;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,

@@ -8,8 +8,6 @@ use iroha_data_model::nexus::staking::PublicLaneValidatorStatus;
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
-    nexus::LaneId,
-    peer::PeerId,
     soracloud::{
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
         SoraConfigExportV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraInrouGuestIsaV1,
@@ -25,6 +23,8 @@ use iroha_data_model::{
     sorafs::pin_registry::StorageClass,
 };
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -1745,9 +1745,7 @@ mod tests {
             FinalizedGlobalThresholdBeaconPulseV1, GLOBAL_THRESHOLD_BEACON_VERSION_V1,
             GlobalThresholdBeaconChainAnchorV1,
         },
-        metadata::Metadata,
         nexus::staking::PublicLaneValidatorRecord,
-        peer::PeerId,
         soracloud::{
             SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_MANIFEST_VERSION_V1,
@@ -1763,6 +1761,8 @@ mod tests {
         },
         sorafs::pin_registry::StorageClass,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
     use std::num::{NonZeroU16, NonZeroU64};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Soracloud runtime fixture key generation should succeed")
@@ -2745,7 +2745,7 @@ mod tests {
         second_record.stake_account = second_validator.clone();
         second_record.peer_id = checked_peer_id();
         world.public_lane_validators_mut_for_testing().insert(
-            (iroha_data_model::nexus::LaneId::SINGLE, second_validator),
+            (iroha_model_base::topology::LaneId::SINGLE, second_validator),
             second_record,
         );
 

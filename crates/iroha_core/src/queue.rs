@@ -108,11 +108,10 @@ use iroha_config::parameters::actual::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::nexus::{
-    DataSpaceCatalog, DataSpaceId, FeeDebitSource, FeeRejectionCode,
-    FeeSponsorBeneficiaryEpochBudgetWindow, FeeSponsorBlockBudgetWindow,
-    FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow, FeeSponsorProgramEpochBudgetWindow,
-    FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LanePrivacyProof,
-    UniversalAccountId,
+    DataSpaceCatalog, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
+    FeeSponsorBlockBudgetWindow, FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow,
+    FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId, FeeSponsorProgramRevisionKey,
+    LaneCatalog, LanePrivacyProof, UniversalAccountId,
 };
 #[cfg(test)]
 use iroha_data_model::nexus::{LaneLifecyclePlan, LaneStorageProfile, LaneVisibility};
@@ -138,7 +137,6 @@ use iroha_data_model::{
             RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
     },
-    peer::PeerId,
     transaction::{
         Executable, ExecutableBatchItem, SignedTransaction, TransactionAdmissionIntent,
         TransactionEntrypoint, signed::TransactionPayload,
@@ -146,6 +144,8 @@ use iroha_data_model::{
 };
 use iroha_logger::{trace, warn};
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_torii_shared::status::NexusLaneTeuBuckets;
@@ -5399,7 +5399,7 @@ trait QueueAdmissionStateAccess {
         &mut self,
         authority: &AccountId,
         lane_alias: &str,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error>;
 }
 struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
@@ -5468,7 +5468,7 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
         &mut self,
         authority: &AccountId,
         lane_alias: &str,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error> {
         Queue::extract_lane_authority_domains(
             self.world,
             authority,
@@ -13163,7 +13163,7 @@ impl Queue {
         authority: &AccountId,
         lane_alias: &str,
         now_ms: u64,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error> {
         extract_directory_authority_domains(world, authority, now_ms).map_err(|err| {
             Error::LaneComplianceDenied {
                 alias: lane_alias.to_string(),
@@ -22013,14 +22013,13 @@ pub mod tests {
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
         isi::runtime_upgrade::ProposeRuntimeUpgrade,
-        metadata::Metadata,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_MANAGED,
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId,
-            DataSpaceMetadata, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
-            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId, LaneLifecyclePlan,
-            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneSchedulerPolicy,
-            ManifestVersion, ParticipantSelector,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceMetadata,
+            JurisdictionSet, LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId,
+            LaneComplianceRule, LaneConfig, LaneLifecyclePlan, LanePrivacyMerkleWitness,
+            LanePrivacyProof, LanePrivacyWitness, LaneSchedulerPolicy, ManifestVersion,
+            ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -22033,7 +22032,10 @@ pub mod tests {
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
     use iroha_logger::Level;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]

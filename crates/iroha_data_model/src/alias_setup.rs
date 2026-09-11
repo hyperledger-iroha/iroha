@@ -12,11 +12,12 @@ use crate::{
         rekey::{AccountAlias, AccountAliasDomain},
     },
     asset::AssetDefinitionId,
-    domain::DomainId,
-    nexus::{DataSpaceCatalog, DataSpaceId},
+    nexus::DataSpaceCatalog,
 };
 use core::{fmt, str::FromStr};
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{error::ParseError, name, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -127,7 +128,6 @@ impl AliasRegistryRoutingActivationV1 {
     }
 
     /// Convert this request into the custom parameter accepted by `SetParameter`.
-
     #[must_use]
     pub fn into_custom_parameter(self) -> crate::parameter::CustomParameter {
         crate::parameter::CustomParameter::new(
@@ -142,7 +142,6 @@ impl AliasRegistryRoutingActivationV1 {
     ///
     /// # Errors
     /// Returns an error for a malformed matching payload, unsupported version, or height zero.
-
     pub fn from_custom_parameter(
         custom: &crate::parameter::CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {
@@ -286,7 +285,6 @@ impl AliasDataspaceBootstrapGrantV1 {
     ///
     /// # Errors
     /// Returns an error for any malformed grant identity or parameter key.
-
     pub fn into_custom_parameter(self) -> Result<crate::parameter::CustomParameter, ParseError> {
         self.validate()?;
         Ok(crate::parameter::CustomParameter::new(
@@ -301,7 +299,6 @@ impl AliasDataspaceBootstrapGrantV1 {
     ///
     /// # Errors
     /// Returns an error for malformed payloads, unknown fields, or any key/identity mismatch.
-
     pub fn from_custom_parameter(
         custom: &crate::parameter::CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {

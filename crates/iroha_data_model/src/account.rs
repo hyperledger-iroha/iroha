@@ -31,11 +31,11 @@ pub mod rekey;
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref},
-    metadata::Metadata,
     nexus::UniversalAccountId,
 };
 pub use address::{AccountAddress, AccountAddressError, AccountAddressErrorCode};
 pub use controller::{AccountController, MultisigMember, MultisigPolicy, MultisigPolicyError};
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{error::ParseError, name::Name};
 #[model]
 mod model {
@@ -867,8 +867,8 @@ impl fmt::Display for NewAccount {
 #[cfg(test)]
 mod account_id_parsing_tests {
     use super::*;
-    use crate::DomainId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::{core::decode_from_bytes, to_bytes};
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
@@ -1187,9 +1187,9 @@ pub mod prelude {
 #[cfg(feature = "transparent_api")]
 mod tests {
     use super::*;
-    use crate::nexus::DataSpaceId;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked account fixture keypair")
     }
@@ -1374,14 +1374,11 @@ mod tests {
 #[cfg(test)]
 mod json_tests {
     use super::*;
-    use crate::{
-        account::address,
-        metadata::Metadata,
-        nexus::{DataSpaceId, UniversalAccountId},
-        prelude::Register,
-    };
+    use crate::{account::address, nexus::UniversalAccountId, prelude::Register};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use norito::codec::{decode_adaptive, encode_adaptive};
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())

@@ -27,6 +27,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::{
     CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 use norito::{json, json::Value, to_bytes};
 #[cfg(test)]
@@ -777,6 +778,7 @@ fn alice() -> AccountId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_model_base::metadata::Metadata;
     fn test_manifest_record() -> PinManifestRecord {
         PinManifestRecord::new(
             default_digest(),

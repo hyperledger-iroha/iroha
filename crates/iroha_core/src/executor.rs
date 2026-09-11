@@ -43,9 +43,8 @@ use iroha_data_model::{
         register::RegisterBox,
         smart_contract_code::{RegisterSmartContractCode, UploadSmartContractCodeChunk},
     },
-    metadata::Metadata,
     nexus::{
-        DataSpaceId, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
+        FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
         FeeSponsorBlockBudgetWindow, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey,
         FeeSponsorBudgetWindow, FeeSponsorEligibility, FeeSponsorEnrollmentKey,
         FeeSponsorMultisigOperation, FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId,
@@ -55,7 +54,7 @@ use iroha_data_model::{
     },
     parameter::CustomParameterId,
     permission::Permission,
-    prelude::{Account, Burn, DomainId, Mint, Register, Transfer, Trigger, Unregister},
+    prelude::{Account, Burn, Mint, Register, Transfer, Trigger, Unregister},
     query::{
         self as data_model_query, AnyQueryBox, QueryItemKind, QueryRequest, QueryWithParams,
         SingularQueryBox,
@@ -72,7 +71,10 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::state_path::StatePath;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -441,7 +443,7 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
-    if let Some(payload) = payload_for!(iroha_data_model::peer::PeerId, PeerId) {
+    if let Some(payload) = payload_for!(iroha_model_base::peer::PeerId, PeerId) {
         if any_exact!(payload; data_model_query::peer::prelude::FindPeers) {
             return Ok(NativeQueryAccess::AllLedger);
         }
@@ -11412,6 +11414,7 @@ mod tests {
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigCancel, MultisigPropose, MultisigRegister, MultisigSpec,
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{
@@ -12585,17 +12588,17 @@ mod tests {
 
         let validator = checked_account_id();
         let staker = checked_account_id();
-        let peer = iroha_data_model::peer::PeerId::new(checked_keypair().public_key().clone());
+        let peer = iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone());
         let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
         let instructions: [InstructionBox; 5] = [
             RebindPublicLaneValidatorPeer::new(
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 validator.clone(),
                 peer,
             )
             .into(),
             BondPublicLaneStake {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator.clone(),
                 staker: staker.clone(),
                 amount: Quantity::from(1_u32),
@@ -12603,7 +12606,7 @@ mod tests {
             }
             .into(),
             SchedulePublicLaneUnbond {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator.clone(),
                 staker: staker.clone(),
                 request_id,
@@ -12612,14 +12615,14 @@ mod tests {
             }
             .into(),
             FinalizePublicLaneUnbond {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator,
                 staker: staker.clone(),
                 request_id,
             }
             .into(),
             ClaimPublicLaneRewards {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 account: staker,
                 upto_epoch: None,
             }
@@ -12652,7 +12655,7 @@ mod tests {
         let peer = |seed: u8| {
             let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("derive checked Initial-executor evidence peer keypair");
-            iroha_data_model::peer::PeerId::new(key_pair.public_key().clone())
+            iroha_model_base::peer::PeerId::new(key_pair.public_key().clone())
         };
         let mut peers = (0xE1_u8..=0xE4).map(peer).collect::<Vec<_>>();
         peers.sort();
@@ -12974,7 +12977,7 @@ mod tests {
             world,
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
-            iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id,
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
@@ -15292,9 +15295,9 @@ mod tests {
             "rejected proved replay must apply no durable state"
         );
     }
-    fn make_peer_id() -> crate::PeerId {
+    fn make_peer_id() -> iroha_model_base::peer::PeerId {
         let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        crate::PeerId::new(kp.public_key().clone())
+        iroha_model_base::peer::PeerId::new(kp.public_key().clone())
     }
     #[test]
     fn checked_keypair_helpers_preserve_requested_algorithm() {
@@ -17346,7 +17349,7 @@ mod tests {
     #[test]
     fn detached_supply_changes_force_sequential_path() {
         let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
                 .expect("valid domain id"),
             "rose".parse().expect("valid asset name"),
         );
@@ -18791,7 +18794,7 @@ mod tests {
                     world,
                     Kura::blank_kura_for_testing(),
                     query::store::LiveQueryStore::start_test(),
-                    iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
                     network_id,
                 );
                 let mut block =

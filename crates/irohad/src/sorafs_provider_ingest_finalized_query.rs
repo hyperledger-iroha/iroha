@@ -31,8 +31,6 @@ use iroha_core::{
     sumeragi::{V2StartupReplayPlan, plan_v2_startup_replay},
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
-#[cfg(test)]
-use iroha_data_model::ChainId;
 use iroha_data_model::{
     NetworkId,
     sorafs::{
@@ -43,6 +41,8 @@ use iroha_data_model::{
         },
     },
 };
+#[cfg(test)]
+use iroha_model_base::chain::ChainId;
 use sorafs_node::{
     ProviderIngestCompletedMusubiCaptureRequestV1,
     ProviderIngestCompletedMusubiCaptureSourcePageV1,
@@ -1678,7 +1678,6 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         block::{BlockHeader, SignedBlock},
-        metadata::Metadata,
         musubi::{
             MusubiArchiveCommitmentV1, MusubiContentDigestV1,
             MusubiReplicationOrderArchiveBindingV1,
@@ -1691,6 +1690,7 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::metadata::Metadata;
     use sorafs_manifest::capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,

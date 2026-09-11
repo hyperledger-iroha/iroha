@@ -9,7 +9,8 @@ use super::{
     PrivacyReleaseArtifactDigestV1, PrivacySecurityClaimDigestV1, PrivacySecurityClaimV1,
     PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
 };
-use crate::{ChainId, NetworkId};
+use crate::NetworkId;
+use iroha_model_base::chain::ChainId;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{PublicKey, Signature};
@@ -187,7 +188,7 @@ pub enum PrivacyReleaseSdkConsumerV1 {
     /// JavaScript N-API package.
     #[norito(rename = "javascript_napi")]
     JavascriptNapi,
-    /// Python PyO3 package.
+    /// Python `PyO3` package.
     #[norito(rename = "python_pyo3")]
     PythonPyo3,
     /// C# package.
@@ -196,7 +197,7 @@ pub enum PrivacyReleaseSdkConsumerV1 {
     /// Command-line client.
     #[norito(rename = "cli")]
     Cli,
-    /// OpenAPI schema package.
+    /// `OpenAPI` schema package.
     #[norito(rename = "openapi")]
     OpenApi,
     /// Genesis authoring tooling.
@@ -251,7 +252,7 @@ pub enum PrivacyReleaseHardwareBackendV1 {
     /// x86-64 AVX-512 implementation.
     #[norito(rename = "avx512")]
     Avx512,
-    /// AArch64 NEON implementation.
+    /// `AArch64` NEON implementation.
     #[norito(rename = "neon")]
     Neon,
     /// Apple Metal implementation.
@@ -954,9 +955,9 @@ struct AuditSignaturePayloadV1 {
     name = "iroha_data_model::privacy::release_manifest::MediumDispositionSignaturePayloadV1"
 )]
 struct MediumDispositionSignaturePayloadV1 {
-    finding_digest: PrivacyReleaseArtifactDigestV1,
-    disposition_digest: PrivacyReleaseArtifactDigestV1,
-    release_artifact_set_digest: PrivacyReleaseArtifactDigestV1,
+    finding: PrivacyReleaseArtifactDigestV1,
+    disposition: PrivacyReleaseArtifactDigestV1,
+    release_artifact_set: PrivacyReleaseArtifactDigestV1,
 }
 
 #[derive(Encode, norito::NoritoSchema)]
@@ -1026,6 +1027,11 @@ pub fn privacy_exact12_syscall_list_digest_v1(syscalls: &[u32]) -> PrivacyReleas
 
 impl PrivacyReleaseSignatureV1 {
     /// Return the exact role-separated bytes that must be signed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the role and manifest-digest
+    /// payload cannot be serialized.
     pub fn signing_bytes(
         role: PrivacyReleaseSignatureRoleV1,
         manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
@@ -1042,13 +1048,18 @@ impl PrivacyReleaseSignatureV1 {
 
 impl PrivacyAcceptedMediumDispositionV1 {
     /// Return the exact artifact-bound bytes that the audit authority must sign.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the finding, disposition and
+    /// release-artifact digest payload cannot be serialized.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         signing_bytes(
             MEDIUM_DISPOSITION_SIGNATURE_DOMAIN_V1,
             &MediumDispositionSignaturePayloadV1 {
-                finding_digest: self.finding_digest,
-                disposition_digest: self.disposition_digest,
-                release_artifact_set_digest: self.release_artifact_set_digest,
+                finding: self.finding_digest,
+                disposition: self.disposition_digest,
+                release_artifact_set: self.release_artifact_set_digest,
             },
         )
     }
@@ -1056,6 +1067,11 @@ impl PrivacyAcceptedMediumDispositionV1 {
 
 impl PrivacyReleaseAuditV1 {
     /// Return the exact release-artifact-bound audit bytes that must be signed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the audit class, report/artifact
+    /// digests and finding-count payload cannot be serialized.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         signing_bytes(
             AUDIT_SIGNATURE_DOMAIN_V1,
@@ -1113,6 +1129,11 @@ impl PrivacyReleaseAuditV1 {
 
 impl PrivacyExact12ReleaseManifestV1 {
     /// Compute the digest of all non-audit release artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the normalized non-audit artifact
+    /// manifest cannot be serialized.
     pub fn computed_release_artifact_set_digest(
         &self,
     ) -> Result<PrivacyReleaseArtifactDigestV1, norito::Error> {
@@ -1137,6 +1158,11 @@ impl PrivacyExact12ReleaseManifestV1 {
     }
 
     /// Compute the canonical digest of all five signed audit records.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the retained audit records,
+    /// including their signatures and accepted dispositions, cannot be serialized.
     pub fn computed_audit_bundle_digest(
         &self,
     ) -> Result<PrivacyAuditBundleDigestV1, norito::Error> {
@@ -1145,6 +1171,11 @@ impl PrivacyExact12ReleaseManifestV1 {
     }
 
     /// Compute the portable manifest digest with its self-digest zeroed and approvals omitted.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the manifest with its self-digest
+    /// zeroed and release signatures removed cannot be serialized.
     pub fn computed_manifest_digest(
         &self,
     ) -> Result<PrivacyExact12ReleaseManifestDigestV1, norito::Error> {
@@ -1161,6 +1192,19 @@ impl PrivacyExact12ReleaseManifestV1 {
     ///
     /// Returns a closed validation error without converting absent evidence into qualification.
     pub fn validate(&self) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
+        self.validate_release_inventory()?;
+        self.validate_protocol_bindings()?;
+        self.validate_stage_receipts()?;
+        self.validate_proof_artifacts()?;
+        self.validate_sdk_packages()?;
+        self.validate_hardware_results()?;
+        self.validate_audits_and_approvals()
+    }
+
+    // Establish identity and every exact count before indexed evidence validation.
+    fn validate_release_inventory(
+        &self,
+    ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         if self.version != PRIVACY_EXACT12_RELEASE_MANIFEST_VERSION_V1 {
             return Err(PrivacyExact12ReleaseManifestValidationErrorV1::Version);
         }
@@ -1206,7 +1250,12 @@ impl PrivacyExact12ReleaseManifestV1 {
         if self.release_signatures.len() != PrivacyReleaseSignatureRoleV1::ALL.len() {
             return Err(PrivacyExact12ReleaseManifestValidationErrorV1::ReleaseSignatureCount);
         }
+        Ok(())
+    }
 
+    fn validate_protocol_bindings(
+        &self,
+    ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         for (binding, expected) in self.protocols.iter().zip(PrivacyProtocolIdV1::ALL) {
             if binding.protocol_id != expected
                 || binding.proof_system_id != expected.expected_proof_system()
@@ -1227,11 +1276,13 @@ impl PrivacyExact12ReleaseManifestV1 {
                 return Err(PrivacyExact12ReleaseManifestValidationErrorV1::ProtocolBinding);
             }
         }
-        self.validate_stage_receipts()?;
-        self.validate_proof_artifacts()?;
-        self.validate_sdk_packages()?;
-        self.validate_hardware_results()?;
+        Ok(())
+    }
 
+    // Keep auditor and approver independence checks in the same authentication phase.
+    fn validate_audits_and_approvals(
+        &self,
+    ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         if self.release_artifact_set_digest.is_zero()
             || self.computed_release_artifact_set_digest().ok()
                 != Some(self.release_artifact_set_digest)
@@ -1433,6 +1484,11 @@ impl PrivacyExact12ReleaseManifestV1 {
 
 impl PrivacyDeploymentValidatorSignatureV1 {
     /// Return the exact seat-bound bytes that a deployment validator must sign.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the validator-index and
+    /// qualification-digest payload cannot be serialized.
     pub fn signing_bytes(
         validator_index: u16,
         qualification_digest: PrivacyExact12DeploymentQualificationDigestV1,
@@ -1449,6 +1505,11 @@ impl PrivacyDeploymentValidatorSignatureV1 {
 
 impl PrivacyExact12DeploymentQualificationV1 {
     /// Compute the exact ordered validator-roster digest.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the ordered validator public keys
+    /// cannot be serialized, including an invalid compact public-key representation.
     pub fn computed_validator_roster_digest(
         &self,
     ) -> Result<PrivacyReleaseArtifactDigestV1, norito::Error> {
@@ -1462,6 +1523,11 @@ impl PrivacyExact12DeploymentQualificationV1 {
     }
 
     /// Compute the deployment digest with its self-digest zeroed and quorum signatures omitted.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the qualification with its
+    /// self-digest zeroed and validator signatures removed cannot be serialized.
     pub fn computed_qualification_digest(
         &self,
     ) -> Result<PrivacyExact12DeploymentQualificationDigestV1, norito::Error> {

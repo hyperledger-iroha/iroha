@@ -10,6 +10,7 @@ use iroha::{
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
+use iroha_model_base::topology::LaneId;
 use iroha_sccp::api::{SccpCapabilities, SccpRecentMessages};
 use std::{
     fs,

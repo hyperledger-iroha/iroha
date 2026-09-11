@@ -11696,7 +11696,7 @@ enum RuntimeTimeoutVoteOriginBinding {
     /// semantic protocol message.
     Mismatch {
         signer: u32,
-        semantic_origin: iroha_data_model::peer::PeerId,
+        semantic_origin: iroha_model_base::peer::PeerId,
     },
 }
 /// Immutable owner retained for one roster source in a timeout-recovery

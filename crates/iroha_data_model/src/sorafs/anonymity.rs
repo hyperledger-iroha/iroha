@@ -140,7 +140,7 @@ impl SorafsCitizenBondV1 {
             self.locked_value_commitment,
             self.frozen_policy_root,
         ];
-        if commitments.iter().any(|value| *value == [0; 32]) {
+        if commitments.contains(&[0; 32]) {
             return Err(SorafsCitizenBondErrorV1::InertCommitment);
         }
         for (index, commitment) in commitments.iter().enumerate() {
@@ -159,15 +159,13 @@ impl SorafsCitizenBondV1 {
             requested_at_height,
             unlock_height,
         }) = self.state
-        {
-            if requested_at_height < self.bonded_at_height
+            && (requested_at_height < self.bonded_at_height
                 || unlock_height
                     != requested_at_height
                         .checked_add(self.exit_delay_blocks)
-                        .ok_or(SorafsCitizenBondErrorV1::HeightOverflow)?
-            {
-                return Err(SorafsCitizenBondErrorV1::InvalidExitWindow);
-            }
+                        .ok_or(SorafsCitizenBondErrorV1::HeightOverflow)?)
+        {
+            return Err(SorafsCitizenBondErrorV1::InvalidExitWindow);
         }
         Ok(())
     }

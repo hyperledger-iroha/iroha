@@ -884,7 +884,6 @@ fn parse_committed_tx_predicate_inner(
     }
 }
 /// Parse a validated committed-transaction app-expression JSON value.
-
 pub(super) fn committed_tx_predicate_from_value(
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
@@ -1095,7 +1094,6 @@ fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -
     }
 }
 /// Convert a validated committed-transaction predicate to its canonical app-expression value.
-
 pub(super) fn committed_tx_predicate_to_value(
     predicate: &CommittedTxPredicate,
 ) -> Result<Value, CommittedTxPredicateJsonError> {
@@ -1104,7 +1102,6 @@ pub(super) fn committed_tx_predicate_to_value(
     Ok(committed_tx_predicate_to_value_unchecked(predicate))
 }
 /// Parse raw JSON and require the exact canonical app-expression encoding.
-
 pub(super) fn committed_tx_predicate_from_canonical_json(
     raw: &str,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
@@ -1119,7 +1116,6 @@ pub(super) fn committed_tx_predicate_from_canonical_json(
     Ok(predicate)
 }
 /// Convert the generic builder schema into the typed committed-transaction tree.
-
 pub(super) fn committed_tx_predicate_from_predicate_json(
     predicate: &crate::query::json::PredicateJson,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
@@ -2301,15 +2297,13 @@ impl IntoSchema for CommittedTxPredicate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        domain::DomainId,
-        metadata::Metadata,
-        transaction::{
-            FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult,
-        },
+    use crate::transaction::{
+        FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult,
     };
     use hex;
     use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use std::str::FromStr;
     fn bare_bytes(value: &dyn norito::core::SerializePayload) -> Vec<u8> {
@@ -2335,7 +2329,7 @@ mod tests {
         );
     }
     fn sample_account(seed: u8) -> crate::account::AccountId {
-        let _domain: crate::domain::DomainId =
+        let _domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let (public_key, _) =
             iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

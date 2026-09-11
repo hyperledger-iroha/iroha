@@ -15,9 +15,12 @@ use iroha_data_model::{
         BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
         consensus::SumeragiLanePayloadOwnership,
     },
-    nexus::{DataSpaceId, LaneId},
     prelude::*,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use nonzero_ext::nonzero;
 use std::sync::Arc;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {

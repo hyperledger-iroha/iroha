@@ -34,7 +34,7 @@ pub enum ClassedRaceClassV1 {
     TouringS1,
 }
 
-/// Versioned track catalog for this computation, independent of RaceV1's Rust implementation.
+/// Versioned track catalog for this computation, independent of `RaceV1`'s Rust implementation.
 #[derive(
     Clone,
     Copy,

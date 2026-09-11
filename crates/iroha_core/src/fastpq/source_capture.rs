@@ -18,10 +18,9 @@ use iroha_data_model::fastpq::{
 };
 
 #[cfg(test)]
-use iroha_data_model::{
-    fastpq::{FastpqSourceExecutionKindV1, FastpqSourceRouteV1},
-    nexus::DataSpaceId,
-};
+use iroha_data_model::fastpq::{FastpqSourceExecutionKindV1, FastpqSourceRouteV1};
+#[cfg(test)]
+use iroha_model_base::topology::DataSpaceId;
 
 use super::{
     FastpqPublicInputsTemplate, dataspace_id_bytes, quantity_statement_from_finalized_transcripts,

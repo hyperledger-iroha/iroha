@@ -994,13 +994,14 @@ mod tests {
             error::{InstructionExecutionError, InvalidParameterError},
             smart_contract_code::DeactivateContractInstance,
         },
-        nexus::DataSpaceId,
         parameter::custom::{CustomParameter, CustomParameterId},
         permission,
         prelude::*,
         smart_contract::manifest::{EntryPointKind, EntrypointDescriptor},
     };
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("smart contract code fixture key generation should succeed")
     }

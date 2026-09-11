@@ -22,15 +22,15 @@ use iroha_data_model::{
             RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
     },
-    metadata::Metadata,
     nexus::{
-        LaneId, PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus,
+        PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
     },
-    peer::PeerId,
     prelude::AccountId,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use std::{collections::BTreeMap, time::Duration};
 /// Canonical storage key for one public-lane stake share.
@@ -2873,13 +2873,15 @@ mod tests {
         domain::Domain,
         isi::error::InvalidParameterError,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-            LaneConfig, LaneVisibility, PublicLaneRewardShare,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneCatalog, LaneConfig,
+            LaneVisibility, PublicLaneRewardShare,
         },
         parameter::{Parameter, system::SumeragiNposParameters},
         peer::Peer,
         prelude::*,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use nonzero_ext::nonzero;
@@ -2891,8 +2893,8 @@ mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("staking algorithm-specific fixture key generation should succeed")
     }
-    fn checked_peer_id() -> crate::PeerId {
-        crate::PeerId::from(checked_keypair().public_key().clone())
+    fn checked_peer_id() -> iroha_model_base::peer::PeerId {
+        iroha_model_base::peer::PeerId::from(checked_keypair().public_key().clone())
     }
     include!("staking_core_tests.rs");
     #[test]
@@ -3098,7 +3100,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3131,7 +3133,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3171,7 +3173,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3388,7 +3390,7 @@ mod tests {
         stx.nexus.staking.restricted_validator_mode =
             iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        let stake_peer = crate::PeerId::from(
+        let stake_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3525,7 +3527,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register multisig admin");
         let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = crate::PeerId::new(bls.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
         let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
         iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop)
             .execute(&admin_id, &mut stx)
@@ -3543,7 +3545,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -4146,7 +4148,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -4928,12 +4930,14 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology.get_mut().push(crate::PeerId::from(
-            replacement
-                .try_signatory()
-                .expect("replacement is single-signatory")
-                .clone(),
-        ));
+        stx.commit_topology
+            .get_mut()
+            .push(iroha_model_base::peer::PeerId::from(
+                replacement
+                    .try_signatory()
+                    .expect("replacement is single-signatory")
+                    .clone(),
+            ));
         Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
@@ -5461,7 +5465,7 @@ mod tests {
         stx.apply();
         record_block_commit(&mut state_block, &block);
         state_block.commit().unwrap();
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -5535,7 +5539,7 @@ mod tests {
         stx.apply();
         record_block_commit(&mut state_block, &block);
         state_block.commit().unwrap();
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -5612,7 +5616,7 @@ mod tests {
         stx.apply();
         record_block_commit(&mut state_block, &block);
         state_block.commit().unwrap();
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -6101,7 +6105,8 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         // Register matching peer so validator admission passes.
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(2),
@@ -6136,7 +6141,8 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(3),
@@ -6268,7 +6274,8 @@ mod tests {
         let mut stx = state_block.transaction();
         let lane_id = LaneId::new(34);
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
             lane_id,
@@ -6493,7 +6500,8 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(31),
             peer_id: validator_peer_id(&validator),
@@ -6539,7 +6547,8 @@ mod tests {
         let mut stx = state_block.transaction();
         let lane_id = LaneId::new(32);
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         RegisterPublicLaneValidator {
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6830,7 +6839,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let missing_peer = crate::PeerId::from(
+        let missing_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator has signatory")

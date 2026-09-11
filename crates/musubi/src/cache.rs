@@ -2753,9 +2753,9 @@ mod tests {
             MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1,
             MusubiVerificationLockV1, MusubiVerificationNodeV1,
         },
-        nexus::DataSpaceId,
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use norito::codec::Encode as _;
     use std::{io::Cursor, path::Path};
     use tempfile::TempDir;

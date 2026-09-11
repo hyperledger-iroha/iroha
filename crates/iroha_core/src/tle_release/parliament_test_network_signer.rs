@@ -23,7 +23,8 @@ use iroha_crypto::{
         ThresholdBlsSession, TleReleasePurpose, ValidatedDealerCommitment,
     },
 };
-use iroha_data_model::{NetworkId, peer::PeerId};
+use iroha_data_model::NetworkId;
+use iroha_model_base::peer::PeerId;
 use rand::{SeedableRng as _, rngs::StdRng};
 use thiserror::Error;
 

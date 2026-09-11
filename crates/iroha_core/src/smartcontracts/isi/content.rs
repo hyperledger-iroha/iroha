@@ -4,8 +4,8 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     content::{ContentBundleManifest, ContentCachePolicy},
     da::types::{BlobClass, RetentionPolicy},
-    nexus::{DataSpaceId, LaneId},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::Encode;
 use std::{collections::BTreeMap, str};
 impl Execute for iroha_data_model::isi::content::PublishContentBundle {

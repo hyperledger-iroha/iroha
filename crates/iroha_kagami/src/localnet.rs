@@ -53,15 +53,14 @@ use iroha_data_model::{
         verifying_keys,
     },
     nexus::{
-        DataSpaceId, FeeSponsorAssetBudget, FeeSponsorEligibility,
-        FeeSponsorNativeInstructionSelector, FeeSponsorProgram, FeeSponsorProgramId,
-        FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector,
+        FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorNativeInstructionSelector,
+        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, FeeSponsorRule,
+        FeeSponsorRuleEffect, FeeSponsorRuleSelector,
     },
     parameter::{
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters},
     },
-    peer::PeerId,
     prelude::*,
     proof::{VerifyingKeyId, VerifyingKeyRecord},
 };
@@ -83,6 +82,12 @@ use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
     init_instruction_registry, read_signed_genesis, validate_genesis_manifest_json,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, Quantity};

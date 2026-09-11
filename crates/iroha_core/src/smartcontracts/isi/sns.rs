@@ -698,13 +698,12 @@ mod tests {
         },
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             Mint, Register,
             alias_setup::{EnsureAlias, RenewAliasLease},
         },
-        metadata::Metadata,
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata},
         permission::Permission,
         query::sns::prelude::FindDataspaceNameOwnerById,
         sns::{NameControllerV1, NameRecordV1},
@@ -712,6 +711,9 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly;
     use std::num::NonZeroU64;

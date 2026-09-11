@@ -39,7 +39,8 @@ use crate::{
     state::{State, consensus_lane_dataspace_at_height},
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::block::consensus_v2 as wire;
+use iroha_model_base::peer::PeerId;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 std::thread_local! {
@@ -190,8 +191,8 @@ impl AutonomousLifecycleDeferredTerminalRecoveryHandoff {
     }
     fn bindings_for_route(
         &self,
-        lane_id: iroha_data_model::nexus::LaneId,
-        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        lane_id: iroha_model_base::topology::LaneId,
+        dataspace_id: iroha_model_base::topology::DataSpaceId,
         lane_incarnation: Hash,
     ) -> Vec<LaneQueueReservationGroupBindingV1> {
         self.units
@@ -214,8 +215,8 @@ fn active_lifecycle_routes(
     context: &wire::HeightContext,
 ) -> Result<
     Vec<(
-        iroha_data_model::nexus::LaneId,
-        iroha_data_model::nexus::DataSpaceId,
+        iroha_model_base::topology::LaneId,
+        iroha_model_base::topology::DataSpaceId,
         Hash,
     )>,
     String,
@@ -589,8 +590,8 @@ fn lifecycle_identity_projection_for_cursor(
 }
 fn planner_covered_pending_groups_for_route(
     deferred_terminal_recovery: &AutonomousLifecycleDeferredTerminalRecoveryHandoff,
-    lane_id: iroha_data_model::nexus::LaneId,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    lane_id: iroha_model_base::topology::LaneId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
     lane_incarnation: Hash,
 ) -> Vec<LaneQueueReservationGroupBindingV1> {
     deferred_terminal_recovery.bindings_for_route(lane_id, dataspace_id, lane_incarnation)
@@ -671,8 +672,8 @@ fn pending_terminal_recovery_observations(
     recovery: &AutonomousLifecyclePendingTerminalOutcomeRecovery,
     network_id: iroha_data_model::NetworkId,
     active_routes: &BTreeSet<(
-        iroha_data_model::nexus::LaneId,
-        iroha_data_model::nexus::DataSpaceId,
+        iroha_model_base::topology::LaneId,
+        iroha_model_base::topology::DataSpaceId,
         Hash,
     )>,
 ) -> Result<

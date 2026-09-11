@@ -45,7 +45,7 @@ use iroha_config::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, IntoKeyValue, Level, Registrable,
+    IntoKeyValue, Level, Registrable,
     account::{AccountDetails, AccountId, AccountValue},
     asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -55,13 +55,15 @@ use iroha_data_model::{
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
     isi::Log,
-    nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
-    peer::PeerId,
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
     transaction::{
         FeePaymentIntent, TransactionBuilder,
         signed::{FeeChargeKind, FeeChargeLimit, TransactionEntrypoint},
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::{

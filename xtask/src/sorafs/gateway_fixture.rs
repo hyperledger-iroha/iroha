@@ -678,7 +678,7 @@ mod tests {
         let matches_expected = matches!(
             &err,
             FixtureError::Invalid(message)
-                if message.contains("payload") || message.contains("fixtures_digest")
+                if message.starts_with("council envelope chunk_digest_sha3_256 mismatch:")
         );
         assert!(matches_expected, "unexpected error: {err:?}");
     }

@@ -9,7 +9,7 @@ use crate::sumeragi::{
     v2_chunks::encode_payload,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
 use std::collections::VecDeque;
 use tempfile::TempDir;

@@ -549,7 +549,8 @@ pub(crate) mod tests {
         sidecar_store::tests::{SidecarFixtureV1, sidecar_fixture},
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
-    use iroha_data_model::{account::AccountId, peer::PeerId, privacy::PrivacyRecipientIdV1};
+    use iroha_data_model::{account::AccountId, privacy::PrivacyRecipientIdV1};
+    use iroha_model_base::peer::PeerId;
 
     fn fixture_parts() -> (
         SidecarFixtureV1,

@@ -135,6 +135,10 @@ pub fn kagemusha_device_response_signing_bytes_v1(
     {
         return Err(KagemushaDeviceResponseErrorV1::Binding);
     }
+    let reply_len = u32::try_from(canonical_reply.len())
+        .map_err(|_| KagemushaDeviceResponseErrorV1::Binding)?;
+    let signature_len = u32::try_from(KAGEMUSHA_DEVICE_RESPONSE_SIGNATURE_BYTES_V1)
+        .map_err(|_| KagemushaDeviceResponseErrorV1::Binding)?;
     let mut transcript = Vec::with_capacity(RESPONSE_DOMAIN.len() + 1 + 84 + 32 + 64);
     transcript.extend_from_slice(RESPONSE_DOMAIN);
     transcript.push(0);
@@ -143,9 +147,8 @@ pub fn kagemusha_device_response_signing_bytes_v1(
     transcript.push(operation);
     transcript.push(0);
     transcript.extend_from_slice(&request_id);
-    transcript.extend_from_slice(&(canonical_reply.len() as u32).to_le_bytes());
-    transcript
-        .extend_from_slice(&(KAGEMUSHA_DEVICE_RESPONSE_SIGNATURE_BYTES_V1 as u32).to_le_bytes());
+    transcript.extend_from_slice(&reply_len.to_le_bytes());
+    transcript.extend_from_slice(&signature_len.to_le_bytes());
     transcript.extend_from_slice(&Sha256::digest(canonical_reply));
     transcript.extend_from_slice(&Sha256::digest(canonical_command));
     transcript.extend_from_slice(&hardware_policy_id);
@@ -316,3 +319,6 @@ mod captured_cutover_identity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod transcript_tests;

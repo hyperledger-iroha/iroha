@@ -49,7 +49,9 @@ use iroha_data_model::{
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use norito::core::{Header, NoritoSerialize, SerializePayload};
 pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
 pub use ordinary_memory::{
@@ -3381,11 +3383,14 @@ mod tests {
     use core::time::Duration;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        AccountId, ChainId, DomainId, Level, NetworkId,
+        AccountId, Level, NetworkId,
         isi::Log,
         query::{QueryRequest, SingularQueryBox, dsl::CompoundPredicate, prelude::FindParameters},
         transaction::TransactionBuilder,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use mv::storage::StorageReadOnly as _;
     use nonzero_ext::nonzero;
@@ -4137,7 +4142,7 @@ mod tests {
         );
         let alias = iroha_data_model::account::AccountAlias::domainless(
             "server-alias".parse().expect("alias label"),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         );
         let request = ValidQueryRequest {
             request: QueryRequest::Singular(

@@ -4,9 +4,9 @@
 //! host. Page and quantity invariants are enforced during both construction and Norito decoding so
 //! untrusted contract payloads cannot manufacture values that the host itself would never return.
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
-    Quantity,
+    AccountId, AssetDefinitionId, AssetId, Json, NftId, Numeric, NumericOperationError, Quantity,
 };
+use iroha_model_base::domain::DomainId;
 use norito::{
     Decode, DeserializePayload, Encode, SerializePayload,
     core::{self as ncore, DecodeFromSlice},
@@ -571,8 +571,9 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::{
-        AccountId, AssetDefinition, AssetDefinitionId, AssetId, DomainId, Registrable,
+        AccountId, AssetDefinition, AssetDefinitionId, AssetId, Registrable,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     fn bare<T: SerializePayload>(value: &T) -> Vec<u8> {
         let mut bytes = Vec::new();

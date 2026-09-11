@@ -42,7 +42,6 @@ use iroha_data_model::{
             RegisterPrivacyVegaIssuerV1, SubmitPrivacyProofV1,
         },
     },
-    metadata::Metadata,
     permission::Permission,
     prelude::{AccountId, QueryBuilderExt},
     privacy::{
@@ -74,6 +73,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use iroha_test_samples::gen_account_in;
 use p256::ecdsa::{

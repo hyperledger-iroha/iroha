@@ -2,10 +2,10 @@
 
 use iroha_data_model::{
     account::AccountId,
-    domain::DomainId,
     kaigi::{KaigiId, authorization::KaigiAuthorizationIdentitiesV1},
     proof::VerifyingKeyBox,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use kaigi_zk::authorization_v1::{
     KAIGI_AUTHORIZATION_CIRCUIT_ID_V1, KAIGI_AUTHORIZATION_CIRCUIT_K_V1,

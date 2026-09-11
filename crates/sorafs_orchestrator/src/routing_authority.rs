@@ -586,7 +586,6 @@ mod tests {
     use super::*;
     use iroha_data_model::{
         account::AccountId,
-        metadata::Metadata,
         sorafs::{
             capacity::ProviderId,
             pin_registry::{
@@ -596,6 +595,7 @@ mod tests {
             },
         },
     };
+    use iroha_model_base::metadata::Metadata;
     use sorafs_manifest::capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
     };

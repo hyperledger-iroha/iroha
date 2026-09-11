@@ -16,7 +16,6 @@ use core::{num::NonZeroU32, time::Duration};
 use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
     prelude::{AccountId, NetworkId},
     privacy::{
         IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_MAX_POLYNOMIALS_V1,
@@ -30,6 +29,7 @@ use iroha_data_model::{
         TransactionPayload, signed::TransactionSignatureError,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use thiserror::Error;
 #[cfg(test)]
@@ -971,11 +971,11 @@ mod tests {
     use core::num::{NonZeroU32, NonZeroU64};
     use iroha_crypto::PrivateKey;
     use iroha_data_model::{
-        metadata::Metadata,
         prelude::AccountId,
         privacy::PrivacyJindoFieldElementV1,
         transaction::{Executable, FeePaymentIntent},
     };
+    use iroha_model_base::metadata::Metadata;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     struct TestRng(u64);
     impl TestRng {

@@ -61,7 +61,6 @@ fn write_i128_decimal_string(
     out.push('"')
 }
 /// Serialize a `Vec<u8>` as a base64 string and deserialize from base64.
-
 #[allow(dead_code)]
 pub mod base64_vec {
     use super::*;
@@ -114,7 +113,6 @@ pub mod base64_vec {
     }
 }
 /// Serialize signed 128-bit integers as decimal strings to satisfy JSON codec expectations.
-
 #[allow(dead_code)]
 pub mod i128_string {
     use super::*;
@@ -136,7 +134,6 @@ pub mod i128_string {
 }
 /// Serialize unsigned 64-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
-
 #[allow(dead_code)]
 pub mod u64_string {
     use super::*;
@@ -206,7 +203,6 @@ pub mod u64_string {
 }
 /// Serialize unsigned 128-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
-
 #[allow(dead_code)]
 pub mod u128_string {
     use super::*;
@@ -237,7 +233,6 @@ pub mod u128_string {
     }
 }
 /// Helpers for fixed-size byte arrays (`[u8; N]`) and their container variants.
-
 #[allow(dead_code)]
 pub mod fixed_bytes {
     use super::*;
@@ -380,7 +375,6 @@ pub mod fixed_bytes {
     }
 }
 /// Serialize fixed-size `u64` limb arrays as canonical JSON arrays.
-
 #[allow(dead_code)]
 pub mod fixed_u64_limbs {
     use super::*;
@@ -414,7 +408,6 @@ pub mod fixed_u64_limbs {
     }
 }
 /// Serialize fixed-size `u32` limb arrays as canonical JSON arrays.
-
 #[allow(dead_code)]
 pub mod fixed_u32_limbs {
     use super::*;
@@ -482,7 +475,6 @@ pub mod fixed_u32_limbs {
     }
 }
 /// Serialize fixed-size arrays of JSON values as canonical JSON arrays.
-
 #[allow(dead_code)]
 pub mod fixed_array {
     use super::*;
@@ -525,7 +517,6 @@ pub mod fixed_array {
     }
 }
 /// Serialize and deserialize fixed-size byte arrays as hex strings.
-
 #[allow(dead_code)]
 pub mod fixed_bytes_hex {
     use super::*;
@@ -608,7 +599,6 @@ pub mod fixed_bytes_hex {
     }
 }
 /// Serialize and deserialize a `SoraNet` privacy collector ID as one canonical lowercase hex value.
-
 #[allow(dead_code)]
 pub mod soranet_privacy_collector_id {
     use super::*;
@@ -643,7 +633,6 @@ pub mod soranet_privacy_collector_id {
     }
 }
 /// Serialize and deserialize [`SoranetPrivacyModeV1`] values as their label strings.
-
 #[allow(dead_code)]
 pub mod privacy_mode {
     use super::*;
@@ -672,7 +661,6 @@ pub mod privacy_mode {
     }
 }
 /// Helper that strips sensitive strings from JSON serialization while retaining internal storage.
-
 #[allow(dead_code)]
 pub mod secret_string {
     use super::*;
@@ -696,11 +684,11 @@ pub mod secret_string {
     }
 }
 /// Serialize a map keyed by [`AccountId`] into a string-keyed JSON object.
-
 #[allow(dead_code)]
 pub mod account_metadata_map {
     use super::*;
-    use crate::{account::AccountId, metadata::Metadata};
+    use crate::account::AccountId;
+    use iroha_model_base::metadata::Metadata;
     pub fn serialize(value: &BTreeMap<AccountId, Metadata>, out: &mut String) {
         let string_keyed: BTreeMap<String, Metadata> = value
             .iter()
@@ -775,7 +763,6 @@ pub mod account_metadata_map {
     }
 }
 /// Serialize Soracloud Inrou guest-image maps as string-keyed JSON objects.
-
 #[allow(dead_code)]
 pub mod sora_inrou_guest_images_map {
     use super::*;

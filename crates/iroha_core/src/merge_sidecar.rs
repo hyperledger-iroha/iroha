@@ -39,8 +39,8 @@ use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2::MAX_VALIDATORS_PER_HEIGHT},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 #[cfg(test)]
 use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
 use iroha_p2p::{

@@ -17,8 +17,8 @@ use iroha_data_model::{
     account::AccountId,
     isi::musubi::SetMusubiReleaseYankV1,
     musubi::{MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1},
-    nexus::DataSpaceId,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use iroha_torii_shared::mcp::{
     LEGACY_PROTOCOL_VERSION as LEGACY_MCP_PROTOCOL_VERSION,

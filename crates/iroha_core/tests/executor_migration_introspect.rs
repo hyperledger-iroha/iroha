@@ -7,10 +7,11 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::{
-    ChainId, executor::Executor as DataModelExecutor, transaction::executable::IvmBytecode,
-};
 use iroha_data_model::{block::BlockHeader, smart_contract::payloads::ExecutorContext};
+use iroha_data_model::{
+    executor::Executor as DataModelExecutor, transaction::executable::IvmBytecode,
+};
+use iroha_model_base::chain::ChainId;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, Memory, VMError, host::IVMHost};
 struct LoggingHost;

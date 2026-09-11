@@ -12,8 +12,7 @@ use crate::{Run, RunContext};
 use eyre::{Report, Result, WrapErr, eyre};
 #[cfg(test)]
 use iroha::data_model::{
-    nexus::{DataSpaceId, FeeDebitSource},
-    peer::PeerId,
+    nexus::FeeDebitSource,
     soracloud::{
         CanonicalRequestSignatureWitnessV1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         SoraUploadedModelPackageFormatV1, SoracloudTxInstruction,
@@ -33,7 +32,6 @@ use iroha::{
         account::AccountId,
         asset::AssetDefinitionId,
         isi::{InstructionBox, decode_instruction_from_pair},
-        metadata::Metadata,
         prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
         query::{
             CommittedTxFilters,
@@ -113,7 +111,12 @@ use iroha_config::{
     parameters::{actual, defaults},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+#[cfg(test)]
+use iroha_model_base::peer::PeerId;
+#[cfg(test)]
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
 use iroha_torii_shared::{
@@ -27555,7 +27558,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
     }
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "lease".parse().expect("name"),
         )
     }
@@ -27642,7 +27645,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             isi::{Register, framed_instruction_payload},
         };
         let instruction = InstructionBox::from(Register::domain(Domain::new(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
                 .expect("domain id"),
         )));
         let (wire_id, framed) = framed_instruction_payload(&instruction)
@@ -30227,7 +30230,7 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         };
 
         let instruction = InstructionBox::from(Register::domain(Domain::new(
-            iroha_data_model::domain::DomainId::try_new("soracloud_cli_test", "universal")
+            iroha_model_base::domain::DomainId::try_new("soracloud_cli_test", "universal")
                 .expect("canonical mock domain id"),
         )));
         let (wire_id, framed) = framed_instruction_payload(&instruction)

@@ -6,8 +6,9 @@
 )]
 use iroha_config::parameters::actual::Network as Config;
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
-use iroha_data_model::{block::consensus_v2::ConsensusMode, prelude::PeerId};
+use iroha_data_model::block::consensus_v2::ConsensusMode;
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,
     ConsensusHandshakeCaps, CryptoHandshakeCaps, NetworkHandle, network::message::*,

@@ -4,6 +4,7 @@
 //! scheduler described in `new_pipeline.md`.
 use core::fmt::Write as _;
 use iroha_crypto::Hash as IrohaHash;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,8 +25,6 @@ use iroha_data_model::{
         BurnBox, GrantBox, InstructionBox, Log, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox, zk,
     },
-    metadata::Metadata,
-    nexus::LaneId,
     nft::NftId,
     permission,
     prelude::*,
@@ -41,6 +40,8 @@ use iroha_data_model::{
     },
     transaction::{SignedTransaction, TransactionEntrypoint, executable::ContractInvocation},
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::LaneId;
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
@@ -2584,13 +2585,14 @@ mod tests {
     use iroha_data_model::{
         isi::Log,
         level::Level,
-        metadata::Metadata,
         transaction::{
             Executable, ExecutableBatchItem, IvmBytecode, PREPARED_FAUCET_OPERATION,
             TransactionBuilder,
         },
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::state_path::StatePath;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::json::Json;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;
@@ -5144,7 +5146,7 @@ seiyaku DynamicAccessCounter {
         stx.apply();
         let _ = st_block.commit_world_overlay_for_testing();
         // Build a tx carrying this program; add manifest copy into metadata as well (optional)
-        let mut md = iroha_data_model::metadata::Metadata::default();
+        let mut md = iroha_model_base::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
         let tx = TransactionBuilder::new(
@@ -5203,7 +5205,7 @@ seiyaku DynamicAccessCounter {
         let (prog, _code_hash, manifest) =
             test_contract_artifact(code, Some(hints.clone()), vec![entrypoint]);
         let manifest = manifest.signed(&kp);
-        let mut md = iroha_data_model::metadata::Metadata::default();
+        let mut md = iroha_model_base::metadata::Metadata::default();
         md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
         md.insert("contract_entrypoint".parse().unwrap(), Json::new("main"));
         let tx = TransactionBuilder::new(

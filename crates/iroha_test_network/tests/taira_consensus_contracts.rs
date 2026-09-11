@@ -6,9 +6,9 @@ use iroha::client::{AccountTransactionDraft, FeeQuoteRequest};
 use iroha_data_model::{
     Level,
     isi::{InstructionBox, Log},
-    metadata::Metadata,
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
 use std::{path::Path, time::Duration};
 use tokio::time::{Instant, sleep, timeout, timeout_at};

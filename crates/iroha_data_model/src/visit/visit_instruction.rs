@@ -41,6 +41,7 @@ use crate::{
     },
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
 /// Dispatch a boxed instruction to the corresponding visitor hook.
 pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) {
     if !(visit_core_instruction(visitor, isi)
@@ -953,6 +954,9 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     struct CountingVisitor {
         logs: usize,
     }

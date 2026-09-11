@@ -7,17 +7,11 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
-    Registrable,
-    account::Account,
-    asset::AssetDefinition,
-    block::BlockHeader,
-    domain::{Domain, DomainId},
-    isi::zk::CreateElection,
-    permission::Permission,
-    prelude::Grant,
-    proof::VerifyingKeyId,
+    Registrable, account::Account, asset::AssetDefinition, block::BlockHeader, domain::Domain,
+    isi::zk::CreateElection, permission::Permission, prelude::Grant, proof::VerifyingKeyId,
 };
 use iroha_executor_data_model::permission::governance::CanManageParliament;
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 #[test]

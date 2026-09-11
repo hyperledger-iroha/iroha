@@ -16,8 +16,8 @@ use iroha_data_model::{
         NposConsensusEffects,
     },
     governance::types::BeaconSessionId,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
 

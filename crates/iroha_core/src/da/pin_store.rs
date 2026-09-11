@@ -146,7 +146,7 @@ impl DaPinStore {
         self.by_location.len()
     }
     /// Drop pin intents belonging to retired lanes.
-    pub fn prune_lanes(&mut self, retired: &BTreeSet<iroha_data_model::nexus::LaneId>) {
+    pub fn prune_lanes(&mut self, retired: &BTreeSet<iroha_model_base::topology::LaneId>) {
         if retired.is_empty() {
             return;
         }
@@ -163,7 +163,8 @@ impl DaPinStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{nexus::LaneId, sorafs::pin_registry::ManifestDigest};
+    use iroha_data_model::sorafs::pin_registry::ManifestDigest;
+    use iroha_model_base::topology::LaneId;
     use std::convert::TryFrom;
     fn sample_intent(lane: u32, seq: u64, alias: Option<&str>) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");

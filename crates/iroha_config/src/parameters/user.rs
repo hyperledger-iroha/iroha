@@ -29,7 +29,6 @@ use iroha_config_base::{
     util::{Bytes, DurationMs, Emitter, EmitterResultExt},
 };
 use iroha_data_model::{
-    domain::DomainId,
     governance::types::{
         MAX_PARLIAMENT_BODY_TARGET_SEATS_V1, MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1,
     },
@@ -46,6 +45,7 @@ use iroha_data_model::{
     },
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 use std::{
@@ -146,7 +146,7 @@ use iroha_crypto::{
     streaming::{KeyMaterialError, STREAMING_DEFAULT_KEM_SUITE, StreamingKeyMaterial},
 };
 use iroha_data_model::{
-    ChainId, Level, NetworkId,
+    Level, NetworkId,
     account::{AccountId, curve::CurveId},
     asset::{AssetDefinitionAlias, prelude::AssetDefinitionId},
     block::BlockHeader,
@@ -165,10 +165,9 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DaManifestPolicy, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata,
-        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneId, LaneSchedulerPolicy,
-        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
-        UniversalAccountId,
+        AUTOSCALE_META_MANAGED, DaManifestPolicy, DataSpaceCatalog, DataSpaceMetadata,
+        FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneSchedulerPolicy,
+        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, UniversalAccountId,
     },
     peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
@@ -181,7 +180,9 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
+use iroha_model_base::chain::ChainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 fn resolve_private_key_source(
     inline: Option<WithOrigin<PrivateKey>>,
     file: Option<WithOrigin<PathBuf>>,
@@ -813,7 +814,7 @@ mod chain_id_config_tests {
             Cow::Borrowed(""),
             Cow::Borrowed("-leading"),
             Cow::Borrowed("contains space"),
-            Cow::Owned("x".repeat(iroha_data_model::id::MAX_CHAIN_ID_BYTES + 1)),
+            Cow::Owned("x".repeat(iroha_model_base::chain::MAX_CHAIN_ID_BYTES + 1)),
         ] {
             assert!(ChainIdInConfig::from_env_str(invalid).is_err());
         }
@@ -16325,7 +16326,7 @@ fn parse_public_dataspace_upstreams(
             }
         };
         parsed.push(actual::ToriiPublicDataspaceUpstream {
-            dataspace_id: iroha_data_model::nexus::DataSpaceId::new(route.dataspace_id),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(route.dataspace_id),
             base_url,
         });
     }
@@ -16565,11 +16566,11 @@ mod torii_public_dataspace_upstream_tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(
             parsed[0].dataspace_id,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL
         );
         assert_eq!(
             parsed[1].dataspace_id,
-            iroha_data_model::nexus::DataSpaceId::new(7)
+            iroha_model_base::topology::DataSpaceId::new(7)
         );
     }
 
@@ -34074,7 +34075,7 @@ impl IsoCurrencyAsset {
 mod configuration_regression_tests {
     use super::*;
     use core::str::FromStr;
-    use iroha_data_model::DomainId;
+    use iroha_model_base::domain::DomainId;
     fn bundled_tables_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../codec/rans/tables/rans_seed0.toml")
@@ -34784,7 +34785,7 @@ mod configuration_regression_tests {
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
-        DaManifestPolicy, DomainId, Emitter, LaneId, NexusFees, NonZeroU64,
+        DaManifestPolicy, DomainId, Emitter, NexusFees, NonZeroU64,
         RETIRED_LANE_FUNCTIONAL_METADATA_KEYS, SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
         SORA_INROU_MIN_CPU_MILLIS_V1, SORA_INROU_MIN_MEMORY_BYTES_V1,
         SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
@@ -34810,6 +34811,7 @@ mod duration_clamp_tests {
         },
     };
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     use std::{
         fs,
@@ -35846,7 +35848,7 @@ policy_digest_hex = "{policy_digest_hex}"
         );
 
         let actual = load_root(table);
-        let lane_id = iroha_data_model::nexus::LaneId::new(1);
+        let lane_id = iroha_model_base::topology::LaneId::new(1);
         let lane = actual
             .nexus
             .lane_catalog
@@ -35856,7 +35858,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect("configured sharded lane");
         assert_eq!(
             lane.shard_id,
-            Some(iroha_data_model::nexus::ShardId::new(9)),
+            Some(iroha_model_base::topology::ShardId::new(9)),
             "the typed shard_id field must survive catalog construction"
         );
         assert!(!lane.metadata.contains_key("da_shard_id"));

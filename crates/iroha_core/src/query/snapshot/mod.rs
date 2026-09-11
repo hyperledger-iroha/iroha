@@ -475,6 +475,8 @@ mod tests {
             parameters::{FetchSize, Pagination, QueryParams, Sorting},
         },
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;

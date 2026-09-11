@@ -30,8 +30,9 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::WriteExt;
-use iroha_data_model::prelude::{DomainId, QueryBuilderExt};
+use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};

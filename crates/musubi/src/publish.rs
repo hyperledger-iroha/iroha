@@ -29,7 +29,6 @@ use iroha_data_model::{
         InstructionBox,
         musubi::{AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1},
     },
-    metadata::Metadata,
     musubi::{
         ArchiveId, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1,
@@ -53,6 +52,7 @@ use iroha_data_model::{
         TransactionSignature, signed::MultisigSignatures,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_musubi_service::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
     MusubiSeedIngressCarPlanV1,
@@ -4715,10 +4715,6 @@ mod unsupported_platform_tests {
         assert!(!requested.exists());
     }
 }
-
-#[cfg(test)]
-#[path = "persistence_frame_fixture.rs"]
-mod persistence_frame_fixture;
 
 #[cfg(test)]
 #[path = "publish/frame_identity_tests.rs"]

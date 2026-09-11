@@ -4021,7 +4021,7 @@ mod tests {
         .sign(keypair.private_key());
         let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
         let routing_plan = RoutingPlan::single(super::super::RoutingDecision::default());
-        let validators = vec![iroha_data_model::peer::PeerId::new(
+        let validators = vec![iroha_model_base::peer::PeerId::new(
             keypair.public_key().clone(),
         )];
         let admission_context = QueuePlanAdmissionContextV1 {
@@ -4055,8 +4055,8 @@ mod tests {
         dataspace_id: u32,
     ) -> QueuePlanJournalRecordV1 {
         let routing_plan = RoutingPlan::single(super::super::RoutingDecision::new(
-            iroha_data_model::nexus::LaneId::new(lane_id),
-            iroha_data_model::nexus::DataSpaceId::new(dataspace_id.into()),
+            iroha_model_base::topology::LaneId::new(lane_id),
+            iroha_model_base::topology::DataSpaceId::new(dataspace_id.into()),
         ));
         record.admission_context.routing_plan_digest = routing_plan.digest();
         record.admission_context.route_incarnations[0].leg = routing_plan.coordinator_leg();
@@ -4298,8 +4298,8 @@ mod tests {
         );
         let mut plan_drift = exact.clone();
         plan_drift.routing_plan = RoutingPlan::single(super::super::RoutingDecision::new(
-            iroha_data_model::nexus::LaneId::new(9),
-            iroha_data_model::nexus::DataSpaceId::new(12),
+            iroha_model_base::topology::LaneId::new(9),
+            iroha_model_base::topology::DataSpaceId::new(12),
         ));
         assert_ne!(
             plan_drift.claim_digest().expect("hash plan-drift record"),

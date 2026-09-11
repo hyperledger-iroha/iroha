@@ -442,7 +442,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura_and_chain(
         Arc::clone(&kura),
-        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+        iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     );
     let block =
         signed_block_with_transaction(accepted_log_transaction("exact-sccp-registry-snapshot"));
@@ -662,7 +662,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura_and_chain(
             Arc::clone(&kura),
-            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+            iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         let mut serialized = String::new();
         serialize_state_snapshot(&state, &mut serialized);

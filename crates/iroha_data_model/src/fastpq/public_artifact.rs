@@ -16,10 +16,11 @@ use super::{
 use crate::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1, DataSpaceId},
+    nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1},
     privacy::GoldilocksDigest384V1,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
@@ -533,14 +534,14 @@ fn check_profile_and_bundle(
 mod tests {
     use super::*;
     use crate::{
-        DomainId,
         fastpq::{FastpqOperationKind, TransferSmtWitness},
         nexus::{
-            AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId,
-            compute_remote_spend_claim_commitment_v1,
+            AxtHandleIssuerContextV1, AxtHandleReplayKey, compute_remote_spend_claim_commitment_v1,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Numeric;
 
     const PROFILE: FastpqCompactProfileIdV1 = FastpqCompactProfileIdV1([0x42; 32]);

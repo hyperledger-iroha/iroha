@@ -55,8 +55,7 @@ impl FastpqQuantityUnits {
             let mut carry = 0_u64;
             for limb in &mut limbs {
                 let product = u64::from(*limb) * 10 + carry;
-                *limb = product as u32;
-                carry = product >> 32;
+                (*limb, carry) = split_wide_limb(product);
             }
             if carry != 0 {
                 return None;
@@ -140,13 +139,14 @@ impl FastpqQuantityUnits {
             return None;
         }
         let mut limbs = [0_u32; FASTPQ_QUANTITY_UNIT_LIMBS];
-        let mut carry = 0_u64;
+        let mut carry = false;
         for ((out, left), right) in limbs.iter_mut().zip(self.limbs).zip(rhs.limbs) {
-            let sum = u64::from(left) + u64::from(right) + carry;
-            *out = sum as u32;
-            carry = sum >> 32;
+            let (sum, limb_overflow) = left.overflowing_add(right);
+            let (sum, carry_overflow) = sum.overflowing_add(u32::from(carry));
+            *out = sum;
+            carry = limb_overflow || carry_overflow;
         }
-        if carry != 0 {
+        if carry {
             return None;
         }
         Self::from_limbs(limbs, self.scale)
@@ -159,18 +159,29 @@ impl FastpqQuantityUnits {
             return None;
         }
         let mut limbs = [0_u32; FASTPQ_QUANTITY_UNIT_LIMBS];
-        let mut borrow = 0_u64;
+        let mut borrow = false;
         for ((out, left), right) in limbs.iter_mut().zip(self.limbs).zip(rhs.limbs) {
-            let left = u64::from(left);
-            let right = u64::from(right) + borrow;
-            *out = left.wrapping_sub(right) as u32;
-            borrow = u64::from(left < right);
+            let (difference, limb_underflow) = left.overflowing_sub(right);
+            let (difference, borrow_underflow) = difference.overflowing_sub(u32::from(borrow));
+            *out = difference;
+            borrow = limb_underflow || borrow_underflow;
         }
-        if borrow != 0 {
+        if borrow {
             return None;
         }
         Self::from_limbs(limbs, self.scale)
     }
+}
+
+// A wide multiplication result contributes its low word to this limb and
+// carries its high word into the next limb. Explicit bytes retain both parts
+// without a lossy integer conversion or a host-endian dependency.
+fn split_wide_limb(value: u64) -> (u32, u64) {
+    let bytes = value.to_le_bytes();
+    (
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        value >> 32,
+    )
 }
 
 #[cfg(test)]

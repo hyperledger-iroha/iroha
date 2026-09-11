@@ -3,9 +3,10 @@
 //! These types define the canonical Norito encoding for JDG attestations, including their scope,
 //! signer sets, optional proofs, and the domain-tagged hash used for signing.
 
+use crate::proof::ProofBox;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{nexus::DataSpaceId, proof::ProofBox};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{

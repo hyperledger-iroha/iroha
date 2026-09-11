@@ -9,6 +9,9 @@ use iroha_core::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use snapshots::assert_events;

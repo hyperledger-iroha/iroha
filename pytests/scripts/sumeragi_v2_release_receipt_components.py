@@ -74,7 +74,7 @@ def proof_ledger_checker_components(source_root: Path) -> tuple[Path, ...]:
 
     return _declared_components(
         source_root,
-        parent_relative=Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
+        parent_relative=Path("scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"),
         assignment="_CHECKER_COMPONENT_FILES",
         filename_pattern=r"sumeragi_v2_proof_ledger_[a-z0-9_]+\.py",
         discovery_pattern="sumeragi_v2_proof_ledger_*.py",
@@ -200,3 +200,58 @@ def fixture_cargo_cache_input(
         "runtime_cache_path": str((artifact_root / "cache").resolve()),
     }
     return cargo_home, inventory, final_inventory, source_home, runtime_fields
+
+
+def install_checker_fixture(formal: Path) -> None:
+    """Install the release fixture checker and its canonical component inventory."""
+    (formal / "sumeragi_v2_proof_ledger_source_inventory.py").write_text(
+        '_CHECKER_COMPONENT_FILES = ("sumeragi_v2_proof_ledger_source_inventory.py",)\n',
+        encoding="utf-8",
+    )
+    (formal / "check_sumeragi_v2_proof_ledger.py").write_text(
+        """import json
+import pathlib
+import sys
+
+args = sys.argv[1:]
+ledger_path = pathlib.Path(args[args.index("--ledger") + 1])
+ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+cross_ids = [
+    item.get("id")
+    for item in ledger.get("obligations", [])
+    if item.get("status") == "cross_tool_proved"
+]
+if "--print-cross-tool-obligations" in args:
+    print("\\n".join(cross_ids))
+    raise SystemExit(0)
+if "--release" in args:
+    if "--verus-evidence" not in args:
+        raise SystemExit(81)
+    if "--verus-log" not in args:
+        raise SystemExit(84)
+    has_cross = "--cross-tool-evidence" in args
+    if bool(cross_ids) != has_cross:
+        raise SystemExit(82)
+    if has_cross:
+        cross_path = pathlib.Path(args[args.index("--cross-tool-evidence") + 1])
+        if json.loads(cross_path.read_text(encoding="utf-8")) != {
+            "backend_verification": True,
+            "canonical": True,
+        }:
+            raise SystemExit(83)
+    if "--production-trace-extraction-evidence" in args:
+        trace_path = pathlib.Path(
+            args[args.index("--production-trace-extraction-evidence") + 1]
+        )
+        if json.loads(trace_path.read_text(encoding="utf-8")) != {
+            "backend_verification": True,
+            "canonical": True,
+            "multilane_source_manifest_sha256": "c" * 64,
+            "theorem": "sumeragi-v2-production-trace-extraction",
+            "workspace_source_manifest_sha256": "b" * 64,
+        }:
+            raise SystemExit(85)
+raise SystemExit(0)
+""",
+        encoding="utf-8",
+    )

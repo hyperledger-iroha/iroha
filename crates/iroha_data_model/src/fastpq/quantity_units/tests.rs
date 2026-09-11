@@ -236,3 +236,20 @@ fn deterministic_full_width_arithmetic_matches_independent_bigint_reference() {
         }
     }
 }
+
+#[test]
+fn wide_limb_split_preserves_low_word_and_carry() {
+    for (wide, expected) in [
+        (0, (0, 0)),
+        (u64::from(u32::MAX), (u32::MAX, 0)),
+        (1_u64 << 32, (0, 1)),
+        (0x0123_4567_89ab_cdef, (0x89ab_cdef, 0x0123_4567)),
+        (u64::MAX, (u32::MAX, u64::from(u32::MAX))),
+    ] {
+        assert_eq!(split_wide_limb(wide), expected);
+    }
+    let value = Quantity::from(u64::from(u32::MAX));
+    let scaled = FastpqQuantityUnits::from_quantity(&value, 1).unwrap();
+    assert_eq!(&scaled.limbs()[..2], &[0xffff_fff6, 9]);
+    assert_eq!(scaled.to_quantity(), Some(value));
+}

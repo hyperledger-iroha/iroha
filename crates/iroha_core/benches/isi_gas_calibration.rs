@@ -19,6 +19,7 @@ use iroha_data_model::{
         action::{Action, Repeats},
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;

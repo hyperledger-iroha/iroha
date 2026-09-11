@@ -5,10 +5,10 @@ use iroha_data_model::{
     nexus as model,
     nexus::{
         AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
-        DataSpaceId, LaneId,
     },
     prelude::Quantity,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use ivm::{
     CoreHost, IVM, IVMHost, PointerType, VMError,
     axt::{

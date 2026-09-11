@@ -62,7 +62,8 @@ use crate::sumeragi::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::block::consensus_v2 as wire;
+use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use std::{mem::size_of, sync::Arc};
 const REPLAY_AUTHORITY_FORMAT_VERSION: u16 = 1;

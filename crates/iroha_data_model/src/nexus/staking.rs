@@ -1,6 +1,9 @@
 //! Public lane staking records and reward metadata.
-use crate::{account::AccountId, asset::AssetId, metadata::Metadata, nexus::LaneId, peer::PeerId};
+use crate::{account::AccountId, asset::AssetId};
 use iroha_crypto::Hash;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

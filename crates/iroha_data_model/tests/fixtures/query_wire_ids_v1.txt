@@ -17,7 +17,6 @@ ErasedIterQuery<crate::oracle::OracleChangeProposal>	iroha.query.v1::iterable::o
 ErasedIterQuery<crate::oracle::OracleDispute>	iroha.query.v1::iterable::oracle::OracleDispute
 ErasedIterQuery<crate::oracle::OracleProviderStatsRecord>	iroha.query.v1::iterable::oracle::OracleProviderStatsRecord
 ErasedIterQuery<crate::oracle::TwitterBindingRecord>	iroha.query.v1::iterable::oracle::TwitterBindingRecord
-ErasedIterQuery<crate::peer::PeerId>	iroha.query.v1::iterable::peer::PeerId
 ErasedIterQuery<crate::permission::Permission>	iroha.query.v1::iterable::permission::Permission
 ErasedIterQuery<crate::proof::ProofRecord>	iroha.query.v1::iterable::proof::ProofRecord
 ErasedIterQuery<crate::repo::RepoAgreement>	iroha.query.v1::iterable::repo::RepoAgreement
@@ -26,3 +25,4 @@ ErasedIterQuery<crate::role::RoleId>	iroha.query.v1::iterable::role::RoleId
 ErasedIterQuery<crate::rwa::Rwa>	iroha.query.v1::iterable::rwa::Rwa
 ErasedIterQuery<crate::trigger::Trigger>	iroha.query.v1::iterable::trigger::Trigger
 ErasedIterQuery<crate::trigger::TriggerId>	iroha.query.v1::iterable::trigger::TriggerId
+ErasedIterQuery<iroha_model_base::peer::PeerId>	iroha.query.v1::iterable::peer::PeerId

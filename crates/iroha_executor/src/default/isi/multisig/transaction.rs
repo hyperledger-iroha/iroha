@@ -390,7 +390,8 @@ mod tests {
     use core::num::{NonZeroU16, NonZeroU64};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
-    use iroha_smart_contract::data_model::{account::AccountId, domain::DomainId};
+    use iroha_model_base::domain::DomainId;
+    use iroha_smart_contract::data_model::account::AccountId;
     use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

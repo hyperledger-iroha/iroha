@@ -19,7 +19,6 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
     prelude::NetworkId,
     privacy::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
@@ -37,6 +36,7 @@ use iroha_data_model::{
         signed::TransactionSignatureError,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_zkp_halo2::vega::{
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, MaskedRelaxedRandomErrorV1,
     MaskedRelaxedRandomSourceV1, ZK_AMS_ACTION_INDEX_V1, ZkAmsAdmissionPublicInputV1,
@@ -2810,7 +2810,6 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        metadata::Metadata,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
@@ -2819,6 +2818,7 @@ mod tests {
         },
         transaction::FeePaymentIntent,
     };
+    use iroha_model_base::metadata::Metadata;
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
     use rand_core_06::Error as RngError;
     #[derive(norito::NoritoSchema)]

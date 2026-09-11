@@ -13,9 +13,8 @@ use iroha_data_model::validation_fee::{
     VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
     ValidationFeeMultisigMarkerV1,
 };
-use iroha_data_model::{
-    NetworkId, isi::InstructionBox, metadata::Metadata, transaction::TransactionBuilder,
-};
+use iroha_data_model::{NetworkId, isi::InstructionBox, transaction::TransactionBuilder};
+use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
 /// Instructions, metadata and their canonical proposal identity validated together.

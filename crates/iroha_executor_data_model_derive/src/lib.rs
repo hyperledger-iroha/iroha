@@ -16,6 +16,7 @@ pub fn derive_parameter(input: TokenStream) -> Result<TokenStream> {
 ///
 /// ```ignore
 /// use iroha_executor::{permission, prelude::*};
+/// use iroha_model_base::domain::DomainId;
 ///
 /// #[derive(Permission, ValidateGrantRevoke, permission::derive_conversions::asset::Owner)]
 /// #[validate(permission::asset::Owner)]

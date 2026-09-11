@@ -707,9 +707,9 @@ mod tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
-        peer::PeerId,
     };
     use iroha_genesis::GenesisBuilder;
+    use iroha_model_base::peer::PeerId;
 
     #[test]
     fn bounded_prepared_reader_accepts_exact_limit() {

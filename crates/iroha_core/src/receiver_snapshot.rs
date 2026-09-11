@@ -689,7 +689,7 @@ mod tests {
             Hash::new(b"kagemusha-receipt-proof"),
         ));
         let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain"),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("asset name"),
         );
         let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(

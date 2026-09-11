@@ -16,15 +16,16 @@ use iroha_data_model::{
         LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
         LaneVolatilityClass,
     },
-    nexus::{DataSpaceId, LaneCompliancePolicy, LaneId},
-    prelude::{Metadata, NetworkId},
+    nexus::LaneCompliancePolicy,
+    prelude::NetworkId,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::status::Status;
 use norito::{
-    core::NoritoDeserialize as _,
     derive::{JsonDeserialize, JsonSerialize},
     json,
     json::{self as serde_json, Map as JsonMap, Value as JsonValue},
@@ -536,8 +537,7 @@ pub fn verify_lane_commitment_fixtures(dir: &Path) -> Result<(), Box<dyn Error>>
             return Err(format!("missing lane commitment Norito bytes {:?}", to_path).into());
         }
         let bytes = fs::read(&to_path)?;
-        let decoded = norito::from_bytes::<LaneBlockCommitment>(&bytes)
-            .and_then(LaneBlockCommitment::try_deserialize)
+        let decoded = norito::decode_from_bytes::<LaneBlockCommitment>(&bytes)
             .map_err(|err| format!("failed to deserialize {:?}: {err}", to_path))?;
         if decoded != fixture.payload {
             return Err(format!(
@@ -1154,10 +1154,8 @@ fn hex32(input: &str) -> [u8; 32] {
 mod tests {
     use super::*;
     use arrow_array::{Array, BooleanArray, Float64Array, StringArray, UInt32Array, UInt64Array};
-    use iroha_data_model::{
-        metadata::Metadata,
-        nexus::{AuditControls, JurisdictionSet, LaneCompliancePolicyId},
-    };
+    use iroha_data_model::nexus::{AuditControls, JurisdictionSet, LaneCompliancePolicyId};
+    use iroha_model_base::metadata::Metadata;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::fs;
     use tempfile::{NamedTempFile, tempdir};

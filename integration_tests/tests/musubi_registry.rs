@@ -25,7 +25,6 @@ use iroha_data_model::{
         MusubiSeedIngressReceiptV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
         MusubiVersionReqV1,
     },
-    nexus::DataSpaceId,
     query::musubi::prelude::{
         FindMusubiAliasHistoryV1, FindMusubiAliasV1, FindMusubiArchiveLocationsV1,
         FindMusubiExactPackageV1, FindMusubiExactReleaseV1, FindMusubiMaintainersV1,
@@ -36,6 +35,7 @@ use iroha_data_model::{
         pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     },
 };
+use iroha_model_base::topology::DataSpaceId;
 use norito::codec::{DecodeAll, Encode};
 fn keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

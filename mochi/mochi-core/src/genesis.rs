@@ -9,16 +9,18 @@ use iroha_data_model::{
         KagemushaMintFinalityGenesisParametersV1,
     },
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox},
-    metadata::Metadata,
-    nexus::DataSpaceId,
     permission::Permission,
-    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NumericSpec, PeerId},
+    prelude::{AccountId, AssetDefinitionId, AssetId, NumericSpec},
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount},
     nexus::CanPublishSpaceDirectoryManifestForAccountDomain,
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use std::{collections::BTreeSet, sync::LazyLock};
 static SAMPLE_ROSE_DEFINITION_ID: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
     let wonderland_id =
@@ -248,10 +250,10 @@ mod tests {
     use iroha_data_model::{
         block::consensus_v2::SumeragiV2GenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
-        peer::PeerId,
-        prelude::ChainId,
     };
     use iroha_genesis::GenesisBuilder;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use iroha_test_samples::ALICE_ID;
 
     fn deterministic_test_validators() -> Vec<PeerId> {

@@ -17,7 +17,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::SignedBlock,
-    domain::DomainId,
     isi::{InstructionBox, OpenVpnLeaseEscrow, SettleVpnLease},
     permission::Permission,
     query::error::QueryExecutionFail,
@@ -33,6 +32,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_torii_shared::configuration::Configuration;

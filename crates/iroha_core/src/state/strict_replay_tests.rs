@@ -16,7 +16,7 @@ use crate::{
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, HasMetadata, Registrable,
+    HasMetadata, Registrable,
     account::{Account, AccountId},
     block::{
         BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
@@ -25,8 +25,9 @@ use iroha_data_model::{
     bridge::SccpOutboundMessageContextV1,
     domain::Domain,
     parameter::{Parameter, system::SumeragiParameter},
-    peer::PeerId,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::time::TimeSource;
 use norito::codec::Encode;
 use std::{
@@ -400,15 +401,15 @@ impl StrictReplayFixture {
                         AssetId::of(definition.clone(), validator.clone()),
                     ))
                     .append_instruction(RegisterPublicLaneValidator::new(
-                        iroha_data_model::nexus::LaneId::SINGLE,
+                        iroha_model_base::topology::LaneId::SINGLE,
                         validator.clone(),
                         entry.validator.clone(),
                         validator.clone(),
                         iroha_primitives::numeric::Quantity::from(1_000_u64),
-                        iroha_data_model::metadata::Metadata::default(),
+                        iroha_model_base::metadata::Metadata::default(),
                     ))
                     .append_instruction(ActivatePublicLaneValidator::new(
-                        iroha_data_model::nexus::LaneId::SINGLE,
+                        iroha_model_base::topology::LaneId::SINGLE,
                         validator,
                     ));
             }
@@ -1072,7 +1073,7 @@ impl StrictReplayFixture {
         }
         if options.seed_space_directory {
             super::replay_validation_tests::seed_space_directory_manifest_for_retired_checkpoint_test(
-                &state, iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                &state, iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             );
         }
         let nexus = state.nexus_snapshot();
@@ -1086,7 +1087,7 @@ impl StrictReplayFixture {
             .lane_catalog
             .lanes()
             .iter()
-            .find(|lane| lane.id == iroha_data_model::nexus::LaneId::SINGLE)
+            .find(|lane| lane.id == iroha_model_base::topology::LaneId::SINGLE)
             .expect("strict replay fixture has the primary lane");
         let validators = roster
             .iter()

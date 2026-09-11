@@ -1,16 +1,14 @@
 //! Client side of the feature-isolated real-network consensus message controller.
 use color_eyre::eyre::{Result, eyre};
 use iroha_crypto::{Hash as CryptoHash, HashOf, sha256};
-use iroha_data_model::{
-    block::{
-        BlockHeader,
-        consensus_v2::{
-            BlockSubject, ExecutionCommitment, MAX_VALIDATORS_PER_HEIGHT, PayloadManifest,
-            ValidatorIndex,
-        },
+use iroha_data_model::block::{
+    BlockHeader,
+    consensus_v2::{
+        BlockSubject, ExecutionCommitment, MAX_VALIDATORS_PER_HEIGHT, PayloadManifest,
+        ValidatorIndex,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use norito::json::{Map, Value};
 use std::{
     collections::BTreeSet,

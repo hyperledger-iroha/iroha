@@ -134,3 +134,87 @@ The pre-format declaration checks are `musubi-build-8`, `musubi-consumer-runtime
 Current SDK reports are `sdk-build-8`, `sdk-runtime-final-6`,
 `sdk-docs-3` and `sdk-clippy-6`. Workspace, memory, native/device and
 four-validator release qualification remain open.
+
+After extracting `Name`, `StatePath` and `ParseError` into `iroha_model_base`,
+the rebuilt Musubi resolver again passes all 34 original tests without a stack
+override. The iterative search and original tests remain byte-identical;
+only their canonical `Name` import changes. A new production-boundary regression
+then covers depth-64 success, depth-65 rejection, exact conflict-chain ownership
+and deterministic results with reversed registry rows. It retains every original
+test and exercises continuation/conflict-chain destruction on ordinary workers.
+The complete library passes **386 tests, zero failures and one ignored
+subprocess-only crash worker exercised by its parent**, on four workers.
+The 5,655 selected inputs remain unchanged during build and execution:
+source `52bdb44a540ea0d84146b28646e98582751d1eedd90bf31c3640a0f03121413a`,
+executable `99be236c956c98724d202f39d2e30ec85604dd2cf546fa7875b3834dae9724f6`.
+The records are `musubi-depth-build-1` and `musubi-depth-runtime-1` under
+`target/architecture-redesign/model-base-extraction-v1/`; the preceding unchanged
+resolver run is `musubi-current-resolver-1`. These results qualify this selected
+model-consumer source; the earlier SDK/lint results retain their separate scope.
+
+Strict library-and-test Clippy subsequently found three loads of the same
+persistence-fixture module and a needlessly owned test-fixture URL. The three
+consumers now share one crate-private test module; every frame assertion remains.
+The rebase fixture owns its fixed offline endpoint once, preserving the exact
+URL previously repeated at all 33 call sites. Final build, full runtime and
+strict library-and-test Clippy pass on the same 5,655 unchanged inputs:
+source `0dcd9468a898319a4f14ff6700fb53922b7145bbbb595d3a904b348a71363934`,
+executable `d833b7def560feb427fbf2c89d2d8f9cc4329c143e288c1dee34ac3a649fc93b`.
+The full run again reports **386 passed, zero failed and one subprocess-only
+ignored worker exercised by its parent**, including all 35 resolver regressions.
+Reports are `musubi-final-build-1`, `musubi-final-runtime-1` and
+`musubi-depth-clippy-4`. Failed lint attempts, including an exhausted-disk run,
+remain recorded separately. Workspace formatting and codec guards also pass.
+The final 34-package all-target consumer check passes with compiler warnings;
+its larger input closure is recorded in the [model checkpoint](model-base-name-state-path.md).
+
+After the Metadata move and SDK test-helper cleanup, both packages build and
+execute from the same 5,658 unchanged selected inputs, source
+`c7c4b856f82bec9e157d1724fb69126e9b1b94181b55a0e8c10eaefbc3ad326e`.
+SDK passes **802 tests**; Musubi passes **386**, including all 35 resolver
+regressions on four ordinary workers and its subprocess-only crash-worker
+contract. Strict library-and-test Clippy passes for both packages, and all ten
+SDK doctests pass on that same source. Musubi has no doctests. The original
+overflowing 512-edge case and the depth-64/65 regression both pass. SDK executable
+SHA-256 is `3de1324fd6f4d5432c428da0b4e246ab776b6ca67a1a58237b3e7804bee4d589`;
+Musubi is `f5186641222f38b1faa44407d54abfb5deab7f5e88339855bb16b363b127c9aa`.
+Reports are `metadata-sdk-musubi-build-2`, `metadata-sdk-runtime-2`,
+`metadata-musubi-runtime-2`, `metadata-sdk-musubi-clippy-3` and
+`metadata-sdk-musubi-docs-1`. The
+[Metadata checkpoint](model-base-metadata.md) records the broader consumer and
+tooling scope; these results do not close workspace, memory or release gates.
+
+After the ChainId owner move, `chain-model-sdk-build-1` and
+`chain-{sdk,musubi}-runtime-1` pass **802 SDK and 386 Musubi tests** on one
+unchanged source, `139dcaac2274565b4d267a6287d1c0afa324662da99a6a22a427dd3d84657bea`.
+Both use four ordinary workers; the 35 resolver regressions and subprocess
+crash-worker contract pass. `chain-sdk-musubi-clippy-1` and
+`chain-sdk-musubi-docs-1` also pass strict library/test lint and all ten SDK
+doctests on that same source. See the [ChainId checkpoint](model-base-chain.md) for
+aggregate and consumer qualification.
+
+After the DomainId move, one composed source again passes **802 SDK tests and
+386 Musubi tests**, including all 35 resolver regressions on four ordinary
+workers. Source is
+`69cf733d700c512abe5e769cead45fd3105452f3e2aa66623ddfbbf2c545c8c2`
+with all 5,663 selected inputs unchanged. SDK executable SHA-256 is
+`8ad129385a0e48a1da89fc6cc502bfde5f19ef0b5dead869d04b6cb9fdb5f16e`;
+Musubi is `3461e5f41737de59048a6e650e07e9f55c4f159af96717f4b005c653927991a7`.
+The search implementation retains SHA-256
+`a548f9e155819e50b56b89197bb67d2fe66855721c29c8f8d0846094f0786e3d`.
+Musubi's one ignored subprocess-only crash worker remains exercised by its
+parent. The reports are `domain-sdk-runtime-1`, `domain-musubi-runtime-1` and
+`domain-resolver-root-cause-checkpoint-1` in the model extraction evidence root.
+The [Domain checkpoint](model-base-domain.md) records the simultaneously passing
+base/aggregate suites and separates the remaining qualification.
+
+After the numeric topology extraction, the composed source
+`09d3aff4126085899eeef7b305bc0a58a8e351c4e0269627ef456e371033db78`
+passes 77 base, 3,675 aggregate, 802 SDK and 386 Musubi tests. All 35 resolver
+regressions retain their passing outcomes on four ordinary workers. The
+iterative search source is unchanged. Musubi executable
+`9f94be93d540193e1cd96441a6e7f57793d3535309d0cf20627a364d4c366d3a`
+and SDK executable
+`7f19681cba2a68937ef16ad9ed4e029d8df71c50263c2afa06d5f4e4b10b22d0`
+are bound by `topology-resolver-root-cause-checkpoint-1.json`. Broader release
+qualification remains outstanding.

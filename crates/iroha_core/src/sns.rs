@@ -19,10 +19,8 @@ use iroha_data_model::{
     account::{AccountAddress, AccountId, rekey::AccountAlias},
     alias_setup::{AccountAliasName, AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
-    domain::DomainId,
     isi::{alias_setup::EnsureAlias, register::RegisterBox},
-    metadata::Metadata,
-    nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+    nexus::{DataSpaceCatalog, DataSpaceMetadata},
     permission::Permission,
     sns::{
         AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,
@@ -34,7 +32,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::state_path::StatePath;
+use iroha_model_base::topology::DataSpaceId;
 #[cfg(test)]
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::{Numeric, Quantity};

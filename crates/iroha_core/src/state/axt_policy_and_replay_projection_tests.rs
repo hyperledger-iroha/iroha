@@ -496,7 +496,7 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
             )
             .expect("derive deterministic snapshot mint-finality validator");
             iroha_data_model::block::consensus_v2::ValidatorPower {
-                validator: iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
+                validator: iroha_model_base::peer::PeerId::new(key_pair.public_key().clone()),
                 power: 1,
             }
         })

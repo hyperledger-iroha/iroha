@@ -1,5 +1,7 @@
 use super::*;
 use crate::{account::NewAccount, domain::NewDomain};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::fmt::Display;
@@ -634,8 +636,9 @@ impl UnregisterBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::peer::PeerId;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
     use norito::{
         codec::{Decode, Encode},
         core::DecodeFromSlice,

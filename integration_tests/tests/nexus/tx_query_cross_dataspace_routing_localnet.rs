@@ -12,19 +12,17 @@ use iroha::{
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
         da::commitment::DaProofPolicyBundle,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             InstructionBox, Log, Mint, Register,
             space_directory::PublishSpaceDirectoryManifest,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
         nexus::{
-            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-            LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility, ManifestEffect,
-            ManifestEntry, ManifestVersion, UniversalAccountId,
+            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, LaneCatalog,
+            LaneConfig as ModelLaneConfig, LaneVisibility, ManifestEffect, ManifestEntry,
+            ManifestVersion, UniversalAccountId,
         },
-        peer::PeerId,
         prelude::{FindAssetById, Quantity},
         transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
@@ -34,6 +32,10 @@ use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
@@ -1496,17 +1498,16 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 mod tests {
     use super::{
         ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, BlockHeader, DS1_ID_U64,
-        DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH,
-        DataSpaceId, DomainId, ExpectedLaneValidatorBinding, Hash, KeyPair, LANE_VALIDATOR_COUNT,
-        LaneId, Level, Log, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, NetworkId, PeerId,
-        RegisterPublicLaneValidator, RoutedJsonResponse, RoutedTransactionSubmitResponse,
-        SignedTransaction, TOTAL_PEERS, account_assets_response_contains,
-        encode_versioned_signed_transaction, expect_proxy_fanout_headers,
-        expect_proxy_route_headers, expected_lane_binding_for_peer, lane_validator_snapshot,
-        manifest_response_contains_dataspace, manifest_response_contains_status,
-        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
-        npos_multilane_genesis_post_topology_transactions, permission_response_contains,
-        routed_header_string, routed_json_empty_body_is_transient,
+        DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH, DomainId,
+        ExpectedLaneValidatorBinding, Hash, KeyPair, LANE_VALIDATOR_COUNT, Level, Log, NEXUS_ALIAS,
+        NEXUS_ID_U64, NEXUS_LANE_INDEX, NetworkId, RegisterPublicLaneValidator, RoutedJsonResponse,
+        RoutedTransactionSubmitResponse, SignedTransaction, TOTAL_PEERS,
+        account_assets_response_contains, encode_versioned_signed_transaction,
+        expect_proxy_fanout_headers, expect_proxy_route_headers, expected_lane_binding_for_peer,
+        lane_validator_snapshot, manifest_response_contains_dataspace,
+        manifest_response_contains_status, multilane_da_proof_policy_bundle,
+        nexus_fee_asset_definition_id, npos_multilane_genesis_post_topology_transactions,
+        permission_response_contains, routed_header_string, routed_json_empty_body_is_transient,
         routed_json_response_is_transient, routed_response_context, routing_probe_gas_account_id,
         stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
         validator_authority_seed,
@@ -1515,6 +1516,8 @@ mod tests {
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
         transaction::TransactionBuilder,
     };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::{core::DecodeFromSlice, json::Value as JsonValue};
     use reqwest::{
         StatusCode as HttpStatusCode,

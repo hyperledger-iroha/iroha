@@ -5,6 +5,8 @@ use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use std::{borrow::Cow, sync::Arc};
 // no specific event enum imports needed here
 use iroha_data_model::prelude::*;

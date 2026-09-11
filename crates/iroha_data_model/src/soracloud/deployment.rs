@@ -228,6 +228,19 @@ impl SoraServiceRolloutStateV1 {
                 "must differ from candidate_version",
             ));
         }
+        self.validate_traffic()?;
+        self.validate_health()?;
+        if self.updated_sequence < self.created_sequence {
+            return Err(invalid_field(
+                "sora service rollout state",
+                "updated_sequence",
+                "must be greater than or equal to created_sequence",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_traffic(&self) -> Result<(), SoracloudManifestError> {
         if self.canary_percent > 100 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -278,6 +291,10 @@ impl SoraServiceRolloutStateV1 {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_health(&self) -> Result<(), SoracloudManifestError> {
         if self.max_health_failures == 0 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -314,13 +331,6 @@ impl SoraServiceRolloutStateV1 {
                 "sora service rollout state",
                 "health_window_secs",
                 "must be greater than zero",
-            ));
-        }
-        if self.updated_sequence < self.created_sequence {
-            return Err(invalid_field(
-                "sora service rollout state",
-                "updated_sequence",
-                "must be greater than or equal to created_sequence",
             ));
         }
         Ok(())
@@ -521,7 +531,7 @@ impl SoraServiceDeploymentStateV1 {
                     "must retain a canary last_rollout until it is promoted or rolled back",
                 ));
             }
-            (None, Some(_)) | (None, None) => {}
+            (None, _) => {}
         }
         if let Some(lease) = self.service_lease.as_ref() {
             lease.validate()?;
@@ -1386,6 +1396,12 @@ impl SoraServiceConfigMutationV1 {
     }
 
     /// Validate canonical mutation material at its audit sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid config name. For an upsert, also rejects an
+    /// unsupported entry schema, a zero or mismatched update sequence, invalid/noncanonical
+    /// JSON, or a value hash that differs from the canonical JSON commitment.
     pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
         match self {
             Self::Upsert(entry) => {
@@ -1441,6 +1457,12 @@ impl SoraServiceSecretMutationV1 {
     }
 
     /// Validate canonical mutation material at its audit sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid secret name. For an upsert, also rejects an
+    /// unsupported entry/envelope schema, a zero or mismatched update sequence, invalid key
+    /// text, empty/oversized nonce or ciphertext, or invalid commitment/AAD digests.
     pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
         match self {
             Self::Upsert(entry) => {
@@ -2827,3 +2849,6 @@ impl SoraModelArtifactRecordV1 {
 
 #[cfg(test)]
 mod captured_deployment_schema_tests;
+
+#[cfg(test)]
+mod rollout_validation_tests;

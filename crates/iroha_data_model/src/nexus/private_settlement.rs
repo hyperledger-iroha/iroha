@@ -22,12 +22,10 @@ use confidential_encoding::{
     zeroize_confidential_vec_spare_capacity,
 };
 
-use super::{DataSpaceId, LaneId};
 use crate::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    peer::PeerId,
     privacy::{
         PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
         PrivacyEncryptedOutputV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyRootV1,
@@ -37,6 +35,8 @@ use crate::{
 use iroha_crypto::{
     Hash, HashOf, HybridPublicKey, PublicKey, SignatureOf, zeroize_value_for_confidential_discard,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -1833,7 +1833,7 @@ impl PrivateSettlementAuditPlaintextV1 {
         {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
-        if !self.inputs[0].active || (self.inputs[1].active && !self.inputs[0].active) {
+        if !self.inputs[0].active {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
         for input in &self.inputs {
@@ -1850,33 +1850,7 @@ impl PrivateSettlementAuditPlaintextV1 {
         if self.payer_authorization.body != self.payer_authorization_body(&authorized_nullifiers)? {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
         }
-        let expected_roles = [
-            PrivateSettlementAuditOutputRoleV1::SettlementRecipient,
-            PrivateSettlementAuditOutputRoleV1::PayerChange,
-            PrivateSettlementAuditOutputRoleV1::SponsorReimbursement,
-        ];
-        let mut view_keys = BTreeSet::new();
-        for (index, (output, expected_role)) in self.outputs.iter().zip(expected_roles).enumerate()
-        {
-            if output.role != expected_role
-                || output.recipient_view_key.iter().all(|byte| *byte == 0)
-                || output
-                    .encryption_opening
-                    .ephemeral_secret
-                    .iter()
-                    .all(|byte| *byte == 0)
-                || !view_keys.insert(output.recipient_view_key)
-            {
-                return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
-            }
-            output.view_key_authorization.validate_shape()?;
-            if output.view_key_authorization.body
-                != self.output_view_key_authorization_body(index)?
-            {
-                return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
-            }
-            output.note.validate()?;
-        }
+        self.validate_output_authorizations()?;
         if !self.outputs[0].note.active
             || self.outputs[0].note.value != self.amount
             || self.outputs[2].note.active != (self.sponsor_reimbursement_amount != 0)
@@ -1905,6 +1879,38 @@ impl PrivateSettlementAuditPlaintextV1 {
             != PRIVATE_SETTLEMENT_INPUT_SLOTS_V1 + PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
         {
             return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
+        }
+        Ok(())
+    }
+
+    // Check output ownership after the fixed-slot and payer-authorization guards.
+    fn validate_output_authorizations(&self) -> Result<(), PrivateSettlementValidationError> {
+        let expected_roles = [
+            PrivateSettlementAuditOutputRoleV1::SettlementRecipient,
+            PrivateSettlementAuditOutputRoleV1::PayerChange,
+            PrivateSettlementAuditOutputRoleV1::SponsorReimbursement,
+        ];
+        let mut view_keys = BTreeSet::new();
+        for (index, (output, expected_role)) in self.outputs.iter().zip(expected_roles).enumerate()
+        {
+            if output.role != expected_role
+                || output.recipient_view_key.iter().all(|byte| *byte == 0)
+                || output
+                    .encryption_opening
+                    .ephemeral_secret
+                    .iter()
+                    .all(|byte| *byte == 0)
+                || !view_keys.insert(output.recipient_view_key)
+            {
+                return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
+            }
+            output.view_key_authorization.validate_shape()?;
+            if output.view_key_authorization.body
+                != self.output_view_key_authorization_body(index)?
+            {
+                return Err(PrivateSettlementValidationError::InvalidAuditPlaintext);
+            }
+            output.note.validate()?;
         }
         Ok(())
     }
@@ -2648,14 +2654,15 @@ impl PrivateSettlementPoolGovernanceV1 {
             return Err(PrivateSettlementValidationError::PoolGovernancePolicyMismatch);
         }
         if self.body.lifecycle.activation_height < policy.body.activation_height
-            || match policy.body.retirement_height {
-                Some(policy_retirement) => self
-                    .body
-                    .lifecycle
-                    .retirement_height
-                    .is_none_or(|retirement| retirement > policy_retirement),
-                None => false,
-            }
+            || policy
+                .body
+                .retirement_height
+                .is_some_and(|policy_retirement| {
+                    self.body
+                        .lifecycle
+                        .retirement_height
+                        .is_none_or(|retirement| retirement > policy_retirement)
+                })
         {
             return Err(PrivateSettlementValidationError::InvalidPoolGovernanceLifecycle);
         }
@@ -4805,13 +4812,23 @@ impl PrivateSettlementReceiptV1 {
                 .digest()
                 .map_err(|_| PrivateSettlementValidationError::CanonicalEncoding)?;
             if authority.route != manifest_leg.route
-                || leg.delta.bundle_id != self.manifest.bundle_id
-                || leg.delta.leg_ordinal != ordinal
-                || leg.delta.route != manifest_leg.route
-                || leg.delta.pool_id != manifest_leg.pool_id
-                || leg.delta.asset_binding_commitment != manifest_leg.asset_binding_commitment
-                || leg.delta.audit_policy_digest != manifest_leg.audit_policy_digest
-                || delta_digest != manifest_leg.delta_digest
+                || (
+                    leg.delta.bundle_id,
+                    leg.delta.leg_ordinal,
+                    leg.delta.route,
+                    leg.delta.pool_id,
+                    leg.delta.asset_binding_commitment,
+                    leg.delta.audit_policy_digest,
+                    delta_digest,
+                ) != (
+                    self.manifest.bundle_id,
+                    ordinal,
+                    manifest_leg.route,
+                    manifest_leg.pool_id,
+                    manifest_leg.asset_binding_commitment,
+                    manifest_leg.audit_policy_digest,
+                    manifest_leg.delta_digest,
+                )
                 || leg.prepare.authority_catalog_index != ordinal
                 || leg.commit.authority_catalog_index != ordinal
                 || leg.prepare.body.phase != PrivateSettlementPhaseV1::Prepare
@@ -4945,7 +4962,7 @@ impl PrivateSettlementAbortReceiptV1 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 mod captured_private_settlement_ordinary_schema_tests;

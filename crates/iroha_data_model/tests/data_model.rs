@@ -1,6 +1,7 @@
 //! Data-model smoke tests and roundtrips
 use iroha_crypto::KeyPair;
 use iroha_data_model::{parameter::BlockParameters, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_schema::Ident;
 use std::str::FromStr as _;
 // Lightweight DSL does not track predicate depth; skip related tests.

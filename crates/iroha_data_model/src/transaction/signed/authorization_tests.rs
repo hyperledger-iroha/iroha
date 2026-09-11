@@ -6,12 +6,13 @@ use super::{
     TransactionSignatureError, model, test_network_id,
 };
 use crate::{
-    DomainId, Level,
+    Level,
     account::{AccountId, MultisigMember, MultisigPolicy},
-    metadata::Metadata,
     prelude::Log,
 };
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, SignatureOf};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::const_vec::ConstVec;
 
 fn checked_transaction_payload_signature(

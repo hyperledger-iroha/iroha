@@ -2,7 +2,8 @@
 //! Miscellaneous integration coverage for status endpoints and helpers.
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{blocking, data_model::prelude::*};
+use iroha::blocking;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_torii_shared::status::Status;
 use sandbox::start_network_async_or_skip;

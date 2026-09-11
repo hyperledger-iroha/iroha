@@ -54,6 +54,7 @@ mod wire_contract_tests {
 
     #[test]
     fn metadata_preserves_tuple_wire_and_nested_frames_in_all_ten_layouts() {
+        type Nested = (u64, Metadata, Vec<String>);
         for entries in [Vec::new(), entries()[..1].to_vec(), entries()] {
             let value = metadata(&entries);
             let canonical = norito::encode_canonical(&value).unwrap();
@@ -96,7 +97,6 @@ mod wire_contract_tests {
                     norito::codec::encode_with_header_flags(&nested_reference),
                     "tuple siblings expose any Metadata layout change"
                 );
-                type Nested = (u64, Metadata, Vec<String>);
                 let nested_frame =
                     ncore::frame_bare_with_header_flags::<Nested>(&nested_payload, nested_flags)
                         .unwrap();

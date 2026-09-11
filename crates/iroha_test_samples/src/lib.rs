@@ -2,7 +2,8 @@
 use iroha_crypto::KeyPair;
 #[cfg(feature = "rand")]
 use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
-use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
+use iroha_data_model::prelude::{AccountId, IvmBytecode};
+use iroha_model_base::domain::DomainId;
 #[cfg(all(test, feature = "rand"))]
 use std::sync::Mutex;
 #[cfg(feature = "rand")]

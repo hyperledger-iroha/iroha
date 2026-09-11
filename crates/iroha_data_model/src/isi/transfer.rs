@@ -1,4 +1,5 @@
 use super::*;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 
 use norito::json::{FastJsonWrite, JsonSerialize};

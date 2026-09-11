@@ -1,7 +1,7 @@
 //! Metadata: key-value pairs that can be attached to accounts, transactions and assets.
 pub use self::model::*;
+use crate::name::Name;
 use iroha_data_model_derive::model;
-use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use norito::core::{self as ncore};
 use std::{borrow::Borrow, collections::BTreeMap, format, str::FromStr, string::String, vec::Vec};
@@ -93,6 +93,109 @@ impl<'de> ncore::DeserializePayload<'de> for Metadata {
         Ok(Metadata(map))
     }
 }
+impl norito::json::FastJsonWrite for Metadata {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        let mut first = true;
+        for (key, value) in &self.0 {
+            if first {
+                first = false;
+            } else {
+                out.push(',');
+            }
+            norito::json::JsonSerialize::json_serialize(key.as_ref(), out);
+            out.push(':');
+            norito::json::JsonSerialize::json_serialize(value, out);
+        }
+        out.push('}');
+    }
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        for (index, (key, value)) in self.0.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            norito::json::write_json_string_to(key.as_ref(), out)?;
+            out.push(':')?;
+            norito::json::JsonSerialize::json_serialize_to(value, out)?;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for Metadata {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = norito::json::Value::json_deserialize(parser)?;
+        let map = match value {
+            norito::json::Value::Object(map) => map,
+            other => {
+                return Err(norito::json::Error::InvalidField {
+                    field: String::new(),
+                    message: format!("expected object, found {other:?}"),
+                });
+            }
+        };
+        let mut out = BTreeMap::new();
+        for (key, val) in map {
+            let name = Name::from_str(&key).map_err(|err| norito::json::Error::InvalidField {
+                field: key.clone(),
+                message: err.reason().into(),
+            })?;
+            let json = Json::from_norito_value_ref(&val)
+                .map_err(|e| norito::json::Error::Message(e.to_string()))?;
+            out.insert(name, json);
+        }
+        Ok(Metadata(out))
+    }
+}
+impl Metadata {
+    /// Returns `true` when the metadata map has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    /// Check if the internal map contains the given key.
+    pub fn contains(&self, key: &Name) -> bool {
+        self.0.contains_key(key)
+    }
+    /// Iterate over key/value pairs stored in the internal map.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Name, &Json)> {
+        self.0.iter()
+    }
+    /// Get the `Some(&Value)` associated to `key`. Return `None` if not found.
+    #[inline]
+    pub fn get<K: Ord + ?Sized>(&self, key: &K) -> Option<&Json>
+    where
+        Name: Borrow<K>,
+    {
+        self.0.get(key)
+    }
+    /// Insert [`Json`] under the given key.  Returns `Some(value)`
+    /// if the value was already present, `None` otherwise.
+    pub fn insert(&mut self, key: Name, value: impl Into<Json>) -> Option<Json> {
+        self.0.insert(key, value.into())
+    }
+}
+#[cfg(feature = "transparent_api")]
+impl Metadata {
+    /// Removes a key from the map, returning the owned `Some(value)` at the key if the key was
+    /// previously in the map, else `None`.
+    #[inline]
+    pub fn remove<K: Ord + ?Sized>(&mut self, key: &K) -> Option<Json>
+    where
+        Name: Borrow<K>,
+    {
+        self.0.remove(key)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,111 +306,4 @@ mod tests {
             assert_eq!(norito::to_bytes(&decoded).unwrap(), bytes);
         }
     }
-}
-
-impl norito::json::FastJsonWrite for Metadata {
-    fn write_json(&self, out: &mut String) {
-        out.push('{');
-        let mut first = true;
-        for (key, value) in &self.0 {
-            if first {
-                first = false;
-            } else {
-                out.push(',');
-            }
-            norito::json::JsonSerialize::json_serialize(key.as_ref(), out);
-            out.push(':');
-            norito::json::JsonSerialize::json_serialize(value, out);
-        }
-        out.push('}');
-    }
-    fn write_json_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        out.begin_container()?;
-        out.push('{')?;
-        for (index, (key, value)) in self.0.iter().enumerate() {
-            if index != 0 {
-                out.push(',')?;
-            }
-            norito::json::write_json_string_to(key.as_ref(), out)?;
-            out.push(':')?;
-            norito::json::JsonSerialize::json_serialize_to(value, out)?;
-        }
-        out.push('}')?;
-        out.end_container();
-        Ok(())
-    }
-}
-
-impl norito::json::JsonDeserialize for Metadata {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = norito::json::Value::json_deserialize(parser)?;
-        let map = match value {
-            norito::json::Value::Object(map) => map,
-            other => {
-                return Err(norito::json::Error::InvalidField {
-                    field: String::new(),
-                    message: format!("expected object, found {other:?}"),
-                });
-            }
-        };
-        let mut out = BTreeMap::new();
-        for (key, val) in map {
-            let name = Name::from_str(&key).map_err(|err| norito::json::Error::InvalidField {
-                field: key.clone(),
-                message: err.reason().into(),
-            })?;
-            let json = Json::from_norito_value_ref(&val)
-                .map_err(|e| norito::json::Error::Message(e.to_string()))?;
-            out.insert(name, json);
-        }
-        Ok(Metadata(out))
-    }
-}
-impl Metadata {
-    /// Returns `true` when the metadata map has no entries.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-    /// Check if the internal map contains the given key.
-    pub fn contains(&self, key: &Name) -> bool {
-        self.0.contains_key(key)
-    }
-    /// Iterate over key/value pairs stored in the internal map.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Name, &Json)> {
-        self.0.iter()
-    }
-    /// Get the `Some(&Value)` associated to `key`. Return `None` if not found.
-    #[inline]
-    pub fn get<K: Ord + ?Sized>(&self, key: &K) -> Option<&Json>
-    where
-        Name: Borrow<K>,
-    {
-        self.0.get(key)
-    }
-    /// Insert [`Json`] under the given key.  Returns `Some(value)`
-    /// if the value was already present, `None` otherwise.
-    pub fn insert(&mut self, key: Name, value: impl Into<Json>) -> Option<Json> {
-        self.0.insert(key, value.into())
-    }
-}
-#[cfg(feature = "transparent_api")]
-impl Metadata {
-    /// Removes a key from the map, returning the owned `Some(value)` at the key if the key was
-    /// previously in the map, else `None`.
-    #[inline]
-    pub fn remove<K: Ord + ?Sized>(&mut self, key: &K) -> Option<Json>
-    where
-        Name: Borrow<K>,
-    {
-        self.0.remove(key)
-    }
-}
-pub mod prelude {
-    //! Prelude: re-export most commonly used traits, structs and macros from this module.
-    pub use super::Metadata;
 }

@@ -25,8 +25,8 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
     merge::MergeQuorumCertificate,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use std::{
     collections::{BTreeMap, VecDeque},
     num::NonZeroU64,

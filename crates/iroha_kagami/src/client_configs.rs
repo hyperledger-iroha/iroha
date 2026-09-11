@@ -3,7 +3,8 @@ use crate::{Outcome, RunArgs, tui};
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
-use iroha_data_model::{NetworkId, domain::DomainId};
+use iroha_data_model::NetworkId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::{name::Name, name::canonicalize_domain_label};
 use std::{
     collections::BTreeSet,

@@ -30,8 +30,9 @@ use crate::sumeragi::v2_core::{
 };
 use iroha_crypto::{Hash, HashOf, sha256_reader_bounded};
 use iroha_data_model::{
-    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, nexus::LaneId, transaction::TransactionEntrypoint,
+    merge::MAX_MERGE_EXECUTION_ENTRYPOINTS, transaction::TransactionEntrypoint,
 };
+use iroha_model_base::topology::LaneId;
 use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use std::sync::Barrier;
@@ -4816,10 +4817,8 @@ mod tests {
     use super::*;
     use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision};
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{
-        nexus::{DataSpaceId, LaneId},
-        transaction::TransactionEntrypoint,
-    };
+    use iroha_data_model::transaction::TransactionEntrypoint;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{fs::OpenOptions, io::Write};
     fn typed_hash<T>(label: &[u8]) -> HashOf<T> {
         HashOf::from_untyped_unchecked(Hash::new(label))

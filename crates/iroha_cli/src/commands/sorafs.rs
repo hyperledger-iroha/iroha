@@ -54,8 +54,6 @@ use iroha_data_model::{
             SubmitSorafsModerationReveal,
         },
     },
-    metadata::Metadata,
-    prelude::ChainId,
     sorafs::{
         gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
         moderation::{
@@ -77,6 +75,8 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy, WriteModeHint};
@@ -16202,10 +16202,7 @@ mod tests {
     use iroha::{
         config::{self, Config},
         crypto::KeyPair,
-        data_model::{
-            Metadata,
-            prelude::{AccountId, ChainId},
-        },
+        data_model::prelude::AccountId,
     };
     use iroha_config::{
         base::{read::ConfigReader, toml::TomlSource},
@@ -16237,6 +16234,8 @@ mod tests {
         },
     };
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
     use norito::json::{Map, Value};
     use norito::{decode_from_bytes, json::JsonSerialize, to_bytes};
@@ -17410,7 +17409,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
     }
     fn xor_asset_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("sora", "universal").unwrap(),
             "xor".parse().unwrap(),
         )
     }

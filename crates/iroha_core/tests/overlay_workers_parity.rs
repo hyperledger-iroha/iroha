@@ -8,6 +8,8 @@ use iroha_core::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 use std::{borrow::Cow, sync::Arc}; // trait for .get()
 fn test_network_id(label: &[u8]) -> NetworkId {

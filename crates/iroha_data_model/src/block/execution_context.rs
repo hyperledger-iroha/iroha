@@ -8,11 +8,11 @@ use crate::{
         consensus::{NativeAmxReceipt, SumeragiLanePayloadOwnership},
     },
     merge::{MergeLedgerEntry, MergeQuorumCertificate},
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Current wire version for a globally committed autonomous lane payload.
@@ -437,12 +437,10 @@ impl Default for BlockExecutionContextBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        merge::{MergeExecutionBatch, MergeLedgerEntry},
-        peer::PeerId,
-    };
+    use crate::merge::{MergeExecutionBatch, MergeLedgerEntry};
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::peer::PeerId;
     fn entrypoint_hash(label: &[u8]) -> HashOf<TransactionEntrypoint> {
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(label))
     }

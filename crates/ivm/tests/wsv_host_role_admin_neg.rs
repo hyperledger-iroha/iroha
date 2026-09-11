@@ -1,9 +1,8 @@
 use iroha_crypto::{Hash, PublicKey};
+use iroha_model_base::domain::DomainId;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
-    },
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -43,8 +42,9 @@ fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
 #[test]
 fn delete_role_with_assignees_fails() {
     let alice_domain: DomainId =
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -57,7 +57,7 @@ fn delete_role_with_assignees_fails() {
     let bob = test_account(bob_domain, bob_pk);
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::new();
@@ -127,8 +127,9 @@ fn delete_role_with_assignees_fails() {
 #[test]
 fn grant_nonexistent_role_fails() {
     let alice_domain: DomainId =
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

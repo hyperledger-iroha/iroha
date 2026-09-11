@@ -1930,7 +1930,8 @@ mod tests {
             predecessor_policy_digest: None,
             economics: ReservePolicyV1::default(),
             asset_definition: AssetDefinitionId::derive_from_components(
-                crate::domain::DomainId::try_new("reserve", "universal").expect("reserve domain"),
+                iroha_model_base::domain::DomainId::try_new("reserve", "universal")
+                    .expect("reserve domain"),
                 "xor".parse().expect("reserve asset name"),
             ),
             custody_account: custody_account.clone(),

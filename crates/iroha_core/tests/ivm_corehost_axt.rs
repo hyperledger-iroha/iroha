@@ -20,7 +20,6 @@ use iroha_data_model::nexus::{
 };
 #[allow(unused_imports)]
 use iroha_data_model::{
-    DataSpaceId,
     block::BlockHeader,
     fastpq::{
         TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
@@ -30,10 +29,12 @@ use iroha_data_model::{
         AxtBinding, AxtDescriptor, AxtEffectBinding, AxtEnvelopeRecord, AxtHandleBudgetKey,
         AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
         AxtPolicySnapshotValidationError, AxtRejectReason, AxtRemoteSpendClaimV1, AxtReplayRecord,
-        AxtTouchSpec, LaneId,
+        AxtTouchSpec,
     },
     prelude::*,
 };
+#[allow(unused_imports)]
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{Quantity, time::TimeSource};
 use iroha_test_samples::ALICE_ID;
 use ivm::{
@@ -1243,9 +1244,9 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             HandleSubject as ModelHandleSubject, RemoteSpendIntent as ModelRemoteSpendIntent,
             SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
         },
-        peer::PeerId,
         transaction::TransactionEntrypoint,
     };
+    use iroha_model_base::peer::PeerId;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::collections::BTreeMap;
     let authority = fixture_authority();

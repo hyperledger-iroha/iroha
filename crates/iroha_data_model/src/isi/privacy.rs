@@ -848,7 +848,6 @@ mod tests {
         account::AccountId,
         asset::AssetBalanceScope,
         block::BlockHeader,
-        domain::DomainId,
         privacy::{
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
@@ -876,6 +875,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use norito::core::DecodeFromSlice;
     use std::str::FromStr as _;
@@ -1010,8 +1010,8 @@ mod tests {
         );
         let statement_digest = statement.digest().expect("fixture statement encodes");
         PrivacyProofEnvelopeV1 {
-            wire_magic: Default::default(),
-            catalog_commitment: Default::default(),
+            wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
+            catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
             protocol_id: activation.protocol_id,
             proof_system_id: activation.proof_system_id,
             engine_id: activation.engine_id,

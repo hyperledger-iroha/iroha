@@ -23,7 +23,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
-    nexus::DataSpaceId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -33,6 +32,7 @@ use crate::{
         },
     },
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{error::ParseError, name::Name};
 use streaming::canonical_frame_len;
 
@@ -4654,6 +4654,7 @@ include!("musubi/registry_policy_impl.rs");
 include!("musubi/query_models.rs");
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::topology::DataSpaceId;
     include!("musubi_tests.rs");
     include!("musubi/registry_query_tests.rs");
 }

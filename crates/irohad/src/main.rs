@@ -541,7 +541,7 @@ mod handshake_payload_tests {
     use iroha_genesis::{GenesisBuilder, ManifestCrypto};
     use std::path::PathBuf;
     fn handshake_payload_from_genesis() -> Json {
-        let chain = iroha_data_model::ChainId::from("handshake-meta-test");
+        let chain = iroha_model_base::chain::ChainId::from("handshake-meta-test");
         let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
             chain,
             PathBuf::from("."),
@@ -4682,9 +4682,10 @@ mod network_relay_tests {
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
-        nexus::{DataSpaceId, LaneId},
-        peer::{Peer, PeerId},
+        peer::Peer,
     };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{num::NonZeroU64, sync::Arc, time::Duration};
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0_u8; Hash::LENGTH];
@@ -6877,7 +6878,8 @@ mod snapshot_read_error_tests {
     #[test]
     fn startup_nexus_merge_preserves_snapshot_topology_and_cooldown_only() {
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
-        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
+        use iroha_model_base::topology::LaneId;
         use std::num::{NonZeroU32, NonZeroU64};
         let catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane namespace"),
@@ -6925,7 +6927,8 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn runtime_surfaces_use_post_replay_lane_catalog() {
-        use iroha_data_model::nexus::{LaneCatalog, LaneConfig, LaneId};
+        use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
+        use iroha_model_base::topology::LaneId;
         use std::num::NonZeroU32;
         let configured = iroha_config::parameters::actual::Nexus::default();
         let mut replayed = configured.clone();
@@ -6963,7 +6966,7 @@ mod snapshot_read_error_tests {
     #[test]
     fn startup_replay_installs_default_lane_manifest_snapshot_before_validation() {
         use iroha_core::governance::manifest::{GovernanceGuardReason, LaneManifestRegistry};
-        use iroha_data_model::nexus::LaneId;
+        use iroha_model_base::topology::LaneId;
         let state = State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -11050,6 +11053,7 @@ mod genesis_key_tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_genesis::GenesisBuilder;
+    use iroha_model_base::chain::ChainId;
     use std::path::PathBuf;
     fn prepared_genesis_proposal(keypair: &KeyPair) -> GenesisBlock {
         let proposal = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
@@ -12491,7 +12495,7 @@ mod config_tests {
         );
     }
     use iroha_crypto::Hash;
-    use iroha_data_model::nexus::DataSpaceId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::{io::Write, path::Path};
     use tempfile::NamedTempFile;
     use toml::Table;
@@ -15007,6 +15011,7 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
     use iroha_config_base::toml::TomlSource;
+    use iroha_model_base::topology::LaneId;
     const GOVERNANCE_DAG_PUBLISHER_HANDLE: &str = "provider:governance-dag-publisher";
     const GOVERNANCE_DAG_PUBLISHER_PEER_ID: &str = "governance-dag-publisher";
     const GOVERNANCE_DAG_PUBLISHER_POLICY_DIGEST: [u8; 32] = [0xA5; 32];
@@ -16372,7 +16377,7 @@ mod tests {
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
             let kagemusha_asset_definition_id = AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("boi", "is")
+                iroha_model_base::domain::DomainId::try_new("boi", "is")
                     .expect("KAGEMUSHA asset domain"),
                 "ds".parse().expect("KAGEMUSHA asset name"),
             );
@@ -16509,7 +16514,7 @@ mod tests {
             ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
         use iroha_crypto::Hash;
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         #[test]
         fn torii_proxy_frames_are_not_low_priority() {
             let route = ToriiRouteHintV1 {
@@ -18308,6 +18313,8 @@ mod tests {
         use iroha_config::base::toml::TomlSource;
         use iroha_core::{kura::Kura, query::store::LiveQueryStore};
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
+        use iroha_model_base::chain::ChainId;
+        use iroha_model_base::domain::DomainId;
         use std::sync::Arc;
         fn sample_manifest() -> RawGenesisTransaction {
             complete_test_genesis_builder(GenesisBuilder::new_without_executor(
@@ -19235,6 +19242,7 @@ mod tests {
         use assertables::assert_contains;
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
+        use iroha_model_base::chain::ChainId;
         use iroha_primitives::addr::socket_addr;
 
         fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {

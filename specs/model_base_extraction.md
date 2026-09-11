@@ -2,10 +2,79 @@
 
 The 2026-09-10 implementation moves `Name`, `StatePath` and `ParseError`, with
 their validation, normalization, schema, FFI and storage-key implementations,
-into `iroha_model_base`. The 35 moved owner tests pass; aggregate/consumer and
-feature qualification is in progress. This is not completed model extraction
-or build-memory evidence. The [redesign](first_release_architecture_redesign.md)
+into `iroha_model_base`. The 35 moved owner tests and four feature selections
+pass; all targets in the 34-package consumer check compile. The final aggregate
+library passes 3,705 tests and both captured wire-fixture checks. The
+[checkpoint](../docs/history/2026-09-10/model-base-name-state-path.md) separates
+these source seals from earlier checks and the outstanding aggregate feature
+matrix. This is not completed model extraction or build-memory
+evidence. The [redesign](first_release_architecture_redesign.md)
 and [canonical identity contract](norito_schema_identity.md) govern acceptance.
+
+The Metadata implementation, all 14 owner tests, FFI dispatch and consumers are
+now moved to the base owner. The aggregate API export inventory has one source;
+retired Metadata paths are removed. The subsequent [Metadata checkpoint](../docs/history/2026-09-10/model-base-metadata.md)
+records passing owner, aggregate and combined-FFI suites on their own source seals,
+plus the 37-package all-target consumer check with developer binaries enabled.
+Broader runtime and release qualification remain in progress.
+
+`ChainId` and its private structural codecs now live in `iroha_model_base::chain`.
+The [chain checkpoint](../docs/history/2026-09-10/model-base-chain.md) records
+the complete owner tests, private golden-frame assertions, canonical consumer
+migration and current qualification scope. `NetworkId` and `IdBox` remain at
+ledger composition; the primitive grammar and byte limit keep one owner.
+
+`DomainId` now lives in `iroha_model_base::domain`, including its canonical
+slice decoder, JSON object-key implementation and `mv` storage-key codec.
+All 11 existing owner tests and three private-field compile-fail examples move
+with it. The base adds an independent check of all seven original domain
+fixture rows; the aggregate keeps its mixed fixture assertions. Its former
+foreign inherent `encode_as_id_box` expansion is removed; the composition is
+`IdBox::from(domain).encode()`. The [Domain checkpoint](../docs/history/2026-09-10/model-base-domain.md)
+records passing owner configurations, the 46-package consumer check, composed
+runtime suites, combined FFI execution and documentation tests. Broader release
+qualification remains outstanding.
+
+The topology owners now live in `iroha_model_base::topology`; all six original
+identity tests move with them. A new owner test checks all 21 captured frames
+and both storage keys. The 29 retained Nexus tests and aggregate fixtures remain
+in place. Consumers import the canonical owner directly; no aggregate aliases
+remain. The [topology checkpoint](../docs/history/2026-09-10/model-base-topology.md)
+records passing owner configurations, the 47-package consumer check, composed
+base/aggregate/SDK/Musubi suites, combined FFI, SDK/Musubi strict lint and
+model/SDK documentation tests. Broader release qualification remains open.
+
+`PeerId` now lives in `iroha_model_base::peer`, with its complete public-key
+codec and JSON-key behavior. All three identity tests move with it; eight
+entity/mixed tests remain in the aggregate and use the existing public-key
+getter. The captured seven PeerId envelope rows remain unchanged. Consumers
+use the base owner directly; aggregate/SDK/executor facade paths are removed.
+The [Peer checkpoint](../docs/history/2026-09-10/model-base-peer.md) records passing
+owner feature/FFI tests, strict owner lint, the 47-package consumer check and the
+optional P2P QUIC check. Composed suites pass 81 base, 3,694 aggregate, 802 SDK
+and 386 Musubi tests; combined FFI and model/SDK documentation also pass.
+The [validation and test ownership changes](../docs/history/2026-09-10/model-validation-phases.md)
+close the production and test lint findings. Strict library/test Clippy passes
+in default and FFI configurations. The final selected aggregate run passes
+3,718 unit and 183 fixture-group tests; the FFI configuration passes 3,722 unit
+tests. All model files meet the 5,000/3,000-line limits without exceptions.
+All 76 moved runtime tests execute under their new owner with matching
+outcomes; wire fixture identities and assertions remain intact. Physical
+extraction, measured memory reduction and full release qualification remain open.
+
+The next AccountId prerequisite has a concrete, unapplied
+[JSON context and primitive candidate](../docs/history/2026-09-11/json-context-primitives.md).
+The coherent codec/derive/MV/primitives selection passes 1,854 tests across all 17
+executables, including both full compiler UI suites, with one existing ignored test.
+Shared vector decoding and transparent collection owners now forward error cleanup;
+18 new regressions cover partial failure, ownership transfer and deep Value cleanup.
+Strict all-target Clippy passes with benchmark internals enabled. Separate primitive
+default and Rust FFI selections each pass 327 library tests and strict all-target
+Clippy. The four-package doctest run passes 17 tests with two existing ignores.
+Earlier telemetry and benchmark results retain their separate source scopes. Original
+lockfile, profiles, wire fixtures and dirty source are preserved. Map/set/generated
+record cleanup, scalar backend/final-tree admission and external callers still require
+completion and qualification before the API replacement or account move.
 
 ## Captured evidence
 
@@ -46,12 +115,12 @@ composition back into the foundation.
 | `error` | `ParseError`; retain aggregate `EnumTryAsError` with its enums. |
 | `name`, `state_path` | `Name`, `StatePath`, their shared normalization helpers and fingerprinted Unicode policy. |
 | `metadata` | `Metadata`, `Path`, entry codecs and bounded JSON behavior; depend on base `Name` and primitives `Json`. |
-| `chain` | `ChainId`, bounded text parsing, and private `ChainIdText`/`ChainIdWire` helpers from the current `id` module. |
+| `chain` | Implemented: `ChainId`, bounded text parsing, and private `ChainIdText`/`ChainIdWire` helpers. |
 | `account` | `AccountId`, `AccountController`, `MultisigPolicy`, `MultisigMember`, `AccountAddress`, associated errors, curve identifiers, scoped address context, bounded I105 JSON and compliance vectors. |
-| `domain` | `DomainId` and its complete parsing/codec implementation. |
+| `domain` | Implemented: `DomainId`, normalization, bounded binary/JSON codecs and both storage-key protocols. Domain entities and IdBox composition remain in the aggregate. |
 | `asset` | `AssetDefinitionId`, `AssetBalanceScope`, `AssetId`; close over account, domain, name and dataspace identities. |
-| `topology` | `DataSpaceId`, `LaneId`, `ShardId` and `LaneIdError`, including their numeric JSON implementations. |
-| `peer` | `PeerId` and its codecs; keep ledger `Peer` in the aggregate. |
+| `topology` | Implemented: `DataSpaceId`, `LaneId`, `ShardId` and `LaneIdError`, including numeric validation, binary/JSON codecs and applicable storage keys. Catalogs and lifecycle policy remain in the aggregate. |
+| `peer` | Implemented: `PeerId`, canonical public-key codecs, JSON object keys and the slice decoder. Ledger `Peer` remains in the aggregate. |
 
 The wire capture scope contains 17 public binary types and the two private
 ChainId helpers. Supporting errors and lookup/context types move with their

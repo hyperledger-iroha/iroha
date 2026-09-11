@@ -6,17 +6,19 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     da::commitment::DaProofPolicyBundle,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{
         InstructionBox, Mint, Register, SetParameter,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    metadata::Metadata,
-    nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneVisibility},
     parameter::{Parameter, system::SumeragiNposParameters},
-    peer::PeerId,
     prelude::Quantity,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use std::time::Duration;

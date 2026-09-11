@@ -296,7 +296,7 @@ fn asset_account_range() {
         AssetId::with_scope(
             AssetDefinitionId::derive_from_components(domain_id, "g".parse().unwrap()),
             account_id.clone(),
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::new(7)),
         ),
         (),
     ));
@@ -318,7 +318,7 @@ fn asset_account_definition_range_includes_all_scopes() {
         AssetId::with_scope(
             target_definition.clone(),
             account_id.clone(),
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::new(7)),
         ),
         AssetId::new(other_definition, account_id.clone()),
         AssetId::new(target_definition.clone(), gen_account_in("other").0),

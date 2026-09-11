@@ -176,9 +176,7 @@ pub use crate::{
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
 pub use crate::{
-    mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
-    },
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     registers::Registers,
     signature::{SignatureScheme, verify_signature},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},

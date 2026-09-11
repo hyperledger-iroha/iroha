@@ -294,7 +294,8 @@ mod tests {
         gadgets::{compact_smt_air::COLUMN_COUNT, public_transfer_statement::PublicTransferLimits},
     };
     use iroha_crypto::Hash;
-    use iroha_data_model::{DataSpaceId, nexus::compute_remote_spend_claim_commitment_v1};
+    use iroha_data_model::nexus::compute_remote_spend_claim_commitment_v1;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
 
     fn context(fixture: &Fixture) -> AxtVerificationContext<'_> {

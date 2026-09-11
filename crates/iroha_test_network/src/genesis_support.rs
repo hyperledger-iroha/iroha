@@ -3,13 +3,13 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     block::{BlockHeader, SignedBlock},
     da::commitment::DaProofPolicyBundle,
     parameter::system::SumeragiConsensusMode,
 };
 use iroha_genesis::{RawGenesisTransaction, ValidatedGenesisBundle};
+use iroha_model_base::chain::ChainId;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -320,9 +320,9 @@ mod tests {
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
             KagemushaMintFinalityGenesisParametersV1,
         },
-        peer::PeerId,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::peer::PeerId;
     use std::fs;
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";

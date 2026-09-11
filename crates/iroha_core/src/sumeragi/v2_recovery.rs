@@ -2907,7 +2907,7 @@ mod tests {
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(0_u64),
                 self_stake: iroha_primitives::numeric::Quantity::from(0_u64),
-                metadata: iroha_data_model::metadata::Metadata::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 status,
                 activation_height,
                 deactivation_height,

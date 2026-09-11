@@ -7,9 +7,9 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    domain::DomainId,
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use norito::to_bytes;
 fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {

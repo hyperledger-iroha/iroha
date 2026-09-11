@@ -28,10 +28,10 @@ use iroha_data_model::{
         stream::{EventMessage, EventSubscriptionRequest},
     },
     isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
-    nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_torii_shared::status::{
     CryptoStatus, GovernanceManifestAdmissionCounters, GovernanceManifestQuorumCounters,
     GovernanceProposalCounters, GovernanceProtectedNamespaceCounters, GovernanceStatus,
@@ -691,12 +691,10 @@ pub fn kagami_default_manifest_json(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        isi::kagemusha_v1::{
-            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
-        },
-        peer::PeerId,
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
     };
+    use iroha_model_base::peer::PeerId;
     mod replay_fixture_owner;
 
     fn test_kagemusha_mint_finality_parameters() -> KagemushaMintFinalityGenesisParametersV1 {

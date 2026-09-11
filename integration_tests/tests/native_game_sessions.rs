@@ -10,6 +10,9 @@
 //! full-world commitment. This ignored gate must run successfully against current validator
 //! binaries; zero-stake settlement does not qualify funded payouts or the cryptographic profile.
 
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 use std::{collections::BTreeMap, time::Duration};
 
 use eyre::{Result, ensure, eyre};

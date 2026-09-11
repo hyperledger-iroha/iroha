@@ -26,6 +26,8 @@ use iroha_crypto::KeyPair;
 #[cfg(feature = "bench")]
 use iroha_crypto::{Algorithm, Hash, Signature, bls_normal_pop_prove};
 use iroha_data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_test_samples::gen_account_in;
 use std::{fs, sync::Arc};
 #[cfg(feature = "bench")]

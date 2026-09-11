@@ -12,7 +12,6 @@ use iroha_data_model::soracloud::SoracloudManifestError;
 use iroha_data_model::{
     Decode, Encode,
     account::AccountId,
-    peer::PeerId,
     soracloud::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
         AgentToolCapabilityV1, AgentUpgradePolicyV1, BfvRefreshTranscriptModeV1,
@@ -41,6 +40,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::{Numeric, Quantity};
 
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};

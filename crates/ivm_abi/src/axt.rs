@@ -18,9 +18,9 @@ use iroha_data_model::nexus::{
     AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry as ModelAxtPolicyEntry,
     AxtPolicySnapshot as ModelAxtPolicySnapshot,
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
-    AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
+    AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec,
     GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
-    HandleSubject as ModelHandleSubject, LaneId, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+    HandleSubject as ModelHandleSubject, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
     ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
     SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest, compute_descriptor_binding,
     compute_remote_spend_intent_commitment_v1, validate_descriptor as validate_model_descriptor,
@@ -29,6 +29,7 @@ use iroha_data_model::{
     asset::AssetBalanceScope,
     prelude::{AccountId, AssetDefinitionId, Quantity},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use std::{
     borrow::Cow,
@@ -1572,7 +1573,7 @@ fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
     fn quantity(value: u128) -> Quantity {

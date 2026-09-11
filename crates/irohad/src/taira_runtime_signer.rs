@@ -38,12 +38,12 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-    peer::PeerId,
     soracloud::{
         SoracloudRuntimeProvenancePurposeV1, validate_soracloud_runtime_provenance_preimage_v1,
     },
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
+use iroha_model_base::peer::PeerId;
 use std::{
     ffi::OsStr,
     fmt,

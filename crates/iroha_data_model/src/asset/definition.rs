@@ -7,14 +7,16 @@ use crate::{
     DeriveJsonSerialize as DeriveJsonSer,
 };
 use crate::{
-    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
-    isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
+    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*,
+    isi::error::MintabilityError, sorafs_uri::SorafsUri,
 };
 use core::fmt;
 use derive_more::Display;
 use getset::{CopyGetters, Getters};
 use iroha_crypto::Hash;
 use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -824,8 +826,8 @@ impl HasMetadata for NewAssetDefinition {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
-    use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::DecodeAll as _;
     #[derive(Encode)]
@@ -1137,7 +1139,8 @@ mod validation_tests {
 #[cfg(test)]
 mod json_tests {
     use super::*;
-    use crate::{domain::DomainId, metadata::Metadata};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
     use norito::json::{Arena, FastFromJson, TapeWalker};
     use std::str::FromStr;

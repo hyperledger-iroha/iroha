@@ -1604,13 +1604,11 @@ impl TaikaiSegmentSigningManifestV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        da::types::{
-            BlobDigest, ExtraMetadata, MetadataEntry, MetadataVisibility, StorageTicketId,
-        },
-        domain::DomainId,
+    use crate::da::types::{
+        BlobDigest, ExtraMetadata, MetadataEntry, MetadataVisibility, StorageTicketId,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use std::str::FromStr;
     fn digest_from(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];

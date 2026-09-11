@@ -1,12 +1,10 @@
 //! Asset definition alias literals and catalog-pinned permission targets.
 pub use self::model::*;
-use crate::{
-    asset::id::AssetDefinitionId,
-    domain::DomainId,
-    nexus::{DataSpaceCatalog, DataSpaceId},
-};
+use crate::{asset::id::AssetDefinitionId, nexus::DataSpaceCatalog};
 use core::fmt;
 use iroha_data_model_derive::model;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;

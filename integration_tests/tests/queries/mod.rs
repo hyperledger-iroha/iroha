@@ -9,6 +9,7 @@ use iroha::{
         query::{error::QueryExecutionFail, parameters::MAX_FETCH_SIZE},
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use std::time::Duration;
 const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(120);

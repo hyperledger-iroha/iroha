@@ -532,7 +532,7 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
         assert_eq!(current_height, 1, "hosted SSE lease must start at height 1");
         assert!(
-            state_view.is_lane_active_for_authority(iroha_data_model::nexus::LaneId::SINGLE),
+            state_view.is_lane_active_for_authority(iroha_model_base::topology::LaneId::SINGLE),
             "hosted SSE validator lane must be active"
         );
         let world = state_view.world();
@@ -1373,7 +1373,7 @@ async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capabil
         let mut validators = state.world.public_lane_validators_mut_for_testing().block();
         validators
             .get_mut(&(
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 validator_account_id,
             ))
             .expect("host validator record")

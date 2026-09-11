@@ -1,12 +1,11 @@
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
-use iroha_data_model::nexus::DataSpaceId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
-    mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
-    },
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -58,7 +57,8 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
 }
 #[test]
 fn balance_syscall_with_tlv_pointers() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -69,7 +69,7 @@ fn balance_syscall_with_tlv_pointers() {
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[((alice.clone(), asset.clone()), num(50))]);
@@ -105,7 +105,8 @@ fn balance_syscall_with_tlv_pointers() {
 }
 #[test]
 fn transfer_syscall_with_tlv_pointers() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -116,7 +117,7 @@ fn transfer_syscall_with_tlv_pointers() {
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[
@@ -171,14 +172,15 @@ fn transfer_syscall_with_tlv_pointers() {
 }
 #[test]
 fn mint_syscall_with_tlv_pointers() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
     let bob = test_account(domain, pk);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), num(0))]);
@@ -211,7 +213,8 @@ fn mint_syscall_with_tlv_pointers() {
 }
 #[test]
 fn transfer_batch_syscalls_buffer_entries() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -226,7 +229,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     let carol = test_account(domain, pk3);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::with_balances(&[
@@ -287,7 +290,8 @@ fn transfer_batch_syscalls_buffer_entries() {
 }
 #[test]
 fn transfer_batch_apply_syscall_executes_batch() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -302,7 +306,7 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let carol = test_account(domain, pk3);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::with_balances(&[

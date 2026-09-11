@@ -7,11 +7,11 @@ use iroha_data_model::{
     account::AccountId,
     alias_setup::{ALIAS_LEASE_YEAR_MS, AliasQuoteGuardV1, AliasTargetV1, ResolvedDomainV1},
     asset::AssetDefinitionId,
-    domain::DomainId,
     isi::alias_setup::RenewAliasLease,
-    nexus::DataSpaceId,
     sns::{NameRecordV1, NameStatus},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, soradns::derive_gateway_hosts};
 use iroha_test_network::{NetworkBuilder, domain_setup_instruction};
 use reqwest::{Client as HttpClient, Url};

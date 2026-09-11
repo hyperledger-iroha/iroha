@@ -5,6 +5,7 @@ use iroha_data_model::{
     parameter::CustomParameterId,
     prelude::*,
 };
+use iroha_model_base::metadata::Metadata;
 use ivm::limits::GasScheduleEntry;
 /// Default maximum size in bytes for JSON payloads (1 MiB).
 pub const DEFAULT_JSON_LIMIT: usize = 1_048_576;

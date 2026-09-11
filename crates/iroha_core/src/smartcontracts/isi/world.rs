@@ -73,6 +73,11 @@ pub mod isi {
         smart_contract::CanRegisterSmartContractCode,
         trigger::CanRegisterGlobalDataTrigger,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::topology::LaneId;
     use std::{
         collections::{BTreeMap, BTreeSet},
         str::FromStr,
@@ -12179,7 +12184,7 @@ pub mod isi {
         })
     }
     fn sccp_local_sora_network_for_chain_id(
-        chain_id: &iroha_data_model::ChainId,
+        chain_id: &iroha_model_base::chain::ChainId,
     ) -> Option<iroha_data_model::bridge::SccpNetworkV1> {
         crate::state::sccp_local_sora_network_for_chain_id(chain_id)
     }
@@ -13491,7 +13496,7 @@ pub mod isi {
             })
     }
     fn derive_sccp_bridge_receipt_projection(
-        lane: iroha_data_model::nexus::LaneId,
+        lane: iroha_model_base::topology::LaneId,
         proof_hash: [u8; 32],
         message: &iroha_sccp::SccpPayloadV1,
         message_id: [u8; 32],
@@ -13517,7 +13522,7 @@ pub mod isi {
         }
     }
     fn derive_bridge_receipt_projection(
-        lane: iroha_data_model::nexus::LaneId,
+        lane: iroha_model_base::topology::LaneId,
         proof_hash: [u8; 32],
         proof: &iroha_data_model::bridge::BridgeProof,
     ) -> Result<iroha_data_model::bridge::BridgeReceipt, Error> {
@@ -13563,7 +13568,7 @@ pub mod isi {
     fn validate_bridge_receipt_lane_matches_transaction(
         receipt: &iroha_data_model::bridge::BridgeReceipt,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<iroha_data_model::nexus::LaneId, Error> {
+    ) -> Result<iroha_model_base::topology::LaneId, Error> {
         let Some(current_lane_id) = state_transaction.current_lane_id else {
             return Err(invalid_bridge_receipt(
                 "bridge receipt requires an active transaction lane",
@@ -19007,7 +19012,7 @@ pub mod isi {
     }
     fn fee_sponsor_asset_scope(
         definition: &AssetDefinition,
-        dataspace: iroha_data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
     ) -> AssetBalanceScope {
         match definition.balance_scope_policy() {
             AssetBalancePolicy::Global => AssetBalanceScope::Global,
@@ -19504,7 +19509,7 @@ pub mod isi {
             }
             let dataspace = state_transaction
                 .current_dataspace_id
-                .unwrap_or(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+                .unwrap_or(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
             let source = AssetId::with_scope(
                 self.asset_definition_id().clone(),
                 program_id.sponsor.clone(),
@@ -19627,7 +19632,7 @@ pub mod isi {
             vault.balance = remaining;
             let dataspace = state_transaction
                 .current_dataspace_id
-                .unwrap_or(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+                .unwrap_or(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
             let source = AssetId::with_scope(
                 self.asset_definition_id().clone(),
                 state_transaction
@@ -21145,11 +21150,9 @@ pub mod isi {
                 Grant, Revoke, consensus_keys, error::AssetTransferAdmissionError,
                 nexus::SetLaneRelayEmergencyValidators, verifying_keys,
             },
-            metadata::Metadata,
             nexus::{
-                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
-                DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-                LaneCatalog, LaneConfig, LaneId,
+                DataSpaceCatalog, DataSpaceMetadata, DomainEndorsement, DomainEndorsementPolicy,
+                DomainEndorsementScope, DomainEndorsementSignature, LaneCatalog, LaneConfig,
             },
             permission::Permission,
             privacy::PrivacyProtocolIdV1,
@@ -21185,7 +21188,11 @@ pub mod isi {
             zk::OpenVerifyEnvelope,
         };
         #[allow(unused_imports)]
+        use iroha_model_base::metadata::Metadata;
+        #[allow(unused_imports)]
         use iroha_model_base::name;
+        #[allow(unused_imports)]
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use rand::{SeedableRng as _, rngs::StdRng};
         use std::{
             collections::{BTreeMap, BTreeSet},
@@ -22383,7 +22390,7 @@ pub mod isi {
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             state_transaction.sccp_registry = registry;
             state_transaction.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 
             let current = native.trust_anchor;
             let next = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
@@ -22858,7 +22865,7 @@ pub mod isi {
                         vec![0xD8_u8.wrapping_add(index); 32],
                         Algorithm::Ed25519,
                     );
-                    iroha_data_model::peer::PeerId::new(keypair.public_key().clone())
+                    iroha_model_base::peer::PeerId::new(keypair.public_key().clone())
                 })
                 .collect::<Vec<_>>();
             let threshold_session = ThresholdBlsSession::<TleReleasePurpose>::new(
@@ -23673,7 +23680,7 @@ pub mod isi {
             *state_transaction.world.sccp_registry.get_mut() = registry.to_wire();
             state_transaction.sccp_registry = registry;
             state_transaction.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             ActiveSccpGovernanceFixture {
                 lane_id,
                 route_key,
@@ -23762,7 +23769,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (fixture, sccp, next) = {
                 let mut seed = state_block.transaction();
                 let sccp = install_active_sccp_governance_fixture(&mut seed);
@@ -24663,7 +24670,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (fixture, sccp, certified_next) = {
                 let mut seed = state_block.transaction();
                 let sccp = install_active_sccp_governance_fixture(&mut seed);
@@ -24757,7 +24764,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (fixture, sccp, registry_before) = {
                 let mut seed = state_block.transaction();
                 let sccp = install_active_sccp_governance_fixture(&mut seed);
@@ -24869,7 +24876,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let mut transaction = state_block.transaction();
             let sccp = install_active_sccp_governance_fixture(&mut transaction);
             let (proposal_kind, _) =
@@ -25223,7 +25230,7 @@ pub mod isi {
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
             let roster_hash =
@@ -25358,7 +25365,7 @@ pub mod isi {
             validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let ordered_roster = validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
             let authorization_roster_hash =
@@ -25369,7 +25376,7 @@ pub mod isi {
                 .sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let successor_roster = successor_validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             let successor_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&successor_roster);
@@ -25465,7 +25472,7 @@ pub mod isi {
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
             let roster_hash =
@@ -25526,7 +25533,7 @@ pub mod isi {
             );
 
             let successor_roster = (0..4)
-                .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
+                .map(|_| iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = successor_roster;
             let stale_roster_error =
@@ -25542,7 +25549,7 @@ pub mod isi {
             );
 
             let seven_peer_roster = (0..7)
-                .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
+                .map(|_| iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone()))
                 .collect::<Vec<_>>();
             let seven_peer_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&seven_peer_roster);
@@ -26210,7 +26217,7 @@ pub mod isi {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (_, source_identity, native_trust_anchor) =
                 iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
             let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
@@ -26268,7 +26275,7 @@ pub mod isi {
         world_test!(registered_staged_tron_route_cannot_be_removed {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let registry = test_staged_tron_registry();
             let key = registry.lanes[0].routes[0].key();
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
@@ -26292,7 +26299,7 @@ pub mod isi {
         world_test!(never_used_staged_evm_route_remains_removable {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                 iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
                 iroha_data_model::bridge::SccpRouteActivationV1::Staged,
@@ -26321,7 +26328,7 @@ pub mod isi {
         world_test!(staged_evm_route_with_liability_cannot_be_removed {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                 iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
                 iroha_data_model::bridge::SccpRouteActivationV1::Staged,
@@ -28182,7 +28189,7 @@ pub mod isi {
         fn new_dummy_block_at_height(height: NonZeroU64) -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =
                 checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(height);
@@ -31874,7 +31881,8 @@ seiyaku GovernanceLifecycle {
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id =
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             if stx.sccp_registry.lanes().is_empty() {
                 stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(
                     test_active_eth_registry(),
@@ -32285,7 +32293,8 @@ seiyaku GovernanceLifecycle {
         ) -> (AssetDefinitionId, AccountId) {
             *stx.world.sccp_registry.get_mut() = registry.to_wire();
             stx.sccp_registry = registry;
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id =
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let (asset, custody) = sccp_test_settlement_ids(stx);
             let route = stx.sccp_registry.lanes()[0]
@@ -32510,8 +32519,8 @@ seiyaku GovernanceLifecycle {
                 account::rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
                 isi::kaigi::EndKaigi,
                 kaigi::{KaigiId, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
-                nexus::DataSpaceId,
             };
+            use iroha_model_base::topology::DataSpaceId;
 
             blank_state_transaction!(state, block, state_block, stx);
             let alias_domain =
@@ -34477,7 +34486,7 @@ seiyaku GovernanceLifecycle {
             state_transaction!(state, block, state_block, stx);
             // Construct a peer with a non-BLS-normal key (Ed25519)
             let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let peer_id = crate::PeerId::new(kp.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(kp.public_key().clone());
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), vec![]);
             let res = isi.execute(&ALICE_ID, &mut stx);
@@ -34817,7 +34826,7 @@ seiyaku GovernanceLifecycle {
                 payload: BridgeProofPayload::SccpDestination(exact.bridge_proof),
             };
             blank_state_transaction!(state, block, state_block, stx);
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
             let verifier_work_before = stx.sccp_verifier_work_for_testing();
@@ -35359,7 +35368,7 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             stx.sccp_registry = registry;
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let current = native.trust_anchor;
             let admitted_high_water = current
                 .checkpoint_height
@@ -35459,7 +35468,7 @@ seiyaku GovernanceLifecycle {
             assert_eq!(lane.native_trust_anchors.len(), retained_cap);
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
                 .expect("exact retained-anchor cap must validate");
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let mut next_hash = [0_u8; 32];
             next_hash[0] = 0xED;
             let next_height = current
@@ -35567,7 +35576,7 @@ seiyaku GovernanceLifecycle {
                 ..previous
             };
             stx.sccp_registry = rotate_native_registry_for_test(registry.as_ref(), next);
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             seed_sccp_test_tx_call_hash(&mut stx, 0x90);
             let unknown = replace_native_proof_trust_anchor_for_test(
@@ -37392,7 +37401,7 @@ seiyaku GovernanceLifecycle {
             state_transaction!(state, block, state_block, stx);
             // BLS-normal key with valid PoP
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37413,7 +37422,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
             iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
                 peer_id.clone(),
@@ -37464,7 +37473,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
 
             iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
@@ -37510,7 +37519,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
 
             iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
@@ -37568,7 +37577,7 @@ seiyaku GovernanceLifecycle {
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let other = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let wrong_pop =
                 iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("mismatched pop");
             let error = iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
@@ -37603,7 +37612,7 @@ seiyaku GovernanceLifecycle {
             let params = stx.world.parameters.get().clone();
             let activation_lead_blocks = params.sumeragi.key_activation_lead_blocks;
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37639,7 +37648,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             // Seed a conflicting consensus key record with the same derived id but a different pk.
             let collision_id = crate::state::derive_validator_key_id(peer_id.public_key());
@@ -37684,7 +37693,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
-            let peer_id = crate::PeerId::new(bls_small.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37702,7 +37711,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
-            let peer_id = crate::PeerId::new(bls_small.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37720,7 +37729,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37746,7 +37755,7 @@ seiyaku GovernanceLifecycle {
             crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
             let mut stx = state_block.transaction();
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop)
@@ -37770,7 +37779,7 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             {
                 let mut stx = state_block.transaction();
@@ -39152,7 +39161,7 @@ seiyaku GovernanceLifecycle {
             let parameter_id = grant.parameter_id().expect("canonical grant key");
             stx.nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                 iroha_data_model::nexus::DataSpaceMetadata {
-                    id: iroha_data_model::nexus::DataSpaceId::new(10),
+                    id: iroha_model_base::topology::DataSpaceId::new(10),
                     alias: "bpng".to_owned(),
                     description: None,
                     fault_tolerance: 1,
@@ -39344,7 +39353,7 @@ seiyaku GovernanceLifecycle {
                 ReputationFinalizedArchiveRetentionRequestV1,
                 ReputationFinalizedArchiveRetentionTargetV1,
             };
-            let chain_id = iroha_data_model::ChainId::from("retention-request-execution");
+            let chain_id = iroha_model_base::chain::ChainId::from("retention-request-execution");
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new_with_chain_for_testing(

@@ -1996,10 +1996,8 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
-    use iroha_data_model::{
-        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
-        peer::PeerId,
-    };
+    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire};
+    use iroha_model_base::peer::PeerId;
     use std::{cell::Cell, num::NonZeroU64};
     use tempfile::TempDir;
     struct Fixture {

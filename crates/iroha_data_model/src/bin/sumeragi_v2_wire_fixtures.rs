@@ -32,8 +32,8 @@ use iroha_data_model::{
         KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use norito::codec::{DecodeAll, Encode};
 use std::{
     collections::BTreeSet,
