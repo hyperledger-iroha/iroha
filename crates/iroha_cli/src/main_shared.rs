@@ -2338,19 +2338,13 @@ mod account {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config()?;
-                    let mut builder = client.query(FindPermissionsByAccountId::new(account_id));
-                    if args.limit.is_some() || args.offset > 0 {
-                        let pagination = iroha::data_model::query::parameters::Pagination::new(
-                            args.limit.and_then(NonZeroU64::new),
-                            args.offset,
-                        );
-                        builder = builder.with_pagination(pagination);
-                    }
-                    if let Some(n) = args.fetch_size.and_then(NonZeroU64::new) {
-                        let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                        builder = builder.with_fetch_size(fs);
-                    }
-                    let permissions = builder.execute_all()?;
+                    let permissions = list_effective_permissions(
+                        &client,
+                        &account_id,
+                        args.limit,
+                        args.offset,
+                        args.fetch_size,
+                    )?;
                     context.print_data(&permissions)
                 }
                 Grant(args) => {
@@ -2381,6 +2375,107 @@ mod account {
                 }
             }
         }
+    }
+    /// Read the complete effective permission set before applying global pagination.
+    ///
+    /// Torii's list fanout applies the requested window independently to every route and
+    /// returns a deduplicated page whose `total` is that page's size, not a global count.
+    /// Only an empty page from a fully successful fanout establishes exhaustion. The
+    /// permission handler rejects limits above its configured cap; it never clamps an
+    /// accepted page size, so advancing by the requested size cannot skip a shard row.
+    fn list_effective_permissions(
+        client: &Client,
+        account_id: &AccountId,
+        limit: Option<u64>,
+        offset: u64,
+        fetch_size: Option<u64>,
+    ) -> Result<Vec<Permission>> {
+        use std::collections::BTreeSet;
+
+        #[derive(crate::json_macros::JsonDeserialize)]
+        struct Page {
+            items: Vec<Permission>,
+            total: u64,
+        }
+
+        let page_size = fetch_size.unwrap_or(500);
+        if page_size == 0 || limit == Some(0) {
+            eyre::bail!("permission --limit and --fetch-size must be positive when provided");
+        }
+        let mut permissions = BTreeSet::new();
+        let mut page_offset = 0_u64;
+        loop {
+            let response = client
+                .get_account_permissions_page_response(account_id, page_size, page_offset)
+                .wrap_err("Failed to get effective account permissions")?;
+            if response.status().as_u16() != 200 {
+                eyre::bail!(
+                    "effective account permissions request failed with HTTP {}",
+                    response.status()
+                );
+            }
+            let header = |name: &str| {
+                response
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+            };
+            if !header("content-type").is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .eq_ignore_ascii_case("application/json")
+            }) {
+                eyre::bail!("effective account permissions response must be application/json");
+            }
+            if header("x-iroha-account-permission-semantics") != Some("effective-v1") {
+                eyre::bail!("account permissions response is missing effective-v1 semantics");
+            }
+            let counter = |name: &str| -> Result<u64> {
+                header(name)
+                    .and_then(|value| value.parse().ok())
+                    .ok_or_else(|| eyre!("account permissions response has invalid {name}"))
+            };
+            let attempted = counter("x-iroha-fanout-routes-attempted")?;
+            let succeeded = counter("x-iroha-fanout-routes-succeeded")?;
+            if attempted == 0
+                || succeeded != attempted
+                || counter("x-iroha-fanout-routes-failed")? != 0
+                || counter("x-iroha-fanout-routes-denied")? != 0
+                || counter("x-iroha-fanout-routes-unavailable")? != 0
+                || counter("x-iroha-fanout-routes-not-found")? != 0
+            {
+                eyre::bail!("account permissions fanout is incomplete; no partial result returned");
+            }
+            let page: Page = parse_json(
+                std::str::from_utf8(response.body())
+                    .wrap_err("account permissions response is not UTF-8")?,
+            )
+            .wrap_err("Failed to decode effective account permissions page")?;
+            if page.total != u64::try_from(page.items.len())? {
+                eyre::bail!("account permissions merged page total does not match its items");
+            }
+            if page.items.is_empty() {
+                break;
+            }
+            permissions.extend(page.items);
+            page_offset = page_offset
+                .checked_add(page_size)
+                .ok_or_else(|| eyre!("account permissions page offset overflow"))?;
+        }
+        Ok(permissions
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| (*index as u64) >= offset)
+            .take(
+                limit
+                    .and_then(|value| usize::try_from(value).ok())
+                    .unwrap_or(usize::MAX),
+            )
+            .map(|(_, permission)| permission)
+            .collect())
     }
     #[derive(clap::Args, Debug)]
     pub struct Id {
@@ -2426,13 +2521,13 @@ mod account {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Maximum number of items to return (server-side limit)
+        /// Maximum number of effective permissions to return after merging all dataspaces
         #[arg(long)]
         limit: Option<u64>,
-        /// Offset into the result set (server-side offset)
+        /// Offset into the complete, canonically ordered effective permission set
         #[arg(long, default_value_t = 0)]
         offset: u64,
-        /// Batch fetch size for iterable queries
+        /// Number of permissions to fetch per dataspace per request (default: 500)
         #[arg(long)]
         fetch_size: Option<u64>,
     }
@@ -2613,14 +2708,9 @@ mod asset {
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
                     let client = context.client_from_config()?;
-                    let entries = client
-                        .query(FindAssets)
-                        .execute_all()
+                    let entry = client
+                        .query_single(FindAssetById::new(id))
                         .wrap_err("Failed to get asset")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|e| e.id() == &id)
-                        .ok_or_else(|| eyre!("Asset not found"))?;
                     context.print_data(&entry)
                 }
                 List(cmd) => cmd.run(context),

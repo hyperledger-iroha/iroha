@@ -36985,13 +36985,28 @@ fn alias_setup_transaction_size_blocker(
     })
 }
 #[cfg(feature = "app_api")]
-const ALIAS_SETUP_PLAN_TTL_MS: u64 = 60_000;
+const ALIAS_PLAN_TTL_MS: u64 = 60_000;
 #[cfg(feature = "app_api")]
-fn alias_setup_plan_deadline(now_ms: u64, guarded_deadline_ms: Option<u64>) -> u64 {
-    let planner_deadline_ms = now_ms.saturating_add(ALIAS_SETUP_PLAN_TTL_MS);
-    guarded_deadline_ms.map_or(planner_deadline_ms, |guarded_deadline_ms| {
-        planner_deadline_ms.min(guarded_deadline_ms)
-    })
+fn alias_plan_deadline(
+    request_time: SystemTime,
+    guarded_deadline_ms: Option<u64>,
+) -> Result<u64, Error> {
+    // This is a client-observed request expiry, not consensus lease time. An idle chain's
+    // latest block remains the exact plan anchor but must not expire a newly requested plan.
+    let request_time_ms = request_time
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .ok_or_else(|| Error::AppServiceUnavailable {
+            code: "alias.plan.clock_unavailable",
+            message: "alias planner wall clock is outside the supported Unix time range".to_owned(),
+        })?;
+    let planner_deadline_ms = request_time_ms.saturating_add(ALIAS_PLAN_TTL_MS);
+    Ok(
+        guarded_deadline_ms.map_or(planner_deadline_ms, |guarded_deadline_ms| {
+            planner_deadline_ms.min(guarded_deadline_ms)
+        }),
+    )
 }
 #[cfg(feature = "app_api")]
 async fn handler_alias_setup_plan(
@@ -37108,7 +37123,7 @@ async fn handler_alias_setup_plan(
     let mut planned_authority_domains = BTreeSet::new();
     let mut planned_expiries = BTreeMap::new();
     let mut warnings = Vec::new();
-    let mut valid_until_ms = alias_setup_plan_deadline(now_ms, None);
+    let mut valid_until_ms = alias_plan_deadline(SystemTime::now(), None)?;
     for (index, ensure) in request.intents.into_iter().enumerate() {
         let target = ensure.intent.target();
         let disposition = match classify_alias_intent_with_planned_parents_and_endorsement_policy(
@@ -37376,8 +37391,6 @@ async fn handler_alias_setup_plan(
     Ok(JsonBody(plan).into_response())
 }
 #[cfg(feature = "app_api")]
-const ALIAS_LIFECYCLE_PLAN_TTL_MS: u64 = 60_000;
-#[cfg(feature = "app_api")]
 fn alias_lifecycle_instruction_frame(
     instruction: &iroha_data_model::isi::InstructionBox,
 ) -> Result<iroha_data_model::alias_setup::AliasFramedInstructionV1, Error> {
@@ -37641,7 +37654,7 @@ async fn handler_alias_auto_renew_plan(
         totals_by_asset: Vec::new(),
         warnings: Vec::new(),
         blockers: Vec::new(),
-        valid_until_ms: now_ms.saturating_add(ALIAS_LIFECYCLE_PLAN_TTL_MS),
+        valid_until_ms: alias_plan_deadline(SystemTime::now(), None)?,
     });
     Ok(JsonBody(plan).into_response())
 }

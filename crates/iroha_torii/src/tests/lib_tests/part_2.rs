@@ -1203,9 +1203,224 @@ fn alias_setup_parent_and_size_diagnostics_are_deterministic() {
     let blocker = alias_setup_transaction_size_blocker(65, 64).expect("oversized payload blocker");
     assert_eq!(blocker.code, "alias.plan.transaction_oversized");
     assert_eq!(blocker.severity, AliasSetupSeverityV1::Error);
-    assert_eq!(alias_setup_plan_deadline(1_000, None), 61_000);
-    assert_eq!(alias_setup_plan_deadline(1_000, Some(30_000)), 30_000);
-    assert_eq!(alias_setup_plan_deadline(u64::MAX - 10, None), u64::MAX);
+    let request_time = UNIX_EPOCH + Duration::from_millis(1_000);
+    assert_eq!(alias_plan_deadline(request_time, None).unwrap(), 61_000);
+    assert_eq!(alias_plan_deadline(request_time, Some(30_000)).unwrap(), 30_000);
+    assert_eq!(alias_plan_deadline(request_time, Some(999)).unwrap(), 999);
+    assert!(alias_plan_deadline(UNIX_EPOCH - Duration::from_millis(1), None).is_err());
+}
+#[tokio::test]
+async fn alias_setup_plan_after_idle_keeps_ledger_quote_and_fresh_request_deadline() {
+    use iroha_data_model::{
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, AliasSetupPlanRequestV1,
+            AliasTransactionPlanV1, ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::EnsureAlias,
+    };
+
+    let key_pair = checked_torii_test_ed25519_keypair(0xA8, "derive idle alias planner authority");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    let ledger_time_ms = 1_000;
+    record_latest_committed_header_for_test(&app, 1, ledger_time_ms);
+    let alias = ResolvedAccountAliasV1::new(
+        "payee@hbl.sbp".parse().expect("canonical alias"),
+        recipient_lookup_sbp_dataspace_for_test(),
+    );
+    let (anchor_hash, policy, expected_quote) = {
+        let view = app.state.view();
+        let policy = iroha_core::sns::policy_by_id(
+            view.world(),
+            iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+        )
+        .expect("read fixture policy")
+        .expect("installed fixture policy");
+        let quote = iroha_core::sns::quote_account_alias_registration(
+            view.world(),
+            &view.nexus().dataspace_catalog,
+            &alias.account_alias(),
+            &authority,
+            1,
+            None,
+            ledger_time_ms,
+        )
+        .expect("quote against the actual committed ledger time");
+        (Hash::from(view.latest_block_hash().unwrap()), policy, quote)
+    };
+    let before_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .expect("current time fits u64");
+    assert!(before_ms > ledger_time_ms + ALIAS_PLAN_TTL_MS);
+    for guard_deadline_ms in [before_ms + 2 * ALIAS_PLAN_TTL_MS, before_ms + 30_000] {
+        let request = AliasSetupPlanRequestV1::new(vec![EnsureAlias::new(
+            AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                alias: alias.clone(),
+                target_account: authority.clone(),
+                provision: AccountProvisionV1::Existing,
+                role: AccountAliasRoleV1::Primary,
+            }),
+            AliasLeaseAcquisitionV1::new(1, None),
+            AliasQuoteGuardV1 {
+                expected_policy_version: policy.policy_version,
+                expected_payment_asset: expected_quote.payment_asset_definition_id.clone(),
+                max_amount: expected_quote.charge_amount.clone(),
+                valid_until_ms: guard_deadline_ms,
+            },
+        )]);
+        let body = norito::json::to_vec(&request).expect("encode setup request");
+        let method = Method::POST;
+        let uri = "/v1/aliases/setup/plan".parse().expect("setup URI");
+        let headers = signed_app_headers(&authority, &key_pair, &method, &uri, &body);
+        let response = handler_alias_setup_plan(
+            State(app.clone()),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            body.into(),
+        )
+        .await
+        .expect("signed setup planner response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let plan: AliasTransactionPlanV1 = norito::json::from_slice(&body).expect("setup plan");
+        let after_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .expect("current time fits u64");
+        assert!(
+            plan.body.valid_until_ms >= after_ms,
+            "new plan must pass SDK wall-clock expiry"
+        );
+        assert!(plan.body.valid_until_ms >= (before_ms + ALIAS_PLAN_TTL_MS).min(guard_deadline_ms));
+        assert!(plan.body.valid_until_ms <= (after_ms + ALIAS_PLAN_TTL_MS).min(guard_deadline_ms));
+        assert_eq!(plan.body.anchor.block_height, 1);
+        assert_eq!(plan.body.anchor.block_hash, anchor_hash);
+        let quote = plan.body.resources[0]
+            .quote
+            .as_ref()
+            .expect("creation lease quote");
+        assert_eq!(quote.exact_amount, expected_quote.charge_amount);
+        assert_eq!(quote.expires_at_ms, expected_quote.expires_at_ms);
+        assert_eq!(
+            quote.grace_expires_at_ms,
+            expected_quote.grace_expires_at_ms
+        );
+        assert_eq!(
+            quote.redemption_expires_at_ms,
+            expected_quote.redemption_expires_at_ms
+        );
+        assert_eq!(quote.guard.valid_until_ms, guard_deadline_ms);
+        iroha::client::decode_and_verify_alias_setup_plan_for_request(&request, &plan)
+            .expect("native SDK accepts the exact unchanged request and frames");
+    }
+    assert_eq!(
+        app.state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            .as_millis(),
+        u128::from(ledger_time_ms)
+    );
+}
+
+#[tokio::test]
+async fn alias_auto_renew_plan_after_idle_keeps_anchor_and_fresh_request_deadline() {
+    use iroha_data_model::{
+        alias_setup::{
+            AliasAutoRenewPlanRequestV1, AliasLifecycleTransactionPlanV1, AliasTargetV1,
+            ResolvedAccountAliasV1,
+        },
+        isi::alias_setup::ConfigureAliasAutoRenew,
+    };
+    let key_pair = checked_torii_test_ed25519_keypair(0xA9, "derive idle auto-renew authority");
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let app = onboarding_alias_test_app(&authority, &authority);
+    bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+    record_latest_committed_header_for_test(&app, 1, 1_000);
+    let anchor_hash = Hash::from(app.state.view().latest_block_hash().unwrap());
+    let request = AliasAutoRenewPlanRequestV1::new(ConfigureAliasAutoRenew::new(
+        AliasTargetV1::AccountAlias(ResolvedAccountAliasV1::new(
+            "payee@hbl.sbp".parse().expect("canonical alias"),
+            recipient_lookup_sbp_dataspace_for_test(),
+        )),
+        0,
+        None,
+    ));
+    let body = norito::json::to_vec(&request).expect("encode auto-renew request");
+    let method = Method::POST;
+    let uri = "/v1/aliases/auto-renew/plan"
+        .parse()
+        .expect("auto-renew URI");
+    let headers = signed_app_headers(&authority, &key_pair, &method, &uri, &body);
+    let before_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let response = handler_alias_auto_renew_plan(
+        State(app.clone()),
+        method,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        body.into(),
+    )
+    .await
+    .expect("signed auto-renew planner response");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 65_536)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let plan: AliasLifecycleTransactionPlanV1 =
+        norito::json::from_slice(&body).expect("auto-renew plan");
+    let after_ms = u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    assert!(
+        plan.body.valid_until_ms >= after_ms,
+        "new plan must pass SDK wall-clock expiry"
+    );
+    assert!(plan.body.valid_until_ms >= before_ms + ALIAS_PLAN_TTL_MS);
+    assert!(plan.body.valid_until_ms <= after_ms + ALIAS_PLAN_TTL_MS);
+    assert_eq!(plan.body.anchor.block_height, 1);
+    assert_eq!(plan.body.anchor.block_hash, anchor_hash);
+    assert!(
+        iroha::client::decode_and_verify_alias_auto_renew_plan_for_request(&request, &plan)
+            .expect("native SDK verifies exact no-op plan")
+            .is_none()
+    );
+    assert_eq!(
+        app.state
+            .view()
+            .latest_block()
+            .unwrap()
+            .header()
+            .creation_time()
+            .as_millis(),
+        1_000
+    );
 }
 #[tokio::test]
 async fn alias_planner_and_recipient_reads_authenticate_before_parsing() {

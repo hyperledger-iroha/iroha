@@ -3141,15 +3141,16 @@ fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) ->
     app
 }
 fn install_account_alias_policy_for_test(world: &mut World, authority: &AccountId) {
-    let mut policy = iroha_data_model::sns::fixtures::default_policy();
-    policy.suffix_id = iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID;
-    policy.suffix = "account-alias".to_owned();
+    // Use the same full alias grammar and pricing as first-release State initialization.
+    iroha_core::sns::seed_default_namespace_policies(world);
+    let mut policy = iroha_core::sns::policy_by_id(
+        &world.view(),
+        iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+    )
+    .expect("read native account alias policy")
+    .expect("native account alias policy is installed");
     policy.steward = authority.clone();
     policy.fund_splitter_account = authority.clone();
-    policy.payment_asset_id = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-    for tier in &mut policy.pricing {
-        tier.base_price.asset_id = policy.payment_asset_id.clone();
-    }
     world.smart_contract_state_mut_for_testing().insert(
         iroha_core::sns::policy_storage_key(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID),
         norito::codec::Encode::encode(&policy),
