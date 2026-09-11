@@ -24,6 +24,8 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 #[test]
 fn plain_ballot_locks_bond_into_escrow() {
+    // Typed governance movements record transcripts even without a transaction call hash.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let alice_id = &*ALICE_ID;
     let bob_id = &*BOB_ID;
     let wonderland: iroha_model_base::domain::DomainId =

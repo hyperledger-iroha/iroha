@@ -56,7 +56,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
         definition_id.clone(),
         "multi_total".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(wonderland.clone()),
     ))
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
@@ -150,7 +150,7 @@ fn asset_totals_drop_when_unregistering_account() {
         definition_id.clone(),
         "account_drop".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(domain_id.clone()),
     ))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register definition");
@@ -235,7 +235,7 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         definition_id.clone(),
         "domain_drop".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(source_domain.clone()),
     ))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
@@ -278,6 +278,7 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         .expect("query definitions")
         .find(|candidate| candidate.id() == &definition_id)
         .expect("source definition should remain");
+    assert_eq!(definition.owning_domain(), &Some(source_domain));
     assert_eq!(definition.total_quantity(), &Quantity::from(40_u32));
     let manual_total = FindAssets::new()
         .execute(CompoundPredicate::PASS, &view)
@@ -336,7 +337,7 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         definition_id.clone(),
         "teardown".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(source_domain.clone()),
     ))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
@@ -388,11 +389,22 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
             .all(|asset| asset.id().definition() != &definition_id),
         "all assets from removed definition should be cleaned across domains"
     );
+    let surviving_accounts: Vec<_> = FindAccounts::new()
+        .execute(CompoundPredicate::PASS, &view)
+        .expect("query accounts")
+        .map(|account| account.id().clone())
+        .collect();
+    for holder in [source_holder, foreign_holder] {
+        assert!(
+            surviving_accounts.contains(&holder),
+            "universal accounts must survive removal of an asset's owning domain"
+        );
+    }
     assert!(
-        FindAccounts::new()
+        FindDomains::new()
             .execute(CompoundPredicate::PASS, &view)
-            .expect("query accounts")
-            .any(|account| account.id() == &foreign_holder),
-        "foreign domain accounts should remain when source domain is removed"
+            .expect("query domains")
+            .any(|domain| domain.id() == &foreign_domain),
+        "the unrelated domain must remain after source domain removal"
     );
 }

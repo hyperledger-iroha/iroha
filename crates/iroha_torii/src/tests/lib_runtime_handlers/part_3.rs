@@ -2320,6 +2320,105 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 #[tokio::test]
+async fn torii_delegated_reads_reject_online_only_observers() {
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+    let observer_key = checked_torii_test_ed25519_keypair(0xb9, "online observer fixture");
+    let observer = PeerId::from(observer_key.public_key().clone());
+    let local = checked_torii_test_peer_id(0xba, "authorized local ingress fixture");
+    let current = checked_torii_test_peer_id(0xbb, "authorized current ingress fixture");
+    let previous = checked_torii_test_peer_id(0xbc, "authorized previous ingress fixture");
+    let (_online_tx, online_rx) = tokio::sync::watch::channel(HashSet::from([Peer::new(
+        "127.0.0.1:18104".parse().expect("observer address"),
+        observer_key.public_key().clone(),
+    )]));
+    {
+        let app = Arc::get_mut(&mut app).expect("unique observer fixture");
+        app.online_peers = OnlinePeersProvider::new(online_rx);
+        app.local_peer_id = Some(local.clone());
+        let mut topology = app.state.commit_topology.block();
+        topology.push(current.clone());
+        topology.commit();
+        let mut topology = app.state.prev_commit_topology.block();
+        topology.push(previous.clone());
+        topology.commit();
+    }
+    assert!(!super::torii_proxy_authenticated_peer_is_trusted(
+        app.as_ref(),
+        &observer
+    ));
+    for trusted in [&local, &current, &previous] {
+        assert!(super::torii_proxy_authenticated_peer_is_trusted(
+            app.as_ref(),
+            trusted
+        ));
+    }
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let scope = ToriiFanoutRouteScopeV1::VisibleAccount {
+        caller_account_id: Some(ALICE_ID.to_string()),
+    };
+    let body =
+        norito::json::to_vec(&norito::json!({"authority": (ALICE_ID.to_string()), "items": []}))
+            .expect("view body");
+    let read = super::torii_read_request(
+        ToriiReadEndpointV1::ContractViewBatchPost,
+        scope.clone(),
+        route,
+        Vec::new(),
+        None,
+        body.clone(),
+    );
+    let fanout = iroha_core::torii_proxy::ToriiReadFanoutProxyRequestV1 {
+        endpoint: ToriiReadEndpointV1::AccountGet,
+        route_scope: scope,
+        merge: iroha_core::torii_proxy::ToriiReadFanoutMergeV1::Account,
+        path_args: vec![ALICE_ID.to_string()],
+        query_string: None,
+        body: Vec::new(),
+        response_format: ToriiProxyResponseFormatV1::Json,
+    };
+    for kind in [
+        ToriiProxyRequestKindV1::Read(read.clone()),
+        ToriiProxyRequestKindV1::ReadFanout(fanout),
+    ] {
+        for sender in [None, Some(observer.clone())] {
+            let request = ToriiProxyRequestV1 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+                request_id: Hash::new(b"untrusted-read-observer"),
+                deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+                hop_count: 1,
+                max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+                visited_peer_ids: vec![observer.clone()],
+                request: kind.clone(),
+            };
+            let response = super::execute_incoming_torii_proxy_request(&app, request, sender).await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("untrusted_proxy_ingress")
+            );
+        }
+    }
+    let request = ToriiProxyRequestV1 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+        request_id: Hash::new(b"authorized-read-ingress"),
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+        visited_peer_ids: vec![local.clone()],
+        request: ToriiProxyRequestKindV1::Read(read),
+    };
+    let response = super::execute_incoming_torii_proxy_request(&app, request, Some(local)).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "authorized ingress must reach ordinary empty-batch validation"
+    );
+}
+#[cfg(all(feature = "app_api", feature = "connect"))]
+#[tokio::test]
 async fn incoming_torii_proxy_rejects_malformed_v1_hop_chain_before_dispatch() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
     let sender = PeerId::new(

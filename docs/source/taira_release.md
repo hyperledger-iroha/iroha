@@ -81,6 +81,29 @@ installed sccache remain in use. No target or cache is cleaned or replaced.
 Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
 The native gate receives the same source, toolchain and explicit target directory.
 
+After verifying the complete native Cargo output set, a bounded owner-private
+ledger records only final test executables and retires recorded superseded outputs
+before checking copy capacity. Retirement runs under Cargo's locks after exact
+inode checks and an OS open-file check; a later copy failure leaves the current
+verified Cargo outputs intact.
+The first run only records current outputs; unrecorded files, production binaries,
+libraries, object files and warm compiler caches are retained. Busy files or an
+unavailable/inconclusive `lsof` check cause retention. A private quarantine closes
+the old pathname before the final open-file check; interrupted retirement remains
+recorded. Retries recover both rename windows using the recorded inode and stable
+metadata, recheck open-file status, and never adopt an unrelated replacement. A
+full ledger retries pending cleanup before admitting successors, so closing an
+old reader restores progress without manual ledger edits.
+
+Temporary executable copies, including non-CLI native network binaries, are
+released after their last child exits, on success or failure. The published native
+`iroha` CLI snapshot remains available to operator custody and deployment consumers;
+the `cli` test harness is temporary. Exact identity and closed-file checks preserve
+replaced or busy copies. If isolation fails partway through a batch, only already
+verified copies are cleanup-owned, including an unpublished CLI; incomplete or
+unrecorded files are retained. Observations and fixture logs remain. Cargo producers
+and Linux release artifacts are outside temporary-copy cleanup.
+
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both
 must execute every listed test without skips. Lifecycle mutation controls check
@@ -154,6 +177,35 @@ Validate the local orchestration without Cargo or network:
 
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
+
+## Updating an initialized testnet
+
+For a routine update of the existing four-validator Taira installation, use the
+completed basic preparation directly:
+
+    python3 scripts/taira_update.py \
+      --deployment /absolute/owner-private/taira/deployment.json \
+      --prepared-result /absolute/completed-preparation/result.json \
+      --output /absolute/owner-private/taira/update-output
+
+The deployment record contains the approved SSH route and public host-key pins,
+network and directory identities, and the exact completed predecessor receipt.
+Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
+preserves configuration, signer custody and ledger state, and verifies native
+Strict snapshot restoration and public basic health. It does not invoke Cargo.
+`--plan-only` writes the concrete plan locally without contacting the host.
+
+Local and guest locks serialize updates. Each operation retains its own staging
+and evidence paths, so a failed transfer or lock conflict can use the same
+completed binaries in a fresh operation after inspection. Failed stages remain
+on disk. An interrupted runtime mutation requires recovery before another update;
+there is no automatic rollback to earlier execution rules after candidate start.
+A successful update emits `next-deployment.json` for the next invocation. Confirm
+an application transaction as state-resolved Applied after installation.
+
+Validate this controller without Cargo or network:
+
+    python3 -B scripts/tests/taira_update_test.py
 
 ## Deployment capacity and retrying an unchanged release
 

@@ -13765,10 +13765,9 @@ async fn handler_runtime_abi_hash(
 // -------------- Core info (AppState-based) --------------
 #[cfg(feature = "connect")]
 fn torii_proxy_authenticated_peer_is_trusted(app: &AppState, peer_id: &PeerId) -> bool {
+    // A connected observer proves possession of a peer key, not authority to
+    // delegate account-visible reads or other internal Torii operations.
     app.local_peer_id.as_ref() == Some(peer_id)
-        || app
-            .online_peers
-            .with_snapshot(|peers| peers.iter().any(|peer| peer.id() == peer_id))
         || app
             .state
             .world_view()
@@ -25488,6 +25487,23 @@ fn execute_trusted_internal_account_asset_local_read(
     )
 }
 #[cfg(feature = "app_api")]
+fn require_routed_contract_view_authority(
+    scope: &ToriiFanoutRouteScopeV1,
+    authority: &AccountId,
+) -> Result<(), Error> {
+    let ToriiFanoutRouteScopeV1::VisibleAccount {
+        caller_account_id: Some(caller),
+    } = scope
+    else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "routed contract view requires an authenticated caller".to_owned(),
+            ),
+        ));
+    };
+    require_runtime_governance_canonical_account_literal(caller, authority, "routed contract view")
+}
+#[cfg(feature = "app_api")]
 async fn execute_torii_read_request_locally(
     app: &SharedAppState,
     request: ToriiReadProxyRequestV1,
@@ -26445,7 +26461,7 @@ async fn execute_torii_read_request_locally(
             )
         }
         ToriiReadEndpointV1::ContractViewPost => {
-            let request = match decode_torii_proxy_json_body::<routing::ContractViewDto>(
+            let view = match decode_torii_proxy_json_body::<routing::ContractViewDto>(
                 request_decode_plan,
                 &request.body,
                 "contract view body",
@@ -26453,10 +26469,15 @@ async fn execute_torii_read_request_locally(
                 Ok(request) => request,
                 Err(response) => return response,
             };
+            if let Err(error) =
+                require_routed_contract_view_authority(&request.route_scope, &view.authority)
+            {
+                return error.into_response();
+            }
             let mut response = match execute_bounded_contract_view_work(
                 app,
                 "v1/contracts/view",
-                BoundedContractViewWork::Single(request),
+                BoundedContractViewWork::Single(view),
             )
             .await
             {
@@ -26475,7 +26496,7 @@ async fn execute_torii_read_request_locally(
             response
         }
         ToriiReadEndpointV1::ContractViewBatchPost => {
-            let request = match decode_torii_proxy_json_body::<routing::ContractViewBatchDto>(
+            let view = match decode_torii_proxy_json_body::<routing::ContractViewBatchDto>(
                 request_decode_plan,
                 &request.body,
                 "contract view batch body",
@@ -26483,10 +26504,15 @@ async fn execute_torii_read_request_locally(
                 Ok(request) => request,
                 Err(response) => return response,
             };
+            if let Err(error) =
+                require_routed_contract_view_authority(&request.route_scope, &view.authority)
+            {
+                return error.into_response();
+            }
             let mut response = match execute_bounded_contract_view_work(
                 app,
                 "v1/contracts/view/batch",
-                BoundedContractViewWork::Batch(request),
+                BoundedContractViewWork::Batch(view),
             )
             .await
             {
@@ -26548,6 +26574,8 @@ async fn execute_torii_read_for_route(
             | ToriiReadEndpointV1::AliasLookupByAccount
             | ToriiReadEndpointV1::ContractAliasResolve
             | ToriiReadEndpointV1::ContractDeploymentState
+            | ToriiReadEndpointV1::ContractViewPost
+            | ToriiReadEndpointV1::ContractViewBatchPost
             | ToriiReadEndpointV1::AccountOnboardingCurrentState
             | ToriiReadEndpointV1::InternalAccountGet
             | ToriiReadEndpointV1::InternalAccountTransactionGet
@@ -26631,6 +26659,7 @@ async fn execute_torii_single_route_read(
         query_string,
         body,
         ToriiProxyResponseFormatV1::Json,
+        None,
     )
     .await
 }
@@ -26667,6 +26696,7 @@ async fn execute_torii_single_route_read_with_format(
     query_string: Option<String>,
     body: Vec<u8>,
     response_format: ToriiProxyResponseFormatV1,
+    caller: Option<&AccountId>,
 ) -> Response {
     let reservation = match try_acquire_query_fanout_memory(app) {
         Ok(reservation) => reservation,
@@ -26711,7 +26741,7 @@ async fn execute_torii_single_route_read_with_format(
     let mut request = torii_read_request(
         endpoint,
         ToriiFanoutRouteScopeV1::VisibleAccount {
-            caller_account_id: None,
+            caller_account_id: caller.map(ToString::to_string),
         },
         route,
         path_args,
@@ -27194,6 +27224,20 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
             "Torii proxy request attempted to revisit the receiving peer",
+        );
+    }
+    #[cfg(feature = "app_api")]
+    if matches!(
+        &proxy_request.request,
+        ToriiProxyRequestKindV1::Read(_) | ToriiProxyRequestKindV1::ReadFanout(_)
+    ) && !immediate_sender_peer_id
+        .as_ref()
+        .is_some_and(|peer| torii_proxy_authenticated_peer_is_trusted(app.as_ref(), peer))
+    {
+        return torii_proxy_error_response(
+            StatusCode::FORBIDDEN,
+            "untrusted_proxy_ingress",
+            "delegated Torii reads require a registered or consensus-authorized ingress peer",
         );
     }
     // Fanout request variants carry the potentially large signed-query byte
@@ -32443,10 +32487,16 @@ async fn handler_post_contract_call_batch_prepare(
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_simulate(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractCallSimulateDto>,
 ) -> Result<AxResponse, Error> {
+    require_runtime_governance_account(
+        &request.0.authority,
+        &verified.account,
+        "contract simulation",
+    )?;
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -32591,10 +32641,12 @@ async fn handler_post_bridge_message_submit(
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_view(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractViewDto>,
 ) -> Result<AxResponse, Error> {
+    require_runtime_governance_account(&request.0.authority, &verified.account, "contract view")?;
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -32613,13 +32665,15 @@ async fn handler_post_contract_view(
                 "failed to encode routed contract view request: {error}"
             )))
         })?;
-        return Ok(execute_torii_single_route_read(
+        return Ok(execute_torii_single_route_read_with_format(
             &app,
             route,
             ToriiReadEndpointV1::ContractViewPost,
             Vec::new(),
             None,
             body,
+            ToriiProxyResponseFormatV1::Json,
+            Some(&verified.account),
         )
         .await
         .into_response());
@@ -32659,10 +32713,16 @@ async fn handler_post_contract_view(
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_view_batch(
     State(app): State<SharedAppState>,
+    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractViewBatchDto>,
 ) -> Result<AxResponse, Error> {
+    require_runtime_governance_account(
+        &request.0.authority,
+        &verified.account,
+        "contract view batch",
+    )?;
     check_public_contract_route_rate_limit(
         &app,
         &headers,
@@ -32705,13 +32765,15 @@ async fn handler_post_contract_view_batch(
                 "failed to encode routed contract view batch request: {error}"
             )))
         })?;
-        return Ok(execute_torii_single_route_read(
+        return Ok(execute_torii_single_route_read_with_format(
             &app,
             route,
             ToriiReadEndpointV1::ContractViewBatchPost,
             Vec::new(),
             None,
             body,
+            ToriiProxyResponseFormatV1::Json,
+            Some(&verified.account),
         )
         .await
         .into_response());

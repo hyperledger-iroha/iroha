@@ -2744,6 +2744,67 @@ fn merge_execution_canonical_order_key(
         proposal.proposal_hash,
     )
 }
+/// Charge the same signed runtime bounds and deterministic native instruction meter as Queue.
+/// This is reservation accounting, not an estimate from a previous execution's gas usage.
+pub(crate) fn merge_execution_proposal_gas<'a>(
+    entrypoints: impl IntoIterator<Item = &'a TransactionEntrypoint>,
+) -> Result<u64, MergeLedgerCommitError> {
+    entrypoints.into_iter().try_fold(0u64, |total, entrypoint| {
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+            std::borrow::Cow::Borrowed(entrypoint),
+        );
+        let gas = crate::queue::Queue::compute_proposal_gas_cost(&accepted).map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "autonomous source has invalid proposal gas accounting: {error}"
+            ))
+        })?;
+        total.checked_add(gas).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous source proposal gas overflows u64".to_owned(),
+            )
+        })
+    })
+}
+/// Reserve a bounded prefix in oldest-origin order before deterministic execution.
+///
+/// Origin height is authenticated by the immutable producer payload, so a newer source from a
+/// busy lower-numbered lane cannot repeatedly overtake an older independently authored source.
+/// The caller restores canonical execution order only after choosing a fitting priority prefix.
+fn select_merge_execution_source_budget(
+    mut sources: Vec<MergeExecutionSource>,
+    gas_limit: u64,
+) -> Result<Vec<MergeExecutionSource>, MergeLedgerCommitError> {
+    sources.sort_by_key(|source| {
+        (
+            source.origin_proposal.descriptor.proposal_height,
+            merge_execution_canonical_order_key(&source.certified.proposal),
+        )
+    });
+    let mut selected_count = 0usize;
+    let mut selected_entrypoints = 0usize;
+    let mut selected_gas = 0u64;
+    for source in &sources {
+        let Some(next_entrypoints) =
+            selected_entrypoints.checked_add(source.input.entrypoints.len())
+        else {
+            break;
+        };
+        let gas = merge_execution_proposal_gas(&source.input.entrypoints)?;
+        if next_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS
+            || !crate::gas::gas_components_fit_block_limit(gas_limit, [selected_gas, gas])
+        {
+            break;
+        }
+        let Some(next_gas) = selected_gas.checked_add(gas) else {
+            break;
+        };
+        selected_gas = next_gas;
+        selected_entrypoints = next_entrypoints;
+        selected_count += 1;
+    }
+    sources.truncate(selected_count);
+    Ok(sources)
+}
 fn merge_execution_source_bundle_hash(source_bundle: &[u8]) -> Hash {
     Hash::new_from_chunks(&[
         b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
@@ -33997,6 +34058,20 @@ impl State {
         state_block: &mut StateBlock<'_>,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<Vec<MergeLaneExecution>, MergeLedgerCommitError> {
+        // Every validator checks the complete reservation before executing any source.
+        // A leader must not turn congestion from combining otherwise-valid sources into
+        // permanent transaction rejections after consuming another lane's block budget.
+        let reserved_gas = merge_execution_proposal_gas(
+            sources.iter().flat_map(|source| &source.input.entrypoints),
+        )?;
+        if !crate::gas::gas_components_fit_block_limit(
+            state_block.gas_limit_per_block,
+            [state_block.gas_used_in_block, reserved_gas],
+        ) {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "autonomous sources exceed the shared block proposal gas budget".to_owned(),
+            ));
+        }
         let _witness_suppression =
             crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -34917,25 +34992,18 @@ impl State {
         if sources.is_empty() {
             return None;
         }
-        sources
-            .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
-        let mut bounded_prefix_len = 0usize;
-        let mut bounded_entrypoints = 0usize;
-        for source in &sources {
-            let Some(next_entrypoints) =
-                bounded_entrypoints.checked_add(source.input.entrypoints.len())
-            else {
-                break;
-            };
-            if next_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
-                break;
+        let sources = match select_merge_execution_source_budget(
+            sources,
+            gas_limit_from_parameters(world.parameters()),
+        ) {
+            Ok(sources) => sources,
+            Err(error) => {
+                warn!(?error, "autonomous merge source gas accounting failed");
+                return None;
             }
-            bounded_entrypoints = next_entrypoints;
-            bounded_prefix_len = bounded_prefix_len.saturating_add(1);
-        }
-        sources.truncate(bounded_prefix_len);
+        };
         if sources.is_empty() {
-            warn!("first canonical merge source exceeds the entrypoint hard limit");
+            warn!("oldest autonomous merge source exceeds the entrypoint or block gas limit");
             return None;
         }
         let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
@@ -34986,7 +35054,7 @@ impl State {
         // publication invalidates even a previously fitting prefix.
         consensus.is_current(self).then_some(selected).flatten()
     }
-    /// Select the largest canonical source prefix whose complete unsigned
+    /// Select a fitting priority source prefix whose complete unsigned
     /// carrier fits, including the immutable historical authority catalog.
     ///
     /// The source builder enforces the execution-batch limit independently.
@@ -34998,8 +35066,11 @@ impl State {
         unsigned_limit: usize,
         mut build_batch: impl FnMut(usize) -> Option<MergeExecutionBatch>,
     ) -> Option<crate::merge::MergeLedgerCandidate> {
-        // Canonical size is monotonic over the ordered source prefix.
-        // Binary search bounds repeated deterministic pre-execution work.
+        // Binary refinement bounds repeated deterministic pre-execution work. Each
+        // trial restores canonical execution order, which can change result sizes;
+        // therefore this finds a fitting prefix, not necessarily the largest one.
+        // Every successful prefix includes the oldest source, and failed larger
+        // trials eventually probe its singleton before reporting no candidate.
         let mut lower = 1usize;
         let mut upper = source_count;
         let mut best = None;
@@ -35024,7 +35095,7 @@ impl State {
         &self,
         epoch_id: u64,
         application_block_header: BlockHeader,
-        sources: Vec<MergeExecutionSource>,
+        mut sources: Vec<MergeExecutionSource>,
     ) -> Option<MergeExecutionBatch> {
         let total_entrypoints = sources
             .iter()
@@ -35033,6 +35104,10 @@ impl State {
         if sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
             return None;
         }
+        // Selection uses age for fairness; execution and its certified wire representation
+        // retain the protocol's canonical lane order for the chosen set.
+        sources
+            .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
         let base_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
         let base_state_hash = self.lane_execution_state_hash();
         if application_block_header.height().get() != base_state_height.saturating_add(1)
