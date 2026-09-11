@@ -420,6 +420,21 @@ enum Command {
     #[command(subcommand)]
     Soracloud(crate::soracloud::Command),
 }
+/// Build the common CLI submission receipt fields with a reusable transaction locator.
+///
+/// The top-level hash feeds `tx status --hash` and therefore uses raw lowercase hex.
+/// The signed transaction and its checked network identity retain their Norito encoding.
+fn transaction_submission_receipt_fields(
+    hash: HashOf<SignedTransaction>,
+    transaction: &SignedTransaction,
+    fee_quote: &FeeQuoteResponse,
+) -> Result<Vec<(&'static str, json::Value)>> {
+    Ok(vec![
+        ("hash", json_utils::json_value(&hash.to_string())?),
+        ("transaction", json_utils::json_value(transaction)?),
+        ("fee_quote", json_utils::json_value(fee_quote)?),
+    ])
+}
 /// Context inside which commands run
 trait RunContext {
     fn config(&self) -> &Config;
@@ -594,11 +609,11 @@ trait RunContext {
         };
         match self.output_format() {
             CliOutputFormat::Json => {
-                let result = json_utils::json_object(vec![
-                    ("hash", json_utils::json_value(&hash)?),
-                    ("transaction", json_utils::json_value(&transaction)?),
-                    ("fee_quote", json_utils::json_value(&fee_quote)?),
-                ])?;
+                let result = json_utils::json_object(transaction_submission_receipt_fields(
+                    hash,
+                    &transaction,
+                    &fee_quote,
+                )?)?;
                 self.print_data(&result)
             }
             CliOutputFormat::Text => {
@@ -4879,7 +4894,7 @@ use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, };
     }
     #[derive(clap::Args, Debug)]
     pub struct Status {
-        /// Hash of the signed transaction to inspect
+        /// Raw 64-character hexadecimal hash from a transaction submission receipt
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
         /// Explicit status routing scope for a one-shot read. `--wait` always uses exact global
@@ -5736,13 +5751,11 @@ mod trigger {
             blocking_client
                 .submit_transaction(&transaction)
                 .wrap_err("Failed to submit trigger execution transaction")?;
-            let mut pairs = vec![
-                ("hash", json_utils::json_value(&hash)?),
+            let mut pairs = transaction_submission_receipt_fields(hash, &transaction, &fee_quote)?;
+            pairs.extend([
                 ("trigger_id", json_utils::json_value(&self.id)?),
-                ("transaction", json_utils::json_value(&transaction)?),
-                ("fee_quote", json_utils::json_value(&fee_quote)?),
                 ("trace_requested", json_utils::json_value(&self.trace)?),
-            ];
+            ]);
             if self.wait.is_enabled() {
                 let status = wait_for_transaction_applied(&client, hash, &self.wait)?;
                 pairs.push(("finalized", json_utils::json_value(&true)?));

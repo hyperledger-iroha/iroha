@@ -3064,3 +3064,85 @@ fn ledger_asset_get_uses_exact_singular_query_and_preserves_not_found() {
         }
     }
 }
+
+#[test]
+fn transaction_submission_receipt_hash_roundtrips_through_status_cli() {
+    use iroha::data_model::{nexus::FeeDebitSource, transaction::TransactionBuilder};
+    use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
+
+    let config = fallback_config();
+    let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
+    let transaction = TransactionBuilder::new(
+        config.network_id,
+        config.account.clone(),
+        fee_payment.clone(),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "submission receipt fixture".to_owned(),
+    )])
+    .try_sign(config.key_pair.private_key())
+    .expect("signed submission fixture");
+    let hash = transaction.hash();
+    let fee_quote = FeeQuoteResponse {
+        intent: fee_payment,
+        observation: FeeQuoteObservation {
+            ledger_time_ms: 1,
+            next_block_height: 2,
+            route_dataspace_id: DataSpaceId::UNIVERSAL,
+        },
+        components: Vec::new(),
+        capacities: Vec::new(),
+        decision: FeeQuoteDecision::Accepted {
+            debit_source: FeeDebitSource::Account(config.account),
+            program_revision: None,
+        },
+    };
+    let receipt = json_utils::json_object(
+        transaction_submission_receipt_fields(hash, &transaction, &fee_quote).unwrap(),
+    )
+    .unwrap();
+    let encoded = norito::json::to_json(&receipt).unwrap();
+    let exported: json::Value = norito::json::from_json(&encoded).unwrap();
+    let exported_hash = exported.get("hash").and_then(json::Value::as_str).unwrap();
+    assert_eq!(exported_hash, hex::encode(hash.as_ref()));
+    assert_eq!(exported_hash.len(), 64);
+    assert!(
+        exported_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    let args = Args::try_parse_from(["iroha", "tx", "status", "--hash", exported_hash, "--wait"])
+        .expect("the exported receipt hash must be accepted directly by tx status");
+    let Command::Tx(transaction::Command::Status(status)) = args.command else {
+        panic!("expected tx status");
+    };
+    assert_eq!(status.hash, hash);
+    assert!(status.wait.wait);
+    assert_eq!(
+        exported.get("transaction"),
+        Some(&json_utils::json_value(&transaction).unwrap())
+    );
+    assert_eq!(
+        exported.get("fee_quote"),
+        Some(&json_utils::json_value(&fee_quote).unwrap())
+    );
+    let checked_network = json_utils::json_value(&config.network_id).unwrap();
+    assert!(checked_network.as_str().unwrap().starts_with("hash:"));
+    assert_eq!(
+        norito::json::from_value::<NetworkId>(checked_network).unwrap(),
+        config.network_id
+    );
+    let checked_hash = json_utils::json_value(&hash).unwrap();
+    assert!(
+        Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            checked_hash.as_str().unwrap(),
+        ])
+        .is_err(),
+        "the raw transaction locator parser must not gain a checked-literal fallback"
+    );
+}
