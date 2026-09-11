@@ -68,8 +68,14 @@ Cargo's profile locks remain held through artifact capture. The regression suite
 reproduces the stale host build script with two real source directories and proves
 the corrected build executes the new source.
 
-Both commands default to the checkout's existing target/ directory. Supply
---target-dir only to select another established warm lane. Preparation uses the
+`check` defaults to the existing sibling `.taira-testnet-build-targets/routine`
+development lane. Set `TAIRA_TESTNET_CARGO_TARGET_DIR` or `--target-dir` to select
+another established development lane; when both are set, they must agree.
+`prepare` defaults to the checkout's existing `target/` release lane and ignores
+the development-only environment override. Its `--target-dir` must select an
+established release lane. The commands enforce separate lane ownership: mutable
+development checks cannot use a captured release lane, and authenticated
+preparation cannot use the routine development lane. Preparation uses the
 unchanged release profile and six jobs for exactly iroha3d_taira, iroha,
 sorafs-node and kagami. Preparation selects the Rust toolchain from the captured
 `rust-toolchain.toml`, then runs Cargo from `/` with the captured manifest and
