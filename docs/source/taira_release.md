@@ -155,6 +155,35 @@ Validate the local orchestration without Cargo or network:
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
 
+## Updating an initialized testnet
+
+For a routine update of the existing four-validator Taira installation, use the
+completed basic preparation directly:
+
+    python3 scripts/taira_update.py \
+      --deployment /absolute/owner-private/taira/deployment.json \
+      --prepared-result /absolute/completed-preparation/result.json \
+      --output /absolute/owner-private/taira/update-output
+
+The deployment record contains the approved SSH route and public host-key pins,
+network and directory identities, and the exact completed predecessor receipt.
+Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
+preserves configuration, signer custody and ledger state, and verifies native
+Strict snapshot restoration and public basic health. It does not invoke Cargo.
+`--plan-only` writes the concrete plan locally without contacting the host.
+
+Local and guest locks serialize updates. Each operation retains its own staging
+and evidence paths, so a failed transfer or lock conflict can use the same
+completed binaries in a fresh operation after inspection. Failed stages remain
+on disk. An interrupted runtime mutation requires recovery before another update;
+there is no automatic rollback to earlier execution rules after candidate start.
+A successful update emits `next-deployment.json` for the next invocation. Confirm
+an application transaction as state-resolved Applied after installation.
+
+Validate this controller without Cargo or network:
+
+    python3 -B scripts/tests/taira_update_test.py
+
 ## Deployment capacity and retrying an unchanged release
 
 Keep the build identity separate from the deployment attempt. A storage or host
