@@ -41,6 +41,9 @@ directory for each invocation and reports the current phase and elapsed time
 every 30 seconds. Native failures report an operation and errno when available;
 arbitrary stderr stays in the private log path.
 
+The approved guest must provide executable `/usr/bin/curl`; both guest entry
+points check this prerequisite before deployment work or output creation.
+
 ## Operator plan
 
 The plan schema is `taira.same-artifact-retry.v1`. All values describe public
@@ -201,6 +204,12 @@ process, executable, listener and configuration identity checks. Only native
 private TOML. Transient startup responses have three attempts within a shared
 30-second deadline, while invalid identities and successful malformed responses
 fail immediately.
+
+Boot persistence repairs an enabled nginx link to `/usr/lib/systemd/system/nginx.service`
+by running `systemctl reenable /etc/systemd/system/nginx.service` against the
+authenticated installed fragment. It records intent before the repair, requires
+the canonical link afterward, and verifies unchanged live processes and fragments;
+it does not restart services.
 
 Because the deployment's files already exist, the completed route admits only
 64 MiB for remaining evidence plus guest/backing reserves, instead of charging

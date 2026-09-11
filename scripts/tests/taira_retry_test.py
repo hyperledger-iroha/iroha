@@ -1405,6 +1405,155 @@ class WorkflowTests(unittest.TestCase):
 
 
 
+class PublicProbePrerequisiteTests(unittest.TestCase):
+    def test_missing_curl_is_rejected(self):
+        with mock.patch.object(retry.Path, "is_file", return_value=False), \
+             mock.patch.object(retry.os, "access") as access:
+            with self.assertRaisesRegex(retry.RetryError, "/usr/bin/curl is unavailable"):
+                retry.require_public_probe_curl()
+        access.assert_not_called()
+
+    def test_nonexecutable_curl_is_rejected(self):
+        with mock.patch.object(retry.Path, "is_file", return_value=True), \
+             mock.patch.object(retry.os, "access", return_value=False) as access:
+            with self.assertRaisesRegex(retry.RetryError, "/usr/bin/curl is unavailable"):
+                retry.require_public_probe_curl()
+        access.assert_called_once_with("/usr/bin/curl", os.X_OK)
+
+    def test_executable_curl_is_accepted(self):
+        with mock.patch.object(retry.Path, "is_file", return_value=True), \
+             mock.patch.object(retry.os, "access", return_value=True) as access:
+            retry.require_public_probe_curl()
+        access.assert_called_once_with("/usr/bin/curl", os.X_OK)
+
+    def test_guest_entrypoints_check_curl_before_work_or_output_creation(self):
+        mac = "aa:bb:cc:dd:ee:ff"
+        request = {"intent": "retirement", "plan": {"expected_mac": mac}}
+        for entry in (retry.guest_admit, retry.guest_run):
+            with self.subTest(entry=entry.__name__), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(retry.os, "geteuid", return_value=0))
+                stack.enter_context(mock.patch.object(retry.sys, "platform", "linux"))
+                stack.enter_context(mock.patch.object(retry.platform, "machine", return_value="aarch64"))
+                stack.enter_context(mock.patch.object(retry.Path, "glob", return_value=[SimpleNamespace(read_text=lambda: mac)]))
+                stack.enter_context(mock.patch.object(retry.Path, "is_file", return_value=False))
+                untouched = [stack.enter_context(mock.patch.object(owner, name)) for owner, name in (
+                    (retry, "direct"), (retry, "capacity_module"),
+                    (retry.Path, "mkdir"), (retry.os, "umask"),
+                )]
+                with self.assertRaisesRegex(retry.RetryError, "/usr/bin/curl is unavailable"):
+                    entry(request)
+                for operation in untouched:
+                    operation.assert_not_called()
+
+    def test_guest_identity_is_checked_before_curl(self):
+        request = {"intent": "retirement", "plan": {"expected_mac": "aa:bb:cc:dd:ee:ff"}}
+        for entry in (retry.guest_admit, retry.guest_run):
+            with self.subTest(entry=entry.__name__), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(retry.os, "geteuid", return_value=0))
+                stack.enter_context(mock.patch.object(retry.sys, "platform", "linux"))
+                stack.enter_context(mock.patch.object(retry.platform, "machine", return_value="aarch64"))
+                stack.enter_context(mock.patch.object(retry.Path, "glob", return_value=[]))
+                guard = stack.enter_context(mock.patch.object(retry, "require_public_probe_curl"))
+                with self.assertRaisesRegex(retry.RetryError, "guest identity differs"):
+                    entry(request)
+                guard.assert_not_called()
+
+
+class BootPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.prior = {
+            "path": "/etc/systemd/system/multi-user.target.wants/nginx.service",
+            "target": "/usr/lib/systemd/system/nginx.service",
+            "uid": 0,
+            "metadata": {"inode": 123},
+        }
+        self.canonical = dict(self.prior, target="../nginx.service")
+        self.before = {
+            "MainPID": "42", "InvocationID": "same-invocation",
+            "ActiveEnterTimestampMonotonic": "1234", "UnitFileState": "enabled",
+            "FragmentPath": "/etc/systemd/system/nginx.service",
+        }
+        self.fragment = {"inode": 456}
+        self.events = []
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.link = self.stack.enter_context(mock.patch.object(
+            retry, "_boot_link", side_effect=[self.prior, self.canonical]
+        ))
+        self.state = self.stack.enter_context(mock.patch.object(
+            retry, "_boot_state", side_effect=[self.before, self.before]
+        ))
+        self.fragment_read = self.stack.enter_context(mock.patch.object(
+            retry, "_boot_fragment", return_value=self.fragment
+        ))
+        self.stack.enter_context(mock.patch.object(
+            retry, "_boot_write", side_effect=lambda name, value: self.events.append((name, value))
+        ))
+        def run(argv, **kwargs):
+            self.events.append(("command", argv))
+            return subprocess.CompletedProcess(argv, 0)
+        self.run = self.stack.enter_context(mock.patch.object(retry.subprocess, "run", side_effect=run))
+
+    def repair(self):
+        retry._boot_reenable_nginx(self.prior, self.before, "a" * 64, self.fragment)
+
+    def test_vendor_nginx_repair_records_intent_then_reenables_exact_fragment(self):
+        self.repair()
+        self.assertEqual([name for name, _ in self.events], [
+            "reenable-intent.json", "command", "reenable-result.json"
+        ])
+        self.assertEqual(self.events[0][1]["prior_link"], self.prior)
+        self.assertEqual(self.events[0][1]["fragment_sha256"], "a" * 64)
+        self.assertIs(self.events[0][1]["used_now"], False)
+        self.assertEqual(self.events[1][1], [
+            "/usr/bin/systemctl", "reenable", "/etc/systemd/system/nginx.service"
+        ])
+        self.assertEqual(self.run.call_args.kwargs["timeout"], 45)
+        self.assertEqual(self.events[2][1], {"exit_code": 0, "units": ["nginx.service"], "used_now": False})
+
+    def test_only_exact_observed_vendor_link_can_be_repaired(self):
+        for target in ("/lib/systemd/system/nginx.service", "/tmp/nginx.service", "../nginx.service"):
+            with self.subTest(target=target):
+                self.prior["target"] = target
+                with self.assertRaisesRegex(RuntimeError, "unexpected nginx boot link repair"):
+                    self.repair()
+        self.assertEqual(self.events, [])
+        self.run.assert_not_called()
+
+    def test_vendor_target_remains_invalid_as_final_link(self):
+        self.link.side_effect = [self.prior, self.prior]
+        with self.assertRaisesRegex(RuntimeError, "enabled unit link points elsewhere"):
+            self.repair()
+        self.assertEqual(self.events[-1][0], "reenable-result.json")
+
+    def test_repair_rejects_identity_change_before_mutation(self):
+        self.link.side_effect = [dict(self.prior, metadata={"inode": 999})]
+        with self.assertRaisesRegex(RuntimeError, "nginx boot repair identity changed"):
+            self.repair()
+        self.run.assert_not_called()
+        self.assertEqual([name for name, _ in self.events], ["reenable-intent.json"])
+
+    def test_repair_rejects_process_or_fragment_change_after_mutation(self):
+        for field in ("MainPID", "InvocationID", "ActiveEnterTimestampMonotonic", "FragmentPath"):
+            with self.subTest(field=field):
+                self.link.side_effect = [self.prior]
+                self.state.side_effect = [self.before, dict(self.before, **{field: "changed"})]
+                with self.assertRaisesRegex(RuntimeError, "live unit process or loaded fragment changed"):
+                    self.repair()
+        self.link.side_effect = [self.prior]
+        self.state.side_effect = [self.before, self.before]
+        self.fragment_read.side_effect = [self.fragment, {"inode": 999}]
+        with self.assertRaisesRegex(RuntimeError, "signed fragment bytes or metadata changed"):
+            self.repair()
+
+    def test_failed_reenable_preserves_intent_and_result(self):
+        self.run.side_effect = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1)
+        with self.assertRaisesRegex(RuntimeError, "systemctl reenable failed; preserve private evidence"):
+            self.repair()
+        self.assertEqual([name for name, _ in self.events], ["reenable-intent.json", "reenable-result.json"])
+        self.assertEqual(self.events[-1][1]["exit_code"], 1)
+
+
 class MainOrderTests(unittest.TestCase):
     def run_main(self, *, completed=False, backing_pass=True, retirement_schema=None):
         with tempfile.TemporaryDirectory() as temporary:

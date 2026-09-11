@@ -3092,7 +3092,7 @@ def _boot_fragment(unit, sha):
     return _boot_stamp(path.lstat())
 
 
-def _boot_enabled_link(unit):
+def _boot_link(unit):
     parent = Path("/etc/systemd/system/multi-user.target.wants")
     _boot_direct(parent)
     path = parent / unit
@@ -3102,11 +3102,70 @@ def _boot_enabled_link(unit):
         "enabled unit link custody differs",
     )
     target = os.readlink(path)
+    _boot_need(_boot_stamp(path.lstat()) == _boot_stamp(m), "enabled unit link changed")
+    return {
+        "path": str(path),
+        "target": target,
+        "uid": m.st_uid,
+        "metadata": _boot_stamp(m),
+    }
+
+
+def _boot_enabled_link(unit):
+    link = _boot_link(unit)
     _boot_need(
-        target in ("../" + unit, str(Path("/etc/systemd/system") / unit)),
+        link["target"] in ("../" + unit, str(Path("/etc/systemd/system") / unit)),
         "enabled unit link points elsewhere",
     )
-    return {"path": str(path), "target": target, "uid": m.st_uid}
+    return {key: link[key] for key in ("path", "target", "uid")}
+
+
+def _boot_reenable_nginx(prior_link, before, fragment_sha, fragment_metadata):
+    unit = "nginx.service"
+    fragment_path = "/etc/systemd/system/nginx.service"
+    _boot_need(
+        prior_link["path"] == "/etc/systemd/system/multi-user.target.wants/nginx.service"
+        and prior_link["target"] == "/usr/lib/systemd/system/nginx.service"
+        and before["UnitFileState"] == "enabled"
+        and before["FragmentPath"] == fragment_path,
+        "unexpected nginx boot link repair",
+    )
+    _boot_write(
+        "reenable-intent.json",
+        {
+            "unit": unit,
+            "fragment_path": fragment_path,
+            "fragment_sha256": fragment_sha,
+            "prior_link": prior_link,
+            "used_now": False,
+        },
+    )
+    _boot_need(
+        _boot_link(unit) == prior_link
+        and _boot_state(unit) == before
+        and _boot_fragment(unit, fragment_sha) == fragment_metadata,
+        "nginx boot repair identity changed",
+    )
+    done = subprocess.run(
+        ["/usr/bin/systemctl", "reenable", fragment_path],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=45,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+    )
+    _boot_write(
+        "reenable-result.json",
+        {"exit_code": done.returncode, "units": [unit], "used_now": False},
+    )
+    _boot_need(
+        done.returncode == 0, "systemctl reenable failed; preserve private evidence"
+    )
+    _boot_invariants(before, _boot_state(unit))
+    _boot_need(
+        _boot_fragment(unit, fragment_sha) == fragment_metadata,
+        "signed fragment bytes or metadata changed",
+    )
+    _boot_enabled_link(unit)
 
 
 def _boot_process_start_ticks(pid):
@@ -3274,9 +3333,17 @@ def _boot_main(request):
         "validator restarted since actual post-start proof",
     )
     selectors = {row["systemd_unit"]: _boot_selector(row) for row in pre["nodes"]}
+    repairs = {}
     for unit in BOOT_UNITS:
         if before[unit]["UnitFileState"] == "enabled":
-            _boot_enabled_link(unit)
+            link = _boot_link(unit)
+            if (
+                unit == "nginx.service"
+                and link["target"] == "/usr/lib/systemd/system/nginx.service"
+            ):
+                repairs[unit] = link
+            else:
+                _boot_enabled_link(unit)
     BOOT_OUT.mkdir(mode=0o700)
     _boot_write(
         "before.json",
@@ -3290,6 +3357,13 @@ def _boot_main(request):
     disabled = [
         unit for unit in BOOT_UNITS if before[unit]["UnitFileState"] == "disabled"
     ]
+    if repairs:
+        _boot_reenable_nginx(
+            repairs["nginx.service"],
+            before["nginx.service"],
+            hashes["nginx.service"],
+            metadata["nginx.service"],
+        )
     if disabled:
         done = subprocess.run(
             ["/usr/bin/systemctl", "enable", *disabled],
@@ -3332,7 +3406,9 @@ def _boot_main(request):
         "genesis_hash": BOOT_GENESIS,
         "passed": True,
         "enabled_units": list(BOOT_UNITS),
-        "changed_units": disabled,
+        "changed_units": [
+            unit for unit in BOOT_UNITS if unit in disabled or unit in repairs
+        ],
         "signed_fragments_unchanged": True,
         "main_pids_unchanged": True,
         "process_start_ticks_unchanged": True,
@@ -4050,6 +4126,13 @@ def validate_execution_capacity(request, capacity, postconditions, resume_id):
                     and resume_id == expected, "deployment must resume its exact retired attempt")
 
 
+def require_public_probe_curl():
+    require(
+        Path("/usr/bin/curl").is_file() and os.access("/usr/bin/curl", os.X_OK),
+        "required public-probe executable /usr/bin/curl is unavailable",
+    )
+
+
 def guest_admit(request):
     """Read-only admission selects retirement or deployment capacity explicitly."""
     intent = execution_intent(request)
@@ -4068,6 +4151,7 @@ def guest_admit(request):
         },
         "guest identity differs from approved runtime",
     )
+    require_public_probe_curl()
     inventory_path = direct(plan["previous_inventory"])
     inventory = decode(public_record(inventory_path, owner=0, private=True))
     require_same_inventory_artifacts(inventory, request["binary"], request["source"])
@@ -4234,6 +4318,7 @@ def guest_run(request):
         },
         "guest identity differs from the approved runtime plan",
     )
+    require_public_probe_curl()
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     capacity = capacity_module(request["capacity_source"])
