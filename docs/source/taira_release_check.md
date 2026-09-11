@@ -35,7 +35,8 @@ Contract view and simulation requests must bind the execution authority to the
 authenticated caller before routing or VM work. Both scopes exercise the direct,
 dynamic and delegated view paths, reject forged callers from online-only
 observers, and prevent protected views from losing authentication through an
-unsigned HTTP upstream. These checks reuse the existing Torii unit harness.
+unsigned HTTP upstream. These checks run in the early startup preflight and
+reuse the existing Torii unit harness.
 
 Both scopes compile the identical configuration, crypto, P2P, CLI, daemon, Core,
 proof, Torii and consensus harness graph plus native shipping binaries with six

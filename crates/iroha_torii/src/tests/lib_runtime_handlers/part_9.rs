@@ -2212,7 +2212,7 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
             .expect("protected route response");
         assert_eq!(
             response.status(),
-            StatusCode::FORBIDDEN,
+            StatusCode::UNAUTHORIZED,
             "{path} must authenticate the bounded raw body before DTO decoding"
         );
     }

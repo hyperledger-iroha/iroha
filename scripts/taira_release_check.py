@@ -546,6 +546,14 @@ TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation"
     "mcp::tests::whole_catalog_publishes_self_contained_input_schemas",
     "mcp::tests::registry_security::tools_list_list_changed_tracks_toolset_version",
 )),)
+TORII_STARTUP_STAGES += (("contract read authority and delegated ingress", (
+    "tests_runtime_handlers::contract_route_mounts_authenticate_mutation_and_compute_before_decode",
+    "tests_runtime_handlers::contract_compute_routes_bind_authenticated_authority_before_work",
+    "tests_runtime_handlers::torii_delegated_reads_reject_online_only_observers",
+    "torii_routed_read_tests::routed_contract_views_require_bound_caller",
+    "torii_routed_read_tests::protected_contract_views_ignore_unsigned_public_upstream",
+    "app_api::tests::contract_view_dispatch_requires_bound_authenticated_authority",
+)),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
     "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
     "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
@@ -569,14 +577,7 @@ TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isol
     "tests_runtime_handlers::transaction_details_rejects_unsigned_and_broadened_queries",
 )),)
 
-TORII_UNIT_STAGES += (("contract read authority and delegated ingress", (
-    "tests_runtime_handlers::contract_route_mounts_authenticate_mutation_and_compute_before_decode",
-    "tests_runtime_handlers::contract_compute_routes_bind_authenticated_authority_before_work",
-    "tests_runtime_handlers::torii_delegated_reads_reject_online_only_observers",
-    "torii_routed_read_tests::routed_contract_views_require_bound_caller",
-    "torii_routed_read_tests::protected_contract_views_ignore_unsigned_public_upstream",
-    "app_api::tests::contract_view_dispatch_requires_bound_authenticated_authority",
-)),)
+
 
 CORE_STAGES += (("native storage and workload Initial executor admission", (
     "smartcontracts::isi::registry_dispatch_tests::every_soracloud_wire_instruction_has_a_reviewed_initial_disposition",
