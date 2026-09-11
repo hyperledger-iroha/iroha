@@ -626,7 +626,7 @@ impl ToolSpec {
         );
         obj.insert(
             "inputSchema".into(),
-            sanitize_tool_input_schema(&self.input_schema),
+            advertised_tool_input_schema(&self.input_schema),
         );
         obj.insert("outputSchema".into(), default_tool_output_schema());
         let semantics = tool_semantics(self);
@@ -709,6 +709,152 @@ fn tool_semantics(tool: &ToolSpec) -> ToolSemantics {
     )
     .expect("MCP semantic classifier must preserve operation/mutation invariants")
 }
+// Visit only JSON Schema subschemas. Values of const/enum/default/examples and
+// extension metadata are application data, even when they contain schema keys.
+fn visit_schema_children(schema: &mut Map, depth: usize, mut visit: impl FnMut(&mut Value, usize)) {
+    for (keyword, value) in schema {
+        match keyword.as_str() {
+            "properties" | "patternProperties" | "dependentSchemas" | "$defs" | "definitions"
+            | "dependencies" => {
+                if let Some(children) = value.as_object_mut() {
+                    for child in children.values_mut() {
+                        // Legacy dependencies can also contain property-name arrays.
+                        if child.is_object() || matches!(child, Value::Bool(_)) {
+                            visit(child, depth + 2);
+                        }
+                    }
+                }
+            }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                if let Some(children) = value.as_array_mut() {
+                    for child in children {
+                        visit(child, depth + 2);
+                    }
+                }
+            }
+            "items" if value.is_array() => {
+                for child in value.as_array_mut().expect("schema array") {
+                    visit(child, depth + 2);
+                }
+            }
+            "additionalProperties"
+            | "additionalItems"
+            | "items"
+            | "contains"
+            | "propertyNames"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "unevaluatedProperties"
+            | "unevaluatedItems"
+            | "contentSchema" => {
+                visit(value, depth + 1);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn advertised_tool_input_schema(schema: &Value) -> Value {
+    // Norito permits 32 nested JSON containers. Keep each schema segment within
+    // 12 containers, including its root/$defs placement, leaving space for the
+    // descriptor, JSON-RPC envelope, and literal keyword values. Literal data
+    // remains subject to the final serializer's unchanged depth/byte bounds.
+    const MAX_SCHEMA_SEGMENT_DEPTH: usize = 12;
+
+    fn factor(
+        schema: &mut Value,
+        depth: usize,
+        definitions: &mut Map,
+        reserved: &mut BTreeSet<String>,
+        next: &mut usize,
+        scoped_references: &mut bool,
+    ) {
+        let Some(object) = schema.as_object_mut() else {
+            return;
+        };
+        *scoped_references |= [
+            "$id",
+            "id",
+            "$anchor",
+            "$dynamicAnchor",
+            "$ref",
+            "$dynamicRef",
+            "$recursiveRef",
+        ]
+        .iter()
+        .any(|keyword| object.contains_key(*keyword));
+        *scoped_references |= object.get("$defs").is_some_and(|value| !value.is_object());
+        if depth >= MAX_SCHEMA_SEGMENT_DEPTH {
+            let name = loop {
+                let name = format!("mcp_schema_{next}");
+                *next += 1;
+                if reserved.insert(name.clone()) {
+                    break name;
+                }
+            };
+            let mut definition = std::mem::replace(schema, Value::Null);
+            // inputSchema -> $defs -> definition: three JSON containers.
+            factor(
+                &mut definition,
+                3,
+                definitions,
+                reserved,
+                next,
+                scoped_references,
+            );
+            definitions.insert(name.clone(), definition);
+            *schema = norito::json!({ "$ref": (format!("#/$defs/{name}")) });
+        } else {
+            visit_schema_children(object, depth, |child, child_depth| {
+                factor(
+                    child,
+                    child_depth,
+                    definitions,
+                    reserved,
+                    next,
+                    scoped_references,
+                );
+            });
+        }
+    }
+
+    let original = sanitize_tool_input_schema(schema);
+    let mut advertised = original.clone();
+    let mut reserved = advertised
+        .get("$defs")
+        .and_then(Value::as_object)
+        .map(|definitions| definitions.keys().cloned().collect())
+        .unwrap_or_default();
+    let mut definitions = Map::new();
+    let mut scoped_references = false;
+    factor(
+        &mut advertised,
+        1,
+        &mut definitions,
+        &mut reserved,
+        &mut 0,
+        &mut scoped_references,
+    );
+    // Registry schemas are expanded and ref-free. Preserve any future resource
+    // identifiers verbatim rather than changing their reference resolution base.
+    if scoped_references {
+        return original;
+    }
+    if !definitions.is_empty() {
+        let root = advertised.as_object_mut().expect("factored schema object");
+        let existing = root
+            .entry("$defs".into())
+            .or_insert_with(|| Value::Object(Map::new()));
+        existing
+            .as_object_mut()
+            .expect("schema definitions object")
+            .extend(definitions);
+    }
+    advertised
+}
+
 fn sanitize_tool_input_schema(schema: &Value) -> Value {
     let root = match schema {
         Value::Object(map) => map,
@@ -2252,12 +2398,22 @@ fn handle_tools_list(
             Err(BoundedJsonError::BodyTooLarge) => {
                 return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
             }
-            Err(_) => {
+            Err(error) => {
+                let error_class = match error {
+                    BoundedJsonError::Unsupported => "unsupported",
+                    BoundedJsonError::LengthMismatch => "length_mismatch",
+                    BoundedJsonError::AllocationFailed => "allocation_failed",
+                    BoundedJsonError::BodyTooLarge => unreachable!("handled above"),
+                };
                 return jsonrpc_error_response(
                     id,
                     JSONRPC_INTERNAL_ERROR,
                     "MCP tool descriptor cannot be serialized within its response envelope",
-                    Some(norito::json!({ "error_code": "response_serialization_failed" })),
+                    Some(norito::json!({
+                        "error_code": "response_serialization_failed",
+                        "tool": (tool.name.as_str()),
+                        "serialization_error": error_class
+                    })),
                 );
             }
         };

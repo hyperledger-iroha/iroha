@@ -522,6 +522,10 @@ TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation"
 )), ("actual public MCP catalogue and response bounds", (
     "mcp::tests::tools_list_writer_catalog_roundtrips_through_modern_http_byte_limit",
     "mcp::tests::tools_list_byte_budget_includes_envelope_and_rejects_oversized_single_tool",
+    "mcp::tests::advertised_schema_factoring_preserves_subschemas_and_literal_values",
+    "mcp::tests::musubi_v1_mcp_bodies_are_self_contained_closed_schemas",
+    "mcp::tests::whole_catalog_publishes_self_contained_input_schemas",
+    "mcp::tests::tools_list_list_changed_tracks_toolset_version",
 )),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",

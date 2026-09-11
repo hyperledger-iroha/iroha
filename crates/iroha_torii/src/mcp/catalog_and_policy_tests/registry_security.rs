@@ -950,6 +950,13 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
             .get("inputSchema")
             .cloned()
             .expect("tool inputSchema");
+        let input_schema = expand_advertised_schema_refs(&input_schema);
+        assert_eq!(
+            input_schema,
+            sanitize_tool_input_schema(&matching[0].input_schema),
+            "{} advertised references must preserve every request constraint",
+            definition.name
+        );
         let root = input_schema.as_object().expect("tool inputSchema object");
         assert!(!root.contains_key(MCP_STRICT_BODY_SCHEMA_EXTENSION));
         assert_eq!(

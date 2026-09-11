@@ -241,6 +241,10 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
                     layer
                         .write(["torii", "mcp", "enabled"], true)
                         .write(["torii", "mcp", "profile"], "writer")
+                        .write(
+                            ["torii", "mcp", "allow_tool_prefixes"],
+                            toml::Value::Array(vec![toml::Value::String("iroha.".to_owned())]),
+                        )
                         .write(["snapshot", "mode"], "read_write")
                         .write(["snapshot", "store_dir"], "./storage/snapshot")
                         .write(["snapshot", "create_every_ms"], 1_000_i64)

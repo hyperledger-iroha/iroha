@@ -1,3 +1,84 @@
+fn expand_advertised_schema_refs(schema: &Value) -> Value {
+    fn expand(value: &Value, root: &Value, active: &mut BTreeSet<String>) -> Value {
+        match value {
+            Value::Object(object) => {
+                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                    assert_eq!(
+                        object.len(),
+                        1,
+                        "factored references have no sibling keywords"
+                    );
+                    assert!(
+                        reference.starts_with("#/$defs/"),
+                        "external reference: {reference}"
+                    );
+                    assert!(
+                        active.insert(reference.to_owned()),
+                        "cyclic reference: {reference}"
+                    );
+                    let target = root
+                        .pointer(&reference[1..])
+                        .expect("self-contained reference");
+                    let expanded = expand(target, root, active);
+                    active.remove(reference);
+                    return expanded;
+                }
+                Value::Object(
+                    object
+                        .iter()
+                        .map(|(key, value)| {
+                            let value = match key.as_str() {
+                                "properties" | "patternProperties" | "dependentSchemas"
+                                | "$defs" | "definitions" | "dependencies" => Value::Object(
+                                    value
+                                        .as_object()
+                                        .expect("schema map")
+                                        .iter()
+                                        .map(|(name, child)| {
+                                            (name.clone(), expand(child, root, active))
+                                        })
+                                        .collect(),
+                                ),
+                                "allOf"
+                                | "anyOf"
+                                | "oneOf"
+                                | "prefixItems"
+                                | "additionalProperties"
+                                | "additionalItems"
+                                | "items"
+                                | "contains"
+                                | "propertyNames"
+                                | "not"
+                                | "if"
+                                | "then"
+                                | "else"
+                                | "unevaluatedProperties"
+                                | "unevaluatedItems"
+                                | "contentSchema" => expand(value, root, active),
+                                _ => value.clone(),
+                            };
+                            (key.clone(), value)
+                        })
+                        .collect(),
+                )
+            }
+            Value::Array(values) => Value::Array(
+                values
+                    .iter()
+                    .map(|value| expand(value, root, active))
+                    .collect(),
+            ),
+            _ => value.clone(),
+        }
+    }
+    let mut expanded = expand(schema, schema, &mut BTreeSet::new());
+    expanded
+        .as_object_mut()
+        .expect("input schema object")
+        .remove("$defs");
+    expanded
+}
+
 async fn modern_doctor_tools_page(app: &SharedAppState, cursor: Option<&str>) -> Value {
     use http_body_util::BodyExt as _;
     use iroha_torii_shared::mcp as wire;
@@ -90,67 +171,191 @@ async fn modern_doctor_tools_page(app: &SharedAppState, cursor: Option<&str>) ->
 
 #[tokio::test]
 async fn tools_list_writer_catalog_roundtrips_through_modern_http_byte_limit() {
-    let mut app = mk_app_state_for_tests();
-    {
-        let state = Arc::get_mut(&mut app).expect("exclusive fixture");
-        state.mcp = iroha_config::parameters::actual::ToriiMcp::default();
-        state.mcp.profile = ToriiMcpProfile::Writer;
-        state.mcp_tools = Arc::new(build_tool_specs(&state.mcp));
+    for prefixes in [Vec::new(), vec!["iroha.".to_owned()]] {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("exclusive fixture");
+            state.mcp = iroha_config::parameters::actual::ToriiMcp::default();
+            state.mcp.profile = ToriiMcpProfile::Writer;
+            state.mcp.allow_tool_prefixes = prefixes;
+            state.mcp_tools = Arc::new(build_tool_specs(&state.mcp));
+        }
+        assert_eq!(app.mcp.max_request_bytes, 1_048_576);
+        assert_eq!(app.mcp.max_tools_per_list, 500);
+        let expected = visible_tools_for_app(&app)
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        assert!(!expected.is_empty());
+        let expected_schemas = visible_tools_for_app(&app)
+            .iter()
+            .map(|tool| {
+                (
+                    tool.name.clone(),
+                    sanitize_tool_input_schema(&tool.input_schema),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut names = Vec::new();
+        let mut cursor = None;
+        let mut pages = 0;
+        loop {
+            assert!(pages < 64, "catalog exceeds the doctor page bound");
+            let payload = modern_doctor_tools_page(&app, cursor.as_deref()).await;
+            pages += 1;
+            let tools = payload
+                .pointer("/result/tools")
+                .and_then(Value::as_array)
+                .expect("tools array");
+            assert!(!tools.is_empty(), "an advertised cursor must make progress");
+            assert!(tools.len() <= app.mcp.max_tools_per_list);
+            names.extend(tools.iter().map(|tool| {
+                let name = tool.get("name").and_then(Value::as_str).expect("name");
+                let advertised = tool.get("inputSchema").expect("advertised schema");
+                assert_eq!(
+                    &expand_advertised_schema_refs(advertised),
+                    expected_schemas.get(name).expect("visible tool"),
+                    "advertisement must preserve the complete validation schema for {name}"
+                );
+                name.to_owned()
+            }));
+            let Some(next) = payload.pointer("/result/nextCursor") else {
+                break;
+            };
+            let next = next.as_str().expect("decimal cursor");
+            assert_eq!(next, names.len().to_string());
+            cursor = Some(next.to_owned());
+        }
+        assert_eq!(
+            names, expected,
+            "pagination must neither omit nor duplicate actual registry tools"
+        );
+        eprintln!(
+            "Writer MCP catalog {:?}: {} tools, {pages} bounded modern HTTP pages",
+            app.mcp.allow_tool_prefixes,
+            names.len()
+        );
+        for required in [
+            "iroha.health",
+            "iroha.accounts.get",
+            "iroha.accounts.assets",
+            "iroha.assets.definitions.get",
+            "iroha.transactions.submit",
+            "iroha.transactions.submit_and_wait",
+        ] {
+            assert!(
+                names.iter().any(|name| name == required),
+                "missing {required}"
+            );
+        }
     }
-    assert_eq!(app.mcp.max_request_bytes, 1_048_576);
-    assert_eq!(app.mcp.max_tools_per_list, 500);
-    let expected = visible_tools_for_app(&app)
-        .iter()
-        .map(|tool| tool.name.clone())
-        .collect::<Vec<_>>();
-    assert!(!expected.is_empty());
-    let mut names = Vec::new();
-    let mut cursor = None;
-    let mut pages = 0;
-    loop {
-        assert!(pages < 64, "catalog exceeds the doctor page bound");
-        let payload = modern_doctor_tools_page(&app, cursor.as_deref()).await;
-        pages += 1;
-        let tools = payload
-            .pointer("/result/tools")
-            .and_then(Value::as_array)
-            .expect("tools array");
-        assert!(!tools.is_empty(), "an advertised cursor must make progress");
-        assert!(tools.len() <= app.mcp.max_tools_per_list);
-        names.extend(tools.iter().map(|tool| {
-            tool.get("name")
-                .and_then(Value::as_str)
-                .expect("name")
-                .to_owned()
-        }));
-        let Some(next) = payload.pointer("/result/nextCursor") else {
-            break;
-        };
-        let next = next.as_str().expect("decimal cursor");
-        assert_eq!(next, names.len().to_string());
-        cursor = Some(next.to_owned());
+}
+
+#[test]
+fn advertised_schema_factoring_preserves_subschemas_and_literal_values() {
+    let literal = norito::json!({
+        "$ref": "this is literal data, not a schema reference",
+        "properties": { "items": { "const": { "type": "object" } } }
+    });
+    let leaf = norito::json!({
+        "type": "object", "const": (literal.clone()), "enum": [(literal.clone())],
+        "default": (literal.clone()), "examples": [(literal.clone())],
+        "x-opaque": (literal.clone())
+    });
+    let mut nested = leaf;
+    for _ in 0..18 {
+        nested = Value::Object(Map::from([
+            ("type".into(), Value::from("object")),
+            (
+                "properties".into(),
+                Value::Object(Map::from([("child".into(), nested)])),
+            ),
+        ]));
     }
-    assert_eq!(
-        names, expected,
-        "pagination must neither omit nor duplicate actual registry tools"
-    );
-    eprintln!(
-        "Writer MCP catalog: {} tools, {pages} bounded modern HTTP pages",
-        names.len()
-    );
-    for required in [
-        "iroha.health",
-        "iroha.accounts.get",
-        "iroha.accounts.assets",
-        "iroha.assets.definitions.get",
-        "iroha.transactions.submit",
-        "iroha.transactions.submit_and_wait",
+    let mut schema = norito::json!({ "type": "object", "properties": {} });
+    let root = schema.as_object_mut().expect("schema");
+    for keyword in [
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+        "definitions",
+        "dependencies",
     ] {
-        assert!(
-            names.iter().any(|name| name == required),
-            "missing {required}"
+        root.insert(
+            keyword.into(),
+            Value::Object(Map::from([("child".into(), nested.clone())])),
         );
     }
+    for keyword in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        root.insert(keyword.into(), Value::Array(vec![nested.clone()]));
+    }
+    for keyword in [
+        "additionalProperties",
+        "additionalItems",
+        "items",
+        "contains",
+        "propertyNames",
+        "not",
+        "if",
+        "then",
+        "else",
+        "unevaluatedProperties",
+        "unevaluatedItems",
+        "contentSchema",
+    ] {
+        root.insert(keyword.into(), nested.clone());
+    }
+    root.insert(
+        "$defs".into(),
+        norito::json!({ "mcp_schema_0": { "type": "string" } }),
+    );
+    root.get_mut("dependencies")
+        .and_then(Value::as_object_mut)
+        .expect("dependencies")
+        .insert("names".into(), norito::json!(["other"]));
+    let sanitized = sanitize_tool_input_schema(&schema);
+    let advertised = advertised_tool_input_schema(&schema);
+    assert_eq!(
+        advertised,
+        advertised_tool_input_schema(&schema),
+        "deterministic definitions"
+    );
+    assert_eq!(
+        advertised.pointer("/$defs/mcp_schema_0"),
+        sanitized.pointer("/$defs/mcp_schema_0"),
+        "existing definitions are not overwritten"
+    );
+    let mut expected = sanitized;
+    expected.as_object_mut().expect("schema").remove("$defs");
+    assert_eq!(expand_advertised_schema_refs(&advertised), expected);
+    let envelope = norito::json!({ "jsonrpc": "2.0", "id": 2, "result": { "tools": [{ "inputSchema": advertised }] } });
+    assert!(json::to_json_bounded_boxed(&envelope, 1_048_576).is_ok());
+
+    // Tuple-form items is a schema array; dependency-name arrays remain data.
+    let tuple = Value::Object(Map::from([
+        ("type".into(), Value::from("object")),
+        (
+            "properties".into(),
+            Value::Object(Map::from([(
+                "body".into(),
+                Value::Object(Map::from([("items".into(), Value::Array(vec![nested]))])),
+            )])),
+        ),
+    ]));
+    assert_eq!(
+        expand_advertised_schema_refs(&advertised_tool_input_schema(&tuple)),
+        sanitize_tool_input_schema(&tuple)
+    );
+    // Moving schemas across a resource identifier would alter reference scope.
+    let mut scoped = schema;
+    scoped
+        .as_object_mut()
+        .expect("schema")
+        .insert("$id".into(), Value::from("https://example.invalid/schema"));
+    assert_eq!(
+        advertised_tool_input_schema(&scoped),
+        sanitize_tool_input_schema(&scoped)
+    );
 }
 
 #[test]
