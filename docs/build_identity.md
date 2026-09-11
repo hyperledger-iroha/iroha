@@ -67,6 +67,14 @@ working-space reserve. Cloning avoids allocating a second full set of native
 test binaries while preserving the same source and destination checks. Warm
 Cargo targets and completed attempt receipts remain retained.
 
+Authenticated preparation keeps one current Git-object source materialization per
+locked build lane. A successful refresh retains its verified predecessor until
+the new source and commit checkpoint are durably published, then removes only
+that predecessor's authenticated entries. It unlinks the capture's `target`
+binding without following it, preserving the warm Cargo lane. Interrupted
+captures and unknown retained directories remain available for recovery; normal
+successful refreshes no longer accumulate a full source tree on every edit.
+
 Basic and full Taira checks compile the same native graph and consensus harness.
 Basic runs the universal default-route transaction sequence; full also runs the
 separate-dataspace sequence. Both retain four validators, the three-dataspace

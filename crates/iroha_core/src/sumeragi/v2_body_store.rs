@@ -4562,7 +4562,32 @@ fn write_validation_outcome_marker_bound(
         &payload,
         FramePayloadKind::ValidationOutcomeMarker,
     )?;
-    directory.publish_atomic(name, &frame, FramePayloadKind::ValidationOutcomeMarker)
+    match directory.publish_atomic(name, &frame, FramePayloadKind::ValidationOutcomeMarker) {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        Err(V2BodyStoreError::AtomicDestinationExists(_)) => {
+            // A crash or affine recovery handoff can leave the durable marker
+            // without its volatile index. Reuse only the exact outcome freshly
+            // reproduced for this authenticated body; never replace the marker.
+            let leaf = directory.inspect_leaf(name, FramePayloadKind::ValidationOutcomeMarker)?;
+            let mut file = directory.open_leaf(&leaf, FramePayloadKind::ValidationOutcomeMarker)?;
+            let path = directory.context_path.join(name);
+            let retained = read_frame_payload(
+                &mut file,
+                &path,
+                VALIDATED_MAGIC,
+                FramePayloadKind::ValidationOutcomeMarker,
+            )?;
+            directory.verify_leaf(&file, name, Some(&leaf))?;
+            if retained != payload {
+                return Err(V2BodyStoreError::ValidationMarkerMismatch);
+            }
+            file.sync_all()
+                .map_err(|source| V2BodyStoreError::Io { path, source })?;
+            directory.sync_context()?;
+            directory.verify_leaf(&file, name, Some(&leaf))
+        }
+        result => result,
+    }
 }
 
 #[cfg(all(unix, not(target_os = "espidf")))]

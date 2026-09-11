@@ -624,6 +624,12 @@ CORE_ADMISSION_STARTUP_STAGES += (("completed consensus outputs after durable re
     "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
     "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_timeout_certificate_reservices_only_sealed_periodic_episode",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("current Prepare recovery and durable validation retry", (
+    "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
+    "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
+    "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
+    "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
+)),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",

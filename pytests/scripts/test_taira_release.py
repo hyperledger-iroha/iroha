@@ -610,7 +610,87 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertEqual(source, original)
             self.assertEqual((source / "same.rs").stat().st_mtime_ns, unchanged_mtime)
             self.assertEqual((source / "edit.rs").read_bytes(), b"new")
-            self.assertEqual(len(list(source.parent.glob("source.retained-*"))), 1)
+            self.assertEqual(list(source.parent.glob("source.retained-*")), [])
+
+    def test_successful_refresh_retires_only_its_previous_source_and_keeps_warm_target(self):
+        entries = self.source_entries({"nested/source.rs": ("100644", b"old"),
+                                       "source-link": ("120000", b"nested/source.rs"),
+                                       "iroha-docs": ("160000", b"")})
+        warm = self.target / "warm-artifact"
+        warm.write_bytes(b"preserve compiler cache")
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            interrupted = source.parent / ("source.retained-" + "f" * 32)
+            interrupted.mkdir()
+            (interrupted / "unknown").write_bytes(b"preserve failed attempt")
+            pending = source.parent / "source.pending-unfinished"
+            pending.mkdir()
+            (pending / "unknown").write_bytes(b"preserve partial capture")
+            previous = entries
+            for revision, payload in (("b", b"second"), ("c", b"third")):
+                updated = self.source_entries({"nested/source.rs": ("100644", payload),
+                                               "source-link": ("120000", b"nested/source.rs"),
+                                               "iroha-docs": ("160000", b"")})
+                with patch.object(release, "commit_entries", return_value=previous):
+                    release.capture_source(self.root, source, self.target, revision * 40, updated)
+                self.assertEqual(list(source.parent.glob("source.retained-*")), [interrupted])
+                self.assertEqual((source / "source-link").read_bytes(), payload)
+                self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                 {"commit": revision * 40})
+                previous = updated
+            self.assertEqual(warm.read_bytes(), b"preserve compiler cache")
+            self.assertEqual((interrupted / "unknown").read_bytes(), b"preserve failed attempt")
+            self.assertEqual((pending / "unknown").read_bytes(), b"preserve partial capture")
+
+    def test_retirement_rejects_unknown_inputs_without_deleting_them(self):
+        entries = self.source_entries({"source.rs": ("100644", b"old")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            updated = self.source_entries({"source.rs": ("100644", b"new")})
+            retire = release.retire_source_capture
+            def inject_unknown(retained, old_entries, target):
+                self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                 {"commit": "b" * 40})
+                retained.chmod(0o700)
+                (retained / "unknown").write_bytes(b"must survive")
+                retained.chmod(0o500)
+                retire(retained, old_entries, target)
+            with patch.object(release, "commit_entries", return_value=entries), \
+                 patch.object(release, "retire_source_capture", side_effect=inject_unknown):
+                with self.assertRaisesRegex(release.PrepareError, "extra inputs"):
+                    release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            retained, = source.parent.glob("source.retained-*")
+            self.assertEqual((retained / "unknown").read_bytes(), b"must survive")
+            self.assertEqual((retained / "source.rs").read_bytes(), b"old")
+            self.assertEqual((source / "source.rs").read_bytes(), b"new")
+
+    def test_checkpoint_publication_failure_retains_previous_source_for_recovery(self):
+        entries = self.source_entries({"source.rs": ("100644", b"old")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            updated = self.source_entries({"source.rs": ("100644", b"new")})
+            with patch.object(release, "commit_entries", return_value=entries), \
+                 patch.object(release.os, "replace", side_effect=OSError("fixture checkpoint failure")), \
+                 patch.object(release, "retire_source_capture") as retire:
+                with self.assertRaisesRegex(OSError, "checkpoint failure"):
+                    release.capture_source(self.root, source, self.target, "b" * 40, updated)
+                retire.assert_not_called()
+            retained, = source.parent.glob("source.retained-*")
+            self.assertEqual((retained / "source.rs").read_bytes(), b"old")
+            self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                             {"commit": "a" * 40})
+            release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                             {"commit": "b" * 40})
+            self.assertTrue(retained.is_dir())
+
+    def test_retirement_cannot_select_current_source(self):
+        entries = self.source_entries({"source.rs": ("100644", b"current")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            with self.assertRaisesRegex(release.PrepareError, "superseded source"):
+                release.retire_source_capture(source, entries, self.target)
+            self.assertEqual((source / "source.rs").read_bytes(), b"current")
 
     def test_captured_source_tampering_or_extra_files_cannot_resume(self):
         entries = self.source_entries({"source.rs": ("100644", b"signed")})

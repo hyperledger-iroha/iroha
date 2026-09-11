@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 513
+EXPECTED_REGRESSION_COUNT = 517
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -37,6 +37,11 @@ def isolate_shipping_fixture(case):
     audit = patch.object(gate, "shipping_harnesses", return_value=())
     audit.start()
     case.addCleanup(audit.stop)
+    # These byte-sized fixtures test orchestration, not the operator's disk.
+    # Capacity regressions override this observation with their exact boundary.
+    capacity = patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=16 * 1024**3))
+    capacity.start()
+    case.addCleanup(capacity.stop)
 
 
 class FixtureCopies(dict):
@@ -54,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 330)
+        self.assertEqual(gate.selected_regression_count(), 334)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -68,6 +73,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
             "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
             "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
+            "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
+            "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
+            "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
+            "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
             "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_timeout_certificate_reservices_only_sealed_periodic_episode",
             "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
             "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",

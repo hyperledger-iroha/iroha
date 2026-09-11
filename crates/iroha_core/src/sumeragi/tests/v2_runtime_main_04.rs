@@ -2410,6 +2410,215 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
 }
 
 #[test]
+fn periodic_current_prepare_retries_bind_store_and_validate_before_lock() {
+    let directory = TempDir::new().expect("temporary current Prepare recovery directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(8, 1, 1),
+        Some(0),
+    );
+    let now = Instant::now();
+    runtime
+        .arm_live_clocks(now)
+        .expect("arm current Prepare recovery");
+    let manifest = runtime_manifest(&context, 0xB7);
+    let durable = DurableBodyReceipt::for_test(
+        context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+    let prepare = signed_prepare_qc_for_runtime_statement(
+        &keys,
+        manifest.round,
+        manifest.subject,
+        commitment,
+    );
+    runtime
+        .enqueue_network(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
+        ))
+        .expect("authenticate the complete current PrepareQC");
+    let RuntimeStep::Advanced(fetch_effects) = runtime.step(now).expect("persist observed Prepare")
+    else {
+        panic!("observed Prepare unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("Prepare scheduler owner");
+    let [
+        fetch @ AdapterEffect::FetchBody {
+            tag,
+            certificate: Some(certificate),
+            ..
+        },
+    ] = fetch_effects.as_slice()
+    else {
+        panic!("current Prepare must fetch its body: {fetch_effects:?}")
+    };
+    assert_eq!(certificate, &prepare);
+    let tag = *tag;
+    let fetch_owner = runtime
+        .take_effect_ownership(fetch_effects.len())
+        .expect("certified Fetch ownership")
+        .pop()
+        .expect("one Fetch owner");
+    assert!(
+        fetch_owner
+            .exact_remote_proposal_fetch_replay(fetch)
+            .is_none()
+    );
+    let _terminals = runtime.take_leader_wire_runtime_terminals();
+    let reservation = runtime
+        .reserve_body_available_with_owner(tag, manifest.clone(), &fetch_owner)
+        .expect("reserve certified reconstruction");
+    runtime
+        .commit_body_available(reservation)
+        .expect("publish certified reconstruction");
+    let RuntimeStep::Advanced(store_effects) = runtime.step(now).expect("publish Store") else {
+        panic!("reconstruction unexpectedly idled")
+    };
+    runtime
+        .take_last_scheduler_ownership()
+        .expect("Store scheduler owner");
+    assert!(matches!(
+        store_effects.as_slice(),
+        [AdapterEffect::StoreBody { .. }]
+    ));
+    let store_owner = runtime
+        .take_effect_ownership(store_effects.len())
+        .expect("Store ownership")
+        .pop()
+        .expect("one Store owner");
+    runtime
+        .set_external_lifecycle_owners(vec![store_owner.owner().clone()])
+        .expect("retain the one physical body owner");
+
+    let mut other_subject = manifest.subject;
+    other_subject.payload_hash = Hash::new(b"another current Prepare body");
+    for unrelated in [
+        AdapterEffect::ValidateBody {
+            tag: EventTag::new(context.height, tag.view() + 1, Generation::new(1)),
+            round: manifest.round,
+            subject: manifest.subject,
+        },
+        AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: other_subject,
+        },
+    ] {
+        let candidate = runtime
+            .driver
+            .effect_candidate_semantic_binding(&unrelated, None)
+            .expect("unrelated body carrier cannot acquire current Prepare authority")
+            .expect("body stage has a candidate statement");
+        assert_eq!(candidate.statement.expect("body statement").phase, None);
+    }
+
+    for (stage, expected_kind) in [
+        (1, RUNTIME_CANDIDATE_KIND_STORE_BODY),
+        (2, RUNTIME_CANDIDATE_KIND_VALIDATE_BODY),
+    ] {
+        // ObservePrepare is durable, but neither validation nor CommitIntent
+        // has run. A periodic carrier has no inherited Fetch statement.
+        assert_eq!(
+            runtime
+                .replayed_body_authority_certificate()
+                .expect("no voting lock"),
+            None
+        );
+        assert_eq!(
+            runtime
+                .current_prepare_authority_certificate()
+                .expect("current QC"),
+            Some(prepare.clone())
+        );
+        let at = now + runtime.retransmit_interval() * stage;
+        let RuntimeStep::Advanced(effects) =
+            runtime.step(at).expect("periodic current Prepare recovery")
+        else {
+            panic!("current Prepare recovery unexpectedly idled")
+        };
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("periodic scheduler owner")
+                .selected,
+            RuntimeSelectedOwnerKind::PeriodicTimer
+        );
+        let ownership = runtime
+            .take_effect_ownership(effects.len())
+            .expect("periodic body ownership");
+        let body_owners = effects
+            .iter()
+            .zip(&ownership)
+            .filter(|(effect, _)| {
+                matches!(
+                    effect,
+                    AdapterEffect::StoreBody { .. } | AdapterEffect::ValidateBody { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        let [(effect, owner)] = body_owners.as_slice() else {
+            panic!("one exact periodic body stage expected: {effects:?}")
+        };
+        let (kind, _) =
+            production_adapter_effect_candidate_semantic_identity(effect).expect("body kind");
+        assert_eq!(kind, expected_kind);
+        let statement = owner
+            .candidate_semantic_statement()
+            .expect("periodic body statement");
+        assert_eq!(statement.phase, Some(wire::GlobalPhase::Prepare));
+        assert_eq!(statement.round, prepare.round);
+        assert_eq!(statement.proposal_round, prepare.proposal_round);
+        assert_eq!(statement.subject, Some(prepare.subject));
+        assert_eq!(
+            statement.execution_commitment,
+            Some(prepare.execution_commitment)
+        );
+        assert_ne!(
+            owner.owner(),
+            store_owner.owner(),
+            "periodic recovery retains its own causal root"
+        );
+        if stage == 1 {
+            runtime
+                .enqueue_body_stored_with_owner(
+                    tag,
+                    manifest.round,
+                    manifest.subject,
+                    durable.clone(),
+                    &store_owner,
+                )
+                .expect("complete the exact physical Store");
+            let RuntimeStep::Advanced(validate_effects) =
+                runtime.step(at).expect("publish Validate")
+            else {
+                panic!("Store completion unexpectedly idled")
+            };
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("Validate scheduler owner");
+            assert!(matches!(
+                validate_effects.as_slice(),
+                [AdapterEffect::ValidateBody { .. }]
+            ));
+            let validate_owner = runtime
+                .take_effect_ownership(validate_effects.len())
+                .expect("Validate ownership")
+                .pop()
+                .expect("one Validate owner");
+            runtime
+                .set_external_lifecycle_owners(vec![validate_owner.owner().clone()])
+                .expect("retain the physical Validate owner");
+        }
+    }
+    assert!(!runtime.fail_closed);
+}
+
+#[test]
 fn periodic_prepare_lock_retries_bind_store_and_validate_authority() {
     let directory = TempDir::new().expect("temporary periodic Prepare-lock directory");
     let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(

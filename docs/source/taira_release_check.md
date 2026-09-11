@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **330 native regressions on macOS**: startup
+`--native-check-scope basic` runs **334 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **513-case** native census,
+Use `--native-check-scope full` to execute the full **517-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -21,8 +21,11 @@ proof, Torii and consensus harness graph plus native shipping binaries with six
 Cargo jobs. This preserves the warm target and dependency feature union. Deferred
 harnesses have compile coverage only; their cases never appear as test passes.
 The basic scope defers 636 seconds of advanced test execution measured in
-preparation56. A complete successful basic run has not yet been measured. Build,
-stage and test durations remain explicit. Python 3.11+, the repository Rust
+preparation56. Preparation99 passed its then-selected 330 basic cases in 547.1
+seconds, including 245.2 seconds for the real network sequence; its warm Linux
+release build took 11 minutes 53 seconds. These are observed durations for that
+candidate, not guarantees. Build, stage and test durations remain explicit.
+Python 3.11+, the repository Rust
 toolchain and previously fetched dependencies are required; Cargo runs offline.
 
 Preparation58 passed all 298 then-selected independent native cases, but the

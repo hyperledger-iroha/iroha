@@ -11368,12 +11368,39 @@ impl RuntimeDriver for SumeragiV2Adapter {
         inherited: Option<&RuntimeCandidateSemanticStatement>,
     ) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
         let effective_inherited = match effect {
-            AdapterEffect::StoreBody { round, subject, .. }
-            | AdapterEffect::ValidateBody { round, subject, .. } => {
-                match self
-                    .replayed_body_authority_certificate()
+            AdapterEffect::StoreBody {
+                tag,
+                round,
+                subject,
+            }
+            | AdapterEffect::ValidateBody {
+                tag,
+                round,
+                subject,
+            } => {
+                // A current PrepareQC is durable before validation can promote
+                // it to the voting lock. Periodic Store/Validate carriers have
+                // no Fetch parent, so mint their statement from that exact QC
+                // here; otherwise they incorrectly appear to be ordinary
+                // Proposal work without its mandatory replay owner.
+                let current_prepare = self
+                    .current_prepare_authority_certificate()
                     .map_err(|error| error.to_string())?
-                {
+                    .filter(|certificate| {
+                        *tag == self.current_tag()
+                            && certificate.round.context_id == round.context_id
+                            && certificate.round.height == tag.height()
+                            && certificate.round.view == tag.view()
+                            && certificate.proposal_round == *round
+                            && certificate.subject == *subject
+                    });
+                let certificate = match current_prepare {
+                    Some(certificate) => Some(certificate),
+                    None => self
+                        .replayed_body_authority_certificate()
+                        .map_err(|error| error.to_string())?,
+                };
+                match certificate {
                     Some(certificate)
                         if *round == certificate.proposal_round
                             && *subject == certificate.subject =>
