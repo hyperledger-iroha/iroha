@@ -75,11 +75,16 @@ const MCP_CLIENT_NAME: &str = "iroha-taira-doctor";
 const MCP_CLIENT_VERSION: &str = "1";
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
+    "iroha.accounts.get",
+    "iroha.accounts.assets",
+    "iroha.assets.definitions.get",
+    "iroha.transactions.submit",
+    "iroha.transactions.submit_and_wait",
+];
+const FULL_MCP_TOOLS: &[&str] = &[
     "iroha.musubi.queries.exact_package",
     "iroha.musubi.queries.exact_release",
     "iroha.musubi.instructions.release_yank_set",
-    "iroha.transactions.submit",
-    "iroha.transactions.submit_and_wait",
 ];
 #[derive(Clone, Copy)]
 enum RouteCheckMethod {
@@ -184,11 +189,45 @@ impl Run for Command {
     }
 }
 /// Read-only Taira public endpoint diagnostics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(super) enum DoctorScope {
+    /// Basic account, asset, transaction and consensus connectivity.
+    #[default]
+    Basic,
+    /// Include advanced service readiness and strict network-time health.
+    Full,
+}
+impl DoctorScope {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Full => "full",
+        }
+    }
+
+    fn includes_route(self, name: &str) -> bool {
+        self == Self::Full
+            || matches!(
+                name,
+                "status"
+                    | "time_now"
+                    | "sumeragi_status"
+                    | "pipeline_transaction_status"
+                    | "public_lane_validators"
+                    | "contracts_state"
+            )
+    }
+}
+
+/// Read-only Taira public endpoint diagnostics.
 #[derive(clap::Args, Debug)]
 pub struct Doctor {
     /// Public Torii root URL.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
+    /// Release surface whose availability is required.
+    #[arg(long, value_enum, default_value = "basic")]
+    pub(super) scope: DoctorScope,
     /// Emit a stable JSON report.
     #[arg(long)]
     pub json: bool,
@@ -201,7 +240,7 @@ impl Run for Doctor {
 }
 impl Doctor {
     fn run_with_output<O: ReportOutput>(&self, output: &mut O) -> Result<()> {
-        let report = run_doctor(&self.public_root)?;
+        let report = run_doctor(&self.public_root, self.scope)?;
         render_report_to(output, self.json, &report)?;
         if report_status(&report) == Some("fail") {
             eyre::bail!("Taira doctor found hard failures");
@@ -2559,7 +2598,7 @@ struct CanarySigner {
     key_pair: KeyPair,
     account_id: AccountId,
 }
-fn run_doctor(public_root: &str) -> Result<Value> {
+fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
     let public_root = normalize_root_url(public_root)?;
     let http = http_client()?;
     let mut checks = Vec::new();
@@ -2567,6 +2606,9 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     let mut failures = Vec::new();
     let empty_object = norito::json!({});
     for (name, method, path, expected_statuses) in ROUTE_CHECKS {
+        if !scope.includes_route(name) {
+            continue;
+        }
         let url = join_url(&public_root, path)?;
         let (method, body) = match method {
             RouteCheckMethod::Get => (reqwest::Method::GET, None),
@@ -2577,7 +2619,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         let semantic_error = if status_ok {
             match *name {
                 "status" => validate_public_status(result.body.as_ref()).err(),
-                "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
+                "time_now" => validate_time_snapshot(result.body.as_ref(), scope).err(),
                 "kagemusha_readiness" => validate_kagemusha_readiness(result.body.as_ref()).err(),
                 _ => None,
             }
@@ -2609,6 +2651,9 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         }
         if *name == "status" && ok {
             collect_status_warnings(result.body.as_ref(), &mut warnings);
+        }
+        if *name == "time_now" && ok && scope == DoctorScope::Basic {
+            collect_time_warnings(result.body.as_ref(), &mut warnings);
         }
     }
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
@@ -2648,29 +2693,25 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             }),
         );
     }
-    let tools = http_mcp_json(&http, mcp_url.as_str(), 2, "tools/list", norito::json!({}))?;
-    let parsed_tool_names = (tools.status == 200)
-        .then(|| mcp_tool_names(tools.body.as_ref()))
-        .transpose();
+    let (tools_status, parsed_tool_names) = read_mcp_tool_catalog(&http, mcp_url.as_str())?;
     let tools_error = parsed_tool_names.as_ref().err().cloned();
-    let tools_ok = tools.status == 200 && tools_error.is_none();
+    let tools_ok = tools_status == 200 && tools_error.is_none();
     push_check(
         &mut checks,
         "mcp_tools_list",
-        tools.status,
+        tools_status,
         tools_ok,
         tools_error.clone(),
     );
     if !tools_ok {
         failures.push(
-            tools_error.unwrap_or_else(|| format!("mcp_tools_list returned HTTP {}", tools.status)),
+            tools_error.unwrap_or_else(|| format!("mcp_tools_list returned HTTP {tools_status}")),
         );
     } else {
-        let tool_names = parsed_tool_names
-            .expect("successful MCP tool parsing has one result")
-            .expect("HTTP 200 MCP tools/list was parsed above");
+        let tool_names = parsed_tool_names.expect("successful MCP tool parsing has one result");
         let missing: Vec<String> = REQUIRED_MCP_TOOLS
             .iter()
+            .chain(FULL_MCP_TOOLS.iter().filter(|_| scope == DoctorScope::Full))
             .copied()
             .filter(|name| !tool_names.iter().any(|present| present == name))
             .map(str::to_owned)
@@ -2697,6 +2738,8 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         }
     }
     let status = if failures.is_empty() { "ok" } else { "fail" };
+    let mut extra = Map::new();
+    extra.insert("scope".into(), Value::from(scope.as_str()));
     report_value(
         "taira_doctor",
         status,
@@ -2704,8 +2747,30 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         checks,
         warnings,
         failures,
-        Map::new(),
+        extra,
     )
+}
+
+/// The public-reset verifier consumes the producer's scoped check contract.
+pub(super) fn doctor_expected_checks(
+    scope: DoctorScope,
+) -> Vec<(&'static str, u64, Option<String>)> {
+    let mut checks = ROUTE_CHECKS
+        .iter()
+        .filter(|(name, _, _, _)| scope.includes_route(name))
+        .map(|(name, _, _, statuses)| (*name, u64::from(statuses[0]), route_check_detail(statuses)))
+        .collect::<Vec<_>>();
+    checks.extend([
+        ("mcp_get", 405, None),
+        ("mcp_initialize", 200, None),
+        ("mcp_tools_list", 200, None),
+        (
+            "mcp_required_tools",
+            200,
+            Some("all required curated tools are present".to_owned()),
+        ),
+    ]);
+    checks
 }
 #[derive(Clone, Debug)]
 struct InrouProbeIdentity {
@@ -5976,6 +6041,24 @@ fn http_mcp_json(
     method: &str,
     params: Value,
 ) -> Result<HttpJson> {
+    http_mcp_json_with_timeout(
+        http,
+        url,
+        request_id,
+        method,
+        params,
+        Duration::from_secs(30),
+    )
+}
+
+fn http_mcp_json_with_timeout(
+    http: &HttpClient,
+    url: &str,
+    request_id: u64,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<HttpJson> {
     let mut params = params
         .as_object()
         .cloned()
@@ -6023,6 +6106,7 @@ fn http_mcp_json(
     let bytes = json::to_vec(&payload).map_err(|err| eyre!("encode MCP request body: {err}"))?;
     let mut request = http
         .post(url)
+        .timeout(timeout)
         .header(reqwest::header::ACCEPT, MCP_ACCEPT)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(
@@ -6152,48 +6236,90 @@ fn validate_public_status(status: Option<&Value>) -> Result<(), String> {
         })?;
     Ok(())
 }
-fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
+fn validate_time_snapshot(snapshot: Option<&Value>, scope: DoctorScope) -> Result<(), String> {
     let snapshot = snapshot
         .and_then(Value::as_object)
         .ok_or_else(|| "/v1/time/now returned a non-object JSON body".to_owned())?;
-    let positive_u64 = |field: &str| {
+    let unsigned = |field: &str| {
         snapshot
             .get(field)
             .and_then(Value::as_u64)
-            .filter(|value| *value > 0)
-            .ok_or_else(|| format!("/v1/time/now field `{field}` must be a positive integer"))
+            .ok_or_else(|| format!("/v1/time/now field `{field}` must be a nonnegative integer"))
     };
-    positive_u64("now")?;
-    positive_u64("sample_count")?;
-    positive_u64("peer_count")?;
-    snapshot
-        .get("confidence_ms")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            "/v1/time/now field `confidence_ms` must be a nonnegative integer".to_owned()
-        })?;
+    if unsigned("now")? == 0 {
+        return Err("/v1/time/now field `now` must be a positive integer".to_owned());
+    }
+    let samples = unsigned("sample_count")?;
+    let peers = unsigned("peer_count")?;
+    unsigned("confidence_ms")?;
     snapshot
         .get("offset_ms")
         .and_then(Value::as_i64)
         .ok_or_else(|| "/v1/time/now field `offset_ms` must be an integer".to_owned())?;
-    if snapshot.get("enforcement_mode").and_then(Value::as_str) != Some("reject") {
-        return Err("/v1/time/now is not using fail-closed time enforcement".to_owned());
+    let mode = snapshot.get("enforcement_mode").and_then(Value::as_str);
+    if !matches!(mode, Some("warn" | "reject")) {
+        return Err("/v1/time/now has an unknown time enforcement mode".to_owned());
     }
-    if snapshot.get("fallback").and_then(Value::as_bool) != Some(false) {
-        return Err("/v1/time/now is using the local-clock fallback".to_owned());
-    }
-    for field in ["healthy", "min_samples_ok", "offset_ok", "confidence_ok"] {
-        if snapshot
-            .get("health")
-            .and_then(Value::as_object)
-            .and_then(|health| health.get(field))
+    let fallback = snapshot
+        .get("fallback")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "/v1/time/now field `fallback` must be a boolean".to_owned())?;
+    let health = snapshot
+        .get("health")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/v1/time/now field `health` must be an object".to_owned())?;
+    let flag = |field: &str| {
+        health
+            .get(field)
             .and_then(Value::as_bool)
-            != Some(true)
-        {
-            return Err(format!("/v1/time/now health field `{field}` is not true"));
+            .ok_or_else(|| format!("/v1/time/now health field `{field}` must be a boolean"))
+    };
+    let healthy = flag("healthy")?;
+    let min_samples_ok = flag("min_samples_ok")?;
+    let offset_ok = flag("offset_ok")?;
+    let confidence_ok = flag("confidence_ok")?;
+    if healthy != (!fallback && min_samples_ok && offset_ok && confidence_ok)
+        || (min_samples_ok && (samples == 0 || peers == 0))
+        || samples > peers
+    {
+        return Err("/v1/time/now has inconsistent sample or health fields".to_owned());
+    }
+    // Missing synchronization is visible but does not gate the basic testnet.
+    // An observed violation of the node's configured clock bounds still does.
+    if !offset_ok || !confidence_ok {
+        return Err("/v1/time/now exceeds configured offset or confidence bounds".to_owned());
+    }
+    if scope == DoctorScope::Full {
+        if mode != Some("reject") {
+            return Err("/v1/time/now is not using fail-closed time enforcement".to_owned());
+        }
+        if fallback {
+            return Err("/v1/time/now is using the local-clock fallback".to_owned());
+        }
+        if !healthy {
+            return Err("/v1/time/now network time is not healthy".to_owned());
         }
     }
     Ok(())
+}
+
+fn collect_time_warnings(snapshot: Option<&Value>, warnings: &mut Vec<String>) {
+    let Some(snapshot) = snapshot else { return };
+    if snapshot.get("enforcement_mode").and_then(Value::as_str) != Some("reject")
+        || snapshot.pointer("/health/healthy").and_then(Value::as_bool) != Some(true)
+    {
+        warnings.push(format!(
+            "network time: enforcement_mode={}, fallback={}, sample_count={}, peer_count={}, healthy={}, min_samples_ok={}, offset_ok={}, confidence_ok={}",
+            snapshot["enforcement_mode"].as_str().expect("validated mode"),
+            snapshot["fallback"].as_bool().expect("validated fallback"),
+            snapshot["sample_count"].as_u64().expect("validated sample count"),
+            snapshot["peer_count"].as_u64().expect("validated peer count"),
+            snapshot["health"]["healthy"].as_bool().expect("validated health"),
+            snapshot["health"]["min_samples_ok"].as_bool().expect("validated samples"),
+            snapshot["health"]["offset_ok"].as_bool().expect("validated offset"),
+            snapshot["health"]["confidence_ok"].as_bool().expect("validated confidence"),
+        ));
+    }
 }
 
 fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String> {
@@ -7455,6 +7581,68 @@ fn validate_mcp_discovery_response(payload: Option<&Value>) -> Result<(), String
     Ok(())
 }
 
+fn read_mcp_tool_catalog(
+    http: &HttpClient,
+    url: &str,
+) -> Result<(u16, Result<Vec<String>, String>)> {
+    let mut names = BTreeSet::new();
+    let mut cursor = 0_u64;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    // A bounded walk consumes the actual Torii pagination contract. A missing
+    // required tool on an early page is not evidence that the tool is absent.
+    for _ in 0..64 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok((200, Err("MCP tools/list exceeded its deadline".to_owned())));
+        }
+        let params = if cursor == 0 {
+            norito::json!({})
+        } else {
+            norito::json!({ "cursor": (cursor.to_string()) })
+        };
+        let response = http_mcp_json_with_timeout(http, url, 2, "tools/list", params, remaining)?;
+        if response.status != 200 {
+            return Ok((response.status, Ok(Vec::new())));
+        }
+        let page = match mcp_tool_names(response.body.as_ref()) {
+            Ok(page) => page,
+            Err(error) => return Ok((200, Err(error))),
+        };
+        for name in page {
+            if !names.insert(name) {
+                return Ok((
+                    200,
+                    Err("MCP tools/list repeats a tool across pages".to_owned()),
+                ));
+            }
+        }
+        let next = response
+            .body
+            .as_ref()
+            .and_then(|body| body.pointer("/result/nextCursor"));
+        let Some(next) = next else {
+            return Ok((200, Ok(names.into_iter().collect())));
+        };
+        let next = next.as_str().and_then(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|number| value == number.to_string())
+        });
+        let Some(next) = next.filter(|next| *next > cursor && *next == names.len() as u64) else {
+            return Ok((
+                200,
+                Err("MCP tools/list has an invalid or nonprogressing cursor".to_owned()),
+            ));
+        };
+        cursor = next;
+    }
+    Ok((
+        200,
+        Err("MCP tools/list exceeds the 64-page doctor bound".to_owned()),
+    ))
+}
+
 fn mcp_tool_names(payload: Option<&Value>) -> Result<Vec<String>, String> {
     let result = validate_modern_mcp_result(payload, 2, "tools/list")?;
     let tools = result
@@ -7471,7 +7659,7 @@ fn mcp_tool_names(payload: Option<&Value>) -> Result<Vec<String>, String> {
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("MCP tool {index} omits a string name"))?;
-        if !name.starts_with("iroha.")
+        if !(name.starts_with("iroha.") || name.starts_with("torii."))
             || name.len() > 128
             || name.ends_with('.')
             || name.contains("..")
@@ -9918,12 +10106,14 @@ mod tests {
             }
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 assert_modern_mcp_request(request, 2, "tools/list");
-                let tools: Vec<Value> = REQUIRED_MCP_TOOLS
+                let mut tools: Vec<Value> = REQUIRED_MCP_TOOLS
                     .iter()
+                    .chain(FULL_MCP_TOOLS)
                     .copied()
                     .filter(|name| Some(*name) != omit_tool)
                     .map(|name| norito::json!({ "name": name, "description": "mock" }))
                     .collect();
+                tools.push(norito::json!({ "name": "torii.get_v1_accounts", "description": "projected route" }));
                 MockResponse::json(
                     200,
                     norito::json!({
@@ -12197,7 +12387,7 @@ mod tests {
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
         let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
         assert!(
@@ -12364,60 +12554,186 @@ mod tests {
     #[test]
     fn time_snapshot_requires_network_time_and_every_health_axis() {
         let healthy = norito::json!({
-            "now": 1_u64,
-            "offset_ms": 0,
-            "confidence_ms": 0_u64,
-            "sample_count": 3_u64,
-            "peer_count": 3_u64,
-            "enforcement_mode": "reject",
-            "fallback": false,
-            "health": {
-                "healthy": true,
-                "min_samples_ok": true,
-                "offset_ok": true,
-                "confidence_ok": true
-            }
+            "now": 1_u64, "offset_ms": 0, "confidence_ms": 0_u64,
+            "sample_count": 3_u64, "peer_count": 3_u64,
+            "enforcement_mode": "reject", "fallback": false,
+            "health": {"healthy": true, "min_samples_ok": true,
+                "offset_ok": true, "confidence_ok": true}
         });
-        validate_time_snapshot(Some(&healthy)).expect("healthy network time");
-        for (label, mutation) in [
-            ("fallback", "/v1/time/now is using the local-clock fallback"),
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            validate_time_snapshot(Some(&healthy), scope).expect("healthy network time");
+            for (path, value) in [
+                ("/now", Value::from(0_u64)),
+                ("/offset_ms", Value::from("0")),
+                ("/confidence_ms", Value::from(-1_i64)),
+                ("/sample_count", Value::from(4_u64)),
+                ("/peer_count", Value::from("3")),
+                ("/enforcement_mode", Value::from("disabled")),
+                ("/fallback", Value::from("false")),
+                ("/health/healthy", Value::Bool(false)),
+                ("/health/min_samples_ok", Value::from("true")),
+            ] {
+                let mut invalid = healthy.clone();
+                *invalid.pointer_mut(path).expect("tested field") = value;
+                assert!(
+                    validate_time_snapshot(Some(&invalid), scope).is_err(),
+                    "{path}"
+                );
+            }
+            for flag in ["offset_ok", "confidence_ok"] {
+                let mut invalid = healthy.clone();
+                *invalid
+                    .pointer_mut("/health/healthy")
+                    .expect("health field") = Value::Bool(false);
+                *invalid
+                    .pointer_mut(&format!("/health/{flag}"))
+                    .expect("health bound") = Value::Bool(false);
+                assert!(
+                    validate_time_snapshot(Some(&invalid), scope)
+                        .expect_err("observed clock bound violation")
+                        .contains("bounds")
+                );
+            }
+            assert!(validate_time_snapshot(None, scope).is_err());
+        }
+        let mut unsynchronized = healthy.clone();
+        *unsynchronized
+            .pointer_mut("/enforcement_mode")
+            .expect("snapshot field") = Value::from("warn");
+        *unsynchronized
+            .pointer_mut("/sample_count")
+            .expect("snapshot field") = Value::from(0_u64);
+        *unsynchronized
+            .pointer_mut("/peer_count")
+            .expect("snapshot field") = Value::from(0_u64);
+        *unsynchronized
+            .pointer_mut("/fallback")
+            .expect("snapshot field") = Value::Bool(true);
+        *unsynchronized
+            .pointer_mut("/health/healthy")
+            .expect("health field") = Value::Bool(false);
+        *unsynchronized
+            .pointer_mut("/health/min_samples_ok")
+            .expect("health field") = Value::Bool(false);
+        validate_time_snapshot(Some(&unsynchronized), DoctorScope::Basic)
+            .expect("basic scope reports synchronization separately");
+        assert!(validate_time_snapshot(Some(&unsynchronized), DoctorScope::Full).is_err());
+    }
+
+    #[test]
+    fn doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes() {
+        for (args, expected) in [
+            (vec!["taira-test", "doctor"], DoctorScope::Basic),
             (
-                "samples",
-                "/v1/time/now field `sample_count` must be a positive integer",
-            ),
-            ("health", "/v1/time/now health field `healthy` is not true"),
-            (
-                "enforcement",
-                "/v1/time/now is not using fail-closed time enforcement",
+                vec!["taira-test", "doctor", "--scope", "full"],
+                DoctorScope::Full,
             ),
         ] {
-            let mut hostile = healthy.clone();
-            let object = hostile.as_object_mut().expect("object");
-            match label {
-                "fallback" => {
-                    object.insert("fallback".into(), Value::Bool(true));
-                }
-                "samples" => {
-                    object.insert("sample_count".into(), Value::from(0_u64));
-                }
-                "health" => {
-                    object
-                        .get_mut("health")
-                        .and_then(Value::as_object_mut)
-                        .expect("health")
-                        .insert("healthy".into(), Value::Bool(false));
-                }
-                "enforcement" => {
-                    object.insert("enforcement_mode".into(), Value::from("warn"));
-                }
-                _ => unreachable!(),
+            let cli = TestTairaCli::try_parse_from(args).expect("doctor scope arguments");
+            let Command::Doctor(doctor) = cli.command else {
+                panic!("expected doctor command");
+            };
+            assert_eq!(doctor.scope, expected);
+        }
+        assert!(
+            TestTairaCli::try_parse_from(["taira-test", "doctor", "--scope", "unknown"]).is_err()
+        );
+        let server = spawn_mock_http(16, |request| {
+            let mut response = doctor_mock_response(request, None);
+            if path_only(&request.path) == "/v1/time/now" {
+                let mut body: Value = json::from_slice(&response.body).unwrap();
+                *body
+                    .pointer_mut("/enforcement_mode")
+                    .expect("snapshot field") = Value::from("warn");
+                *body.pointer_mut("/sample_count").expect("snapshot field") = Value::from(0_u64);
+                *body.pointer_mut("/peer_count").expect("snapshot field") = Value::from(0_u64);
+                *body.pointer_mut("/fallback").expect("snapshot field") = Value::Bool(true);
+                *body.pointer_mut("/health/healthy").expect("health field") = Value::Bool(false);
+                *body
+                    .pointer_mut("/health/min_samples_ok")
+                    .expect("health field") = Value::Bool(false);
+                response.body = json::to_vec(&body).unwrap();
             }
+            response
+        });
+        let report = run_doctor(&server.base_url, DoctorScope::Basic).expect("basic doctor");
+        let requests = finish_mock(server);
+        assert_eq!(report_status(&report), Some("ok"));
+        assert_eq!(report["scope"].as_str(), Some("basic"));
+        let warnings = report["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        let warning = warnings[0].as_str().unwrap();
+        assert!(
+            warning.contains("enforcement_mode=warn")
+                && warning.contains("fallback=true")
+                && warning.contains("healthy=false")
+                && warning.contains("sample_count=0")
+        );
+        for (name, _, path, _) in ROUTE_CHECKS {
+            if !DoctorScope::Basic.includes_route(name) {
+                assert!(
+                    !requests
+                        .iter()
+                        .any(|request| path_only(&request.path) == *path)
+                );
+            }
+        }
+        let checks = report["checks"].as_array().unwrap();
+        let expected = doctor_expected_checks(DoctorScope::Basic);
+        assert_eq!(checks.len(), expected.len());
+        for (actual, (name, status, detail)) in checks.iter().zip(expected) {
+            assert_eq!(actual["name"].as_str(), Some(name));
+            assert_eq!(actual["http_status"].as_u64(), Some(status));
             assert_eq!(
-                validate_time_snapshot(Some(&hostile)),
-                Err(mutation.to_owned())
+                actual.get("detail").and_then(Value::as_str),
+                detail.as_deref()
             );
         }
-        assert!(validate_time_snapshot(None).is_err());
+    }
+
+    #[test]
+    fn doctor_tools_list_consumes_pages_and_rejects_invalid_cursors() {
+        for invalid_cursor in [false, true] {
+            let server = spawn_mock_http(16, move |request| {
+                let mut response = doctor_mock_response(request, None);
+                if request.method == "POST" && request.body.contains("tools/list") {
+                    let request_body: Value = json::from_str(&request.body).unwrap();
+                    let mut body: Value = json::from_slice(&response.body).unwrap();
+                    let tools = body
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                        .unwrap();
+                    if request_body.pointer("/params/cursor").is_none() {
+                        tools.truncate(1);
+                        body.pointer_mut("/result")
+                            .and_then(Value::as_object_mut)
+                            .unwrap()
+                            .insert(
+                                "nextCursor".into(),
+                                Value::from(if invalid_cursor { "0" } else { "1" }),
+                            );
+                    } else {
+                        assert_eq!(request_body["params"]["cursor"].as_str(), Some("1"));
+                        tools.remove(0);
+                    }
+                    response.body = json::to_vec(&body).unwrap();
+                }
+                response
+            });
+            let report = run_doctor(&server.base_url, DoctorScope::Basic).expect("paged doctor");
+            let requests = finish_mock(server);
+            assert_eq!(
+                report_status(&report),
+                Some(if invalid_cursor { "fail" } else { "ok" })
+            );
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request.body.contains("tools/list"))
+                    .count(),
+                if invalid_cursor { 1 } else { 2 }
+            );
+        }
     }
     #[test]
     fn kagemusha_readiness_requires_exact_universal_kagemusha_contract() {
@@ -12689,7 +13005,7 @@ mod tests {
         let server = spawn_mock_http(16, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let _requests = finish_mock(server);
         let failures = report
             .as_object()
@@ -12723,7 +13039,7 @@ mod tests {
                 doctor_mock_response(request, None)
             }
         });
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let _requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("fail"));
         assert!(
@@ -12764,7 +13080,7 @@ mod tests {
                     doctor_mock_response(request, None)
                 }
             });
-            let report = run_doctor(&server.base_url).expect("doctor report");
+            let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
             let _requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("fail"));
             assert!(
@@ -12793,7 +13109,7 @@ mod tests {
                 doctor_mock_response(request, None)
             }
         });
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let _requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("fail"));
         assert!(
@@ -12807,9 +13123,10 @@ mod tests {
         );
     }
     #[test]
-    fn doctor_rejects_non_iroha_or_malformed_mcp_tools() {
+    fn doctor_rejects_unknown_namespaces_or_malformed_mcp_tools() {
         for hostile_tool in [
             norito::json!({"name": "connect.legacy", "description": "retired"}),
+            norito::json!({"name": "torii.get-v1-accounts", "description": "malformed"}),
             norito::json!({"description": "missing name"}),
             norito::json!({"name": (REQUIRED_MCP_TOOLS[0]), "description": "duplicate"}),
         ] {
@@ -12832,7 +13149,7 @@ mod tests {
                     doctor_mock_response(request, None)
                 }
             });
-            let report = run_doctor(&server.base_url).expect("doctor report");
+            let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
             let _requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("fail"));
         }

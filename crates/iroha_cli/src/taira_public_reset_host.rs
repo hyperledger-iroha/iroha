@@ -1121,27 +1121,12 @@ fn prepared_mutation_identity_sha256(
 
 fn validate_prepared_mutation_identity(admitted: &HostAdmission) -> Result<()> {
     let request = &admitted.request;
-    let valid_phase = matches!(
-        request.mutation_phase.as_str(),
-        "pre_edge"
-            | "post_edge"
-            | "restart-wave-1"
-            | "restart-wave-2"
-            | "restart-wave-3"
-            | "restart-wave-4"
-    );
+    let scope = admitted.inventory.qualification_scope;
     let valid_kind = match request.mutation_phase.as_str() {
-        "pre_edge" => matches!(
-            request.mutation_kind.as_str(),
-            "onboarding"
-                | "faucet"
-                | "write_canary"
-                | "inrou_bundle_pin"
-                | "inrou_guest_pin"
-                | "inrou_discovery_pin"
-                | "inrou_canary"
-        ),
-        "post_edge" | "restart-wave-1" | "restart-wave-2" | "restart-wave-3" | "restart-wave-4" => {
+        "pre_edge" => scope
+            .canary_kinds()
+            .contains(&request.mutation_kind.as_str()),
+        phase if phase == "post_edge" || scope.restart_wave(phase).is_some() => {
             matches!(
                 request.mutation_kind.as_str(),
                 "onboarding" | "faucet" | "write_canary"
@@ -1149,8 +1134,7 @@ fn validate_prepared_mutation_identity(admitted: &HostAdmission) -> Result<()> {
         }
         _ => false,
     };
-    if !valid_phase
-        || !valid_kind
+    if !valid_kind
         || request.mutation_idempotency_key
             != child_mutation_idempotency_key(
                 &admitted.inventory.authorization_nonce,
@@ -1186,12 +1170,15 @@ fn validate_prepared_mutation_progress(
         .ok_or_else(|| eyre!("host plan omits seal phase"))?;
     let expected = match admitted.request.mutation_phase.as_str() {
         "pre_edge" => first_restart,
-        "restart-wave-1" => first_restart + 1,
-        "restart-wave-2" => first_restart + 2,
-        "restart-wave-3" => first_restart + 3,
-        "restart-wave-4" => first_restart + 4,
         "post_edge" => first_seal,
-        _ => return Err(eyre!("prepared mutation phase is outside the host plan")),
+        phase => {
+            first_restart
+                + admitted
+                    .inventory
+                    .qualification_scope
+                    .restart_wave(phase)
+                    .ok_or_else(|| eyre!("prepared mutation phase is outside the host plan"))?
+        }
     };
     if usize::from(progress.next_forward_ordinal) != expected {
         return Err(eyre!(
@@ -4745,7 +4732,14 @@ fn host_forward_plan(admitted: &HostAdmission) -> Vec<HostActionKeyV1> {
             artifact_role: String::new(),
         });
     }
-    for validator in &validators {
+    for validator in admitted
+        .inventory
+        .qualification_scope
+        .restart_validator_indices()
+        .iter()
+        .map(|index| &admitted.inventory.validators[*index])
+        .filter(|validator| validator.endpoint.host_identity_sha256 == identity)
+    {
         plan.push(HostActionKeyV1 {
             host_slug: validator.slug.clone(),
             action: HostAction::Restart.label().to_owned(),
@@ -8373,10 +8367,14 @@ fn validator_cmdline_is_complete(cmdline: &[u8], maximum: usize) -> Result<bool>
         return Ok(false);
     }
     if cmdline.len() > maximum {
-        return Err(eyre!("validator MainPID cmdline exceeds the exact byte bound"));
+        return Err(eyre!(
+            "validator MainPID cmdline exceeds the exact byte bound"
+        ));
     }
     if !cmdline.ends_with(&[0]) {
-        return Err(eyre!("validator MainPID cmdline is missing its terminal NUL"));
+        return Err(eyre!(
+            "validator MainPID cmdline is missing its terminal NUL"
+        ));
     }
     Ok(true)
 }
@@ -8493,11 +8491,13 @@ fn observe_validator_process(
                 "validator MainPID changed during launcher attestation"
             ));
         }
-        return Ok(if executable_after == expected_executable || cmdline.is_empty() {
-            ValidatorProcessReadiness::ExecPending
-        } else {
-            ValidatorProcessReadiness::LauncherPending
-        });
+        return Ok(
+            if executable_after == expected_executable || cmdline.is_empty() {
+                ValidatorProcessReadiness::ExecPending
+            } else {
+                ValidatorProcessReadiness::LauncherPending
+            },
+        );
     }
     let cmdline = read_validator_cmdline(&proc_root.join("cmdline"), 8 * 1024)?;
     if fs::read_link(proc_root.join("exe"))? != expected_executable {
@@ -11373,7 +11373,11 @@ fn prepared_child_process_error(output: &ProcessOutput, label: &str, kind: &str)
     )
 }
 
-fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Vec<u8>> {
+fn require_doctor_success(
+    output: ProcessOutput,
+    public_root: &str,
+    scope: crate::taira::DoctorScope,
+) -> Result<Vec<u8>> {
     if !output.status.success()
         && let Ok(value) = json::from_slice::<norito::json::Value>(&output.stdout)
         && value.get("command").and_then(norito::json::Value::as_str) == Some("taira_doctor")
@@ -11393,7 +11397,7 @@ fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Ve
                 let status = check.get("http_status")?.as_u64()?;
                 (check.get("ok")?.as_bool()? == false
                     && status <= 599
-                    && DOCTOR_EXPECTED_CHECKS
+                    && crate::taira::doctor_expected_checks(scope)
                         .iter()
                         .any(|(expected, _, _)| *expected == name))
                 .then(|| format!("{name}: HTTP {status}"))
@@ -12547,7 +12551,10 @@ fn inrou_probe_root(inventory: &InventoryV1, scope: crate::taira::InrouProbeScop
 
 fn mutation_probe_root<'a>(inventory: &'a InventoryV1, phase: &str) -> Result<&'a str> {
     let scope = match phase {
-        "pre_edge" | "restart-wave-1" | "restart-wave-2" | "restart-wave-3" | "restart-wave-4" => {
+        phase
+            if phase == "pre_edge"
+                || inventory.qualification_scope.restart_wave(phase).is_some() =>
+        {
             crate::taira::InrouProbeScope::Candidate
         }
         "post_edge" => crate::taira::InrouProbeScope::Public,
@@ -13912,9 +13919,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     }
 
     fn doctor_with_mode(&mut self, timeout_secs: u64, recovery_only: bool) -> Result<()> {
+        let scope = match self.admitted.inventory.qualification_scope {
+            super::QualificationScopeV1::CoreTestnet => crate::taira::DoctorScope::Basic,
+            super::QualificationScopeV1::Inrou => crate::taira::DoctorScope::Full,
+        };
         let args = vec![
             "taira".into(),
             "doctor".into(),
+            "--scope".into(),
+            scope.as_str().into(),
             "--public-root".into(),
             self.admitted
                 .inventory
@@ -13931,10 +13944,17 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             require_forward_lease_budget(self.admitted, timeout_secs)?;
         }
         let output = self.run_local_cli_process_until(args, Vec::new(), deadline, recovery_only)?;
-        let output =
-            require_doctor_success(output, &self.admitted.inventory.inrou_canary.public_root)?;
+        let output = require_doctor_success(
+            output,
+            &self.admitted.inventory.inrou_canary.public_root,
+            scope,
+        )?;
         let value = parse_json_report(&output, "same-revision Taira doctor")?;
-        validate_doctor_report(&value, &self.admitted.inventory.inrou_canary.public_root)
+        validate_doctor_report(
+            &value,
+            &self.admitted.inventory.inrou_canary.public_root,
+            scope,
+        )
     }
 
     fn run_journaled_write_canary_child(
@@ -15100,6 +15120,17 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     }
 
     fn convergence(&mut self, timeout_secs: u64, wave: usize, recovery_only: bool) -> Result<()> {
+        let final_wave = self
+            .admitted
+            .inventory
+            .qualification_scope
+            .restart_validator_indices()
+            .len();
+        if wave > final_wave {
+            return Err(eyre!(
+                "convergence wave is outside the signed qualification plan"
+            ));
+        }
         if self.runtime.validator_client_configs.len() != 4 {
             return Err(eyre!(
                 "convergence requires four retained validator client configs"
@@ -15138,7 +15169,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             )?,
             recovery_only,
             wave,
-            4,
+            final_wave,
             "inrou_restart_convergence_evidence",
         )?;
         let had_prior_receipt = if let Some(value) = retained_receipt {
@@ -15535,7 +15566,10 @@ fn build_recovery_intent(inventory: &InventoryV1, step: ExecutionStep) -> Option
             .iter()
             .map(|kind| recovery_child_mutation(nonce, "pre_edge", kind, None))
             .collect(),
-        ExecutionStep::RestartProof => (1..=4)
+        ExecutionStep::RestartProof => (1..=inventory
+            .qualification_scope
+            .restart_validator_indices()
+            .len())
             .flat_map(|wave| {
                 let phase = format!("restart-wave-{wave}");
                 let restart = recovery_child_mutation(
@@ -15628,13 +15662,14 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             }
             let outcome = match mutation.kind.as_str() {
                 "host_restart" => {
-                    let wave = mutation
-                        .phase
-                        .strip_prefix("restart-wave-")
-                        .and_then(|value| value.parse::<usize>().ok())
-                        .filter(|wave| (1..=4).contains(wave));
-                    let Some(validator) = wave.and_then(|wave| inventory.validators.get(wave - 1))
-                    else {
+                    let scope = inventory.qualification_scope;
+                    let validator = scope.restart_wave(&mutation.phase).and_then(|wave| {
+                        scope
+                            .restart_validator_indices()
+                            .get(wave - 1)
+                            .and_then(|index| inventory.validators.get(*index))
+                    });
+                    let Some(validator) = validator else {
                         return Ok(RecoveryOutcome::Rejected(
                             "restart_validator_missing".to_owned(),
                         ));
@@ -15692,7 +15727,11 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     if inventory.qualification_scope.includes_inrou() {
                         self.read_inrou_restart_baselines_with_mode(true)?;
                     }
-                    for wave in 1..=4 {
+                    for wave in 1..=inventory
+                        .qualification_scope
+                        .restart_validator_indices()
+                        .len()
+                    {
                         self.convergence(inventory.timeouts.convergence_secs, wave, true)?;
                         if inventory.qualification_scope.includes_inrou() {
                             self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
@@ -15775,7 +15814,13 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 if inventory.qualification_scope.includes_inrou() {
                     self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
                 }
-                for (index, validator) in inventory.validators.iter().enumerate() {
+                for (index, validator_index) in inventory
+                    .qualification_scope
+                    .restart_validator_indices()
+                    .iter()
+                    .enumerate()
+                {
+                    let validator = &inventory.validators[*validator_index];
                     let wave = index + 1;
                     let restart_index = index * 4;
                     let origins = inventory
@@ -17216,48 +17261,11 @@ fn validate_common_report(
     Ok(())
 }
 
-const DOCTOR_EXPECTED_CHECKS: &[(&str, u64, Option<&str>)] = &[
-    ("status", 200, None),
-    ("time_now", 200, None),
-    (
-        "sumeragi_status",
-        401,
-        Some("mounted route is expected to return HTTP 401 for this preflight shape"),
-    ),
-    (
-        "pipeline_transaction_status",
-        400,
-        Some("mounted route is expected to return HTTP 400 for this preflight shape"),
-    ),
-    ("sccp_capabilities", 200, None),
-    ("zk_proofs_count", 200, None),
-    ("public_lane_validators", 200, None),
-    (
-        "contracts_state",
-        400,
-        Some("mounted route is expected to return HTTP 400 for this preflight shape"),
-    ),
-    (
-        "musubi_ordered_prefix",
-        401,
-        Some("mounted route is expected to return HTTP 401 for this preflight shape"),
-    ),
-    (
-        "soracloud_status",
-        401,
-        Some("mounted route is expected to return HTTP 401 for this preflight shape"),
-    ),
-    ("mcp_get", 405, None),
-    ("mcp_initialize", 200, None),
-    ("mcp_tools_list", 200, None),
-    (
-        "mcp_required_tools",
-        200,
-        Some("all required curated tools are present"),
-    ),
-];
-
-fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Result<()> {
+fn validate_doctor_report(
+    value: &norito::json::Value,
+    public_root: &str,
+    scope: crate::taira::DoctorScope,
+) -> Result<()> {
     validate_common_report(value, "taira_doctor", public_root)?;
     let object = value.as_object().expect("common report checked object");
     require_exact_json_fields(
@@ -17266,12 +17274,18 @@ fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Res
             "command",
             "status",
             "public_root",
+            "scope",
             "checks",
             "warnings",
             "failures",
         ],
         "Taira doctor report",
     )?;
+    if object.get("scope").and_then(norito::json::Value::as_str) != Some(scope.as_str()) {
+        return Err(eyre!(
+            "Taira doctor report scope does not match signed qualification"
+        ));
+    }
     require_empty_report_array(object, "failures", "Taira doctor report")?;
     let warnings = object
         .get("warnings")
@@ -17294,13 +17308,14 @@ fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Res
         .get("checks")
         .and_then(norito::json::Value::as_array)
         .ok_or_else(|| eyre!("Taira doctor checks must be an array"))?;
-    if checks.len() != DOCTOR_EXPECTED_CHECKS.len() {
+    let expected_checks = crate::taira::doctor_expected_checks(scope);
+    if checks.len() != expected_checks.len() {
         return Err(eyre!(
             "Taira doctor report must contain exactly {} checks",
-            DOCTOR_EXPECTED_CHECKS.len()
+            expected_checks.len()
         ));
     }
-    for (check, &(name, http_status, detail)) in checks.iter().zip(DOCTOR_EXPECTED_CHECKS) {
+    for (check, (name, http_status, detail)) in checks.iter().zip(expected_checks) {
         let check = check
             .as_object()
             .ok_or_else(|| eyre!("Taira doctor check must be an object"))?;
@@ -17319,7 +17334,7 @@ fn validate_doctor_report(value: &norito::json::Value, public_root: &str) -> Res
                 .and_then(norito::json::Value::as_u64)
                 != Some(http_status)
             || check.get("ok").and_then(norito::json::Value::as_bool) != Some(true)
-            || detail.is_some_and(|detail| {
+            || detail.as_deref().is_some_and(|detail| {
                 check.get("detail").and_then(norito::json::Value::as_str) != Some(detail)
             })
         {
@@ -17710,6 +17725,16 @@ fn validate_convergence_wave(
     expected_wave: usize,
     inventory: &InventoryV1,
 ) -> Result<(u64, String, String, String)> {
+    if expected_wave
+        > inventory
+            .qualification_scope
+            .restart_validator_indices()
+            .len()
+    {
+        return Err(eyre!(
+            "convergence wave is outside the signed qualification plan"
+        ));
+    }
     let object = value
         .as_object()
         .ok_or_else(|| eyre!("convergence-wave receipt must be an object"))?;
@@ -18220,7 +18245,8 @@ mod tests {
                     request.extend_from_slice(&buffer[..count]);
                 }
                 assert!(request.starts_with(b"GET /readyz HTTP/1.1\r\n"));
-                let request_text = std::str::from_utf8(&request).expect("readiness request headers");
+                let request_text =
+                    std::str::from_utf8(&request).expect("readiness request headers");
                 let accept = request_text
                     .split("\r\n")
                     .skip(1)
@@ -18430,9 +18456,13 @@ mod tests {
             stdout: br#"{"command":"taira_doctor","public_root":"https://taira.sora.org","checks":[{"name":"status","http_status":502,"ok":false,"detail":"do-not-forward-response-body"},{"name":"untrusted-label","http_status":200,"ok":false}],"failures":["do-not-forward-failure-text"]}"#.to_vec(),
             stderr: b"generic CLI failure".to_vec(),
         };
-        let error = require_doctor_success(output, "https://taira.sora.org")
-            .expect_err("doctor failure")
-            .to_string();
+        let error = require_doctor_success(
+            output,
+            "https://taira.sora.org",
+            crate::taira::DoctorScope::Basic,
+        )
+        .expect_err("doctor failure")
+        .to_string();
         assert!(error.contains("status: HTTP 502"));
         assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
     }
@@ -19169,6 +19199,41 @@ mod tests {
             )
             .expect("retained evidence before the frontier remains usable"),
             Some("retained wave")
+        );
+        let mut inventory = super::super::sample_inventory_fixture();
+        inventory.qualification_scope = super::super::QualificationScopeV1::CoreTestnet;
+        let final_wave = inventory
+            .qualification_scope
+            .restart_validator_indices()
+            .len();
+        assert_eq!(final_wave, 1);
+        assert_eq!(
+            require_retained_restart_wave_before_frontier::<()>(
+                None,
+                true,
+                1,
+                final_wave,
+                "inrou_restart_convergence_evidence",
+            )
+            .expect("core's only restart is its reconstructible final crash frontier"),
+            None
+        );
+        assert!(
+            require_retained_restart_wave_before_frontier::<()>(
+                None,
+                true,
+                0,
+                final_wave,
+                "inrou_restart_convergence_evidence",
+            )
+            .is_err(),
+            "initial convergence must still have durable evidence"
+        );
+        assert!(
+            validate_convergence_wave(&norito::json::Value::Null, 2, &inventory)
+                .expect_err("an unselected wave cannot supply core convergence evidence")
+                .to_string()
+                .contains("outside the signed qualification plan")
         );
     }
 
@@ -22621,9 +22686,9 @@ time.sleep(30)
     }
 
     fn exact_doctor_report_fixture(public_root: &str) -> norito::json::Value {
-        let checks = DOCTOR_EXPECTED_CHECKS
-            .iter()
-            .map(|&(name, http_status, detail)| {
+        let checks = crate::taira::doctor_expected_checks(crate::taira::DoctorScope::Basic)
+            .into_iter()
+            .map(|(name, http_status, detail)| {
                 let mut check = norito::json::Map::new();
                 check.insert("name".to_owned(), name.into());
                 check.insert("http_status".to_owned(), http_status.into());
@@ -22638,6 +22703,7 @@ time.sleep(30)
             "command": "taira_doctor",
             "status": "ok",
             "public_root": public_root,
+            "scope": "basic",
             "checks": checks,
             "warnings": [],
             "failures": [],
@@ -22648,14 +22714,17 @@ time.sleep(30)
     fn doctor_report_requires_the_exact_first_release_check_surface() {
         let public_root = "https://taira.sora.org";
         let canonical = exact_doctor_report_fixture(public_root);
-        validate_doctor_report(&canonical, public_root).expect("exact doctor report");
+        validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Basic)
+            .expect("exact doctor report");
 
+        validate_doctor_report(&canonical, public_root, crate::taira::DoctorScope::Full)
+            .expect_err("basic report must not satisfy full qualification");
         let mut sparse = canonical.clone();
         sparse
             .as_object_mut()
             .expect("doctor object")
             .remove("warnings");
-        let _error = validate_doctor_report(&sparse, public_root)
+        let _error = validate_doctor_report(&sparse, public_root, crate::taira::DoctorScope::Basic)
             .expect_err("sparse doctor report must fail closed");
 
         let mut extra = canonical.clone();
@@ -22663,7 +22732,7 @@ time.sleep(30)
             .as_object_mut()
             .expect("doctor object")
             .insert("legacy_routes".to_owned(), norito::json!([]));
-        let _error = validate_doctor_report(&extra, public_root)
+        let _error = validate_doctor_report(&extra, public_root, crate::taira::DoctorScope::Basic)
             .expect_err("unknown doctor report fields must fail closed");
 
         let mut nonfinal_mcp = canonical.clone();
@@ -22683,8 +22752,9 @@ time.sleep(30)
             .and_then(norito::json::Value::as_object_mut)
             .expect("MCP GET doctor check");
         mcp_get.insert("http_status".to_owned(), 204_u64.into());
-        let _error = validate_doctor_report(&nonfinal_mcp, public_root)
-            .expect_err("MCP GET must require exact HTTP 405");
+        let _error =
+            validate_doctor_report(&nonfinal_mcp, public_root, crate::taira::DoctorScope::Basic)
+                .expect_err("MCP GET must require exact HTTP 405");
 
         let mut substituted = canonical;
         substituted
@@ -22695,8 +22765,9 @@ time.sleep(30)
             .and_then(norito::json::Value::as_object_mut)
             .expect("first doctor check")
             .insert("name".to_owned(), "health".into());
-        let _error = validate_doctor_report(&substituted, public_root)
-            .expect_err("substituted doctor route name must fail closed");
+        let _error =
+            validate_doctor_report(&substituted, public_root, crate::taira::DoctorScope::Basic)
+                .expect_err("substituted doctor route name must fail closed");
     }
 
     #[test]
@@ -23490,11 +23561,29 @@ time.sleep(30)
         let full_plan = host_forward_plan(&admitted);
         let full_canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
             .expect("full qualification intent");
+        let full_restart = build_recovery_intent(&admitted.inventory, ExecutionStep::RestartProof)
+            .expect("full restart intent");
         admitted.inventory.qualification_scope = super::super::QualificationScopeV1::CoreTestnet;
+        let core_plan = host_forward_plan(&admitted);
         assert_eq!(
-            host_forward_plan(&admitted),
-            full_plan,
-            "artifact custody, stage, restarts, seal and rollback host plan remain fixed"
+            core_plan
+                .iter()
+                .filter(|key| key.action != HostAction::Restart.label())
+                .collect::<Vec<_>>(),
+            full_plan
+                .iter()
+                .filter(|key| key.action != HostAction::Restart.label())
+                .collect::<Vec<_>>(),
+            "all four validators retain artifact custody, staging, start and seal actions"
+        );
+        assert_eq!(
+            core_plan
+                .iter()
+                .filter(|key| key.action == HostAction::Restart.label())
+                .map(|key| key.host_slug.as_str())
+                .collect::<Vec<_>>(),
+            [super::super::VALIDATOR_SLUGS[0]],
+            "the signed core plan restarts only the first canonical validator"
         );
         assert!(!admitted.inventory.qualification_scope.includes_inrou());
         let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
@@ -23511,17 +23600,55 @@ time.sleep(30)
         assert!(!recovery_intent_identity_matches(&full_canary, &canary));
         let restart = build_recovery_intent(&admitted.inventory, ExecutionStep::RestartProof)
             .expect("core restart intent");
-        assert_eq!(restart.mutations.len(), 16);
-        for wave in 0..4 {
-            assert_eq!(restart.mutations[wave * 4].kind, "host_restart");
-            assert_eq!(
-                restart.mutations[wave * 4 + 1..wave * 4 + 4]
-                    .iter()
-                    .map(|mutation| mutation.kind.as_str())
-                    .collect::<Vec<_>>(),
-                ["onboarding", "faucet", "write_canary"]
-            );
+        assert_eq!(restart.mutations.len(), 4);
+        assert_eq!(
+            restart
+                .mutations
+                .iter()
+                .map(|mutation| mutation.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["host_restart", "onboarding", "faucet", "write_canary"]
+        );
+        assert!(
+            restart
+                .mutations
+                .iter()
+                .all(|mutation| mutation.phase == "restart-wave-1")
+        );
+        assert!(!recovery_intent_identity_matches(&restart, &full_restart));
+        assert!(!recovery_intent_identity_matches(&full_restart, &restart));
+        for cursor in 0..=restart.mutations.len() {
+            let mut resumed = restart.clone();
+            resumed.next_mutation = u16::try_from(cursor).expect("bounded cursor");
+            for mutation in resumed.mutations.iter_mut().take(cursor) {
+                mutation.state = RecoveryMutationStateV1::Applied;
+            }
+            super::super::validate_recovery_intent(&resumed, ExecutionStep::RestartProof)
+                .expect("every exact core cursor reopens");
+            assert!(recovery_intent_identity_matches(&resumed, &restart));
+            if cursor < resumed.mutations.len() {
+                resumed.mutations[cursor].state = RecoveryMutationStateV1::Submitted;
+                super::super::validate_recovery_intent(&resumed, ExecutionStep::RestartProof)
+                    .expect("a submitted core child retains read-only recovery");
+                assert!(!super::super::recovery_ready_to_continue(
+                    &resumed,
+                    ExecutionStep::RestartProof,
+                ));
+            }
+            if cursor > 0 {
+                resumed.mutations[cursor - 1].state = RecoveryMutationStateV1::Prepared;
+                assert!(
+                    super::super::validate_recovery_intent(&resumed, ExecutionStep::RestartProof)
+                        .is_err(),
+                    "the shorter plan cannot skip an unapplied predecessor"
+                );
+            }
         }
+        let mut overrun = restart.clone();
+        overrun.next_mutation = 5;
+        assert!(
+            super::super::validate_recovery_intent(&overrun, ExecutionStep::RestartProof).is_err()
+        );
         let edge = build_recovery_intent(&admitted.inventory, ExecutionStep::EdgeVerify)
             .expect("core post-edge intent");
         assert_eq!(
@@ -23539,9 +23666,42 @@ time.sleep(30)
             .filter(|mutation| mutation.kind != "host_restart")
             .count();
         assert_eq!(
-            writes, 18,
-            "all baseline mutations retain immutable recovery evidence"
+            writes, 9,
+            "initial, single postrestart, and public-edge workflows retain immutable recovery evidence"
         );
+        admitted.request.mutation_kind = "write_canary".to_owned();
+        for phase in ["pre_edge", "restart-wave-1", "post_edge"] {
+            admitted.request.mutation_phase = phase.to_owned();
+            admitted.request.mutation_idempotency_key = child_mutation_idempotency_key(
+                &admitted.inventory.authorization_nonce,
+                phase,
+                "write_canary",
+            );
+            validate_prepared_mutation_identity(&admitted).expect("selected core mutation phase");
+            mutation_probe_root(&admitted.inventory, phase).expect("selected core probe phase");
+        }
+        for phase in [
+            "restart-wave-0",
+            "restart-wave-01",
+            "restart-wave-2",
+            "restart-wave-3",
+            "restart-wave-4",
+        ] {
+            admitted.request.mutation_phase = phase.to_owned();
+            admitted.request.mutation_idempotency_key = child_mutation_idempotency_key(
+                &admitted.inventory.authorization_nonce,
+                phase,
+                "write_canary",
+            );
+            assert!(
+                validate_prepared_mutation_identity(&admitted).is_err(),
+                "{phase}"
+            );
+            assert!(
+                mutation_probe_root(&admitted.inventory, phase).is_err(),
+                "{phase}"
+            );
+        }
     }
 
     #[test]
@@ -23664,13 +23824,14 @@ time.sleep(30)
             ] {
                 fs::write(&cmdline, argv).expect("invalid bounded cmdline");
                 let mut observations = 0;
-                let error = wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
-                    observations += 1;
-                    let argv = read_validator_cmdline(&cmdline, maximum)?;
-                    validator_cmdline_is_complete(&argv, maximum)?;
-                    Ok(ValidatorProcessReadiness::ExecPending)
-                })
-                .expect_err("malformed nonempty or oversized argv must never become pending");
+                let error =
+                    wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+                        observations += 1;
+                        let argv = read_validator_cmdline(&cmdline, maximum)?;
+                        validator_cmdline_is_complete(&argv, maximum)?;
+                        Ok(ValidatorProcessReadiness::ExecPending)
+                    })
+                    .expect_err("malformed nonempty or oversized argv must never become pending");
                 assert_eq!(error.to_string(), expected_error);
                 assert_eq!(observations, 1);
             }
@@ -23984,64 +24145,85 @@ time.sleep(30)
 
     #[test]
     fn cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace() {
-        let mut admitted = progress_admission();
-        validate_inventory(&admitted.inventory).expect("admitted cohost topology");
-        let plan = host_forward_plan(&admitted);
-        let coordination = host_coordination_path(&admitted).expect("fixed coordination path");
-        let slugs = admitted
-            .inventory
-            .validators
-            .iter()
-            .map(|v| v.slug.clone())
-            .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
-            .collect::<Vec<_>>();
-        for slug in slugs {
-            select_target(&mut admitted, &slug);
-            assert_eq!(host_forward_plan(&admitted), plan, "{slug}");
-            assert_eq!(
-                host_coordination_path(&admitted).expect("same host coordination"),
-                coordination,
-                "{slug}"
-            );
-        }
-        let first_restart = plan
-            .iter()
-            .position(|key| key.action == HostAction::Restart.label())
-            .expect("first restart");
-        let first_seal = plan
-            .iter()
-            .position(|key| key.action == HostAction::Seal.label())
-            .expect("first seal");
-        assert_eq!(
-            plan[first_restart..first_restart + 4]
-                .iter()
-                .map(|key| key.host_slug.as_str())
-                .collect::<Vec<_>>(),
-            super::super::VALIDATOR_SLUGS
-        );
-        assert_eq!(plan[first_restart - 1].action, HostAction::Start.label());
-        assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
-        for (phase, ordinal) in [
-            ("pre_edge", first_restart),
-            ("restart-wave-1", first_restart + 1),
-            ("restart-wave-2", first_restart + 2),
-            ("restart-wave-3", first_restart + 3),
-            ("restart-wave-4", first_restart + 4),
-            ("post_edge", first_seal),
+        for scope in [
+            super::super::QualificationScopeV1::CoreTestnet,
+            super::super::QualificationScopeV1::Inrou,
         ] {
-            admitted.request.mutation_phase = phase.to_owned();
-            let mut progress = initial_host_progress(&admitted);
-            progress.next_forward_ordinal = u16::try_from(ordinal).expect("bounded plan");
-            validate_prepared_mutation_progress(&admitted, &progress)
-                .expect("exact complete-host boundary");
-            for wrong in [ordinal - 1, ordinal + 1] {
-                progress.next_forward_ordinal =
-                    u16::try_from(wrong).expect("bounded wrong ordinal");
-                assert!(
-                    validate_prepared_mutation_progress(&admitted, &progress).is_err(),
-                    "{phase} ordinal={wrong}"
+            let mut admitted = progress_admission();
+            admitted.inventory.qualification_scope = scope;
+            validate_inventory(&admitted.inventory).expect("admitted cohost topology");
+            let plan = host_forward_plan(&admitted);
+            let coordination = host_coordination_path(&admitted).expect("fixed coordination path");
+            let slugs = admitted
+                .inventory
+                .validators
+                .iter()
+                .map(|v| v.slug.clone())
+                .chain(std::iter::once(admitted.inventory.edge.slug.clone()))
+                .collect::<Vec<_>>();
+            for slug in slugs {
+                select_target(&mut admitted, &slug);
+                assert_eq!(host_forward_plan(&admitted), plan, "{slug}");
+                assert_eq!(
+                    host_coordination_path(&admitted).expect("same host coordination"),
+                    coordination,
+                    "{slug}"
                 );
             }
+            let first_restart = plan
+                .iter()
+                .position(|key| key.action == HostAction::Restart.label())
+                .expect("first restart");
+            let first_seal = plan
+                .iter()
+                .position(|key| key.action == HostAction::Seal.label())
+                .expect("first seal");
+            assert_eq!(
+                plan[first_restart..first_restart + scope.restart_validator_indices().len()]
+                    .iter()
+                    .map(|key| key.host_slug.as_str())
+                    .collect::<Vec<_>>(),
+                scope
+                    .restart_validator_indices()
+                    .iter()
+                    .map(|index| super::super::VALIDATOR_SLUGS[*index])
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(plan[first_restart - 1].action, HostAction::Start.label());
+            assert_eq!(plan[first_seal - 1].action, HostAction::EdgeVerify.label());
+            let phases = std::iter::once(("pre_edge".to_owned(), first_restart))
+                .chain(
+                    (1..=scope.restart_validator_indices().len())
+                        .map(|wave| (format!("restart-wave-{wave}"), first_restart + wave)),
+                )
+                .chain(std::iter::once(("post_edge".to_owned(), first_seal)));
+            for (phase, ordinal) in phases {
+                admitted.request.mutation_phase = phase.clone();
+                let mut progress = initial_host_progress(&admitted);
+                progress.next_forward_ordinal = u16::try_from(ordinal).expect("bounded plan");
+                validate_prepared_mutation_progress(&admitted, &progress)
+                    .expect("exact complete-host boundary");
+                for wrong in [ordinal - 1, ordinal + 1] {
+                    progress.next_forward_ordinal =
+                        u16::try_from(wrong).expect("bounded wrong ordinal");
+                    assert!(
+                        validate_prepared_mutation_progress(&admitted, &progress).is_err(),
+                        "{phase} ordinal={wrong}"
+                    );
+                }
+            }
+            admitted.request.mutation_phase = format!(
+                "restart-wave-{}",
+                scope.restart_validator_indices().len() + 1
+            );
+            let mut progress = initial_host_progress(&admitted);
+            progress.next_forward_ordinal =
+                u16::try_from(first_restart + scope.restart_validator_indices().len() + 1)
+                    .expect("bounded unselected wave");
+            assert!(
+                validate_prepared_mutation_progress(&admitted, &progress).is_err(),
+                "unselected restart waves cannot borrow an edge-action boundary"
+            );
         }
     }
 

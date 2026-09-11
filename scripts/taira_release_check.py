@@ -70,6 +70,17 @@ STAGES = (
         "taira_public_reset::executor_model::tests::qualification_scope_is_bound_before_normal_and_recovery_signature_admission",
         "taira_public_reset::executor_model::tests::qualification_scope_is_immutable_in_recovery_and_reported_explicitly",
         "taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan",
+        "taira_public_reset::host::tests::restart_recovery_reconstructs_only_the_final_frontier_receipt",
+        "taira_public_reset::host::tests::cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace",
+    )),
+    ("public doctor producer and deployment contract", (
+        "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
+        "taira::tests::doctor_tools_list_consumes_pages_and_rejects_invalid_cursors",
+        "taira::tests::doctor_mock_healthy_flow_reports_ok",
+        "taira::tests::time_snapshot_requires_network_time_and_every_health_axis",
+        "taira::tests::doctor_rejects_unknown_namespaces_or_malformed_mcp_tools",
+        "taira::tests::doctor_mock_required_tool_missing_reports_failure",
+        "taira_public_reset::host::tests::doctor_report_requires_the_exact_first_release_check_surface",
     )),
     ("private config descriptors", (
         "client_config::tests::inherited_config_loads_exact_descriptor_without_reopening_provenance",

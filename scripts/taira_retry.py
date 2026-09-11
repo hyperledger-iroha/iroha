@@ -4620,9 +4620,16 @@ def preserve_postcondition_outputs(attempt):
 
 def public_validation(binary, inventory, directory):
     """Run the exact released doctor without loading a client config or credentials."""
+    qualification_scope = inventory.get("qualification_scope")
+    require(
+        qualification_scope in ("core_testnet", "inrou"),
+        "public validation requires the signed qualification scope",
+    )
+    doctor_scope = "basic" if qualification_scope == "core_testnet" else "full"
     cli = str(Path(binary["destination"]) / "iroha")
     run_native(
-        [cli, "taira", "doctor", "--public-root", "https://taira.sora.org", "--json"],
+        [cli, "taira", "doctor", "--scope", doctor_scope,
+         "--public-root", "https://taira.sora.org", "--json"],
         directory,
         phase="public-validation",
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
@@ -4630,6 +4637,7 @@ def public_validation(binary, inventory, directory):
     doctor = decode(public_record(directory / "stdout", owner=0, private=True))
     require(
         doctor.get("command") == "taira_doctor"
+        and doctor.get("scope") == doctor_scope
         and doctor.get("public_root") == "https://taira.sora.org"
         and doctor.get("status") == "ok"
         and doctor.get("failures") == []

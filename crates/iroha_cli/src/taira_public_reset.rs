@@ -622,6 +622,24 @@ impl QualificationScopeV1 {
         matches!(self, Self::Inrou)
     }
 
+    /// Canonical inventory slots restarted by this signed qualification plan.
+    const fn restart_validator_indices(self) -> &'static [usize] {
+        match self {
+            Self::CoreTestnet => &[0],
+            Self::Inrou => &[0, 1, 2, 3],
+        }
+    }
+
+    fn restart_wave(self, phase: &str) -> Option<usize> {
+        self.restart_validator_indices()
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| {
+                let wave = index + 1;
+                (phase == format!("restart-wave-{wave}")).then_some(wave)
+            })
+    }
+
     const fn canary_kinds(self) -> &'static [&'static str] {
         match self {
             Self::CoreTestnet => &["onboarding", "faucet", "write_canary"],
@@ -1440,8 +1458,8 @@ fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
     let physical_validator_hosts = u64::try_from(physical_validator_hosts)
         .map_err(|_| eyre!("physical validator host count does not fit u64"))?;
     // This conservative maximum covers both explicit qualification scopes. Core
-    // omits Inrou execution without changing host actions or shortening custody
-    // leases; unused budget never introduces a wait. Keep each timeout class
+    // omits Inrou execution and additional restart waves without shortening
+    // custody leases; unused budget never introduces a wait. Keep each timeout class
     // independently bounded for the closed four-validator/one-edge plan.
     let seconds = timeouts
         .install_secs

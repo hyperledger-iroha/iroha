@@ -746,9 +746,11 @@ class RetryTests(unittest.TestCase):
         retry.write_public(
             seed / "seed-authority-receipt.json", {"network_id": "native-network"}
         )
-        for variant in ("valid", "wrong-source", "wrong-network", "mcp-error"):
+        for variant in ("valid", "full", "wrong-scope", "wrong-source", "wrong-network", "mcp-error"):
             output = self.root / variant
             calls = []
+            scope = "full" if variant == "full" else "basic"
+            inventory = {"qualification_scope": "inrou" if variant == "full" else "core_testnet"}
 
             def native(argv, directory, *, phase, env, **kwargs):
                 self.assertEqual(env, {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
@@ -756,10 +758,12 @@ class RetryTests(unittest.TestCase):
                 directory.mkdir(mode=0o700)
                 calls.append(argv)
                 if argv[0] != "/usr/bin/curl":
+                    self.assertEqual(argv[argv.index("--scope") + 1], scope)
                     retry.write_public(
                         directory / "stdout",
                         {
                             "command": "taira_doctor",
+                            "scope": "full" if variant == "wrong-scope" else scope,
                             "public_root": "https://taira.sora.org",
                             "status": "ok",
                             "failures": [],
@@ -809,14 +813,19 @@ class RetryTests(unittest.TestCase):
                     side_effect=lambda path, **kwargs: Path(path).read_bytes(),
                 ),
             ):
-                if variant == "valid":
-                    result = retry.public_validation(binary, {}, output)
+                if variant in ("valid", "full"):
+                    result = retry.public_validation(binary, inventory, output)
                     self.assertTrue(result["public_mcp_health_passed"])
                     self.assertFalse(result["application_validation_completed"])
                 else:
                     with self.assertRaises(retry.RetryError):
-                        retry.public_validation(binary, {}, output)
-            self.assertEqual(len(calls), 5)
+                        retry.public_validation(binary, inventory, output)
+            self.assertEqual(len(calls), 1 if variant == "wrong-scope" else 5)
+        with mock.patch.object(retry, "run_native") as native:
+            for scope in (None, "", "unknown"):
+                with self.assertRaises(retry.RetryError):
+                    retry.public_validation(binary, {"qualification_scope": scope}, self.root / "invalid")
+            native.assert_not_called()
 
     def test_native_error_tail_is_bounded_and_public_only(self):
         path = self.root / "stderr"

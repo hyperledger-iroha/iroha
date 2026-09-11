@@ -108,9 +108,10 @@ rebasing retained validator configs. Retry keeps the key unchanged and rejects
 missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
-Native apply qualifies four-peer convergence, prepared application mutations,
-Inrou runtime health and all four recovery restarts through these direct
-endpoints before staging or switching the public edge. The same retained
+Native apply qualifies four-peer convergence, prepared application mutations
+and one validator restart for signed `core_testnet` scope. The `inrou` scope
+also requires Inrou runtime health and all four ordered restart waves through
+these direct endpoints before staging or switching the public edge. The same retained
 mutations and restart evidence flow into the release proof. After cutover,
 `EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
 remain before public cutover; a failed rollback remains resumable and must be
