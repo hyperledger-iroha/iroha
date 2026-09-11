@@ -11,6 +11,8 @@ explicitly selected. This preference never changes Linux release compilation.
 Private test-executable copies are released after their last subprocess exits,
 including failed checks; their observations and test logs remain available.
 Native node/client snapshots remain retained for network and CLI capture consumers.
+Successful captures record final Cargo test executables in a bounded lane ledger;
+later captures retire only recorded superseded closed executables, preserving caches.
 On macOS, descriptor-bound copy-on-write clones avoid full duplicate allocation
 while retaining independent inodes and exact content/stat validation. Unsupported
 filesystems stream only when all remaining copies fit beside the working reserve;
@@ -45,6 +47,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 
 
 STAGES = (
@@ -1108,6 +1111,278 @@ def native_artifact_clone_function():
     return clone_descriptor
 
 
+NATIVE_TEST_OUTPUT_MAX_RECORDS = 128
+NATIVE_TEST_OUTPUT_MAX_LEDGER_BYTES = 256 * 1024
+NATIVE_TEST_OUTPUT_SCHEMA = "taira.native-test-outputs.v1"
+
+
+def native_test_output_identity(info: os.stat_result) -> list[int]:
+    """Use metadata captured with the producer's existing content verification."""
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_uid,
+            info.st_nlink, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def native_test_output_confirmed_closed(path: Path) -> bool | None:
+    """True means closed, false means busy, and None means inspection failed."""
+    executable = Path("/usr/sbin/lsof" if sys.platform == "darwin" else "/usr/bin/lsof")
+    if not executable.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [str(executable), "-nP", "-F", "p", "--", str(path)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=5, check=False,
+            env={"PATH": os.defpath, "LANG": "C", "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.stderr:
+        return None
+    if result.returncode == 1 and not result.stdout:
+        return True
+    if result.returncode == 0 and result.stdout:
+        return False
+    return None
+
+
+def _native_test_output_directory(path: Path) -> int:
+    if not path.is_absolute() or path.resolve(strict=True) != path:
+        raise ValueError("test-output directory is indirect")
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info, named = os.fstat(fd), path.lstat()
+        if (info.st_uid != os.geteuid() or info.st_mode & 0o022
+                or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)):
+            raise ValueError("test-output directory custody differs")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _save_native_test_outputs(fd: int, state: dict) -> None:
+    raw = (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if len(raw) > NATIVE_TEST_OUTPUT_MAX_LEDGER_BYTES:
+        raise ValueError("test-output ledger exceeds its bound")
+    name = ".pending-" + uuid.uuid4().hex
+    output = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                     dir_fd=fd)
+    try:
+        os.fchmod(output, 0o600)
+        view = memoryview(raw)
+        while view:
+            written = os.write(output, view)
+            if written <= 0:
+                raise OSError("test-output ledger made no write progress")
+            view = view[written:]
+        os.fsync(output)
+    finally:
+        os.close(output)
+    os.replace(name, "ledger.json", src_dir_fd=fd, dst_dir_fd=fd)
+    os.fsync(fd)
+
+
+def _valid_native_test_output(row, target: Path) -> bool:
+    if not isinstance(row, dict) or set(row) != {"selection", "path", "identity", "quarantine"}:
+        return False
+    identity = row["identity"]
+    path = Path(row["path"]) if isinstance(row["path"], str) else Path()
+    selection = row["selection"]
+    if not isinstance(selection, str) or selection not in HARNESS_TARGETS:
+        return False
+    name = HARNESS_TARGETS[selection][1]
+    return (any(re.fullmatch(re.escape(prefix) + r"-[0-9a-f]{16}", path.name)
+                for prefix in (name, name.replace("-", "_")))
+            and path.parent == target / "debug/deps"
+            and isinstance(identity, list) and len(identity) == 8
+            and all(type(value) is int and value >= 0 for value in identity)
+            and stat.S_ISREG(identity[3]) and identity[3] & stat.S_IXUSR
+            and not identity[3] & 0o022 and identity[4] == os.geteuid()
+            and identity[5] == 1 and 0 < identity[2] <= 4 * 1024**3
+            and (row["quarantine"] is None or isinstance(row["quarantine"], str)
+                 and re.fullmatch(r"retiring-[0-9a-f]{32}", row["quarantine"]) is not None))
+
+
+def _load_native_test_outputs(fd: int, root: Path, target: Path) -> dict:
+    empty = {"schema": NATIVE_TEST_OUTPUT_SCHEMA, "source": str(root), "target": str(target),
+             "current": {}, "pending": []}
+    try:
+        source = os.open("ledger.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except FileNotFoundError:
+        return empty
+    try:
+        info = os.fstat(source)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or info.st_size > NATIVE_TEST_OUTPUT_MAX_LEDGER_BYTES):
+            raise ValueError("test-output ledger custody differs")
+        raw = os.read(source, NATIVE_TEST_OUTPUT_MAX_LEDGER_BYTES + 1)
+        if (len(raw) != info.st_size or native_test_output_identity(os.fstat(source)) != native_test_output_identity(info)
+                or native_test_output_identity(os.stat("ledger.json", dir_fd=fd, follow_symlinks=False)) != native_test_output_identity(info)):
+            raise ValueError("test-output ledger changed during read")
+    finally:
+        os.close(source)
+    state = json.loads(raw)
+    if raw != (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode():
+        raise ValueError("test-output ledger is not canonical")
+    if (not isinstance(state, dict) or set(state) != set(empty)
+            or any(state[key] != empty[key] for key in ("schema", "source", "target"))
+            or not isinstance(state["current"], dict) or not isinstance(state["pending"], list)):
+        raise ValueError("test-output ledger belongs to different inputs")
+    rows = list(state["current"].values()) + state["pending"]
+    if (len(rows) > NATIVE_TEST_OUTPUT_MAX_RECORDS or not all(_valid_native_test_output(row, target) for row in rows)
+            or any(key != row["selection"] or row["quarantine"] is not None
+                   for key, row in state["current"].items())):
+        raise ValueError("test-output ledger contains invalid records")
+    return state
+
+
+def _retire_native_test_output_pending(directory: int, deps: int, control: Path,
+                                      state: dict, protected: list[dict]) -> int:
+    """Retry only durable pending ownership, including interrupted rename windows."""
+    pending = state["pending"]
+    retired = 0
+    for row in tuple(pending):
+        if any(row["path"] == item["path"] or row["identity"][:2] == item["identity"][:2]
+               for item in protected):
+            pending.remove(row)
+            continue
+        expected = row["identity"]
+        name = row["quarantine"] or Path(row["path"]).name
+        parent = directory if row["quarantine"] else deps
+        path = control / name if row["quarantine"] else Path(row["path"])
+        try:
+            actual = native_test_output_identity(os.stat(name, dir_fd=parent, follow_symlinks=False))
+        except FileNotFoundError:
+            # A crash after publishing rename intent may leave the original.
+            if row["quarantine"]:
+                name, parent, path = Path(row["path"]).name, deps, Path(row["path"])
+                try:
+                    actual = native_test_output_identity(os.stat(name, dir_fd=deps, follow_symlinks=False))
+                except FileNotFoundError:
+                    pending.remove(row)
+                    continue
+                if actual != expected:
+                    continue  # Never adopt a replacement at the original path.
+                row["quarantine"] = None
+                _save_native_test_outputs(directory, state)
+            else:
+                pending.remove(row)
+                continue
+        if actual != expected:
+            # The durable intent names one exact inode moved into our private
+            # directory. Rename may advance ctime before its refreshed record
+            # reaches disk; all other coordinates must still match.
+            if row["quarantine"] is None or actual[:-1] != expected[:-1]:
+                continue
+        closed = native_test_output_confirmed_closed(path)
+        if closed is None:
+            break  # One unavailable OS query must not become 128 timeout waits.
+        if not closed:
+            continue
+        if actual != expected:
+            row["identity"] = expected = actual
+            _save_native_test_outputs(directory, state)
+        if row["quarantine"] is None:
+            quarantine = "retiring-" + uuid.uuid4().hex
+            row["quarantine"] = quarantine
+            _save_native_test_outputs(directory, state)  # A crash cannot turn a moved file into an orphan.
+            # Recheck after the OS query; Cargo cannot write while its lock is held.
+            if native_test_output_identity(os.stat(name, dir_fd=deps, follow_symlinks=False)) != expected:
+                continue
+            os.rename(name, quarantine, src_dir_fd=deps, dst_dir_fd=directory)
+            os.fsync(deps)
+            os.fsync(directory)
+            renamed = native_test_output_identity(os.stat(quarantine, dir_fd=directory, follow_symlinks=False))
+            # Rename may advance ctime, but must preserve every other coordinate.
+            if renamed[:-1] != expected[:-1]:
+                continue
+            row["identity"] = expected = renamed
+            _save_native_test_outputs(directory, state)
+            name, path = quarantine, control / quarantine
+            # The original name is now unavailable to racing old consumers.
+            # If one opened before rename, retain its inode and retry later.
+            closed = native_test_output_confirmed_closed(path)
+            if closed is None:
+                break
+            if not closed:
+                continue
+        if native_test_output_identity(os.stat(name, dir_fd=directory, follow_symlinks=False)) != expected:
+            continue
+        os.unlink(name, dir_fd=directory)
+        os.fsync(directory)
+        pending.remove(row)
+        retired += expected[2]
+    _save_native_test_outputs(directory, state)
+    return retired
+
+
+def retire_superseded_native_test_outputs(root: Path, target: Path, current: dict[str, dict]) -> None:
+    """Record verified final tests and retire closed predecessors under Cargo locks.
+
+    Callers pass only successful Cargo test outputs, using the source identity
+    already verified while copying. Failures retain files and never fail a build.
+    """
+    if not current:
+        return
+    control = target / ("taira-native-test-outputs-" + hashlib.sha256(os.fsencode(root)).hexdigest()[:20])
+    directory = deps = None
+    retired = 0
+    try:
+        if not all(_valid_native_test_output(row, target) and key == row["selection"]
+                   and row["quarantine"] is None for key, row in current.items()):
+            raise ValueError("current test-output ownership is invalid")
+        control.mkdir(mode=0o700, exist_ok=True)
+        directory = _native_test_output_directory(control)
+        if stat.S_IMODE(os.fstat(directory).st_mode) != 0o700:
+            raise ValueError("test-output ledger directory must remain private")
+        deps = _native_test_output_directory(target / "debug/deps")
+        previous = _load_native_test_outputs(directory, root, target)
+
+        def admit(prior):
+            next_current = dict(prior["current"])
+            pending = list(prior["pending"])
+            for selection, row in current.items():
+                old = next_current.get(selection)
+                if old is not None and old != row:
+                    pending.append(old)
+                next_current[selection] = row
+            protected = list(next_current.values())
+            candidates = []
+            for row in pending:
+                if any(row["path"] == item["path"] or row["identity"][:2] == item["identity"][:2]
+                       for item in protected):
+                    continue
+                if row not in candidates:
+                    candidates.append(row)
+            return prior | {"current": next_current, "pending": candidates}
+
+        state = admit(previous)
+        if len(state["current"]) + len(state["pending"]) > NATIVE_TEST_OUTPUT_MAX_RECORDS:
+            # A full ledger must still retry old pending work when readers close.
+            # Protect this capture even though it has not been enrolled yet.
+            protected = list(previous["current"].values()) + list(current.values())
+            retired += _retire_native_test_output_pending(directory, deps, control, previous, protected)
+            state = admit(previous)
+        protected = list(state["current"].values())
+        pending = state["pending"]
+        if len(protected) + len(pending) > NATIVE_TEST_OUTPUT_MAX_RECORDS:
+            raise ValueError("test-output ledger is full; old outputs retained")
+        _save_native_test_outputs(directory, state)  # No deletion precedes durable ownership publication.
+        retired += _retire_native_test_output_pending(directory, deps, control, state, protected)
+        if retired:
+            print(f"[taira-check] retired {retired} bytes of recorded superseded Cargo test executables", flush=True)
+        if pending:
+            print(f"[taira-check] retained {len(pending)} superseded test outputs: busy, changed, or unverified", flush=True)
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        print(f"[taira-check] test-output retirement skipped: {type(error).__name__}; remaining outputs retained", flush=True)
+    finally:
+        if deps is not None:
+            os.close(deps)
+        if directory is not None:
+            os.close(directory)
+
+
 def isolate_native_artifacts(root: Path, env: dict[str, str],
                              records: dict[str, dict[str, object]]) -> NativeArtifactCopies:
     """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
@@ -1232,6 +1507,16 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 os.fsync(parent_fd)
             finally:
                 os.close(parent_fd)
+            # Reuse source identities already verified above. The ledger owns
+            # only final tests, never shipping binaries or Cargo cache entries.
+            retire_superseded_native_test_outputs(root, target, {
+                selection: {"selection": selection, "path": str(paths[selection]),
+                    "identity": [expected.device, expected.inode, expected.size,
+                        stat.S_IFREG | expected.mode, os.geteuid(), expected.link_count,
+                        expected.mtime_ns, expected.ctime_ns], "quarantine": None}
+                for selection, expected in identities.items()
+                if selection in HARNESS_TARGETS and records[selection]["profile"].get("test") is True
+            })
         # Publish observations only when the complete batch is frozen and the locks released.
         for observation in observations:
             print("[taira-check] isolated native artifact " + json.dumps(observation, sort_keys=True), flush=True)

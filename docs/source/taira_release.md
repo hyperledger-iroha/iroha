@@ -81,6 +81,18 @@ installed sccache remain in use. No target or cache is cleaned or replaced.
 Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
 The native gate receives the same source, toolchain and explicit target directory.
 
+After successful native capture, a bounded owner-private ledger records only the
+gate's final Cargo test executables. Later captures retire recorded superseded
+outputs under Cargo's locks after exact inode checks and an OS open-file check.
+The first run only records current outputs; unrecorded files, production binaries,
+libraries, object files and warm compiler caches are retained. Busy files or an
+unavailable/inconclusive `lsof` check cause retention. A private quarantine closes
+the old pathname before the final open-file check; interrupted retirement remains
+recorded. Retries recover both rename windows using the recorded inode and stable
+metadata, recheck open-file status, and never adopt an unrelated replacement. A
+full ledger retries pending cleanup before admitting successors, so closing an
+old reader restores progress without manual ledger edits.
+
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both
 must execute every listed test without skips. Lifecycle mutation controls check
