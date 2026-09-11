@@ -36,7 +36,6 @@ fn leaves() -> Vec<FastpqOrdinarySourceStatementLeafV1> {
             },
             statement_index: i,
             entry_index: i * 2,
-            transcript_index: 0,
             entry_transcript_count: 1,
             entry_hash: Hash::new([i as u8]),
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,

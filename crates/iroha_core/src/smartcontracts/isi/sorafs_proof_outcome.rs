@@ -1699,6 +1699,7 @@ impl ValidSingularQuery for FindSorafsProofOutcomeEvents {
 }
 #[cfg(test)]
 mod tests {
+    include!("sorafs_proof_outcome/schema_identity_tests.rs");
     use super::*;
     include!("sorafs/proof_outcome_permission_token_tests.rs");
     use crate::{

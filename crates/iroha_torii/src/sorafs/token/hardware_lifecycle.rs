@@ -94,7 +94,7 @@ impl HardwareDriverV1 {
                 trusted_at: 0,
             }),
         };
-        driver.current(Phase::Startup)?;
+        driver.current(Phase::Startup, None)?;
         Ok(driver)
     }
     pub(super) fn pins(&self) -> &StreamTokenHardwarePinsV1 {
@@ -148,8 +148,8 @@ impl HardwareDriverV1 {
         observation: &SignerStreamTokenStateObservationBodyV1,
         floor: &QueryFloor,
         historical: &[FinalityFloorV1],
-        token_expiry: Option<u64>,
-    ) -> Result<(), StreamTokenIssuerError> {
+        token_window: Option<(u64, u64)>,
+    ) -> Result<u64, StreamTokenIssuerError> {
         self.check_handles()?;
         let candidate = custody.current_anchor();
         let observed_at = observation.observed_at_unix_ms;
@@ -187,19 +187,23 @@ impl HardwareDriverV1 {
             || now < observed_at
             || now - observed_at > self.pins.custody_trust().max_anchor_age_ms
             || now - observed_at > self.pins.observer_trust().max_state_age_ms
-            || token_expiry.is_some_and(|expires| now >= expires)
+            || token_window.is_some_and(|(issued, expires)| {
+                now >= expires
+                    || issued > (now / 1_000).saturating_add(super::MAX_TOKEN_FUTURE_SKEW_SECS)
+            })
         {
             return Err(evidence_error());
         }
         history.anchor = candidate;
         history.observed_at = observed_at;
         history.trusted_at = now;
-        Ok(())
+        Ok(now)
     }
     fn current(
         &self,
         phase: Phase,
-    ) -> Result<VerifiedStreamTokenSignerQualificationV1, StreamTokenIssuerError> {
+        token_window: Option<(u64, u64)>,
+    ) -> Result<(VerifiedStreamTokenSignerQualificationV1, u64), StreamTokenIssuerError> {
         let floor = self.query_floor()?;
         let attempt = SignerStreamTokenObservationExpectedV1::current(
             self.pins.binding(),
@@ -230,14 +234,33 @@ impl HardwareDriverV1 {
             self.now_unix_ms()?,
         )
         .map_err(|_| evidence_error())?;
-        self.accept(
+        let validated_at = self.accept(
             verified.custody(),
             &decoded_observation.body,
             &floor,
             &[historical_block(verified.custody().statement().anchor)],
-            None,
+            token_window,
         )?;
-        Ok(verified)
+        Ok((verified, validated_at))
+    }
+    /// Authorize one new admission from fresh current custody and local finalized history.
+    /// The returned time is sampled after observer I/O and both finality checks. This does not
+    /// promise globally latest control state or cancellation of previously admitted streams.
+    pub(super) fn before_admission(
+        &self,
+        body: &StreamTokenBodyV1,
+    ) -> Result<u64, StreamTokenIssuerError> {
+        // This pure preparation validates the bounded body and its exact provider/key generation;
+        // it neither reserves an operation nor invokes the signing provider.
+        SignerStreamTokenExpectedV1::new(body, self.pins.binding())
+            .map_err(|_| StreamTokenIssuerError::HardwareBindingMismatch)?;
+        let expiry = body
+            .ttl_epoch
+            .checked_mul(1_000)
+            .ok_or(StreamTokenIssuerError::TimeOverflow)?;
+        let (_, validated_at) =
+            self.current(Phase::BeforeAdmission, Some((body.issued_at, expiry)))?;
+        Ok(validated_at)
     }
     pub(super) fn sign(
         &self,
@@ -245,7 +268,7 @@ impl HardwareDriverV1 {
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
         let prepared = SignerStreamTokenExpectedV1::new(&body, self.pins.binding())
             .map_err(|_| evidence_error())?;
-        let original = self.current(Phase::BeforeProvider)?;
+        let (original, _) = self.current(Phase::BeforeProvider, None)?;
         self.check_handles()?;
         // The exact body and prepared operation survive an ambiguous result. Recovery is one
         // read-only lookup, never a second reservation, signature or HTTP issuance.
@@ -339,7 +362,7 @@ impl HardwareDriverV1 {
                     block_hash: after.completion().anchor.block_hash,
                 },
             ],
-            Some(expiry),
+            Some((pending.token().body.issued_at, expiry)),
         )?;
 
         let release_floor = self.query_floor()?;
@@ -396,7 +419,7 @@ impl HardwareDriverV1 {
                     block_hash: released.completion().anchor.block_hash,
                 },
             ],
-            Some(expiry),
+            Some((pending.token().body.issued_at, expiry)),
         )?;
         // The only escape of the pending signature follows the fresh exact completed observation.
         pending.0.take().ok_or_else(evidence_error)

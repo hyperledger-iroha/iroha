@@ -37,6 +37,7 @@ async fn push_records_teu_using_router_assignment() {
         &[(test_lane, test_dataspace)],
     ));
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let domain_name = unique_test_domain_name("tagged");
     let unregister =
         Unregister::domain(DomainId::try_new(&domain_name, "test-dataspace-42").unwrap());
@@ -58,12 +59,13 @@ async fn push_records_teu_using_router_assignment() {
         default_limits.max_metadata_depth(),
     );
     let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-    let tx = AcceptedTransaction::accept(
+    let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         state.network_id_ref(),
         Duration::from_secs(60),
         tx_limits,
         &crypto_cfg,
+        &time_source,
     )
     .expect("Failed to accept transaction.");
     let hash = tx.as_ref().hash_as_entrypoint();
@@ -86,6 +88,7 @@ async fn push_records_teu_from_ivm_metadata() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let max_cycles = 42_000_u64;
     let tx = accepted_ivm_tx_by(account_id, &key_pair, &time_source, max_cycles);
     let hash = tx.as_ref().hash_as_entrypoint();
@@ -502,7 +505,6 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new(world_with_test_domains(), kura, query_handle);
     install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
-    let state = Arc::new(state);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router = Arc::new(MutableRouter::new(expected));
     let mut queue = Queue::test_with_router_for_routes(
@@ -511,6 +513,14 @@ fn corrupt_route_indexes_retain_accepted_work_without_rejection() {
         router.clone(),
         &[(expected.lane_id, expected.dataspace_id)],
     );
+    install_manifest_lane_authority_for_queue_test(&mut state, &queue, 0x71);
+    let journal_dir = tempfile::tempdir().expect("journal directory");
+    queue.install_plan_journal(
+        journal_dir.path().join("routing-corruption.norito"),
+        1024 * 1024,
+        true,
+    ).expect("install exact routing-ownership journal");
+    let state = Arc::new(state);
     let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
     queue.events_sender = event_sender;
     let queue = Arc::new(queue);

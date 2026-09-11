@@ -914,4 +914,59 @@ mod tests {
     }
     include!("reserve_transparency_runtime/restart_tests.rs");
     include!("reserve_transparency_runtime/canonical_checkpoint_tests.rs");
+    #[test]
+    fn persisted_scanner_frames_bind_distinct_payload_and_checkpoint_identities() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = scanner_config(directory.path().canonicalize().unwrap().join("scanner"));
+        let (query, projection, sink) = test_dependencies();
+        let mut scanner = scanner(&config, query.clone(), projection.clone(), sink.clone());
+        assert_eq!(scanner.tick().unwrap().events, 1);
+        let checkpoint = scanner.checkpoint.clone().unwrap();
+        let bytes = std::fs::read(&scanner.checkpoint_path).unwrap();
+        let payload_bytes = norito::encode_canonical(&checkpoint.payload).unwrap();
+        for (frame, identity) in [
+            (
+                bytes.as_slice(),
+                "sorafs_node::reserve_transparency_runtime::ReserveTransparencyCheckpointV1",
+            ),
+            (
+                payload_bytes.as_slice(),
+                "sorafs_node::reserve_transparency_runtime::ReserveTransparencyCheckpointPayloadV1",
+            ),
+        ] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        let decoded: ReserveTransparencyCheckpointV1 = norito::decode_canonical(&bytes).unwrap();
+        let payload: ReserveTransparencyCheckpointPayloadV1 =
+            norito::decode_canonical(&payload_bytes).unwrap();
+        assert_eq!(decoded, checkpoint);
+        assert_eq!(payload, checkpoint.payload);
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+        assert_eq!(norito::encode_canonical(&payload).unwrap(), payload_bytes);
+        decoded
+            .validate_for(&test_network_id(), QUERY_HANDLE, query_qualification())
+            .unwrap();
+        assert!(matches!(
+            norito::decode_canonical::<ReserveTransparencyCheckpointV1>(&payload_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<ReserveTransparencyCheckpointPayloadV1>(&bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        drop(scanner);
+        let reopened = ReserveTransparencyScannerV1::try_new(
+            &config,
+            test_network_id(),
+            query_qualification(),
+            query,
+            projection,
+            sink,
+        )
+        .unwrap();
+        assert_eq!(reopened.checkpoint, Some(checkpoint));
+    }
 }

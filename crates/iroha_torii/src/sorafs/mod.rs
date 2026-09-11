@@ -47,6 +47,8 @@ pub mod site;
 #[cfg(feature = "app_api")]
 pub mod stream_token_admission;
 #[cfg(feature = "app_api")]
+pub(crate) mod stream_token_cleanup;
+#[cfg(feature = "app_api")]
 pub(crate) mod stream_token_runtime;
 pub mod token;
 pub use admission::{

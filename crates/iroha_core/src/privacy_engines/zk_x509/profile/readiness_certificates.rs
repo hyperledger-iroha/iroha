@@ -29,23 +29,19 @@ use sha2::{Digest as _, Sha256};
 const SOUNDNESS_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
 const SOUNDNESS_CERTIFICATE_DOMAIN_V1: &[u8] = b"iroha.zk-x509.soundness-certificate.payload.v1";
 const SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1: u16 = 61;
-const SOUNDNESS_ROUND_BY_ROUND_BITS_V1: u16 = 129;
+const SOUNDNESS_ROUND_BY_ROUND_BITS_V1: u16 = 157;
 const SOUNDNESS_RANDOM_ORACLE_BITS_V1: u16 = 256;
 const SOUNDNESS_MAX_RANDOM_ORACLE_QUERY_LOG2_V1: u16 = 64;
 const SOUNDNESS_ROUND_BY_ROUND_UNION_TERMS_V1: u8 = 7;
 const SHA_MEMORY_EQUALITIES_V1: u8 = 2;
 const SHA_CALL_EQUALITIES_V1: u8 = 1;
 const SHA_BASE_FOLD_EQUALITIES_V1: u8 = 1;
-/// Independent SHA-256 pin for the typed soundness-certificate payload.
+/// Independent SHA-256 pin for an accepted soundness-certificate payload.
 ///
-/// It is not part of the payload it authenticates. Operators can reproduce
-/// and print the independently framed 61-field, 718-byte derivation with
-/// `installed_soundness_pin_matches_the_current_compiled_profile`; native
-/// capture tooling cannot derive or rewrite this reviewed pin.
-pub(crate) const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [
-    0xd2, 0x73, 0xa1, 0xbd, 0x01, 0x3f, 0x48, 0x08, 0x8d, 0x75, 0xa6, 0x21, 0xad, 0x89, 0x38, 0x64,
-    0xce, 0x4a, 0xa5, 0xce, 0x73, 0x11, 0x27, 0xaa, 0x04, 0x38, 0xac, 0xd8, 0xb9, 0x59, 0x2d, 0xaf,
-];
+/// No certificate is installed while the current MAIN opening schedule exceeds
+/// the consensus proof cap under the mandatory shared STARK geometry.
+/// TODO: review and install a certificate for the bounded replacement proof.
+pub(crate) const ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1: [u8; 32] = [0; 32];
 pub(crate) const ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1: u16 = 1;
 const RESOURCE_CERTIFICATE_DOMAIN_V1: &[u8] =
     b"iroha.zk-x509.native-resource-certificate.payload.v1";
@@ -393,8 +389,9 @@ fn validate_soundness_certificate_payload_v1(
     )?;
     let ca = validate_fri_certificate_v1(
         certificate.ca_fri,
-        7,
-        ZK_X509_CA_FRI_LDE_LOG2_V1 - 7,
+        super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
+        ZK_X509_CA_FRI_LDE_LOG2_V1
+            - super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
         ZK_X509_CA_FRI_TERMINAL_LOG2_V1,
         ZK_X509_CA_FRI_TERMINAL_DEGREE_BOUND_V1,
         ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1,
@@ -1021,11 +1018,14 @@ mod tests {
         }
     }
     #[test]
-    fn soundness_certificate_recomputes_the_complete_bound_and_pin() {
+    fn soundness_certificate_recomputes_the_complete_bound_without_installing_a_pin() {
         let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
-        let digest = validate_soundness_certificate_payload_v1(certificate)
-            .expect("canonical soundness certificate");
+        let digest = soundness_certificate_digest_v1(certificate);
         assert_ne!(digest, [0; 32]);
+        assert_eq!(
+            validate_soundness_certificate_payload_v1(certificate),
+            Some(soundness_certificate_digest_v1(certificate))
+        );
         assert!(soundness_certificate_matches_pin_v1(certificate, digest));
         assert!(!soundness_certificate_matches_pin_v1(certificate, [0; 32]));
         let mut wrong_pin = digest;
@@ -1036,14 +1036,16 @@ mod tests {
         ));
     }
     #[test]
-    fn installed_soundness_pin_matches_the_current_compiled_profile() {
+    fn unavailable_soundness_payload_has_an_independent_exact_hash() {
         let compiled_profile_digest =
             crate::privacy_engines::zk_x509::engine::construct_zk_x509_compiled_profile_v1()
                 .expect("compiled X.509 profile")
                 .digest();
         let certificate = canonical_soundness_certificate_v1(compiled_profile_digest);
-        let validated = validate_soundness_certificate_payload_v1(certificate)
-            .expect("canonical soundness certificate validates");
+        assert_eq!(
+            validate_soundness_certificate_payload_v1(certificate),
+            Some(soundness_certificate_digest_v1(certificate))
+        );
         let (independent, payload_bytes) =
             independently_digest_soundness_certificate_v1(certificate);
         assert_eq!(SOUNDNESS_CERTIFICATE_FIELD_COUNT_V1, 61);
@@ -1054,15 +1056,18 @@ mod tests {
             payload_bytes,
             hex::encode(independent),
         );
-        assert_eq!(validated, independent);
-        assert_eq!(independent, ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1);
-        assert!(soundness_certificate_is_pinned_v1(compiled_profile_digest));
+        assert_eq!(soundness_certificate_digest_v1(certificate), independent);
+        assert_eq!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
+        assert!(!soundness_certificate_is_pinned_v1(compiled_profile_digest));
     }
     #[test]
     fn every_soundness_certificate_field_is_hashed_and_pinned() {
         let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
-        let digest = validate_soundness_certificate_payload_v1(certificate)
-            .expect("canonical soundness certificate");
+        let digest = soundness_certificate_digest_v1(certificate);
+        assert_eq!(
+            validate_soundness_certificate_payload_v1(certificate),
+            Some(soundness_certificate_digest_v1(certificate))
+        );
         macro_rules! reject_mutation {
             ($mutate:expr) => {{
                 let mut mutation = certificate;

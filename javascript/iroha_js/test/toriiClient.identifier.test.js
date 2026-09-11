@@ -344,19 +344,25 @@ function assertBfvOperationKeyComponentVectors(operationVectors) {
     assert.equal(vector.key_id, bootstrap.key_id, `bootstrap refresh vector ${vector.name}: key id`);
     assert.equal(Number.isSafeInteger(vector.refresh_rounds), true, `bootstrap refresh vector ${vector.name}: refresh rounds`);
     assert.equal(vector.refresh_rounds > 0, true, `bootstrap refresh vector ${vector.name}: refresh rounds positive`);
-    assert.equal(
-      vector.refresh_rounds <= bootstrap.max_refresh_rounds,
-      true,
-      `bootstrap refresh vector ${vector.name}: refresh rounds within key bound`,
-    );
     assert.equal(vector.input_plaintext_slots.length > 0, true, `bootstrap refresh vector ${vector.name}: plaintext slots`);
     for (const [index, slot] of vector.input_plaintext_slots.entries()) {
       assert.equal(Number.isSafeInteger(slot), true, `bootstrap refresh vector ${vector.name}: slot ${index}`);
       assert.equal(slot >= 0, true, `bootstrap refresh vector ${vector.name}: slot ${index} non-negative`);
     }
     assert.equal(vector.expected_input_ciphertext_bytes > 0, true, `bootstrap refresh vector ${vector.name}: input bytes`);
-    assert.equal(vector.expected_output_ciphertext_bytes > 0, true, `bootstrap refresh vector ${vector.name}: output bytes`);
     assertBfvUpperSha256(`bootstrap refresh vector ${vector.name}: input`, vector.expected_input_ciphertext_sha256);
+    if (vector.expected_error !== undefined) {
+      assert.equal(vector.refresh_rounds > bootstrap.max_refresh_rounds, true, "rejected refresh count exceeds supported capacity");
+      assert.equal(vector.expected_error, "invalid BFV parameters: BFV bootstrap refresh rounds 2 exceeds bootstrap key max_refresh_rounds 1");
+      assert.equal(vector.expected_output_ciphertext_sha256, undefined);
+      continue;
+    }
+    assert.equal(
+      vector.refresh_rounds <= bootstrap.max_refresh_rounds,
+      true,
+      `bootstrap refresh vector ${vector.name}: refresh rounds within key bound`,
+    );
+    assert.equal(vector.expected_output_ciphertext_bytes > 0, true, `bootstrap refresh vector ${vector.name}: output bytes`);
     assertBfvUpperSha256(`bootstrap refresh vector ${vector.name}: output`, vector.expected_output_ciphertext_sha256);
     assertBfvUpperSha256(`bootstrap refresh vector ${vector.name}: plaintext`, vector.expected_plaintext_sha256);
     assert.equal(vector.output_components.coefficient_count, publicDegree, `bootstrap refresh vector ${vector.name}: coefficient count`);
@@ -1326,13 +1332,27 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
     [
       "bootstrap refresh bound drift",
       (operationVectors) => {
-        operationVectors.bootstrap_key.max_refresh_rounds = 1;
+        operationVectors.bootstrap_key.max_refresh_rounds = 0;
       },
     ],
     [
       "bootstrap refresh component drift",
       (operationVectors) => {
         operationVectors.bootstrap_refresh_vectors[0].output_components.c0_sha256 = "0".repeat(64);
+      },
+    ],
+    [
+      "rejected bootstrap refresh input digest drift",
+      (operationVectors) => {
+        operationVectors.bootstrap_refresh_vectors.find((vector) => vector.expected_error !== undefined)
+          .expected_input_ciphertext_sha256 = "0".repeat(64);
+      },
+    ],
+    [
+      "rejected bootstrap refresh input slot drift",
+      (operationVectors) => {
+        operationVectors.bootstrap_refresh_vectors.find((vector) => vector.expected_error !== undefined)
+          .input_plaintext_slots = [-1];
       },
     ],
     [

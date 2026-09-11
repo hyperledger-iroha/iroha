@@ -2776,6 +2776,7 @@ where
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
+    let initial_processed_items = stats.processed_items();
     let batch_size = params
         .fetch_size
         .fetch_size
@@ -2867,7 +2868,12 @@ where
         let mut batch_iter =
             ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
         let (batch, _next) = batch_iter.next_batch(0)?;
-        debug_assert_eq!(stats.processed_items(), skipped.saturating_add(processed));
+        debug_assert_eq!(
+            stats.processed_items(),
+            initial_processed_items
+                .saturating_add(skipped)
+                .saturating_add(processed)
+        );
         return Ok((QueryOutput::new_bounded(batch, has_more, None), stats));
     }
     if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
@@ -2892,7 +2898,10 @@ where
             let (batch, _next) = batch_iter.next_batch(0)?;
             let remaining_items =
                 u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
-            debug_assert_eq!(stats.processed_items(), count);
+            debug_assert_eq!(
+                stats.processed_items(),
+                initial_processed_items.saturating_add(count)
+            );
             return Ok((QueryOutput::new(batch, remaining_items, None), stats));
         }
         let mut count = 0_u64;
@@ -2953,7 +2962,10 @@ where
         let (batch, _next) = batch_iter.next_batch(0)?;
         let remaining_items =
             u64::try_from(total_after_pagination.saturating_sub(batch_len)).unwrap_or(u64::MAX);
-        debug_assert_eq!(stats.processed_items(), count);
+        debug_assert_eq!(
+            stats.processed_items(),
+            initial_processed_items.saturating_add(count)
+        );
         return Ok((QueryOutput::new(batch, remaining_items, None), stats));
     }
     let fetch_size = usize::try_from(batch_size.get()).unwrap_or(usize::MAX);

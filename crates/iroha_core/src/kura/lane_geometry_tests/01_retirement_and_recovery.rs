@@ -121,6 +121,18 @@ fn unjournaled_nonzero_activation_without_marker_fails_closed_before_intent() {
     let initial_activations =
         BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
     let kura = open_kura(&root, &extended);
+    install_retirement_test_lane_markers(
+        &kura,
+        &extended,
+        &extended_incarnations,
+        &extended_activations,
+    );
+    let participant_blocks = extended
+        .entry(LaneId::new(1))
+        .expect("dynamic participant lane")
+        .blocks_dir(&root);
+    fs::remove_file(participant_blocks.join(MARKER_FILE_NAME))
+        .expect("remove the dynamic lane's authority marker");
     let error = kura
         .apply_lane_geometry_transition(
             &extended,
@@ -144,10 +156,6 @@ fn unjournaled_nonzero_activation_without_marker_fails_closed_before_intent() {
             .is_empty(),
         "missing-marker rejection must precede retirement intent publication"
     );
-    let participant_blocks = extended
-        .entry(LaneId::new(1))
-        .expect("dynamic participant lane")
-        .blocks_dir(&root);
     assert!(participant_blocks.is_dir());
     assert!(
         !participant_blocks.join(MARKER_FILE_NAME).exists(),
@@ -301,8 +309,14 @@ fn certified_drain_frontier_admission_rejects_stale_route_and_missing_native_evi
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("drain-frontier-admission");
     let (_, extended) = retirement_test_configs();
-    let (extended_incarnations, _) = retirement_test_geometry();
+    let (extended_incarnations, extended_activations) = retirement_test_geometry();
     let kura = open_kura(&root, &extended);
+    install_retirement_test_lane_markers(
+        &kura,
+        &extended,
+        &extended_incarnations,
+        &extended_activations,
+    );
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(8);
     let lane_incarnation = extended_incarnations[&lane_id];
@@ -378,15 +392,16 @@ fn scale_in_allows_unrelated_participant_work() {
         &extended_activations,
     );
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (network_id, epoch, payload) = autonomous_retirement_payload(
+    let (_, _, payload) = autonomous_retirement_payload(
         extended_incarnations[&LaneId::SINGLE],
         LaneId::new(9),
         DataSpaceId::new(19),
         Hash::new(b"unrelated participant incarnation"),
         &producer,
     );
-    kura.persist_lane_executable_payload(&payload, network_id, epoch)
-        .expect("persist non-target participant work");
+    let payload =
+        crate::kura::tests::historical_capacity_bound_payload_for_fixture(&payload, &producer);
+    crate::kura::tests::persist_historical_capacity_payload_fixture(&kura, &payload, &producer);
     kura.apply_lane_geometry_transition(
         &extended,
         &initial,
@@ -642,15 +657,16 @@ fn scale_in_allows_recreated_incarnation_and_unrelated_participant_work() {
             &extended_activations,
         );
         let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let (network_id, epoch, payload) = autonomous_retirement_payload(
+        let (_, _, payload) = autonomous_retirement_payload(
             extended_incarnations[&LaneId::SINGLE],
             participant_lane,
             participant_dataspace,
             participant_incarnation,
             &producer,
         );
-        kura.persist_lane_executable_payload(&payload, network_id, epoch)
-            .expect("persist non-target participant work");
+        let payload =
+            crate::kura::tests::historical_capacity_bound_payload_for_fixture(&payload, &producer);
+        crate::kura::tests::persist_historical_capacity_payload_fixture(&kura, &payload, &producer);
         kura.apply_lane_geometry_transition(
             &extended,
             &initial,
@@ -1566,6 +1582,11 @@ fn canonical_sealed_reveal_block_and_current_receipt_release_applied_participant
     });
     kura.store_block(Arc::clone(&block))
         .expect("store canonical global block");
+    crate::kura::tests::persist_v2_finality_chain_through(
+        &kura,
+        NonZeroUsize::new(usize::try_from(block.header().height().get()).expect("block height"))
+            .expect("nonzero application height"),
+    );
     let certified = certified_geometry_lane_block_for_proposal(proposal.clone(), &producer);
     kura.write_certified_lane_block_artifact(&certified)
         .expect("persist globally backed lane certificate");

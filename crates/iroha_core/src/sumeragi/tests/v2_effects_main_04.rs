@@ -1862,6 +1862,7 @@ fn certified_fetch_capacity_release_after_timeout_cleanup_retries_without_restar
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
     let planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
+        0,
         Arc::clone(&fixture.executor.output_guard),
         1,
     );
@@ -2080,6 +2081,7 @@ fn fresh_certified_fetch_queues_after_capacity_consumes_its_target() {
     let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
     let planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
+        0,
         Arc::clone(&fixture.executor.output_guard),
         1,
     );
@@ -2429,6 +2431,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let foreign_output_guard = ConsensusOutputGuard::isolated();
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
+        0,
         Arc::clone(&foreign_output_guard),
         1,
     );

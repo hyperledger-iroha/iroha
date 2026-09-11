@@ -1379,7 +1379,9 @@ impl Kura {
         entry: &LaneConfigEntry,
         frontier: Option<&CertifiedLaneBlockArtifact>,
         frontier_source: Option<&DurableAutonomousLaneMergeSource>,
-    ) -> Result<Vec<(u64, iroha_data_model::NetworkId, u64)>> {
+        retention: Option<&AuthenticatedLaneHistoryRetention>,
+        obsolete_bundle_recovery: Option<&CertifiedBundleAppendRecovery>,
+    ) -> Result<Vec<AutonomousLaneMergeBundleV1>> {
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
         let certified_recovery = if let Some(frontier) = frontier {
@@ -1417,6 +1419,16 @@ impl Kura {
                 &source.source_bundle,
                 AutonomousLaneMergeBundleV1::FORMAT_LABEL,
             )?
+        } else if let Some(recovery) = obsolete_bundle_recovery {
+            if !frontier.is_some_and(|frontier| {
+                retention.is_some_and(|proof| proof.permits_discard(&frontier.proposal.descriptor))
+            }) {
+                return Err(Self::invalid_lane_artifact_error(
+                    bundle_data_path,
+                    "obsolete bundle append preimage lacks authenticated terminal authority",
+                ));
+            }
+            Some(recovery.clone())
         } else {
             if self.certified_bundle_pair_has_any_recovery_locked(
                 &bundle_data_path,
@@ -1623,7 +1635,16 @@ impl Kura {
                 "durable certified frontier conflicts with its indexed lane slot",
             ));
         }
-        let mut persisted = Vec::new();
+        // A terminal cursor owns only missing cross-pair dependencies below
+        // its discarded prefix. Physical history must still have a frontier,
+        // remain below it, and agree with its exact indexed current slot.
+        certified.retain(|_, artifact| {
+            !retention.is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
+        });
+        bundles.retain(|_, bundle| {
+            !retention
+                .is_some_and(|proof| proof.permits_discard(&bundle.certified.proposal.descriptor))
+        });
         for (height, bundle) in &bundles {
             let Some(artifact) = certified.get(height) else {
                 return Err(Self::invalid_lane_artifact_error(
@@ -1631,23 +1652,18 @@ impl Kura {
                     "autonomous bundle exists without its exact certified lane slot",
                 ));
             };
-            let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref() else {
+            if artifact.prepare_qc.payload_availability_qc.is_none() {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
                     "autonomous bundle exists for an ordinary certified lane slot",
                 ));
-            };
+            }
             if bundle.certified != *artifact {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
                     "autonomous bundle differs from its exact certified lane slot",
                 ));
             }
-            persisted.push((
-                *height,
-                availability.body.network_id,
-                availability.body.epoch,
-            ));
         }
         for (height, artifact) in &certified {
             if artifact.prepare_qc.payload_availability_qc.is_some()
@@ -1660,7 +1676,11 @@ impl Kura {
                 ));
             }
         }
-        Ok(persisted)
+        // Preserve the complete authenticated rows, including an append's
+        // stable preimage. A caller must not discard this evidence and reread
+        // the same pair through the live no-recovery-artifacts path before
+        // all-route capacity admission permits completing the pending append.
+        Ok(bundles.into_values().collect())
     }
     fn certified_bundle_capacity_consumed_components_locked(
         &self,
@@ -2163,7 +2183,10 @@ impl Kura {
                 CertifiedBundleCapacityIdentity,
                 CertifiedBundleCapacityReservation,
             >::new();
+            let mut obsolete_append_plans = Vec::new();
             for entry in entries {
+                let retention =
+                    self.authenticated_lane_history_retention_under_prune_guard(&entry)?;
                 let artifact = {
                     let _geometry_guard = self.lane_geometry_lock.lock();
                     let active = self.lane_storage_entry(entry.lane_id)?;
@@ -2186,15 +2209,38 @@ impl Kura {
                         None
                     }
                 };
+                self.recover_certified_bundle_history_rewrites_under_prune_guard(
+                    &entry,
+                    retention.as_ref(),
+                    artifact.as_ref(),
+                )?;
                 let Some(artifact) = artifact else {
                     let _geometry_guard = self.lane_geometry_lock.lock();
                     let active = self.lane_storage_entry(entry.lane_id)?;
                     let _sidecar_guard = self.sidecar_lock.lock();
-                    self.preflight_certified_bundle_inventory_locked(&active, None, None)?;
+                    self.preflight_certified_bundle_inventory_locked(
+                        &active,
+                        None,
+                        None,
+                        retention.as_ref(),
+                        None,
+                    )?;
                     continue;
                 };
-                let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref()
-                else {
+                let obsolete_plans = if let Some(proof) = retention.as_ref()
+                    && proof.permits_discard(&artifact.proposal.descriptor)
+                {
+                    self.plan_obsolete_certified_bundle_appends_under_prune_guard(
+                        &entry, &artifact, proof,
+                    )?
+                } else {
+                    Vec::new()
+                };
+                if artifact.prepare_qc.payload_availability_qc.is_none()
+                    || retention
+                        .as_ref()
+                        .is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
+                {
                     let persisted = {
                         let _geometry_guard = self.lane_geometry_lock.lock();
                         let active = self.lane_storage_entry(entry.lane_id)?;
@@ -2204,28 +2250,25 @@ impl Kura {
                             &active,
                             Some(&artifact),
                             None,
+                            retention.as_ref(),
+                            obsolete_plans
+                                .iter()
+                                .find_map(|plan| plan.bundle_recovery()),
                         )?
                     };
-                    for (height, network_id, epoch) in persisted {
-                        self.durable_autonomous_lane_merge_source_under_prune_guard(
-                            entry.lane_id,
-                            height,
-                            network_id,
-                            epoch,
-                            None,
-                            true,
-                        )
-                        .map_err(|message| {
-                            Self::invalid_lane_artifact_error(
-                                self.store_root.clone(),
-                                format!(
-                                    "startup persisted autonomous bundle is invalid: {message}"
-                                ),
-                            )
-                        })?;
+                    for bundle in persisted {
+                        self.validate_startup_persisted_autonomous_bundle_under_prune_guard(
+                            &bundle,
+                        )?;
                     }
+                    obsolete_append_plans.extend(obsolete_plans);
                     continue;
-                };
+                }
+                let availability = artifact
+                    .prepare_qc
+                    .payload_availability_qc
+                    .as_ref()
+                    .expect("non-discardable autonomous frontier has availability evidence");
                 let descriptor = &artifact.proposal.descriptor;
                 let source = self
                     .durable_autonomous_lane_merge_source_under_prune_guard(
@@ -2257,24 +2300,13 @@ impl Kura {
                         &active,
                         Some(&artifact),
                         Some(&source),
+                        retention.as_ref(),
+                        None,
                     )?;
                     (plan, consumed, persisted)
                 };
-                for (height, network_id, epoch) in persisted {
-                    self.durable_autonomous_lane_merge_source_under_prune_guard(
-                        entry.lane_id,
-                        height,
-                        network_id,
-                        epoch,
-                        None,
-                        true,
-                    )
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            format!("startup persisted autonomous bundle is invalid: {message}"),
-                        )
-                    })?;
+                for bundle in persisted {
+                    self.validate_startup_persisted_autonomous_bundle_under_prune_guard(&bundle)?;
                 }
                 if rebuilt.keys().any(|identity| {
                     identity.lane_id == plan.identity.lane_id
@@ -2318,6 +2350,17 @@ impl Kura {
                     ));
                 }
             }
+            let obsolete_append_index_growth = obsolete_append_plans
+                .iter()
+                .try_fold(0_u64, |total, plan| {
+                    total.checked_add(plan.remaining_index_growth())
+                })
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "obsolete append recovery index growth overflows",
+                    )
+                })?;
             if self.max_disk_usage_bytes != 0 && !self.store_root.as_os_str().is_empty() {
                 // `used` already contains any authenticated partial append and its
                 // intent/build files.  Keep the in-memory reservation at its full
@@ -2354,6 +2397,7 @@ impl Kura {
                         bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
                     })
                     .and_then(|bytes| bytes.checked_add(rebuilt_effective_reserved))
+                    .and_then(|bytes| bytes.checked_add(obsolete_append_index_growth))
                     .ok_or_else(|| {
                         Self::invalid_lane_artifact_error(
                             self.store_root.clone(),
@@ -2369,6 +2413,11 @@ impl Kura {
                 }
             }
             *self.certified_bundle_capacity_reservations.lock() = rebuilt.into();
+            // Only now are all current routes' publication obligations and
+            // every obsolete journal's remaining index growth admitted.
+            self.recover_obsolete_certified_bundle_appends_under_prune_guard(
+                &obsolete_append_plans,
+            )?;
             Ok(())
         })();
         if result.is_ok() {

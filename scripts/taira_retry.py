@@ -354,6 +354,8 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 
 def require_candidate_probe_inventory(inventory):
     """Reject obsolete or ambiguous public drafts before any retirement mutation."""
+    require(inventory.get("qualification_scope") in ("core_testnet", "inrou"),
+            "one explicit qualification scope is required")
     operator_key = inventory.get("operator_public_key")
     # PublicKey Display uses a lowercase multihash prefix and uppercase payload.
     # Native admission performs the cryptographic key/config/custody joins.
@@ -3416,6 +3418,8 @@ def preflight_identity(attempt, inventory):
         report["schema"] == "iroha.taira.public-reset.report.v1"
         and report["command"] == "preflight"
         and report["status"] == "ok"
+        and inventory.get("qualification_scope") in ("core_testnet", "inrou")
+        and report.get("qualification_scope") == inventory["qualification_scope"]
         and report["deployment_id"] == inventory["deployment_id"]
         and report["revision"] == inventory["revision"]["commit"]
         and report["inventory_sha256"] == inventory_sha
@@ -3424,6 +3428,7 @@ def preflight_identity(attempt, inventory):
     )
     return {
         "deployment_id": inventory["deployment_id"],
+        "qualification_scope": inventory["qualification_scope"],
         "authorization_nonce": inventory["authorization_nonce"],
         "inventory_sha256": inventory_sha,
         "authorization_sha256": report["authorization_sha256"],
@@ -3455,6 +3460,7 @@ def completed_attempt(plan, attempt, *, required=False):
     expected = {
         "schema": "iroha.taira.public-reset.journal.v1",
         "deployment_id": inventory["deployment_id"],
+        "qualification_scope": inventory["qualification_scope"],
         "inventory_sha256": frontier["inventory_sha256"],
         "authorization_sha256": frontier["authorization_sha256"],
         "authorization_nonce": inventory["authorization_nonce"],
@@ -4546,6 +4552,7 @@ def guest_locked(request, capacity, root):
         "passed": True,
         "commit": binary["commit"],
         "deployment_id": draft["deployment_id"],
+        "qualification_scope": draft["qualification_scope"],
         "completed": completed,
         "private_attempt": str(attempt),
         "native_apply_passed": True,
@@ -4852,6 +4859,7 @@ def resume_postconditions(request, attempt, terminal_path):
         "commit": binary["commit"],
         "deployment_id": inventory["deployment_id"],
         "completed": completed,
+        "qualification_scope": inventory["qualification_scope"],
         "private_attempt": str(attempt),
         "native_apply_passed": True,
         "seed_continuity_passed": True,

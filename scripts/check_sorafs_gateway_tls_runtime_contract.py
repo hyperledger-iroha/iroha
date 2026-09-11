@@ -32,6 +32,176 @@ FORBIDDEN_DOC_CLAIMS = (
 )
 
 
+# This is a narrow source contract, not a Rust parser or native qualification.
+# Literal tokens stay atomic so comments/quoted examples cannot supply code.
+_RUST_TOKEN = re.compile(
+    r'\s+|//[^\n]*|/\*|(?:br|r)(?P<raw_hashes>\#{0,255})"'
+    r'|(?:b|c)?"(?:\\.|[^"\\])*"|(?:b)?\'(?:\\.|[^\'\\])\''
+    r'|[A-Za-z_][A-Za-z_0-9]*|.',
+    re.DOTALL,
+)
+
+
+def _tokens(source: str) -> tuple[str, ...]:
+    """Keep code/literal tokens while discarding whitespace and nested comments."""
+
+    result: list[str] = []
+    cursor = 0
+    while cursor < len(source):
+        match = _RUST_TOKEN.match(source, cursor)
+        assert match is not None
+        token = match.group()
+        cursor = match.end()
+        if token.isspace() or token.startswith("//"):
+            continue
+        if token == "/*":
+            depth = 1
+            while depth:
+                opening = source.find("/*", cursor)
+                closing = source.find("*/", cursor)
+                if closing < 0:
+                    return ()
+                if 0 <= opening < closing:
+                    depth += 1
+                    cursor = opening + 2
+                else:
+                    depth -= 1
+                    cursor = closing + 2
+            continue
+        if match.group("raw_hashes") is not None:
+            end_marker = '"' + match.group("raw_hashes")
+            end = source.find(end_marker, cursor)
+            if end < 0:
+                return ()
+            cursor = end + len(end_marker)
+            token = source[match.start():cursor]
+        result.append(token)
+    return tuple(result)
+
+
+def _positions(tokens: tuple[str, ...], expected: tuple[str, ...]) -> list[int]:
+    return [
+        index for index, token in enumerate(tokens)
+        if expected and token == expected[0]
+        and tokens[index:index + len(expected)] == expected
+    ]
+
+
+def _contains_once(tokens: tuple[str, ...], source: str) -> bool:
+    return len(_positions(tokens, _tokens(source))) == 1
+
+
+def _body(tokens: tuple[str, ...], owner: str) -> tuple[str, ...]:
+    """Read the unique named owner's balanced body; ambiguity fails closed."""
+
+    marker = _tokens(owner)
+    starts = _positions(tokens, marker)
+    if len(starts) != 1:
+        return ()
+    start = starts[0] + len(marker)
+    while start < len(tokens) and tokens[start] != "{":
+        start += 1
+    depth = 1
+    for end in range(start + 1, len(tokens)):
+        if tokens[end] == "{":
+            depth += 1
+        elif tokens[end] == "}":
+            depth -= 1
+            if depth == 0:
+                return tokens[start + 1:end]
+    return ()
+
+
+_CONTROLLER_CONSTRUCTOR = """
+    let hostnames = config.hostnames.clone();
+    let automation =
+        AcmeAutomation::try_new(config, client_binding.clone(), Arc::clone(&client))?;
+    Ok(Self {
+        automation: Mutex::new(automation), client_binding, client, tls_state,
+        hostnames, poll_interval: DEFAULT_POLL_INTERVAL,
+    })
+"""
+_ACME_CONSTRUCTOR = """
+    qualify_acme_client(&client_binding, &client)?;
+    Ok(Self { config, client_binding, client, state: AcmeState::default(), })
+"""
+_PROVIDER_BINDING_FAILURE = """
+    if config.acme.enabled != config.acme.provider.is_some() {
+        return Err(ToriiBuildError::invalid_configuration(
+            "sorafs.gateway.acme.provider",
+            "provider binding must be present exactly when ACME is enabled",
+        ));
+    }
+"""
+_ENABLED_WITHOUT_CLIENT = """
+    (true, None) => {
+        return Err(ToriiBuildError::invalid_runtime_dependency(
+            "sorafs.gateway.acme",
+            "ACME is enabled but no runtime client was supplied",
+        ));
+    }
+"""
+_DISABLED_WITH_CLIENT = """
+    (false, Some(_)) => {
+        return Err(ToriiBuildError::invalid_runtime_dependency(
+            "sorafs.gateway.acme",
+            "runtime client supplied while ACME is disabled",
+        ));
+    }
+"""
+_QUALIFIED_CLIENT_BRANCH = """
+    (true, Some(client)) => {
+        let provider = config.acme.provider.as_ref().ok_or_else(|| {
+            ToriiBuildError::invalid_configuration(
+                "sorafs.gateway.acme.provider",
+                "ACME is enabled but no provider binding was configured",
+            )
+        })?;
+        let binding = gateway_runtime_provider_binding(provider)?;
+        Some(Arc::new(
+            TlsAutomationHandle::try_new(
+                gateway_acme_config(&config.acme), binding, client,
+                Arc::clone(&tls_state),
+            ).map_err(|error| {
+                ToriiBuildError::invalid_runtime_dependency(
+                    "sorafs.gateway.acme",
+                    format!("client failed exact startup qualification: {error:?}"),
+                )
+            })?,
+        ))
+    }
+"""
+_RUNTIME_SETTER_EMITTER = """
+    (
+        $(
+            $(#[$attribute:meta])*
+            $name:ident($argument:ident: $dependency:ty $(,)?) => $field:ident;
+        )+
+    ) => {
+        $(
+            $(#[$attribute])*
+            #[must_use]
+            pub fn $name(mut self, $argument: $dependency) -> Self {
+                self.$field = Some($argument);
+                self
+            }
+        )+
+    };
+"""
+_RUNTIME_SETTER_ROWS = (
+    ("""
+        with_sorafs_gateway_acme_client(
+            client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>,
+        ) => sorafs_gateway_acme_client;
+    """, "irohad:missing-runtime-acme-injection"),
+    ("""
+        with_sorafs_gateway_compliance_feed_transport(
+            transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+        ) => sorafs_gateway_compliance_feed_transport;
+    """, "irohad:missing-runtime-compliance-transport-injection"),
+)
+
+
 def _repository_root_identity(root: Path, failures: list[str]) -> Path | None:
     """Return one validated repository-root identity."""
 
@@ -145,8 +315,15 @@ def check_contract(root: Path) -> list[str]:
         failures.append("controller:missing-runtime-client-boundary")
     if "GatewayProviderBindingV1" not in controller:
         failures.append("controller:missing-config-provider-binding")
-    if "AcmeAutomation::try_new(config, client_binding, client)?" not in controller:
+    controller_constructor = _body(
+        _tokens(production_controller),
+        "pub fn try_new",
+    )
+    if controller_constructor != _tokens(_CONTROLLER_CONSTRUCTOR):
         failures.append("controller:missing-startup-qualification")
+    production_acme = acme.split("#[cfg(test)]", 1)[0]
+    if _body(_tokens(production_acme), "pub fn try_new") != _tokens(_ACME_CONSTRUCTOR):
+        failures.append("acme-harness:missing-startup-qualification")
     if "fn qualification(&self)" not in acme:
         failures.append("acme-harness:missing-provider-qualification")
     if "pub trait AcmeClient: Send + Sync" not in acme:
@@ -179,31 +356,32 @@ def check_contract(root: Path) -> list[str]:
         if "runtime-injected provider client" not in renewal:
             failures.append("xtask:renewal-does-not-fail-closed")
 
-    if (
-        "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
-        not in torii
-    ):
+    gateway_builder = _body(_tokens(torii), "fn build_sorafs_gateway_security")
+    acme_match = _body(
+        gateway_builder,
+        "let tls_automation = match (config.acme.enabled, acme_client)",
+    )
+    if not _contains_once(acme_match, _ENABLED_WITHOUT_CLIENT):
         failures.append("torii:missing-enabled-without-client-startup-failure")
-    if (
-        "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
-        not in torii
-    ):
+    if not _contains_once(acme_match, _DISABLED_WITH_CLIENT):
+        failures.append("torii:missing-disabled-with-client-startup-failure")
+    if not _contains_once(gateway_builder, _PROVIDER_BINDING_FAILURE):
         failures.append("torii:missing-provider-binding-startup-failure")
-    if "TlsAutomationHandle::try_new(" not in torii:
+    if not _contains_once(acme_match, _QUALIFIED_CLIENT_BRANCH):
         failures.append("torii:missing-exact-client-qualification")
     if 'include!("main/runtime_deps.rs");' not in irohad:
         failures.append("irohad:missing-runtime-deps-module")
-    for marker, failure in (
-        (
-            "pub fn with_sorafs_gateway_acme_client(",
-            "irohad:missing-runtime-acme-injection",
-        ),
-        (
-            "pub fn with_sorafs_gateway_compliance_feed_transport(",
-            "irohad:missing-runtime-compliance-transport-injection",
-        ),
+    runtime_tokens = _tokens(runtime_deps.split("#[cfg(test)]", 1)[0])
+    if _body(runtime_tokens, "macro_rules! define_runtime_dep_setters_v1") != _tokens(
+        _RUNTIME_SETTER_EMITTER
     ):
-        if marker not in runtime_deps:
+        failures.append("irohad:runtime-dependency-setter-emitter-drift")
+    setters = _body(
+        _body(runtime_tokens, "impl IrohaRuntimeDeps"),
+        "define_runtime_dep_setters_v1!",
+    )
+    for row, failure in _RUNTIME_SETTER_ROWS:
+        if not _contains_once(setters, row):
             failures.append(failure)
     for marker, failure in (
         (

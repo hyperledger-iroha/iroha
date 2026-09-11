@@ -376,6 +376,17 @@ fn core_host_timing_change_aborts_active_envelope() {
         "an envelope accepted under the prior timing must not commit"
     );
     let result = commit_single_handle_envelope(&mut host, &descriptor, &proof, &handle, &intent);
+    assert_eq!(result, Err(VMError::PermissionDenied));
+    let reject = host
+        .take_axt_reject_for_tests()
+        .expect("issuer reset rejection");
+    assert_eq!(reject.reason, AxtRejectReason::PolicyDenied);
+    assert_eq!(
+        reject.detail,
+        "committed AXT policy has no unambiguous single-key issuer",
+    );
+    configure_axt_test_host(&mut host, [(dsid, manifest_root)]);
+    let result = commit_single_handle_envelope(&mut host, &descriptor, &proof, &handle, &intent);
     assert_unanchored_spend_rejection(&mut host, result);
 }
 #[cfg(feature = "app_api")]

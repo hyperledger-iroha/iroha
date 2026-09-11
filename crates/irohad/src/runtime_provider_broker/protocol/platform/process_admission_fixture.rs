@@ -116,6 +116,22 @@ pub(super) fn connect_test_process(
         Arc::clone(&endpoint.client_pool),
     )
 }
+pub(super) fn connect_test_process_before(
+    endpoint: &BrokerTestEndpoint,
+    chain_id: &str,
+    network_id: NetworkId,
+    catalog: Vec<ProviderBindingWireV1>,
+    deadline: BrokerDeadlineV1,
+) -> Result<(Arc<BrokerSession>, Vec<ProviderObservationWireV1>), BrokerError> {
+    BrokerSession::connect_before(
+        endpoint,
+        chain_id,
+        network_id,
+        catalog,
+        deadline,
+        Arc::clone(&endpoint.client_pool),
+    )
+}
 pub(super) fn prepare_test_server_state(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -295,7 +311,7 @@ mod tests {
         let (replacement, _replacement_peer) =
             UnixStream::pair().expect("create replacement connection");
         session
-            .reconnect_using(None, || {
+            .reconnect_using(None, |_| {
                 Ok(BrokerConnection {
                     stream: replacement,
                     session_id: [2; 32],
@@ -307,7 +323,7 @@ mod tests {
         assert!(Arc::ptr_eq(&session.decode_pool, &endpoint.client_pool));
         assert_eq!(session.connection.lock().unwrap().session_id, [2; 32]);
         session
-            .reconnect_using(None, || {
+            .reconnect_using(None, |_| {
                 panic!("healthy reconnect must not authenticate again")
             })
             .expect("healthy session retains current connection");

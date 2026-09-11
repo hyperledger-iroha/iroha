@@ -1937,7 +1937,7 @@ mod tests {
             .split_once("impl ScalarVector {")
             .expect("scalar-vector impl")
             .1
-            .split_once("impl core::ops::Add for ScalarVector")
+            .split_once("struct PointVector(")
             .expect("scalar-vector boundary")
             .0;
         assert_eq!(
@@ -2002,7 +2002,7 @@ mod tests {
             .split_once("impl ScalarVector {")
             .expect("scalar-vector impl")
             .1
-            .split_once("impl core::ops::Add for ScalarVector")
+            .split_once("struct PointVector(")
             .expect("scalar-vector boundary")
             .0;
         let sum = scalar_vector

@@ -477,6 +477,8 @@ pub struct EvidenceViewerGrantClaimsV1 {
     pub role: EvidenceViewerRoleV1,
     /// Review-purpose digest.
     pub purpose_digest: [u8; 32],
+    /// Fresh nonzero identity of this issuance, bound into the credential.
+    pub issuance_nonce: [u8; 32],
     /// Grant generation, beginning at one.
     pub generation: u64,
     /// Grant issue timestamp.
@@ -486,7 +488,11 @@ pub struct EvidenceViewerGrantClaimsV1 {
 }
 /// Runtime-only rotating-grant boundary.
 pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
-    /// Issue one unforgeable grant for exact claims.
+    /// Issue one unforgeable grant for exact claims, including the issuance nonce.
+    ///
+    /// Distinct nonces must produce independently revocable credentials, even for
+    /// otherwise identical claims. An error may hide an issued credential; its
+    /// authenticated expiry remains the bound when no token is returned.
     fn issue(
         &self,
         claims: &EvidenceViewerGrantClaimsV1,
@@ -499,9 +505,12 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         now_unix_ms: u64,
     ) -> Result<(), EvidenceViewerExternalErrorV1>;
     /// Revoke a previously issued token digest. Implementations must be idempotent.
+    /// Exact-issued retirement may call the same captured provider after qualification drift.
+    /// This only retires its returned credential; a failure does not establish reclamation.
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1>;
 }
 include!("evidence_viewer/receipt_signing.rs");
+include!("evidence_viewer/grant_publication.rs");
 /// Runtime-only authenticated erasure boundary.
 pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Irreversibly erase or cryptographically destroy one exact object.
@@ -524,7 +533,8 @@ pub enum EvidenceViewerCheckpointStoreExternalErrorV1 {
     /// The checkpoint store is temporarily unavailable.
     #[error("evidence-viewer checkpoint store unavailable")]
     Unavailable,
-    /// The checkpoint store rejected the exact request.
+    /// The checkpoint store definitively rejected the exact request without a commit.
+    /// A request that may still complete must instead report `Ambiguous`.
     #[error("evidence-viewer checkpoint store rejected request")]
     Rejected,
     /// The CAS outcome is unknown and requires authoritative readback.
@@ -831,12 +841,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1> {
     }
 }
 impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1> {
-    fn issue(
-        &self,
-        claims: &EvidenceViewerGrantClaimsV1,
-    ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
-        self.invoke(|provider| provider.issue(claims))
-    }
     fn verify(
         &self,
         token: &str,
@@ -1183,6 +1187,8 @@ pub struct EvidenceViewerSessionSecurityRecordV1 {
     pub finalized_at_unix_ms: u64,
     /// Active grant generation.
     pub grant_generation: u64,
+    /// Exact issuance nonce bound into the installed active grant.
+    pub active_grant_issuance_nonce: [u8; 32],
     /// Active grant issue timestamp.
     pub active_grant_issued_at_unix_ms: u64,
     /// One-way digest of the active grant.
@@ -2194,7 +2200,7 @@ impl EvidenceViewerServiceV1 {
             if can_restore_process_local_snapshot(&state) {
                 *state = previous;
             }
-            return Err(error);
+            return Err(error.into());
         }
         Ok(EvidenceViewerChallengeIssuedV1 {
             challenge_id,
@@ -2402,109 +2408,102 @@ impl EvidenceViewerServiceV1 {
             viewer_account: request.viewer_account.clone(),
             role: request.role,
             purpose_digest,
+            issuance_nonce: fresh_grant_issuance_nonce()?,
             generation: 1,
             issued_at_unix_ms: request.now_unix_ms,
             expires_at_unix_ms: grant_expires_at_unix_ms,
         };
-        let grant = self
-            .deps
-            .grants
-            .issue(&claims)
-            .map_err(map_external_error)?;
-        let security_record = EvidenceViewerSessionSecurityRecordV1 {
-            local_session,
-            case_id: request.case_id.clone(),
-            round_id: request.round_id.clone(),
-            role: request.role,
-            purpose_digest,
-            credential_id_digest: webauthn.credential_id_digest,
-            webauthn_assertion_digest: assertion_digest,
-            authenticator_counter: webauthn.authenticator_counter,
-            policy_digest: authorization.policy_digest,
-            finalized_height: authorization.finalized_height,
-            finalized_block_hash: authorization.finalized_block_hash,
-            finalized_at_unix_ms: authorization.finalized_at_unix_ms,
-            grant_generation: 1,
-            active_grant_issued_at_unix_ms: request.now_unix_ms,
-            active_grant_digest: grant.digest(),
-            active_grant_expires_at_unix_ms: grant_expires_at_unix_ms,
-            revoked: false,
-        };
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                let _ = self.deps.grants.revoke(grant.digest());
-                return Err(EvidenceViewerErrorV1::StateUnavailable);
-            }
-        };
-        if let Err(error) = self.ensure_authoritative_state_locked(&state) {
-            let _ = self.deps.grants.revoke(grant.digest());
-            return Err(error);
-        }
-        if let Err(error) = ensure_session_commit_slot(
-            &state,
-            &self.config,
-            request.idempotency_key,
-            session_request_digest,
-            assertion_digest,
-            security_record.local_session.session_id,
-            request.quarantine_id,
-        ) {
-            let _ = self.deps.grants.revoke(grant.digest());
-            return Err(error);
-        }
-        let previous = state.clone();
-        let challenge = state
-            .challenges
-            .get_mut(&challenge_id)
-            .ok_or(EvidenceViewerErrorV1::AuthenticationRejected)?;
-        if challenge.consumed_at_unix_ms.is_some() {
-            return Err(EvidenceViewerErrorV1::AuthenticationRejected);
-        }
-        challenge.consumed_at_unix_ms = Some(request.now_unix_ms);
-        state.sessions.insert(
-            security_record.local_session.session_id,
-            security_record.clone(),
-        );
-        let receipt = match self.append_receipt_locked(
-            &mut state,
-            ReceiptSpecV1 {
-                kind: EvidenceViewerReceiptKindV1::SessionIssued,
-                session_id: Some(security_record.local_session.session_id),
-                case_id: Some(security_record.case_id.clone()),
-                round_id: Some(security_record.round_id.clone()),
-                quarantine_id: security_record.local_session.quarantine_id,
-                object_id: security_record.local_session.object_id,
-                evidence_digest: security_record.local_session.evidence_digest,
-                actor_account: &security_record.local_session.viewer_account,
-                idempotency_key: request.idempotency_key,
-                request_digest: session_request_digest,
-                range: None,
-                issued_at_unix_ms: request.now_unix_ms,
-            },
-        ) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                *state = previous;
-                let _ = self.deps.grants.revoke(grant.digest());
-                return Err(error);
-            }
-        };
-        state.idempotency.insert(
-            request.idempotency_key,
-            IdempotencyRecordV1 {
-                idempotency_key: request.idempotency_key,
-                request_digest: session_request_digest,
-                outcome_digest: receipt.receipt_digest,
-            },
-        );
-        if let Err(error) = self.persist_locked(&mut state) {
-            if can_restore_process_local_snapshot(&state) {
-                *state = previous;
-            }
-            let _ = self.deps.grants.revoke(grant.digest());
-            return Err(error);
-        }
+        let (grant, (security_record, receipt)) =
+            self.deps.grants.issue_for_publication(&claims, |pending| {
+                let grant = &pending.token;
+                let security_record = EvidenceViewerSessionSecurityRecordV1 {
+                    local_session,
+                    case_id: request.case_id.clone(),
+                    round_id: request.round_id.clone(),
+                    role: request.role,
+                    purpose_digest,
+                    credential_id_digest: webauthn.credential_id_digest,
+                    webauthn_assertion_digest: assertion_digest,
+                    authenticator_counter: webauthn.authenticator_counter,
+                    policy_digest: authorization.policy_digest,
+                    finalized_height: authorization.finalized_height,
+                    finalized_block_hash: authorization.finalized_block_hash,
+                    finalized_at_unix_ms: authorization.finalized_at_unix_ms,
+                    grant_generation: 1,
+                    active_grant_issuance_nonce: claims.issuance_nonce,
+                    active_grant_issued_at_unix_ms: request.now_unix_ms,
+                    active_grant_digest: grant.digest(),
+                    active_grant_expires_at_unix_ms: grant_expires_at_unix_ms,
+                    revoked: false,
+                };
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return Err(EvidenceViewerErrorV1::StateUnavailable);
+                    }
+                };
+                self.ensure_authoritative_state_locked(&state)?;
+                ensure_session_commit_slot(
+                    &state,
+                    &self.config,
+                    request.idempotency_key,
+                    session_request_digest,
+                    assertion_digest,
+                    security_record.local_session.session_id,
+                    request.quarantine_id,
+                )?;
+                let previous = state.clone();
+                let challenge = state
+                    .challenges
+                    .get_mut(&challenge_id)
+                    .ok_or(EvidenceViewerErrorV1::AuthenticationRejected)?;
+                if challenge.consumed_at_unix_ms.is_some() {
+                    return Err(EvidenceViewerErrorV1::AuthenticationRejected);
+                }
+                challenge.consumed_at_unix_ms = Some(request.now_unix_ms);
+                state.sessions.insert(
+                    security_record.local_session.session_id,
+                    security_record.clone(),
+                );
+                let receipt = match self.append_receipt_locked(
+                    &mut state,
+                    ReceiptSpecV1 {
+                        kind: EvidenceViewerReceiptKindV1::SessionIssued,
+                        session_id: Some(security_record.local_session.session_id),
+                        case_id: Some(security_record.case_id.clone()),
+                        round_id: Some(security_record.round_id.clone()),
+                        quarantine_id: security_record.local_session.quarantine_id,
+                        object_id: security_record.local_session.object_id,
+                        evidence_digest: security_record.local_session.evidence_digest,
+                        actor_account: &security_record.local_session.viewer_account,
+                        idempotency_key: request.idempotency_key,
+                        request_digest: session_request_digest,
+                        range: None,
+                        issued_at_unix_ms: request.now_unix_ms,
+                    },
+                ) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        *state = previous;
+                        return Err(error);
+                    }
+                };
+                state.idempotency.insert(
+                    request.idempotency_key,
+                    IdempotencyRecordV1 {
+                        idempotency_key: request.idempotency_key,
+                        request_digest: session_request_digest,
+                        outcome_digest: receipt.receipt_digest,
+                    },
+                );
+                if let Err(error) = pending.persist(self, &mut state) {
+                    if can_restore_process_local_snapshot(&state) {
+                        *state = previous;
+                    }
+                    return Err(error);
+                }
+                Ok((security_record, receipt))
+            })?;
         Ok(EvidenceViewerSessionIssuedV1 {
             session: security_record,
             grant,
@@ -2534,106 +2533,105 @@ impl EvidenceViewerServiceV1 {
         {
             return Err(EvidenceViewerErrorV1::AuthenticationRejected);
         }
-        let rotated = self.rotate_grant(&session, grant, now_unix_ms)?;
-        let viewer_digest = text_digest(&session.local_session.viewer_account);
-        let visible_watermark = format!(
-            "CONFIDENTIAL · {} · {} · {}",
-            session.role.as_str(),
-            hex::encode(&viewer_digest[..8]),
-            hex::encode(session.local_session.session_id)
-        );
-        let manifest = EvidenceViewerManifestV1 {
-            version: EVIDENCE_VIEWER_MANIFEST_VERSION_V1,
-            session_id,
-            case_id: session.case_id.clone(),
-            round_id: session.round_id.clone(),
-            quarantine_id: session.local_session.quarantine_id,
-            object_id: session.local_session.object_id,
-            evidence_digest: session.local_session.evidence_digest,
-            payload_len: object.payload_len,
-            content_type: object.content_type.clone(),
-            max_range_bytes: self.config.max_range_bytes,
-            role: session.role,
-            purpose_digest: session.purpose_digest,
-            visible_watermark,
-            watermark_metadata_digest: session.local_session.watermark_metadata_digest,
-            expires_at_unix_ms: session.local_session.expires_at_unix_ms,
-            finalized_height: authorization.finalized_height,
-            finalized_block_hash: authorization.finalized_block_hash,
-        };
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                let _ = self.deps.grants.revoke(rotated.token.digest());
-                return Err(EvidenceViewerErrorV1::StateUnavailable);
-            }
-        };
-        if let Err(error) = self.ensure_authoritative_state_locked(&state) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        if let Err(error) = ensure_new_idempotency(
-            &state,
-            self.config.max_idempotency_records,
-            idempotency_key,
-            request_digest,
-        ) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        let previous = state.clone();
-        if let Err(error) = apply_rotated_grant(&mut state, &session, &rotated) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        if let Err(error) = apply_reauthorized_anchor(&mut state, &session, &authorization) {
-            *state = previous;
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        let receipt = match self.append_receipt_locked(
-            &mut state,
-            ReceiptSpecV1 {
-                kind: EvidenceViewerReceiptKindV1::ManifestAccessed,
-                session_id: Some(session_id),
-                case_id: Some(session.case_id),
-                round_id: Some(session.round_id),
-                quarantine_id: session.local_session.quarantine_id,
-                object_id: session.local_session.object_id,
-                evidence_digest: session.local_session.evidence_digest,
-                actor_account: viewer_account,
-                idempotency_key,
-                request_digest,
-                range: None,
-                issued_at_unix_ms: now_unix_ms,
-            },
-        ) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                *state = previous;
-                let _ = self.deps.grants.revoke(rotated.token.digest());
-                return Err(error);
-            }
-        };
-        state.idempotency.insert(
-            idempotency_key,
-            IdempotencyRecordV1 {
-                idempotency_key,
-                request_digest,
-                outcome_digest: receipt.receipt_digest,
-            },
-        );
-        if let Err(error) = self.persist_locked(&mut state) {
-            if can_restore_process_local_snapshot(&state) {
-                *state = previous;
-            }
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
+        let claims = self.rotation_claims(&session, grant, now_unix_ms)?;
+        let (replacement, (manifest, receipt)) =
+            self.deps.grants.issue_for_publication(&claims, |pending| {
+                let rotated = RotatedGrantV1 {
+                    token: &pending.token,
+                    issuance_nonce: claims.issuance_nonce,
+                    generation: claims.generation,
+                    issued_at_unix_ms: claims.issued_at_unix_ms,
+                    expires_at_unix_ms: claims.expires_at_unix_ms,
+                };
+                let viewer_digest = text_digest(&session.local_session.viewer_account);
+                let visible_watermark = format!(
+                    "CONFIDENTIAL · {} · {} · {}",
+                    session.role.as_str(),
+                    hex::encode(&viewer_digest[..8]),
+                    hex::encode(session.local_session.session_id)
+                );
+                let manifest = EvidenceViewerManifestV1 {
+                    version: EVIDENCE_VIEWER_MANIFEST_VERSION_V1,
+                    session_id,
+                    case_id: session.case_id.clone(),
+                    round_id: session.round_id.clone(),
+                    quarantine_id: session.local_session.quarantine_id,
+                    object_id: session.local_session.object_id,
+                    evidence_digest: session.local_session.evidence_digest,
+                    payload_len: object.payload_len,
+                    content_type: object.content_type.clone(),
+                    max_range_bytes: self.config.max_range_bytes,
+                    role: session.role,
+                    purpose_digest: session.purpose_digest,
+                    visible_watermark,
+                    watermark_metadata_digest: session.local_session.watermark_metadata_digest,
+                    expires_at_unix_ms: session.local_session.expires_at_unix_ms,
+                    finalized_height: authorization.finalized_height,
+                    finalized_block_hash: authorization.finalized_block_hash,
+                };
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return Err(EvidenceViewerErrorV1::StateUnavailable);
+                    }
+                };
+                self.ensure_authoritative_state_locked(&state)?;
+                ensure_new_idempotency(
+                    &state,
+                    self.config.max_idempotency_records,
+                    idempotency_key,
+                    request_digest,
+                )?;
+                let previous = state.clone();
+                apply_rotated_grant(&mut state, &session, &rotated)?;
+                if let Err(error) = apply_reauthorized_anchor(&mut state, &session, &authorization)
+                {
+                    *state = previous;
+                    return Err(error);
+                }
+                let receipt = match self.append_receipt_locked(
+                    &mut state,
+                    ReceiptSpecV1 {
+                        kind: EvidenceViewerReceiptKindV1::ManifestAccessed,
+                        session_id: Some(session_id),
+                        case_id: Some(session.case_id),
+                        round_id: Some(session.round_id),
+                        quarantine_id: session.local_session.quarantine_id,
+                        object_id: session.local_session.object_id,
+                        evidence_digest: session.local_session.evidence_digest,
+                        actor_account: viewer_account,
+                        idempotency_key,
+                        request_digest,
+                        range: None,
+                        issued_at_unix_ms: now_unix_ms,
+                    },
+                ) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        *state = previous;
+                        return Err(error);
+                    }
+                };
+                state.idempotency.insert(
+                    idempotency_key,
+                    IdempotencyRecordV1 {
+                        idempotency_key,
+                        request_digest,
+                        outcome_digest: receipt.receipt_digest,
+                    },
+                );
+                if let Err(error) = pending.persist(self, &mut state) {
+                    if can_restore_process_local_snapshot(&state) {
+                        *state = previous;
+                    }
+                    return Err(error);
+                }
+                Ok((manifest, receipt))
+            })?;
         let _ = self.deps.grants.revoke(grant.digest());
         Ok(EvidenceViewerManifestOutcomeV1 {
             manifest,
-            rotated_grant: rotated.token,
+            rotated_grant: replacement,
             receipt,
         })
     }
@@ -2667,97 +2665,96 @@ impl EvidenceViewerServiceV1 {
         }
         let session = self.active_session(session_id, viewer_account, now_unix_ms)?;
         let authorization = self.reauthorize_session(&session, now_unix_ms)?;
-        let rotated = self.rotate_grant(&session, grant, now_unix_ms)?;
-        let range = self
-            .node
-            .read_moderation_quarantine_object_range(
-                session.local_session.quarantine_id,
-                start,
-                end,
-            )
-            .map_err(|_| EvidenceViewerErrorV1::RuntimeUnavailable)?;
-        if range.record.object_id != session.local_session.object_id
-            || range.record.payload_digest != session.local_session.evidence_digest
-            || range.start != start
-            || range.end != end
-            || u64::try_from(range.payload.len()).unwrap_or(u64::MAX) != end - start
-        {
-            return Err(EvidenceViewerErrorV1::AuthenticationRejected);
-        }
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                let _ = self.deps.grants.revoke(rotated.token.digest());
-                return Err(EvidenceViewerErrorV1::StateUnavailable);
-            }
-        };
-        if let Err(error) = self.ensure_authoritative_state_locked(&state) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        if let Err(error) = ensure_new_idempotency(
-            &state,
-            self.config.max_idempotency_records,
-            idempotency_key,
-            request_digest,
-        ) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        let previous = state.clone();
-        if let Err(error) = apply_rotated_grant(&mut state, &session, &rotated) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        if let Err(error) = apply_reauthorized_anchor(&mut state, &session, &authorization) {
-            *state = previous;
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        let receipt = match self.append_receipt_locked(
-            &mut state,
-            ReceiptSpecV1 {
-                kind: EvidenceViewerReceiptKindV1::RangeAccessed,
-                session_id: Some(session_id),
-                case_id: Some(session.case_id),
-                round_id: Some(session.round_id),
-                quarantine_id: session.local_session.quarantine_id,
-                object_id: session.local_session.object_id,
-                evidence_digest: session.local_session.evidence_digest,
-                actor_account: viewer_account,
-                idempotency_key,
-                request_digest,
-                range: Some((start, end)),
-                issued_at_unix_ms: now_unix_ms,
-            },
-        ) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                *state = previous;
-                let _ = self.deps.grants.revoke(rotated.token.digest());
-                return Err(error);
-            }
-        };
-        state.idempotency.insert(
-            idempotency_key,
-            IdempotencyRecordV1 {
-                idempotency_key,
-                request_digest,
-                outcome_digest: receipt.receipt_digest,
-            },
-        );
-        if let Err(error) = self.persist_locked(&mut state) {
-            if can_restore_process_local_snapshot(&state) {
-                *state = previous;
-            }
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
+        let claims = self.rotation_claims(&session, grant, now_unix_ms)?;
+        let (replacement, (range, receipt)) =
+            self.deps.grants.issue_for_publication(&claims, |pending| {
+                let rotated = RotatedGrantV1 {
+                    token: &pending.token,
+                    issuance_nonce: claims.issuance_nonce,
+                    generation: claims.generation,
+                    issued_at_unix_ms: claims.issued_at_unix_ms,
+                    expires_at_unix_ms: claims.expires_at_unix_ms,
+                };
+                let range = self
+                    .node
+                    .read_moderation_quarantine_object_range(
+                        session.local_session.quarantine_id,
+                        start,
+                        end,
+                    )
+                    .map_err(|_| EvidenceViewerErrorV1::RuntimeUnavailable)?;
+                if range.record.object_id != session.local_session.object_id
+                    || range.record.payload_digest != session.local_session.evidence_digest
+                    || range.start != start
+                    || range.end != end
+                    || u64::try_from(range.payload.len()).unwrap_or(u64::MAX) != end - start
+                {
+                    return Err(EvidenceViewerErrorV1::AuthenticationRejected);
+                }
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return Err(EvidenceViewerErrorV1::StateUnavailable);
+                    }
+                };
+                self.ensure_authoritative_state_locked(&state)?;
+                ensure_new_idempotency(
+                    &state,
+                    self.config.max_idempotency_records,
+                    idempotency_key,
+                    request_digest,
+                )?;
+                let previous = state.clone();
+                apply_rotated_grant(&mut state, &session, &rotated)?;
+                if let Err(error) = apply_reauthorized_anchor(&mut state, &session, &authorization)
+                {
+                    *state = previous;
+                    return Err(error);
+                }
+                let receipt = match self.append_receipt_locked(
+                    &mut state,
+                    ReceiptSpecV1 {
+                        kind: EvidenceViewerReceiptKindV1::RangeAccessed,
+                        session_id: Some(session_id),
+                        case_id: Some(session.case_id.clone()),
+                        round_id: Some(session.round_id.clone()),
+                        quarantine_id: session.local_session.quarantine_id,
+                        object_id: session.local_session.object_id,
+                        evidence_digest: session.local_session.evidence_digest,
+                        actor_account: viewer_account,
+                        idempotency_key,
+                        request_digest,
+                        range: Some((start, end)),
+                        issued_at_unix_ms: now_unix_ms,
+                    },
+                ) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        *state = previous;
+                        return Err(error);
+                    }
+                };
+                state.idempotency.insert(
+                    idempotency_key,
+                    IdempotencyRecordV1 {
+                        idempotency_key,
+                        request_digest,
+                        outcome_digest: receipt.receipt_digest,
+                    },
+                );
+                if let Err(error) = pending.persist(self, &mut state) {
+                    if can_restore_process_local_snapshot(&state) {
+                        *state = previous;
+                    }
+                    return Err(error);
+                }
+                Ok((range, receipt))
+            })?;
         let _ = self.deps.grants.revoke(grant.digest());
         Ok(EvidenceViewerRangeOutcomeV1 {
             range,
             watermark_metadata_digest: session.local_session.watermark_metadata_digest,
-            rotated_grant: rotated.token,
+            rotated_grant: replacement,
             receipt,
         })
     }
@@ -2789,86 +2786,85 @@ impl EvidenceViewerServiceV1 {
         }
         let session = self.active_session(session_id, viewer_account, now_unix_ms)?;
         let authorization = self.reauthorize_session(&session, now_unix_ms)?;
-        let rotated = self.rotate_grant(&session, grant, now_unix_ms)?;
-        let mut event_hasher = blake3::Hasher::new();
-        event_hasher.update(REQUEST_BINDING_DOMAIN_V1);
-        event_hasher.update(kind.as_str().as_bytes());
-        event_hasher.update(&request_digest);
-        if let Some(digest) = event_metadata_digest {
-            event_hasher.update(&digest);
-        }
-        let event_digest = *event_hasher.finalize().as_bytes();
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                let _ = self.deps.grants.revoke(rotated.token.digest());
-                return Err(EvidenceViewerErrorV1::StateUnavailable);
-            }
-        };
-        if let Err(error) = self.ensure_authoritative_state_locked(&state) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        if let Err(error) = ensure_new_idempotency(
-            &state,
-            self.config.max_idempotency_records,
-            idempotency_key,
-            request_digest,
-        ) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        let previous = state.clone();
-        if let Err(error) = apply_rotated_grant(&mut state, &session, &rotated) {
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        if let Err(error) = apply_reauthorized_anchor(&mut state, &session, &authorization) {
-            *state = previous;
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
-        let receipt = match self.append_receipt_locked(
-            &mut state,
-            ReceiptSpecV1 {
-                kind: EvidenceViewerReceiptKindV1::InteractionRecorded,
-                session_id: Some(session_id),
-                case_id: Some(session.case_id),
-                round_id: Some(session.round_id),
-                quarantine_id: session.local_session.quarantine_id,
-                object_id: session.local_session.object_id,
-                evidence_digest: session.local_session.evidence_digest,
-                actor_account: viewer_account,
-                idempotency_key,
-                request_digest: event_digest,
-                range: None,
-                issued_at_unix_ms: now_unix_ms,
-            },
-        ) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                *state = previous;
-                let _ = self.deps.grants.revoke(rotated.token.digest());
-                return Err(error);
-            }
-        };
-        state.idempotency.insert(
-            idempotency_key,
-            IdempotencyRecordV1 {
-                idempotency_key,
-                request_digest,
-                outcome_digest: receipt.receipt_digest,
-            },
-        );
-        if let Err(error) = self.persist_locked(&mut state) {
-            if can_restore_process_local_snapshot(&state) {
-                *state = previous;
-            }
-            let _ = self.deps.grants.revoke(rotated.token.digest());
-            return Err(error);
-        }
+        let claims = self.rotation_claims(&session, grant, now_unix_ms)?;
+        let (replacement, receipt) =
+            self.deps.grants.issue_for_publication(&claims, |pending| {
+                let rotated = RotatedGrantV1 {
+                    token: &pending.token,
+                    issuance_nonce: claims.issuance_nonce,
+                    generation: claims.generation,
+                    issued_at_unix_ms: claims.issued_at_unix_ms,
+                    expires_at_unix_ms: claims.expires_at_unix_ms,
+                };
+                let mut event_hasher = blake3::Hasher::new();
+                event_hasher.update(REQUEST_BINDING_DOMAIN_V1);
+                event_hasher.update(kind.as_str().as_bytes());
+                event_hasher.update(&request_digest);
+                if let Some(digest) = event_metadata_digest {
+                    event_hasher.update(&digest);
+                }
+                let event_digest = *event_hasher.finalize().as_bytes();
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return Err(EvidenceViewerErrorV1::StateUnavailable);
+                    }
+                };
+                self.ensure_authoritative_state_locked(&state)?;
+                ensure_new_idempotency(
+                    &state,
+                    self.config.max_idempotency_records,
+                    idempotency_key,
+                    request_digest,
+                )?;
+                let previous = state.clone();
+                apply_rotated_grant(&mut state, &session, &rotated)?;
+                if let Err(error) = apply_reauthorized_anchor(&mut state, &session, &authorization)
+                {
+                    *state = previous;
+                    return Err(error);
+                }
+                let receipt = match self.append_receipt_locked(
+                    &mut state,
+                    ReceiptSpecV1 {
+                        kind: EvidenceViewerReceiptKindV1::InteractionRecorded,
+                        session_id: Some(session_id),
+                        case_id: Some(session.case_id),
+                        round_id: Some(session.round_id),
+                        quarantine_id: session.local_session.quarantine_id,
+                        object_id: session.local_session.object_id,
+                        evidence_digest: session.local_session.evidence_digest,
+                        actor_account: viewer_account,
+                        idempotency_key,
+                        request_digest: event_digest,
+                        range: None,
+                        issued_at_unix_ms: now_unix_ms,
+                    },
+                ) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        *state = previous;
+                        return Err(error);
+                    }
+                };
+                state.idempotency.insert(
+                    idempotency_key,
+                    IdempotencyRecordV1 {
+                        idempotency_key,
+                        request_digest,
+                        outcome_digest: receipt.receipt_digest,
+                    },
+                );
+                if let Err(error) = pending.persist(self, &mut state) {
+                    if can_restore_process_local_snapshot(&state) {
+                        *state = previous;
+                    }
+                    return Err(error);
+                }
+                Ok(receipt)
+            })?;
         let _ = self.deps.grants.revoke(grant.digest());
-        Ok((rotated.token, receipt))
+        Ok((replacement, receipt))
     }
     /// Place a legal hold. Only an exact finalized legal authorization is accepted.
     ///
@@ -2976,7 +2972,7 @@ impl EvidenceViewerServiceV1 {
             if can_restore_process_local_snapshot(&state) {
                 *state = previous;
             }
-            return Err(error);
+            return Err(error.into());
         }
         Ok((hold, receipt))
     }
@@ -3079,7 +3075,7 @@ impl EvidenceViewerServiceV1 {
             if can_restore_process_local_snapshot(&state) {
                 *state = previous;
             }
-            return Err(error);
+            return Err(error.into());
         }
         Ok((released, receipt))
     }
@@ -3188,7 +3184,7 @@ impl EvidenceViewerServiceV1 {
             if can_restore_process_local_snapshot(&state) {
                 *state = previous;
             }
-            return Err(error);
+            return Err(error.into());
         }
         Ok((retention, receipt))
     }
@@ -3274,7 +3270,7 @@ impl EvidenceViewerServiceV1 {
                 if can_restore_process_local_snapshot(&state) {
                     *state = previous;
                 }
-                return Err(error);
+                return Err(error.into());
             }
             return Err(EvidenceViewerErrorV1::LegalHoldPrecedence);
         }
@@ -3320,7 +3316,7 @@ impl EvidenceViewerServiceV1 {
             if can_restore_process_local_snapshot(&state) {
                 *state = previous;
             }
-            return Err(error);
+            return Err(error.into());
         }
         // Retain the state lock across the irreversible boundary so a legal
         // hold cannot race between precedence evaluation and erasure commit.
@@ -3355,7 +3351,7 @@ impl EvidenceViewerServiceV1 {
             // The irreversible boundary has already committed. The durable
             // write-ahead intent makes restart recovery an idempotent replay.
             state.durability_uncertain = true;
-            return Err(error);
+            return Err(error.into());
         }
         Ok((erasure, receipt))
     }
@@ -3395,7 +3391,7 @@ impl EvidenceViewerServiceV1 {
         }
         if let Err(error) = self.persist_locked(&mut state) {
             state.durability_uncertain = true;
-            return Err(error);
+            return Err(error.into());
         }
         Ok(())
     }
@@ -3822,7 +3818,7 @@ impl EvidenceViewerServiceV1 {
             if can_restore_process_local_snapshot(&state) {
                 *state = previous;
             }
-            return Err(error);
+            return Err(error.into());
         }
         Ok(head)
     }
@@ -4177,18 +4173,18 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(authorization)
     }
-    fn rotate_grant(
+    fn rotation_claims(
         &self,
         session: &EvidenceViewerSessionSecurityRecordV1,
         token: &OpaqueEvidenceViewerSecretV1,
         now_unix_ms: u64,
-    ) -> Result<RotatedGrantV1, EvidenceViewerErrorV1> {
+    ) -> Result<EvidenceViewerGrantClaimsV1, EvidenceViewerErrorV1> {
         if token.digest() != session.active_grant_digest
             || now_unix_ms >= session.active_grant_expires_at_unix_ms
         {
             return Err(EvidenceViewerErrorV1::AuthenticationRejected);
         }
-        let current_claims = grant_claims(session, now_unix_ms, false)?;
+        let current_claims = grant_claims(session);
         self.deps
             .grants
             .verify(token.expose(), &current_claims, now_unix_ms)
@@ -4205,22 +4201,13 @@ impl EvidenceViewerServiceV1 {
             return Err(EvidenceViewerErrorV1::SessionInactive);
         }
         let claims = EvidenceViewerGrantClaimsV1 {
+            issuance_nonce: fresh_grant_issuance_nonce()?,
             generation,
             issued_at_unix_ms: now_unix_ms,
             expires_at_unix_ms,
             ..current_claims
         };
-        let replacement = self
-            .deps
-            .grants
-            .issue(&claims)
-            .map_err(map_external_error)?;
-        Ok(RotatedGrantV1 {
-            token: replacement,
-            generation,
-            issued_at_unix_ms: now_unix_ms,
-            expires_at_unix_ms,
-        })
+        Ok(claims)
     }
     fn append_receipt_locked(
         &self,
@@ -4397,13 +4384,13 @@ impl EvidenceViewerServiceV1 {
             return Ok(());
         }
         if readback.as_ref() == expected {
-            return if cas_result.is_err() {
+            return if cas_result == Err(EvidenceViewerCheckpointStoreExternalErrorV1::Rejected) {
                 Err(EvidenceViewerCheckpointCommitFailureV1::Unchanged)
             } else {
                 Err(EvidenceViewerCheckpointCommitFailureV1::Ambiguous)
             };
         }
-        if cas_result.is_ok() {
+        if cas_result != Err(EvidenceViewerCheckpointStoreExternalErrorV1::Rejected) {
             return Err(EvidenceViewerCheckpointCommitFailureV1::Ambiguous);
         }
         let (Some(record), Some((checkpoint, checkpoint_anchor))) = (readback, verified_readback)
@@ -4422,7 +4409,7 @@ impl EvidenceViewerServiceV1 {
     fn persist_locked(
         &self,
         state: &mut EvidenceViewerStateV1,
-    ) -> Result<(), EvidenceViewerErrorV1> {
+    ) -> Result<(), EvidenceViewerPersistenceFailureV1> {
         state.authoritative_race_adopted = false;
         let checkpoint = checkpoint_from_state(state);
         validate_checkpoint(&self.config, &checkpoint)?;
@@ -4487,7 +4474,7 @@ impl EvidenceViewerServiceV1 {
         let checkpoint_bytes = norito::encode_canonical(&envelope)
             .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
         if len_u64(checkpoint_bytes.len()) > self.config.checkpoint_max_bytes {
-            return Err(EvidenceViewerErrorV1::ResourceExhausted);
+            return Err(EvidenceViewerErrorV1::ResourceExhausted.into());
         }
         let next_record = self.sign_checkpoint_store_record(
             checkpoint_digest,
@@ -4507,36 +4494,46 @@ impl EvidenceViewerServiceV1 {
                     Ok(adopted) => adopted,
                     Err(_) => {
                         state.durability_uncertain = true;
-                        return Err(EvidenceViewerErrorV1::CheckpointUnavailable);
+                        return Err(EvidenceViewerErrorV1::CheckpointUnavailable.into());
                     }
                 };
                 if let Some(head) = adopted.compaction_archive_head.as_ref()
                     && self.verify_compaction_archive_lineage(head).is_err()
                 {
                     state.durability_uncertain = true;
-                    return Err(EvidenceViewerErrorV1::CheckpointUnavailable);
+                    return Err(EvidenceViewerErrorV1::CheckpointUnavailable.into());
                 }
                 if write_local_checkpoint_store_record(&self.config, &record).is_err() {
                     adopted.durability_uncertain = true;
                     *state = adopted;
-                    return Err(EvidenceViewerErrorV1::CheckpointUnavailable);
+                    return Err(EvidenceViewerErrorV1::CheckpointUnavailable.into());
                 }
                 adopted.authoritative_race_adopted = true;
                 *state = adopted;
-                return Err(EvidenceViewerErrorV1::CheckpointChanged);
+                return Err(EvidenceViewerErrorV1::CheckpointChanged.into());
             }
             Err(failure) => {
                 if failure.makes_state_uncertain() {
                     state.durability_uncertain = true;
                 }
-                return Err(failure.service_error());
+                return Err(EvidenceViewerPersistenceFailureV1 {
+                    error: failure.service_error(),
+                    publication: if failure.makes_state_uncertain() {
+                        GrantPublicationDispositionV1::Uncertain
+                    } else {
+                        GrantPublicationDispositionV1::Unpublished
+                    },
+                });
             }
         }
         state.checkpoint_anchor = Some(checkpoint_anchor);
         state.checkpoint_record = Some(next_record.clone());
         if write_local_checkpoint_store_record(&self.config, &next_record).is_err() {
             state.durability_uncertain = true;
-            return Err(EvidenceViewerErrorV1::CheckpointUnavailable);
+            return Err(EvidenceViewerPersistenceFailureV1 {
+                error: EvidenceViewerErrorV1::CheckpointUnavailable,
+                publication: GrantPublicationDispositionV1::Committed,
+            });
         }
         Ok(())
     }
@@ -4555,8 +4552,9 @@ struct ReceiptSpecV1<'a> {
     range: Option<(u64, u64)>,
     issued_at_unix_ms: u64,
 }
-struct RotatedGrantV1 {
-    token: OpaqueEvidenceViewerSecretV1,
+struct RotatedGrantV1<'a> {
+    token: &'a OpaqueEvidenceViewerSecretV1,
+    issuance_nonce: [u8; 32],
     generation: u64,
     issued_at_unix_ms: u64,
     expires_at_unix_ms: u64,
@@ -4564,7 +4562,7 @@ struct RotatedGrantV1 {
 fn apply_rotated_grant(
     state: &mut EvidenceViewerStateV1,
     expected: &EvidenceViewerSessionSecurityRecordV1,
-    rotated: &RotatedGrantV1,
+    rotated: &RotatedGrantV1<'_>,
 ) -> Result<(), EvidenceViewerErrorV1> {
     if state
         .erasures
@@ -4577,6 +4575,7 @@ fn apply_rotated_grant(
         .get_mut(&expected.local_session.session_id)
         .ok_or(EvidenceViewerErrorV1::NotFound)?;
     if session.revoked
+        || session.active_grant_issuance_nonce != expected.active_grant_issuance_nonce
         || session.grant_generation != expected.grant_generation
         || session.active_grant_issued_at_unix_ms != expected.active_grant_issued_at_unix_ms
         || session.active_grant_digest != expected.active_grant_digest
@@ -4585,6 +4584,7 @@ fn apply_rotated_grant(
         return Err(EvidenceViewerErrorV1::AuthenticationRejected);
     }
     session.grant_generation = rotated.generation;
+    session.active_grant_issuance_nonce = rotated.issuance_nonce;
     session.active_grant_issued_at_unix_ms = rotated.issued_at_unix_ms;
     session.active_grant_digest = rotated.token.digest();
     session.active_grant_expires_at_unix_ms = rotated.expires_at_unix_ms;
@@ -4664,20 +4664,8 @@ fn authorization_anchor_extends(
         }
     }
 }
-fn grant_claims(
-    session: &EvidenceViewerSessionSecurityRecordV1,
-    now_unix_ms: u64,
-    replacement: bool,
-) -> Result<EvidenceViewerGrantClaimsV1, EvidenceViewerErrorV1> {
-    let generation = if replacement {
-        session
-            .grant_generation
-            .checked_add(1)
-            .ok_or(EvidenceViewerErrorV1::ResourceExhausted)?
-    } else {
-        session.grant_generation
-    };
-    Ok(EvidenceViewerGrantClaimsV1 {
+fn grant_claims(session: &EvidenceViewerSessionSecurityRecordV1) -> EvidenceViewerGrantClaimsV1 {
+    EvidenceViewerGrantClaimsV1 {
         session_id: session.local_session.session_id,
         case_id: session.case_id.clone(),
         round_id: session.round_id.clone(),
@@ -4685,14 +4673,11 @@ fn grant_claims(
         viewer_account: session.local_session.viewer_account.clone(),
         role: session.role,
         purpose_digest: session.purpose_digest,
-        generation,
-        issued_at_unix_ms: if replacement {
-            now_unix_ms
-        } else {
-            session.active_grant_issued_at_unix_ms
-        },
+        issuance_nonce: session.active_grant_issuance_nonce,
+        generation: session.grant_generation,
+        issued_at_unix_ms: session.active_grant_issued_at_unix_ms,
         expires_at_unix_ms: session.active_grant_expires_at_unix_ms,
-    })
+    }
 }
 fn checkpoint_from_state(state: &EvidenceViewerStateV1) -> EvidenceViewerCheckpointV1 {
     EvidenceViewerCheckpointV1 {
@@ -5666,6 +5651,7 @@ fn validate_checkpoint(
             || session.finalized_height == 0
             || is_zero_digest(session.finalized_block_hash)
             || session.finalized_at_unix_ms == 0
+            || is_zero_digest(session.active_grant_issuance_nonce)
             || session.grant_generation == 0
             || session.active_grant_issued_at_unix_ms == 0
             || is_zero_digest(session.active_grant_digest)
@@ -8175,82 +8161,7 @@ mod tests {
             "object-state failure must precede every external challenge operation"
         );
     }
-    #[test]
-    fn checkpoint_genesis_and_successor_use_cas_with_mandatory_readback() {
-        let fixture = EvidenceViewerFixture::new();
-        let service = fixture.open();
-        let genesis = fixture
-            .checkpoint_store
-            .current()
-            .expect("authoritative genesis");
-        assert_eq!(genesis.generation, 1);
-        assert_eq!(genesis.predecessor_revision, None);
-        assert_eq!(genesis.predecessor_checkpoint_digest, None);
-        assert_eq!(
-            genesis.checkpoint_store_handle,
-            TEST_CHECKPOINT_STORE_HANDLE
-        );
-        assert_eq!(
-            genesis.checkpoint_store_revision,
-            TEST_CHECKPOINT_STORE_QUALIFICATION.revision()
-        );
-        assert_eq!(
-            genesis.checkpoint_store_policy_digest,
-            TEST_CHECKPOINT_STORE_QUALIFICATION.policy_digest()
-        );
-        assert_eq!(genesis.revision, checkpoint_store_record_revision(&genesis));
-        let (_, genesis_anchor) =
-            verify_checkpoint_store_record(&fixture.config, &service.checkpoint_store, &genesis)
-                .expect("genesis record signature and canonical checkpoint");
-        assert_eq!(genesis_anchor.checkpoint_generation, genesis.generation);
-        assert_eq!(genesis_anchor.predecessor_checkpoint_revision, None);
-        assert_eq!(genesis_anchor.predecessor_checkpoint_digest, None);
-        assert_eq!(
-            genesis_anchor.checkpoint_store_handle,
-            TEST_CHECKPOINT_STORE_HANDLE
-        );
-        assert_eq!(
-            genesis_anchor.checkpoint_store_revision,
-            TEST_CHECKPOINT_STORE_QUALIFICATION.revision()
-        );
-        assert_eq!(
-            genesis_anchor.checkpoint_store_policy_digest,
-            TEST_CHECKPOINT_STORE_QUALIFICATION.policy_digest()
-        );
-        assert_eq!(fixture.checkpoint_store.cas_call_count(), 1);
-        assert_eq!(fixture.checkpoint_store.load_call_count(), 4);
-        fixture.issue_challenge(
-            &service,
-            JUROR_ACCOUNT,
-            EvidenceViewerRoleV1::Juror,
-            [0xC0; 32],
-            BASE_UNIX_MS,
-        );
-        let successor = fixture
-            .checkpoint_store
-            .current()
-            .expect("authoritative successor");
-        assert_eq!(successor.generation, 2);
-        assert_eq!(successor.predecessor_revision, Some(genesis.revision));
-        assert_eq!(
-            successor.predecessor_checkpoint_digest,
-            Some(genesis.checkpoint_digest)
-        );
-        let (_, successor_anchor) =
-            verify_checkpoint_store_record(&fixture.config, &service.checkpoint_store, &successor)
-                .expect("successor record signature and canonical checkpoint");
-        assert_eq!(successor_anchor.checkpoint_generation, successor.generation);
-        assert_eq!(
-            successor_anchor.predecessor_checkpoint_revision,
-            Some(genesis.revision)
-        );
-        assert_eq!(
-            successor_anchor.predecessor_checkpoint_digest,
-            Some(genesis.checkpoint_digest)
-        );
-        assert_eq!(fixture.checkpoint_store.cas_call_count(), 2);
-        assert_eq!(fixture.checkpoint_store.load_call_count(), 8);
-    }
+    include!("evidence_viewer_checkpoint_genesis_tests.rs");
     #[test]
     fn stale_replica_fails_closed_until_verified_authoritative_refresh() {
         let fixture = EvidenceViewerFixture::new();
@@ -9228,7 +9139,7 @@ mod tests {
             .expect("unchanged predecessor");
         unchanged_fixture
             .checkpoint_store
-            .set_next_cas_mode(MockCheckpointCasMode::AmbiguousNoCommit);
+            .set_next_cas_mode(MockCheckpointCasMode::RejectedNoCommit);
         assert_eq!(
             unchanged_service
                 .issue_challenge(EvidenceViewerChallengeRequestV1 {
@@ -10699,4 +10610,6 @@ mod tests {
     // test module so their libtest paths and private-helper access remain stable.
     include!("evidence_viewer/canonical_checkpoint_tests.rs");
     include!("evidence_viewer/provider_security_tests.rs");
+    include!("evidence_viewer/schema_identity_tests.rs");
+    include!("evidence_viewer/grant_cleanup_tests.rs");
 }

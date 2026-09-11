@@ -837,6 +837,10 @@ pub struct StartupArgs {
     /// Validate configuration and available genesis, then exit without binding network sockets.
     #[arg(long)]
     pub check_config: bool,
+    /// Require this registered account to retain SoraCloud deployment authority
+    /// after executing the exact signed genesis during offline validation.
+    #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
+    pub require_genesis_inrou_deployment_authority: Option<String>,
     /// Enables trace logs of configuration reading & parsing.
     ///
     /// Might be useful for configuration troubleshooting.
@@ -6594,6 +6598,26 @@ fn freeze_lane_manifests_for_startup_replay(
     registry.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(registry))
 }
+/// Freeze compliance once before snapshot authentication or transaction replay.
+///
+/// The same immutable engine is installed in State and later shared with Queue. Revalidating its
+/// coverage after replay does not rescan mutable policy files.
+fn freeze_lane_compliance_for_startup_replay(
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> ReportResult<Option<Arc<LaneComplianceEngine>>, StartError> {
+    if !nexus.compliance.enabled {
+        return Ok(None);
+    }
+    let dir = nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
+        Report::new(StartError::InitKura)
+            .attach("lane compliance enabled but no policy_dir configured")
+    })?;
+    let engine = LaneComplianceEngine::from_directory(dir, nexus.compliance.audit_only)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+    engine.validate_active_catalog(&nexus.lane_catalog)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+    Ok(Some(Arc::new(engine)))
+}
 /// Rebind the frozen startup sources to the effective catalog produced by replay.
 fn rebind_frozen_lane_manifests_after_startup_replay(
     frozen: &LaneManifestRegistryHandle,
@@ -6603,6 +6627,8 @@ fn rebind_frozen_lane_manifests_after_startup_replay(
     rebound.validate_active_coverage_for_catalog(&nexus.lane_catalog)?;
     Ok(Arc::new(rebound))
 }
+#[cfg(test)]
+mod startup_runtime_policy_tests;
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -7876,11 +7902,45 @@ impl Iroha {
                 block_count.0
             )));
         }
+        // An imported snapshot has not yet authorized geometry mutation. Compute its candidate
+        // policy from configured static settings and authenticated restored topology without
+        // replacing State's canonical snapshot projection. Freeze filesystem-backed policy once.
+        let startup_policy_nexus = if provisional_imported_prefix {
+            nexus_config_for_startup_replay(config.nexus.clone(), Some(&state.nexus_snapshot()))
+        } else {
+            nexus_for_runtime_surfaces(&state)
+        };
+        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) = if emergency_fast {
+            iroha_logger::warn!(
+                "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
+            );
+            (Arc::new(LaneManifestRegistry::empty()), None)
+        } else {
+            let manifests = freeze_lane_manifests_for_startup_replay(&startup_policy_nexus)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| report.attach("lane manifest registry is not ready before snapshot authentication and Kura replay"))?;
+            let compliance = freeze_lane_compliance_for_startup_replay(&startup_policy_nexus)?;
+            (manifests, compliance)
+        };
+        let startup_policy = if emergency_fast {
+            iroha_core::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
+        } else {
+            iroha_core::sumeragi::V2SnapshotStartupPolicy::from_configured_runtime(
+                &state,
+                &startup_policy_nexus,
+                frozen_startup_lane_manifests.as_ref(),
+                frozen_startup_lane_compliance.as_deref(),
+            )
+        }
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+        state.install_lane_manifests(&frozen_startup_lane_manifests);
+        state.install_lane_compliance_engine(frozen_startup_lane_compliance.clone());
         let mut snapshot_startup_authorization =
             iroha_core::sumeragi::authenticate_v2_snapshot_startup(
                 kura.as_ref(),
                 &state,
                 &v2_replay_plan,
+                &startup_policy,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         let authenticated_snapshot_mode = snapshot_startup_authorization
@@ -8029,6 +8089,7 @@ impl Iroha {
                 kura.as_ref(),
                 &state,
                 &v2_replay_plan,
+                &startup_policy,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
@@ -8048,23 +8109,6 @@ impl Iroha {
         if provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
         }
-        // Transaction validation during replay consults the lane registry. Freeze and install the
-        // configured source set before the first replay transition; installing it only after
-        // replay leaves even the default lane absent on snapshot-free restart.
-        let frozen_startup_lane_manifests = if emergency_fast {
-            iroha_logger::warn!(
-                "emergency Fast startup deferred lane-manifest directory loading and validation until a Strict restart"
-            );
-            Arc::new(LaneManifestRegistry::empty())
-        } else {
-            let replay_nexus = nexus_for_runtime_surfaces(&state);
-            freeze_lane_manifests_for_startup_replay(&replay_nexus)
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-                .map_err(|report| {
-                    report.attach("lane manifest registry is not ready before atomic Kura replay")
-                })?
-        };
-        state.install_lane_manifests(&frozen_startup_lane_manifests);
         if generic_replay_height > state_height {
             iroha_logger::info!(
                 start_height = generic_replay_start,
@@ -8080,6 +8124,15 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
+        // Key admission and rotation read canonical WSV parameters. Local configuration must
+        // match that authority rather than overwriting it after replay without a block.
+        state
+            .validate_sumeragi_key_policy(&config.sumeragi)
+            .map_err(|field| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "configured Sumeragi key policy differs from canonical state: {field}"
+                ))
+            })?;
         // No Kura writer is live while trust selection or replay can still fail. Emergency Fast
         // remains read-only for its entire process lifetime; Strict owns every writer and repair.
         if emergency_fast {
@@ -8121,32 +8174,11 @@ impl Iroha {
         let dataspace_catalog = Arc::new(runtime_nexus.dataspace_catalog.clone());
         let governance_catalog = Arc::new(runtime_nexus.governance.clone());
         let registry_cfg = runtime_nexus.registry.clone();
-        let lane_compliance = if emergency_fast {
-            if runtime_nexus.compliance.enabled {
-                iroha_logger::warn!(
-                    "emergency Fast startup deferred compliance-policy directory loading and validation until a Strict restart"
-                );
-            }
-            None
-        } else if runtime_nexus.compliance.enabled {
-            let dir = runtime_nexus
-                .compliance
-                .policy_dir
-                .as_ref()
-                .ok_or_else(|| {
-                    Report::new(StartError::InitKura)
-                        .attach("lane compliance enabled but no policy_dir configured")
-                })?;
-            let engine =
-                LaneComplianceEngine::from_directory(dir, runtime_nexus.compliance.audit_only)
-                    .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
-            engine
-                .validate_active_catalog(lane_catalog.as_ref())
-                .map_err(|err| Report::new(err).change_context(StartError::InitKura))?;
-            Some(Arc::new(engine))
-        } else {
-            None
-        };
+        let lane_compliance = frozen_startup_lane_compliance;
+        if let Some(engine) = lane_compliance.as_ref() {
+            engine.validate_active_catalog(lane_catalog.as_ref())
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
+        }
         let mut queue_config = config.queue;
         if emergency_fast {
             queue_config.capacity = std::num::NonZeroUsize::MIN;
@@ -8164,7 +8196,6 @@ impl Iroha {
             &dataspace_catalog,
             lane_compliance.clone(),
         ));
-        state.install_lane_compliance_engine(lane_compliance.clone());
         // Replay may have committed lane lifecycle transitions. Rebind the same immutable source
         // snapshot used by replay to the effective catalog, rather than rescanning mutable files
         // at a second startup boundary.
@@ -8755,7 +8786,6 @@ impl Iroha {
         // Use cloned config values to keep `config` borrowable later.
         let tiered_state_cfg = config.tiered_state.clone();
         let pipeline_cfg = config.pipeline.clone();
-        let sumeragi_cfg = config.sumeragi.clone();
         let fraud_cfg = config.fraud_monitoring.clone();
         let zk_cfg = config.zk.clone();
         let gov_cfg = config.gov.clone();
@@ -8773,7 +8803,6 @@ impl Iroha {
                     report.attach("failed to restore effective Nexus tiered lane geometry")
                 })?;
             state.set_pipeline(pipeline_cfg);
-            state.set_sumeragi_parameters(&sumeragi_cfg);
             state.set_oracle(oracle_cfg);
             state.set_fraud_monitoring(fraud_cfg);
             // Settlement runtime state was installed before Kura replay. Preserve
@@ -13853,7 +13882,13 @@ fn run_main_with_config_guard(
         })?;
     }
     if args.startup.check_config {
-        validate_config_for_check(&config, genesis.as_ref())?;
+        validate_config_for_check(
+            &config,
+            genesis.as_ref(),
+            args.startup
+                .require_genesis_inrou_deployment_authority
+                .as_deref(),
+        )?;
         if genesis.is_some() {
             println!("Ready: configuration and available genesis are valid");
         } else {
@@ -13904,7 +13939,7 @@ fn run_main_with_config_guard(
                 .attach("deployment runtime authority requires the exact local signed genesis")
         })?;
         let (authenticated_genesis, _) =
-            validate_available_genesis_for_check(&config, local_genesis)?;
+            validate_available_genesis_for_check(&config, local_genesis, None)?;
         factory(&config, &authenticated_genesis, runtime_deps)
             .map_err(|error| Report::new(MainError::Config).attach(error))?
     } else {
@@ -14037,14 +14072,36 @@ fn run_main_with_config_guard(
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
+    required_inrou_deployment_authority: Option<&str>,
 ) -> ReportResult<(), MainError> {
+    let _discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+        *config.common.chain_discriminant.value(),
+    );
+    let required_authority = required_inrou_deployment_authority
+        .map(|literal| {
+            let account = AccountId::parse_encoded(literal).map_err(|_| {
+                Report::new(MainError::Config)
+                    .attach("required Inrou deployment authority must be a canonical account ID for the configured chain")
+            })?;
+            if account.to_string() != literal {
+                return Err(Report::new(MainError::Config)
+                    .attach("required Inrou deployment authority must be a canonical account ID for the configured chain"));
+            }
+            Ok(account)
+        })
+        .transpose()?;
+    if required_authority.is_some() && genesis.is_none() {
+        return Err(Report::new(MainError::Config).attach(
+            "required Inrou deployment authority cannot be qualified without the signed genesis",
+        ));
+    }
     validate_config_offline(config).change_context(MainError::Config)?;
     IrohaRuntimeProviderBindingsV1::try_from_config(config)
         .map_err(Report::new)
         .change_context(MainError::Config)
         .attach("failed to validate the public runtime-provider binding catalog")?;
     if let Some(genesis) = genesis {
-        validate_available_genesis_for_check(config, genesis)?;
+        validate_available_genesis_for_check(config, genesis, required_authority.as_ref())?;
     }
     Ok(())
 }
@@ -14052,6 +14109,7 @@ fn validate_config_for_check(
 fn validate_available_genesis_for_check(
     config: &Config,
     genesis: &GenesisBlock,
+    required_inrou_deployment_authority: Option<&AccountId>,
 ) -> ReportResult<(iroha_core::sumeragi::GenesisV2Bootstrap, u64), MainError> {
     let configured_key = &config.genesis.public_key;
     let embedded_key =
@@ -14103,6 +14161,7 @@ fn validate_available_genesis_for_check(
         signed_mode,
         signed_parameters,
         block_cadence_ms,
+        required_inrou_deployment_authority,
     )
     .map(|validated_genesis| (validated_genesis, block_cadence_ms))
 }
@@ -14198,6 +14257,7 @@ fn validate_genesis_execution_offline(
     signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     _signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
+    required_inrou_deployment_authority: Option<&AccountId>,
 ) -> ReportResult<iroha_core::sumeragi::GenesisV2Bootstrap, MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
         Report::new(MainError::Config).attach(format!(
@@ -14242,6 +14302,9 @@ fn validate_genesis_execution_offline(
             ))
         })?;
     state.install_lane_manifests(&frozen_lane_manifests);
+    let frozen_compliance = freeze_lane_compliance_for_startup_replay(&replay_nexus)
+        .change_context(MainError::Config)?;
+    state.install_lane_compliance_engine(frozen_compliance);
     let signed_voters =
         iroha_core::sumeragi::signed_genesis_voting_peers(genesis).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
@@ -14264,6 +14327,16 @@ fn validate_genesis_execution_offline(
         Report::new(MainError::Config)
             .attach(format!("genesis instruction execution failed: {error}"))
     })?;
+    if required_inrou_deployment_authority.is_some_and(|authority| {
+        !iroha_core::smartcontracts::isi::soracloud::soracloud_management_authority_is_authorized(
+            staged.world(),
+            authority,
+        )
+    }) {
+        return Err(Report::new(MainError::Config).attach(
+            "required Inrou deployment authority is absent or lacks exact CanManageSoracloud in final genesis state",
+        ));
+    }
     let staged_block_cadence_ms = staged
         .world()
         .parameters()
@@ -18278,6 +18351,26 @@ mod tests {
         #[allow(unused_imports)]
         use super::*;
         #[test]
+        fn inrou_deployment_authority_requires_offline_check_config() {
+            let flag = "--require-genesis-inrou-deployment-authority";
+            let error = Args::try_parse_from(["iroha3d", flag, "public-account"])
+                .expect_err("deployment qualification must not become a runtime option");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+            let parsed =
+                Args::try_parse_from(["iroha3d", "--check-config", flag, "public-account"])
+                    .expect("account parsing is deferred until the configured chain is known");
+            assert_eq!(
+                parsed
+                    .startup
+                    .require_genesis_inrou_deployment_authority
+                    .as_deref(),
+                Some("public-account"),
+            );
+        }
+        #[test]
         fn whitespace_only_arguments_are_ignored() {
             let parsed = parse_args_from(vec![
                 OsString::from("iroha3d"),
@@ -18325,28 +18418,22 @@ mod tests {
             .expect("build complete sample genesis manifest")
         }
         fn sample_config_table() -> toml::Table {
-            toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-                trusted_peers_pop = [
-                  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
-                ]
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-                [genesis]
-                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-                file = "./genesis.signed.nrt"
-                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                [streaming]
-                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-                [logger]
-                format = "pretty"
-            }
+            // Share the daemon's complete parser fixture, including independent
+            // consensus, transport and streaming identities. Keep only these
+            // manifest-test overrides here so required config fields cannot drift.
+            let mut table = crate::config_tests::minimal_config_table();
+            iroha_config::base::toml::Writer::new(&mut table)
+                .write(
+                    ["genesis", "public_key"],
+                    "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+                )
+                .write(["genesis", "file"], "./genesis.signed.nrt")
+                .write(["logger", "format"], "pretty")
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    1_073_741_824_i64,
+                );
+            table
         }
         fn sample_config() -> Config {
             ConfigReader::new()
@@ -18424,7 +18511,11 @@ mod tests {
         fn genesis_staging_state_for_test(
             config: &Config,
             genesis: &GenesisBlock,
-        ) -> (State, Arc<Kura>) {
+        ) -> (DisposableValidationRoot, State, Arc<Kura>) {
+            let validation_root = DisposableValidationRoot::create()
+                .expect("allocate disposable fixture validation storage");
+            let kura = open_disposable_validation_kura(config, &validation_root)
+                .expect("open fixture Kura with current configured geometry");
             let authority = AccountId::new(config.genesis.public_key.clone());
             let mut world = World::with(
                 [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
@@ -18436,50 +18527,64 @@ mod tests {
                 &genesis.0,
                 &config.nexus.dataspace_catalog,
             );
-            let kura = Kura::blank_kura_for_testing();
-            let mut state = State::new_with_chain_for_testing(
+            let mut state = State::try_new_with_chain_and_network_id(
                 world,
                 Arc::clone(&kura),
                 LiveQueryStore::start_test(),
                 config.common.chain.clone(),
-            );
-            state.set_pipeline(config.pipeline.clone());
-            state.set_oracle(config.oracle.clone());
-            state.set_fraud_monitoring(config.fraud_monitoring.clone());
-            state.set_gov(config.gov.clone());
-            state.content = config.content.clone();
-            state.set_settlement(config.settlement.clone());
-            state
-                .set_zk(config.zk.clone())
-                .expect("test ZK config must be valid");
-            state
-                .set_nexus(config.nexus.clone())
-                .expect("test Nexus config must be valid");
-            state.set_crypto(config.crypto.clone());
-            let nexus = state.nexus_snapshot();
-            let lane_manifests = Arc::new(
-                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-            );
+                NetworkId::from_genesis_hash(genesis.0.hash()),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
+            )
+            .expect("initialize fixture world with its signed genesis identity");
+            install_zk_config_before_kura_replay(&mut state, config)
+                .expect("fixture ZK policy must be valid");
+            apply_state_runtime_config_before_snapshot_auth(&mut state, config)
+                .expect("fixture execution policy must be valid");
+            apply_state_geometry_config_before_kura_replay(&mut state, config)
+                .expect("fixture Nexus geometry must be valid");
+            let nexus = nexus_for_runtime_surfaces(&state);
+            let lane_manifests = freeze_lane_manifests_for_startup_replay(&nexus)
+                .expect("fixture lane manifests must be ready for genesis replay");
             state.install_lane_manifests(&lane_manifests);
-            (state, kura)
+            let compliance = freeze_lane_compliance_for_startup_replay(&nexus)
+                .expect("fixture compliance must be ready for genesis replay");
+            state.install_lane_compliance_engine(compliance);
+            (validation_root, state, kura)
+        }
+        fn sign_configured_genesis_for_test(
+            genesis: RawGenesisTransaction,
+            genesis_authority: &KeyPair,
+            config: &Config,
+        ) -> GenesisBlock {
+            // Match Kagami's config-bound signer: both provisional staging and
+            // the final proposal must commit to the policy installed in State.
+            genesis
+                .with_consensus_meta()
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                    genesis_authority,
+                    Some(iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)),
+                    Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                        &config.zk,
+                    )),
+                )
+                .expect("sign genesis fixture with configured DA and confidential policies")
         }
         fn staged_context_hashes_for_test(
             genesis: &RawGenesisTransaction,
             genesis_authority: &KeyPair,
             config: &Config,
         ) -> (Hash, Hash) {
-            let provisional = genesis
-                .clone()
-                .with_consensus_meta()
-                .build_and_sign(genesis_authority)
-                .expect("sign provisional genesis fixture");
+            let provisional =
+                sign_configured_genesis_for_test(genesis.clone(), genesis_authority, config);
             let authority = AccountId::new(genesis_authority.public_key().clone());
             let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
                 .expect("provisional fixture voting roster");
             let topology = Topology::new(voters);
             let (mode, _) =
                 signed_v2_genesis_context_metadata(&provisional).expect("signed v2 metadata");
-            let (state, _kura) = genesis_staging_state_for_test(config, &provisional);
+            let (_validation_root, state, _kura) =
+                genesis_staging_state_for_test(config, &provisional);
             let mut voting_block = None;
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 provisional.0,
@@ -18520,11 +18625,11 @@ mod tests {
             let mut parameters = genesis.sumeragi_v2_context_parameters();
             parameters.nexus_amx_context_hash = nexus_amx_hash.into();
             parameters.execution_policy_hash = execution_policy_hash.into();
-            genesis
-                .with_sumeragi_v2_context_parameters(parameters)
-                .with_consensus_meta()
-                .build_and_sign(genesis_authority)
-                .expect("sign context-bound genesis fixture")
+            sign_configured_genesis_for_test(
+                genesis.with_sumeragi_v2_context_parameters(parameters),
+                genesis_authority,
+                config,
+            )
         }
         #[test]
         fn manifest_crypto_matches_config() {
@@ -18549,10 +18654,13 @@ mod tests {
         fn detects_allowed_signing_mismatch() {
             let mut manifest = sample_manifest();
             let crypto = ManifestCrypto {
-                allowed_signing: vec![Algorithm::Ed25519, Algorithm::Sm2],
-                default_hash: "sm3-256".to_owned(),
+                allowed_signing: vec![Algorithm::Ed25519],
+                allowed_curve_ids: vec![iroha_data_model::account::curve::CurveId::ED25519.as_u8()],
                 ..Default::default()
             };
+            crypto
+                .validate()
+                .expect("mismatched manifest policy must be valid");
             manifest = manifest
                 .into_builder()
                 .with_crypto(crypto)
@@ -18570,7 +18678,8 @@ mod tests {
         fn detects_allowed_curve_ids_mismatch() {
             let manifest = sample_manifest();
             let mut config = sample_config();
-            config.crypto.allowed_curve_ids.push(2);
+            config.crypto.allowed_curve_ids =
+                vec![iroha_data_model::account::curve::CurveId::ED25519.as_u8()];
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("curve id mismatch should be detected");
             assert!(
@@ -18778,7 +18887,8 @@ mod tests {
                 config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
             let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
-            let (state, _kura) = genesis_staging_state_for_test(&config, &genesis);
+            let (_validation_root, state, _kura) =
+                genesis_staging_state_for_test(&config, &genesis);
             let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
                 .expect("signed voting roster");
             let topology = Topology::new(voters);
@@ -18873,9 +18983,12 @@ mod tests {
             for instruction in extra_instructions {
                 builder = builder.append_instruction(instruction);
             }
-            let genesis = builder
-                .build_and_sign(&genesis_authority)
-                .expect("signed genesis fixture");
+            let genesis = sign_configured_genesis_for_test(
+                builder.build_raw().expect("build final genesis fixture"),
+                &genesis_authority,
+                &config,
+            );
+            config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
@@ -18904,8 +19017,216 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                None,
             )
             .expect("valid genesis should execute in the disposable overlay");
+        }
+        #[test]
+        fn check_config_offline_accepts_final_inrou_deployment_capability() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let genesis_authority = AccountId::new(
+                KeyPair::try_from_seed(
+                    b"offline-genesis-validation-authority".to_vec(),
+                    Algorithm::Ed25519,
+                )
+                .unwrap()
+                .public_key()
+                .clone(),
+            );
+            let deployment_authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let permission = Permission::new("CanManageSoracloud".into(), Json::new(()));
+            let register: InstructionBox =
+                Register::account(Account::new(deployment_authority.clone())).into();
+            let cases: Vec<(&str, AccountId, Vec<InstructionBox>)> = vec![
+                (
+                    "existing genesis account",
+                    genesis_authority.clone(),
+                    vec![Grant::account_permission(permission.clone(), genesis_authority).into()],
+                ),
+                (
+                    "dedicated direct grant",
+                    deployment_authority.clone(),
+                    vec![
+                        register.clone(),
+                        Grant::account_permission(permission.clone(), deployment_authority.clone())
+                            .into(),
+                    ],
+                ),
+                (
+                    "live assigned role",
+                    deployment_authority.clone(),
+                    vec![
+                        register,
+                        Register::role(
+                            Role::new(
+                                "offline_inrou_deployer".parse().unwrap(),
+                                deployment_authority,
+                            )
+                            .add_permission(permission),
+                        )
+                        .into(),
+                    ],
+                ),
+            ];
+            for (label, authority, instructions) in cases {
+                let fixture = offline_semantic_genesis_fixture(instructions);
+                validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    Some(&authority),
+                )
+                .unwrap_or_else(|error| panic!("{label} must qualify: {error:?}"));
+            }
+        }
+        #[test]
+        fn check_config_offline_rejects_absent_or_revoked_inrou_deployment_capability() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let permission = Permission::new("CanManageSoracloud".into(), Json::new(()));
+            let register: InstructionBox =
+                Register::account(Account::new(authority.clone())).into();
+            let grant: InstructionBox =
+                Grant::account_permission(permission.clone(), authority.clone()).into();
+            let role_id: RoleId = "offline_inrou_deployer".parse().unwrap();
+            let role: InstructionBox = Register::role(
+                Role::new(role_id.clone(), authority.clone()).add_permission(permission.clone()),
+            )
+            .into();
+            let cases: Vec<(&str, Vec<InstructionBox>)> = vec![
+                ("missing account", vec![]),
+                ("missing permission", vec![register.clone()]),
+                (
+                    "direct grant then revoke",
+                    vec![
+                        register.clone(),
+                        grant,
+                        Revoke::account_permission(permission.clone(), authority.clone()).into(),
+                    ],
+                ),
+                (
+                    "revoked role membership",
+                    vec![
+                        register.clone(),
+                        role.clone(),
+                        Revoke::account_role(role_id.clone(), authority.clone()).into(),
+                    ],
+                ),
+                (
+                    "deleted role",
+                    vec![
+                        register.clone(),
+                        role.clone(),
+                        Unregister::role(role_id.clone()).into(),
+                    ],
+                ),
+                (
+                    "revoked role permission",
+                    vec![
+                        register,
+                        role,
+                        Revoke::role_permission(permission, role_id).into(),
+                    ],
+                ),
+            ];
+            for (label, instructions) in cases {
+                let fixture = offline_semantic_genesis_fixture(instructions);
+                let error = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    Some(&authority),
+                )
+                .err()
+                .unwrap_or_else(|| panic!("{label} must fail final-state qualification"));
+                assert!(
+                    format!("{error:?}")
+                        .contains("lacks exact CanManageSoracloud in final genesis state"),
+                    "{label} must execute successfully before failing the final capability check: {error:?}",
+                );
+            }
+        }
+        #[test]
+        fn check_config_offline_rejects_malformed_inrou_management_grants() {
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+            let authority = AccountId::new(
+                KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519)
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+            );
+            let malformed = Permission::new("CanManageSoracloud".into(), Json::new(false));
+            let grants: [InstructionBox; 2] = [
+                Grant::account_permission(malformed.clone(), authority.clone()).into(),
+                Register::role(
+                    Role::new("offline_inrou_deployer".parse().unwrap(), authority.clone())
+                        .add_permission(malformed),
+                )
+                .into(),
+            ];
+            for grant in grants {
+                let fixture = offline_semantic_genesis_fixture([
+                    Register::account(Account::new(authority.clone())).into(),
+                    grant,
+                ]);
+                let error = validate_genesis_execution_offline(
+                    &fixture.config,
+                    &fixture.genesis,
+                    &fixture.authority,
+                    fixture.mode,
+                    fixture.parameters,
+                    fixture.cadence_ms,
+                    Some(&authority),
+                )
+                .err()
+                .expect("same-named malformed token must never qualify");
+                assert!(format!("{error:?}").contains("genesis instruction execution failed"));
+            }
+        }
+        #[test]
+        fn check_config_inrou_authority_requires_canonical_account_and_signed_genesis() {
+            let config = sample_config();
+            let _discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                *config.common.chain_discriminant.value(),
+            );
+            let account = AccountId::new(config.genesis.public_key.clone()).to_string();
+            let error = validate_config_for_check(&config, None, Some(&account))
+                .expect_err("an unavailable genesis cannot satisfy deployment qualification");
+            assert!(
+                format!("{error:?}").contains("cannot be qualified without the signed genesis")
+            );
+            for invalid in [
+                "not-an-account".to_owned(),
+                format!(" {account}"),
+                format!("{account}@domain"),
+            ] {
+                let error = validate_config_for_check(&config, None, Some(&invalid)).expect_err(
+                    "the authority must use the configured chain's canonical account encoding",
+                );
+                assert!(
+                    format!("{error:?}")
+                        .contains("must be a canonical account ID for the configured chain")
+                );
+            }
         }
         #[test]
         fn check_config_accepts_taira_without_offline_backend_settings() {
@@ -18913,14 +19234,14 @@ mod tests {
             config.common.chain = ChainId::from("taira");
             config.confidential.enabled = true;
             config.confidential.assume_valid = false;
-            validate_config_for_check(&config, None)
+            validate_config_for_check(&config, None, None)
                 .expect("Taira has universal offline primitives without backend enablement");
         }
         #[test]
         fn check_config_qualifies_the_fixed_moderation_strict_ingress() {
             let mut exact = sample_config();
             configure_exact_moderation_strict_ingress(&mut exact);
-            assert!(validate_config_for_check(&exact, None).is_ok());
+            assert!(validate_config_for_check(&exact, None, None).is_ok());
             for (mutation, expected) in [
                 (0, "runtime-provider binding is substituted"),
                 (1, "runtime-provider binding is stale or revoked"),
@@ -18938,7 +19259,7 @@ mod tests {
                 } else {
                     moderation.strict_ingress_revision += 1;
                 }
-                let report = validate_config_for_check(&invalid, None)
+                let report = validate_config_for_check(&invalid, None, None)
                     .expect_err("invalid fixed ingress binding must fail check-config");
                 assert!(format!("{report:#}").contains(expected));
             }
@@ -18961,6 +19282,7 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                None,
             )
             .err()
             .expect("duplicate genesis registration must fail semantic execution");
@@ -19109,56 +19431,27 @@ mod tests {
         }
         #[test]
         fn verify_genesis_metadata_rejects_fingerprint_mismatch() -> eyre::Result<()> {
-            use iroha_core::{kura::Kura, query::store::LiveQueryStore};
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
-            let mut config = sample_config();
+            let config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            // Build a canonical manifest with consensus metadata, then tamper with the advertised
-            // fingerprint so genesis validation should fail.
-            let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
-                chain,
-                PathBuf::from("."),
-            ))
+            let genesis_block = complete_test_genesis_builder(
+                GenesisBuilder::new_without_executor(chain, PathBuf::from(".")),
+            )
             .build_raw()
             .expect("build complete fingerprint-mismatch genesis manifest")
-            .with_consensus_meta();
-            let mut manifest_value =
-                norito::json::value::to_value(&manifest).expect("serialize manifest");
-            if let Some(obj) = manifest_value.as_object_mut() {
-                obj.insert(
-                    "consensus_fingerprint".to_owned(),
-                    norito::json::Value::String(
-                        "0x00000000000000000000000000000000000000000000000000000000000000ff"
-                            .to_owned(),
-                    ),
-                );
-            } else {
-                panic!("manifest must serialize as a JSON object");
-            }
-            let tampered: RawGenesisTransaction =
-                norito::json::value::from_value(manifest_value).expect("decode tampered manifest");
-            let genesis_block = tampered.build_and_sign(&genesis_keys)?;
+            .with_consensus_meta()
+            .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::new(), kura, query);
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let (mode_tag, _bls_domain, consensus_caps) = compute_consensus_handshake_caps(
-                &world,
-                height,
-                &config,
-                &config_caps,
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
-            )
-            .expect("valid v2 handshake config");
-            // Diverge the runtime chain after computing consensus caps to force a
-            // fingerprint mismatch without altering the embedded handshake metadata.
-            config.common.chain = ChainId::from("fingerprint-mismatch");
+            let (mode_tag, _bls_domain, mut consensus_caps, _, _) =
+                consensus_caps_from_genesis(&genesis_block, &config_caps, &config.sumeragi)
+                    .expect("signed genesis must produce canonical v2 caps");
+            // Raw manifest fingerprints are normalized during signing. Mutate
+            // the expected admission fingerprint after deriving it from the
+            // actual signed genesis so this exercises the mismatch gate.
+            consensus_caps.consensus_fingerprint[0] ^= 1;
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =
                 verify_genesis_metadata(&genesis_block, &config, &consensus_caps, &mode_tag, proto)
@@ -19213,6 +19506,7 @@ mod tests {
                 genesis_manifest_json: Some(manifest_path),
                 startup: StartupArgs {
                     check_config: false,
+                    require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
                 },
@@ -19251,6 +19545,7 @@ mod tests {
                 genesis_manifest_json,
                 startup: StartupArgs {
                     check_config: false,
+                    require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
                 },

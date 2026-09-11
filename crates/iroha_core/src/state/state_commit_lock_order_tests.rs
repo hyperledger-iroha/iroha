@@ -100,6 +100,9 @@ fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
 }
 #[test]
 fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block() {
+    // The channel handshakes establish ordering; the deadline only bounds a
+    // deadlock under a heavily loaded test runner.
+    let timeout = Duration::from_secs(30);
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = Arc::new(State::new_for_testing(World::default(), kura, query));
@@ -132,7 +135,7 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
         let _ = commit_done.send("commit");
     });
     block_ready_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(timeout)
         .expect("prebuilt block ready");
     let lifecycle_state = Arc::clone(&state);
     let lifecycle_done = done_tx.clone();
@@ -144,7 +147,7 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
     });
     let publication_start = Instant::now();
     let mut catalog_published = false;
-    while publication_start.elapsed() < Duration::from_secs(1) {
+    while publication_start.elapsed() < timeout {
         if state
             .nexus_snapshot()
             .lane_catalog
@@ -164,10 +167,10 @@ fn lane_lifecycle_cleanup_does_not_hold_commit_serialization_from_prebuilt_block
         .send(())
         .expect("release prebuilt block commit");
     done_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(timeout)
         .expect("first operation completion");
     done_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(timeout)
         .expect("second operation completion");
     lifecycle_handle.join().expect("lane lifecycle thread");
     commit_handle.join().expect("commit thread");

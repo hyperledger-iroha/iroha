@@ -971,6 +971,14 @@ mod tests {
             .expect("second replica projection");
         assert_eq!(first, second);
         assert_eq!(first.canonical_bytes(), second.canonical_bytes());
+        let header = norito::core::Header::read(first.canonical_bytes())
+            .expect("routing authority projection header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name(
+                "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"
+            )
+        );
         assert_eq!(
             <RoutingAuthorityProjectionEnvelopeV1 as norito::NoritoSchema>::nominal_name(),
             "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"

@@ -6711,39 +6711,7 @@ mod tests {
     }
     include!("provider_ingest_outbox/tests/sealed_checkpoint_lifecycle.rs");
     include!("provider_ingest_outbox/tests/canonical_authorization.rs");
-    #[test]
-    fn sealed_record_rejects_byte_digest_revision_and_lineage_tamper() {
-        let checkpoint_bytes = encode_provider_ingest_checkpoint(
-            &ProviderIngestOutboxCheckpointV1::default(),
-            policy(),
-        )
-        .expect("checkpoint bytes");
-        let record = ProviderIngestSealedCheckpointRecordV1::new(1, None, None, checkpoint_bytes);
-        let mut tampered_bytes = record.clone();
-        tampered_bytes.checkpoint_bytes[0] ^= 0x80;
-        assert_eq!(
-            tampered_bytes.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-        let mut tampered_digest = record.clone();
-        tampered_digest.checkpoint_digest[0] ^= 0x80;
-        assert_eq!(
-            tampered_digest.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-        let mut tampered_revision = record.clone();
-        tampered_revision.revision[0] ^= 0x80;
-        assert_eq!(
-            tampered_revision.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-        let mut tampered_lineage = record;
-        tampered_lineage.predecessor_revision = Some([0xA5; 32]);
-        assert_eq!(
-            tampered_lineage.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-    }
+    include!("provider_ingest_outbox/tests/sealed_record_schema.rs");
     #[test]
     fn provider_drift_substitution_and_test_markers_fail_closed() {
         let directory = tempdir().expect("checkpoint directory");

@@ -149,6 +149,7 @@ impl StreamTokenGatewayAdmissionRequestV1 {
                 | StreamTokenValidationStatusV1::Excluded(
                     StreamTokenExcludedKindV1::InvalidSignature
                         | StreamTokenExcludedKindV1::UnsupportedKeyVersion
+                        | StreamTokenExcludedKindV1::SignerAuthorityUnavailable
                 )
         );
         if carries_body != self.token_body_digest.is_some()
@@ -224,6 +225,7 @@ impl StreamTokenGatewayAdmissionRecordV1 {
                 | StreamTokenValidationStatusV1::Excluded(
                     StreamTokenExcludedKindV1::InvalidSignature
                         | StreamTokenExcludedKindV1::UnsupportedKeyVersion
+                        | StreamTokenExcludedKindV1::SignerAuthorityUnavailable
                 )
         );
         if carries_body != self.outcome.token_body_digest.is_some()
@@ -787,4 +789,4 @@ struct StreamTokenReconcileBatchV1 {
 }
 #[cfg(test)]
 #[path = "stream_token_admission/tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -63,18 +63,19 @@ outcomes; wire fixture identities and assertions remain intact. Physical
 extraction, measured memory reduction and full release qualification remain open.
 
 The next AccountId prerequisite has a concrete, unapplied
-[JSON context and primitive candidate](../docs/history/2026-09-11/json-context-primitives.md).
-The coherent codec/derive/MV/primitives selection passes 1,854 tests across all 17
+[JSON context and ordinary Value owner candidate](../docs/history/2026-09-11/json-value-destruction.md).
+The coherent codec/derive/MV/primitives selection passes 1,862 tests across all 18
 executables, including both full compiler UI suites, with one existing ignored test.
-Shared vector decoding and transparent collection owners now forward error cleanup;
-18 new regressions cover partial failure, ownership transfer and deep Value cleanup.
-Strict all-target Clippy passes with benchmark internals enabled. Separate primitive
-default and Rust FFI selections each pass 327 library tests and strict all-target
-Clippy. The four-package doctest run passes 17 tests with two existing ignores.
-Earlier telemetry and benchmark results retain their separate source scopes. Original
-lockfile, profiles, wire fixtures and dirty source are preserved. Map/set/generated
-record cleanup, scalar backend/final-tree admission and external callers still require
-completion and qualification before the API replacement or account move.
+Ordinary iterative Value destruction supersedes cleanup callbacks and fixes both
+actual 32,768-level overflow reproducers on ordinary stacks. Allocation regressions
+cover admitted-depth and wide-container destruction. Strict all-target Clippy passes
+with benchmark internals enabled. Separate primitive default and Rust FFI selections
+each pass 327 library tests; FFI strict lint, 17 doctests (two existing ignores),
+strict Rustdoc, formatting and codec guards pass. Earlier telemetry and benchmark
+results retain their separate source scopes. Original lockfile, profiles, wire
+fixtures and dirty source are preserved. External context/owned-value consumers and
+scalar backend/final-tree admission still require completion and qualification
+before the API replacement or account move.
 
 ## Captured evidence
 

@@ -284,11 +284,13 @@ const SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES: u64 = 256 * 1024 *
 const SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 const SORACLOUD_OPERATOR_PRESEED_MAX_MANIFEST_SCAN_V1: usize = 10_000;
 const SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_MAX_MESSAGES_PER_COMMAND: usize = 32;
+#[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_ATTEST_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QMP_POWERDOWN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -358,11 +360,13 @@ const SORACLOUD_INROU_KVM_DEVICE_RDEV: u64 = (10_u64 << 8) | 232_u64;
 #[cfg(target_os = "linux")]
 const SORACLOUD_INROU_QEMU_SANDBOX_POLICY: &str =
     "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny";
+#[cfg(any(target_os = "linux", test))]
 const SORACLOUD_INROU_LOG_TRUNCATION_MARKER: &[u8] =
     b"\n[Inrou runtime log truncated at the configured safety limit]\n";
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_REPLICAS: usize = 4_096;
 const SORACLOUD_RUNTIME_STATE_MAX_STRING_BYTES: usize = 4 * 1024;
+#[cfg(target_os = "linux")]
 const SORACLOUD_RUNTIME_STDERR_TAIL_BYTES: u64 = 64 * 1024;
 const SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES: usize = 65_536;
 const SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS: usize = 65_536;
@@ -617,6 +621,7 @@ fn read_soracloud_regular_file_bounded(
     }
     Ok(payload)
 }
+#[cfg(target_os = "linux")]
 fn read_soracloud_regular_text_bounded(
     path: &Path,
     maximum_bytes: u64,
@@ -945,12 +950,14 @@ fn portable_vm_guest_machine_profile(
             machine_type: "q35",
             root_label: "rootfs-x86_64",
             block_device: "virtio-blk-pci",
+            #[cfg(target_os = "linux")]
             net_device: "virtio-net-pci",
         },
         SoraInrouGuestIsaV1::Aarch64 => PortableVmGuestMachineProfile {
             machine_type: "virt",
             root_label: "rootfs-aarch64",
             block_device: "virtio-blk-device",
+            #[cfg(target_os = "linux")]
             net_device: "virtio-net-device",
         },
     }
@@ -11523,6 +11530,7 @@ fn open_inrou_runtime_log(
     }
     Ok(file)
 }
+#[cfg(any(target_os = "linux", test))]
 fn drain_inrou_runtime_log_bounded(mut reader: impl io::Read, mut log: fs::File) -> io::Result<()> {
     let payload_limit = SORACLOUD_INROU_LOG_MAX_BYTES
         .saturating_sub(SORACLOUD_INROU_LOG_TRUNCATION_MARKER.len() as u64);
@@ -11561,6 +11569,7 @@ fn drain_inrou_runtime_log_bounded(mut reader: impl io::Read, mut log: fs::File)
     }
     Ok(())
 }
+#[cfg(target_os = "linux")]
 fn spawn_inrou_runtime_log_drain(
     reader: impl io::Read + Send + 'static,
     log: fs::File,
@@ -11574,6 +11583,7 @@ fn spawn_inrou_runtime_log_drain(
             }
         })
 }
+#[cfg(target_os = "linux")]
 fn attach_inrou_runtime_log_drains(
     child: &mut std::process::Child,
     stderr_log: fs::File,
@@ -11693,6 +11703,7 @@ fn join_inrou_log_drains_bounded(log_drains: &mut Vec<thread::JoinHandle<()>>) {
         }
     }
 }
+#[cfg(target_os = "linux")]
 fn stderr_log_excerpt(path: &Path) -> String {
     let Ok((mut file, metadata)) =
         open_soracloud_regular_file_no_follow(path, "runtime stderr log")
@@ -11743,6 +11754,7 @@ fn effective_inrou_lifecycle_grace(
     operator_minimum.max(Duration::from_secs(u64::from(workload_minimum_secs)))
 }
 impl HostedHttpWorker {
+    #[cfg(target_os = "linux")]
     fn new(
         cache_key: HostedHttpWorkerCacheKey,
         child: std::process::Child,
@@ -13129,6 +13141,7 @@ struct PortableVmGuestMachineProfile {
     machine_type: &'static str,
     root_label: &'static str,
     block_device: &'static str,
+    #[cfg(target_os = "linux")]
     net_device: &'static str,
 }
 #[derive(Clone, Copy)]
@@ -15997,6 +16010,7 @@ fn validate_inrou_guest_data_mount_path(mount_path: &str) -> eyre::Result<()> {
         })?;
     validate_inrou_data_volume_mount_path(relative, mount_path)
 }
+#[cfg(target_os = "linux")]
 fn build_inrou_portable_data_volume_mounts(
     lease_disks: &[PortableVmLeaseDisk],
 ) -> Vec<InrouDataVolumeMount> {
@@ -16983,10 +16997,12 @@ fn portable_vm_vcpu_count(
     }
     Ok(count)
 }
+#[cfg(target_os = "linux")]
 fn portable_vm_memory_mib(resources: &iroha_data_model::soracloud::SoraResourceLimitsV1) -> u64 {
     debug_assert!(resources.validate_for_inrou().is_ok());
     resources.memory_bytes.get() / (1024 * 1024)
 }
+#[cfg(target_os = "linux")]
 fn append_portable_vm_drive(
     command: &mut Command,
     profile: PortableVmGuestMachineProfile,
@@ -21789,6 +21805,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     fn assert_eyre_error_contains_any(error: eyre::Report, expected: &[&str]) {
         let message = format!("{error:#}");
         assert!(

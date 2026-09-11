@@ -442,6 +442,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     ),
     ZkX509StarkErrorV1,
 > {
+    validate_zk_x509_main_proof_budget_v1()?;
     validate_zk_x509_main_verifier_profile_v1(assembly.verifier_profile)?;
     if public.consensus_context_digest == [0_u8; 32] {
         return Err(ZkX509StarkErrorV1::InvalidStatement);

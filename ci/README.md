@@ -375,3 +375,9 @@ selectors are rejected. Root and external file identities remain independently
 sealed even though their bytes match. Changed manifests or dependencies require
 an explicit graph review, a coherent owner update, and fresh native artifacts;
 source, wheel, ABI, hardware and clean-release gates still apply.
+Review both lock entries and manifest dependency kinds, target conditions and
+features: an unchanged package version inventory does not imply an unchanged
+build closure. After an approved graph change, replace the sole digest and
+provision a fresh external snapshot; previous graph snapshots remain historical
+evidence and cannot authorize new builds. Retain locked metadata validation and
+independent root/external identity checks before and after it.

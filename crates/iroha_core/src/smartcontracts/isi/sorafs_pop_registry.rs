@@ -2345,6 +2345,7 @@ impl ValidSingularQuery for FindSorafsPopRegistryStatus {
 }
 #[cfg(test)]
 mod tests {
+    include!("sorafs_pop_registry/schema_identity_tests.rs");
     use super::*;
     include!("sorafs/pop_permission_token_tests.rs");
     use crate::{

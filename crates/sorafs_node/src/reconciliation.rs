@@ -52,10 +52,11 @@ pub(crate) struct AppealFinanceRollupReconciliationEntry {
     pub(crate) total_rewards_forfeited_treasury_xor: XorQuantity,
     pub(crate) generated_at_unix_ms: u64,
 }
+/// Hash the canonical frame so reconciliation does not depend on a caller's layout guard.
 pub(crate) fn hash_snapshot<T: norito::core::NoritoSerialize>(
     snapshot: &T,
 ) -> Result<[u8; 32], norito::Error> {
-    let bytes = norito::to_bytes(snapshot)?;
+    let bytes = norito::encode_canonical(snapshot)?;
     Ok(*hash(&bytes).as_bytes())
 }
 
@@ -67,23 +68,29 @@ mod tests {
     where
         T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
     {
-        assert_eq!(T::nominal_name(), owner);
-        assert_eq!(T::frame_name(), owner);
-        let encoded = norito::encode_canonical(value).expect("snapshot frame");
-        assert_eq!(encoded[6..22], norito::schema::identity::frame_hash::<T>());
-        let decoded: T = norito::decode_canonical(&encoded).expect("snapshot roundtrip");
-        assert_eq!(
-            norito::codec::encode_adaptive(&decoded),
-            norito::codec::encode_adaptive(value)
-        );
-        let digest = hash_snapshot(value).expect("actual reconciliation digest");
-        assert_eq!(digest, *hash(&encoded).as_bytes());
-        let mut wrong_owner = encoded;
+        let encoded = crate::schema_identity_test_support::assert_canonical_frame(value, owner);
+        let digest = *hash(&encoded).as_bytes();
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                hash_snapshot(value).expect("actual reconciliation digest"),
+                digest
+            );
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        let mut wrong_owner = encoded.clone();
         wrong_owner[6] ^= 1;
         assert!(matches!(
             norito::decode_canonical::<T>(&wrong_owner),
             Err(norito::Error::SchemaMismatch)
         ));
+        assert!(norito::decode_canonical::<T>(&encoded[..encoded.len() - 1]).is_err());
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
         digest
     }
 
@@ -106,7 +113,7 @@ mod tests {
                 retention_source: None,
             }],
         };
-        let gc = GcReconciliationSnapshot {
+        let mut gc = GcReconciliationSnapshot {
             version: RECONCILIATION_SNAPSHOT_VERSION_V1,
             gc_freed_bytes_total: 456,
             gc_evictions_total: 2,
@@ -149,7 +156,21 @@ mod tests {
                 .len(),
             4
         );
+        assert!(matches!(
+            norito::decode_canonical::<AppealFinanceRollupReconciliationSnapshot>(
+                &norito::encode_canonical(&repair).unwrap()
+            ),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<GcReconciliationSnapshot>(
+                &norito::encode_canonical(&retention).unwrap()
+            ),
+            Err(norito::Error::SchemaMismatch)
+        ));
         retention.manifests[0].retention_epoch += 1;
         assert_ne!(hash_snapshot(&retention).unwrap(), digests[1]);
+        gc.chunk_refcounts[0].count += 1;
+        assert_ne!(hash_snapshot(&gc).unwrap(), digests[2]);
     }
 }

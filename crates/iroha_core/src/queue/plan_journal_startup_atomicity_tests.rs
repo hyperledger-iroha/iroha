@@ -78,6 +78,220 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
     );
 }
 #[test]
+fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let plan_path = dir.path().join("empty-startup-plans.norito");
+    let reservation_path = dir.path().join("empty-startup-reservations.norito");
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    install_single_validator_topology_for_queue_test(&mut state, 0xD9);
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+        lane: LaneId::SINGLE,
+        dataspace: DataSpaceId::UNIVERSAL,
+    });
+    {
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::clone(&router),
+            &[],
+        );
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("create empty QueuePlan journal");
+        assert_eq!(
+            queue
+                .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                .expect("create empty reservation journal"),
+            LaneQueueReservationReplaySummary::default()
+        );
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+    }
+    let queue = Queue::test_with_router_for_routes(
+        config_factory(),
+        &time_source,
+        Arc::clone(&router),
+        &[],
+    );
+    assert_eq!(
+        queue
+            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+            .expect("reopen empty reservation journal"),
+        LaneQueueReservationReplaySummary::default()
+    );
+    assert_eq!(
+        queue
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("reopen empty QueuePlan journal"),
+        0
+    );
+    let tx = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+    let hash = tx.hash_as_entrypoint();
+    let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+    let plan_bytes = std::fs::read(&plan_path).expect("capture empty QueuePlan journal");
+    let reservation_bytes =
+        std::fs::read(&reservation_path).expect("capture empty reservation journal");
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture empty startup ownership");
+    assert!(snapshot.is_empty());
+    let assert_ingress_closed = || {
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
+        let failure = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(
+                tx.clone(),
+                &state,
+                plan.clone(),
+            )
+            .expect_err("an empty replay must not admit work before exact startup completion");
+        assert!(matches!(
+            failure.err,
+            Error::PlanJournalDurabilityRejected { ref reason }
+                if reason == "queue journal startup is awaiting exact State/Kura reconciliation"
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert!(queue.txs.is_empty());
+        assert!(queue.durable_plan_claims.is_empty());
+        assert_eq!(
+            queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("observe unchanged startup ownership"),
+            snapshot
+        );
+        assert_eq!(
+            std::fs::read(&plan_path).expect("read QueuePlan journal"),
+            plan_bytes
+        );
+        assert_eq!(
+            std::fs::read(&reservation_path).expect("read reservation journal"),
+            reservation_bytes
+        );
+    };
+    // HTTP availability cannot grant ingress authority, either before replay or while the
+    // immutable State/Kura reconciliation receipt is retained by the startup runner.
+    assert_ingress_closed();
+    let replay = queue
+        .replay_plan_journal(&state)
+        .expect("replay empty QueuePlan journal");
+    assert_eq!(replay.records, 0);
+    assert_eq!(replay.replayed, 0);
+    assert_ingress_closed();
+    let receipt = queue
+        .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+        .expect("bind exact empty startup receipt")
+        .expect("no admission may invalidate the empty replay cut");
+    assert_ingress_closed();
+    assert!(
+        queue
+            .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)
+            .expect("early rejected ingress must preserve the exact retained receipt")
+    );
+    queue
+        .complete_lane_reservation_startup_reconciliation(receipt)
+        .expect("publish exact empty startup completion");
+    assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    queue
+        .push_with_lane_with_state_and_routing_plan_strict_durable(tx.clone(), &state, plan.clone())
+        .expect("the identical transaction is admitted after startup completion");
+    assert_eq!(queue.active_len(), 1);
+    assert!(queue.txs.contains_key(&hash));
+    assert!(queue.durable_plan_claims.contains_key(&hash));
+    assert_ne!(
+        std::fs::read(&plan_path).expect("read admitted QueuePlan journal"),
+        plan_bytes
+    );
+    assert_eq!(
+        std::fs::read(&reservation_path).expect("read unchanged reservation journal"),
+        reservation_bytes
+    );
+    // A second restart restores a real durable FIFO claim. Its lost-response retry must
+    // not return or rebind that claim while the exact replay receipt is still retained.
+    let admitted_plan_bytes =
+        std::fs::read(&plan_path).expect("capture admitted QueuePlan journal");
+    drop(queue);
+    let restarted = Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+    restarted
+        .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+        .expect("reopen empty reservation journal with one durable QueuePlan claim");
+    assert_eq!(
+        restarted
+            .install_plan_journal(&plan_path, 1024 * 1024, true)
+            .expect("reopen retained QueuePlan claim"),
+        1
+    );
+    let replay = restarted
+        .replay_plan_journal(&state)
+        .expect("restore retained QueuePlan claim");
+    assert_eq!(replay.records, 1);
+    assert_eq!(replay.replayed, 1);
+    let retained_claim = restarted
+        .durable_plan_claims
+        .get(&hash)
+        .expect("retained claim")
+        .clone();
+    let retained_snapshot = restarted
+        .lane_reservation_reconciliation_snapshot()
+        .expect("empty restored ownership");
+    assert!(retained_snapshot.is_empty());
+    let receipt = restarted
+        .bind_lane_reservation_startup_reconciliation_receipt(&retained_snapshot)
+        .expect("bind replay receipt including retained QueuePlan claim")
+        .expect("retained claim is unchanged");
+    let failure = restarted
+        .push_with_lane_with_state_and_routing_plan_strict_durable(tx.clone(), &state, plan.clone())
+        .expect_err("retained durable-claim retry must wait for startup completion");
+    assert!(
+        matches!(failure.err, Error::PlanJournalDurabilityRejected { ref reason }
+        if reason == "queue journal startup is awaiting exact State/Kura reconciliation")
+    );
+    assert_eq!(
+        restarted
+            .durable_plan_claims
+            .get(&hash)
+            .expect("unchanged retained claim")
+            .journal_record_digest,
+        retained_claim.journal_record_digest
+    );
+    assert_eq!(
+        std::fs::read(&plan_path).expect("read retained QueuePlan journal"),
+        admitted_plan_bytes
+    );
+    assert!(
+        restarted
+            .revalidate_lane_reservation_startup_reconciliation_receipt(
+                &receipt,
+                &retained_snapshot
+            )
+            .expect("rejected retry preserves retained startup receipt")
+    );
+    restarted
+        .complete_lane_reservation_startup_reconciliation(receipt)
+        .expect("complete retained-claim startup");
+    let expected_route = plan.coordinator_route();
+    let retry = restarted
+        .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
+        .expect("retained durable claim becomes retryable after startup completion");
+    assert_eq!(retry, expected_route);
+    assert_eq!(
+        restarted
+            .durable_plan_claims
+            .get(&hash)
+            .expect("retry retains the exact durable claim")
+            .journal_record_digest,
+        retained_claim.journal_record_digest
+    );
+    assert_eq!(
+        std::fs::read(&plan_path).expect("read retried QueuePlan journal"),
+        admitted_plan_bytes
+    );
+}
+
+#[test]
 fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
     let dir = tempfile::tempdir().expect("tempdir");
     let journal_path = dir.path().join("queue_plan_receipt_preflight.norito");

@@ -429,6 +429,39 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_record_fixture(
         .expect("the canonical V1 fixture covers every lifecycle stage")
 }
 
+/// Build a structurally exact Commit-owned body stage for the coordinator explorer.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_decision_body_record_fixture(
+    context: LifecycleContext,
+    stage: LifecycleStageKind,
+    seed: u8,
+) -> ReplayCase {
+    let fixture = Fixture::for_record(context, seed);
+    assert!(matches!(
+        stage,
+        LifecycleStageKind::FetchBody
+            | LifecycleStageKind::StoreBody
+            | LifecycleStageKind::ValidateBody
+    ));
+    replay_case(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag: fixture.tag,
+            origin: BodyPipelineOriginV1::Certified {
+                certificate: fixture.commit_qc,
+                manifest: fixture.proposal.manifest,
+                fetch_manifest_present: true,
+                certified_sources: Vec::new(),
+            },
+        }),
+        stage,
+        if stage == LifecycleStageKind::FetchBody {
+            DurablePayloadReference::None
+        } else {
+            fixture.body_payload
+        },
+    )
+}
+
 /// Build the canonical replay pair for one exact unsigned/signed timeout edge.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_timeout_sign_broadcast_fixture(
     context: LifecycleContext,
@@ -588,6 +621,99 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_pending_certified_fet
         authority,
     )
 }
+/// Keep the real signed Prepare body source while deriving a later signed Commit.
+#[cfg(feature = "bls")]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_retained_prepare_apply_family_fixture(
+    verified: &VerifiedHeightContext,
+    original: &LifecycleReplayAuthorityV1,
+    keys: &[KeyPair],
+    after_enter_view: bool,
+    corrupt_prepare_signature: bool,
+) -> ([ReplayCase; 4], wire::QuorumCertificate) {
+    let context = super::super::projection::lifecycle_context(verified.context());
+    let LifecycleReplaySourceV1::BodyPipeline(mut body_source) = original.source.clone() else {
+        panic!("fixture requires the actual stored Prepare body source")
+    };
+    let BodyPipelineOriginV1::Certified { certificate, .. } = &mut body_source.origin else {
+        panic!("fixture requires an authenticated certified body")
+    };
+    assert_eq!(certificate.phase, wire::GlobalPhase::Prepare);
+    verified
+        .verify_quorum_certificate(certificate)
+        .expect("real Prepare quorum");
+    let mut commit = certificate.clone();
+    commit.phase = wire::GlobalPhase::Commit;
+    let preimage = wire::Vote {
+        round: commit.round,
+        proposal_round: commit.proposal_round,
+        phase: commit.phase,
+        subject: commit.subject,
+        execution_commitment: commit.execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let signatures = commit
+        .signers
+        .iter()
+        .map(|signer| {
+            iroha_crypto::Signature::new(
+                keys[usize::try_from(*signer).expect("signer index")].private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    commit.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate the later real Commit quorum");
+    verified
+        .verify_quorum_certificate(&commit)
+        .expect("real current Commit quorum");
+    if corrupt_prepare_signature {
+        certificate.aggregate_signature[0] ^= 1;
+    }
+    let ReplayPayloadBindingV1::BodyFrame(frame) = &original.payload else {
+        panic!("fixture requires the actual stored body frame")
+    };
+    let payload = DurablePayloadReference::BodyFrame(frame.durable_reference());
+    // EnterView advances the reducer occurrence, never the certificate's
+    // proposal identity. A delayed Commit still certifies its original round.
+    let apply_tag = ReplayEventTagV1::new(
+        commit.round.height,
+        commit.round.view + u64::from(after_enter_view),
+        body_source.tag.generation + u64::from(after_enter_view),
+    );
+    let body = LifecycleReplaySourceV1::BodyPipeline(body_source);
+    let fetch = replay_case(
+        context,
+        body.clone(),
+        LifecycleStageKind::FetchBody,
+        payload,
+    );
+    let store = replay_case(
+        context,
+        body.clone(),
+        LifecycleStageKind::StoreBody,
+        payload,
+    );
+    let validate = replay_case(context, body, LifecycleStageKind::ValidateBody, payload);
+    let apply = replay_case(
+        context,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator: RecoveredWalFrameIdentity::for_test(301, 302, [0xC4; 32]).persisted_locator(),
+            role: ReplayWalRoleV1::DECISION,
+            tag: apply_tag,
+            action: WalReplayActionV1::ApplyDecision(commit.clone()),
+        }),
+        LifecycleStageKind::ApplyDecision,
+        payload,
+    );
+    ([fetch, store, validate, apply], commit)
+}
+
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_recovered_decision_terminal_family_fixture(
     context: LifecycleContext,
     certified_sources: Vec<PeerId>,

@@ -1561,7 +1561,7 @@ mod tests {
         archive.validate().expect("maximum bounded PDP archive");
         archive
     }
-    fn replace_norito_schema<T: norito::NoritoSchema>(bytes: &mut [u8]) {
+    fn replace_norito_schema<T: norito::NoritoSerialize>(bytes: &mut [u8]) {
         const SCHEMA_OFFSET: usize = 4 + 1 + 1;
         const SCHEMA_LEN: usize = 16;
         assert!(bytes.len() >= norito::core::Header::SIZE);
@@ -2317,6 +2317,45 @@ mod tests {
         assert!(matches!(
             CheckpointWriterGuard::acquire(&hardlink),
             Err(CheckpointStoreError::Io)
+        ));
+    }
+
+    #[test]
+    fn checkpoint_schema_binds_durable_proof_outcomes_and_rejects_a_submission_frame() {
+        let directory = TempDir::new().unwrap();
+        let outbox = ProofOutcomeOutbox::open(directory.path(), policy()).unwrap();
+        let operation = outbox
+            .enqueue_potr(&signed_receipt(), [6; 32])
+            .unwrap()
+            .operation_id();
+        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+        let bytes = crate::schema_identity_test_support::assert_canonical_frame(
+            &checkpoint,
+            "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1",
+        );
+        let path = directory
+            .path()
+            .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        drop(outbox);
+        let restored = ProofOutcomeOutbox::open(directory.path(), policy()).unwrap();
+        assert_eq!(restored.pending(8).unwrap()[0].operation_id, operation);
+        drop(restored);
+        let submission = &checkpoint.pending[0].submission;
+        let foreign = norito::encode_canonical(submission).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<SorafsProofOutcomeSubmissionV1>(&foreign).unwrap(),
+            *submission
+        );
+        assert!(matches!(
+            norito::decode_canonical::<ProofOutcomeOutboxCheckpointV1>(&foreign),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        std::fs::remove_file(&path).unwrap();
+        write_private_checkpoint(&path, &foreign);
+        assert!(matches!(
+            ProofOutcomeOutbox::open(directory.path(), policy()),
+            Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
     }
 }

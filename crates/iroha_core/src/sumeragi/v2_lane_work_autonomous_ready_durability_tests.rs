@@ -103,6 +103,18 @@ fn install_autonomous_test_queue(
     queue
         .replay_plan_journal(adapter.state.as_ref())
         .expect("replay autonomous queue plan journal");
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture autonomous fixture startup ownership");
+    if snapshot.is_empty() {
+        let receipt = queue
+            .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+            .expect("bind exact empty autonomous fixture startup receipt")
+            .expect("empty autonomous fixture replay remains unchanged");
+        queue
+            .complete_lane_reservation_startup_reconciliation(receipt)
+            .expect("complete empty autonomous fixture startup before admission");
+    }
     adapter
         .install_lane_drain_queue(Arc::clone(&queue))
         .expect("install autonomous production queue");
@@ -5793,7 +5805,7 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     assert!(!adapter.output_guard.restart_required());
 }
 #[test]
-fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
+fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligible() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     let lane_id = LaneId::new(1);
     let dataspace_id = DataSpaceId::new(7);
@@ -5804,6 +5816,9 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         adapter.context.network_id,
         AccountId::new(transaction_key.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_admission_intent(
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
     )
     .sign(transaction_key.private_key());
     let accepted =
@@ -5823,13 +5838,12 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),
-            "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+            "QueuePlanSynced work requires its globally admitted autonomous reservation"
         );
     }
 
     // QueuePlan-synchronized ownership remains autonomous even when the
-    // topology exposes only one route and the broader multi-lane exclusion is
-    // therefore disabled.
+    // topology exposes only one route.
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
     enable_single_custom_lane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
     let transaction_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
@@ -5856,7 +5870,7 @@ fn repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible() {
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),
-            "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+            "QueuePlanSynced work requires its globally admitted autonomous reservation"
         );
     }
 }

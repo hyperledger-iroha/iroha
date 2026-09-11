@@ -3,6 +3,7 @@ use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production
 use iroha_crypto::{
     PublicKey,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
+    zeroize_value_for_confidential_discard,
 };
 use iroha_data_model::sorafs::moderation::{
     AdversarialCorpusManifestV1, ModerationCommitteeAggregateV1, ModerationReproManifestV1,
@@ -733,8 +734,7 @@ impl std::fmt::Debug for ModerationQuarantineObjectInput {
 }
 impl Drop for ModerationQuarantineObjectInput {
     fn drop(&mut self) {
-        self.payload.fill(0);
-        let _ = std::hint::black_box(&self.payload);
+        zeroize_value_for_confidential_discard(&mut self.payload);
         scrub_optional_quarantine_text(&mut self.content_type);
         scrub_optional_quarantine_text(&mut self.notes);
     }
@@ -746,8 +746,7 @@ fn scrub_optional_quarantine_text(value: &mut Option<String>) {
 }
 fn scrub_owned_quarantine_text(value: String) {
     let mut bytes = value.into_bytes();
-    bytes.fill(0);
-    let _ = std::hint::black_box(&bytes);
+    zeroize_value_for_confidential_discard(&mut bytes);
 }
 /// Persisted index record for one encrypted local quarantine payload object.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -784,7 +783,7 @@ pub struct ModerationQuarantineObjectRecord {
     pub envelope_path: String,
 }
 /// Decrypted local quarantine object payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectPayload {
     /// Persisted object index record.
     pub record: ModerationQuarantineObjectRecord,
@@ -792,7 +791,7 @@ pub struct ModerationQuarantineObjectPayload {
     pub payload: Vec<u8>,
 }
 /// Authenticated byte range from a local quarantine object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectRangePayload {
     /// Persisted object index record.
     pub record: ModerationQuarantineObjectRecord,
@@ -3259,8 +3258,7 @@ struct ModerationQuarantineChunkAadV1 {
 struct ModerationQuarantineDek([u8; 32]);
 impl Drop for ModerationQuarantineDek {
     fn drop(&mut self) {
-        self.0.fill(0);
-        let _ = std::hint::black_box(&self.0);
+        zeroize_value_for_confidential_discard(&mut self.0);
     }
 }
 struct ModerationQuarantineWrappedDek(Vec<u8>);
@@ -3271,22 +3269,10 @@ impl ModerationQuarantineWrappedDek {
 }
 impl Drop for ModerationQuarantineWrappedDek {
     fn drop(&mut self) {
-        self.0.fill(0);
-        let _ = std::hint::black_box(&self.0);
+        zeroize_value_for_confidential_discard(&mut self.0);
     }
 }
-struct ModerationQuarantinePlaintext(Vec<u8>);
-impl ModerationQuarantinePlaintext {
-    fn into_vec(mut self) -> Vec<u8> {
-        std::mem::take(&mut self.0)
-    }
-}
-impl Drop for ModerationQuarantinePlaintext {
-    fn drop(&mut self) {
-        self.0.fill(0);
-        let _ = std::hint::black_box(&self.0);
-    }
-}
+include!("moderation/quarantine_plaintext.rs");
 /// Decode one fixed V1 envelope before any key-provider operation.
 ///
 /// The configured byte ceiling and byte-derived allocation, element and depth
@@ -3493,18 +3479,18 @@ pub(crate) fn open_moderation_quarantine_object(
     record: &ModerationQuarantineObjectRecord,
     key_provider_binding: &ModerationQuarantineKeyProviderBindingV1,
     key_wrapper: &dyn ModerationQuarantineKeyWrapper,
-) -> Result<Vec<u8>, ModerationQuarantineObjectError> {
-    let payload = ModerationQuarantinePlaintext(open_moderation_quarantine_object_range(
+) -> Result<ModerationQuarantinePlaintext, ModerationQuarantineObjectError> {
+    let payload = open_moderation_quarantine_object_range(
         envelope,
         record,
         key_provider_binding,
         key_wrapper,
         0..envelope.payload_len,
-    )?);
+    )?;
     if *blake3::hash(&payload.0).as_bytes() != envelope.payload_digest {
         return Err(authentication_failed(envelope.quarantine_id));
     }
-    Ok(payload.into_vec())
+    Ok(payload)
 }
 /// Authenticate and decrypt only chunks intersecting `range`.
 ///
@@ -3517,7 +3503,7 @@ pub(crate) fn open_moderation_quarantine_object_range(
     key_provider_binding: &ModerationQuarantineKeyProviderBindingV1,
     key_wrapper: &dyn ModerationQuarantineKeyWrapper,
     range: Range<u64>,
-) -> Result<Vec<u8>, ModerationQuarantineObjectError> {
+) -> Result<ModerationQuarantinePlaintext, ModerationQuarantineObjectError> {
     validate_quarantine_object_envelope(envelope)?;
     let rebuilt = moderation_quarantine_object_record_from_envelope(
         envelope,
@@ -3619,7 +3605,7 @@ pub(crate) fn open_moderation_quarantine_object_range(
     if output.0.len() != output_len {
         return Err(authentication_failed(envelope.quarantine_id));
     }
-    Ok(output.into_vec())
+    Ok(output)
 }
 /// Rewrap a per-object DEK without decrypting or rewriting ciphertext chunks.
 pub(crate) fn rewrap_moderation_quarantine_object(

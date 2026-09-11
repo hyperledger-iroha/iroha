@@ -27,6 +27,7 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
         genesis_manifest_json: None,
         startup: StartupArgs {
             check_config: false,
+            require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,
         },
@@ -265,7 +266,7 @@ fn check_config_and_runtime_enforce_frame_cap_boundary() -> eyre::Result<()> {
         config.network.max_frame_bytes,
         iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES + 1
     );
-    let check_report = validate_config_for_check(&config, None)
+    let check_report = validate_config_for_check(&config, None, None)
         .expect_err("--check-config must reject an unrepresentable frame cap");
     assert_contains!(
         format!("{check_report:#}"),
@@ -284,10 +285,11 @@ fn check_config_and_runtime_enforce_frame_cap_boundary() -> eyre::Result<()> {
             load_config_with_overrides(|table, _genesis_key| {
                 iroha_config::base::toml::Writer::new(table).write(
                     ["network", topic],
-                    i64::try_from(plaintext_ceiling + 1).expect("first rejected topic cap fits i64"),
+                    i64::try_from(plaintext_ceiling + 1)
+                        .expect("first rejected topic cap fits i64"),
                 );
             })?;
-        let check_report = validate_config_for_check(&topic_config, None)
+        let check_report = validate_config_for_check(&topic_config, None, None)
             .expect_err("--check-config must reject a topic cap above plaintext capacity");
         let expected = format!(
             "network.{topic} ({}) exceeds the AEAD-specific plaintext ceiling of {plaintext_ceiling} bytes derived from network.max_frame_bytes ({encrypted_cap})",

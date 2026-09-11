@@ -1492,7 +1492,7 @@ mod tests {
         common::Owned,
         domain::Domain,
         events::data::oracle::FeedEventRecord,
-        events::data::prelude::{AssetEvent, DataEvent, DomainEvent},
+        events::data::prelude::{AssetEvent, DataEvent},
         isi::SetAssetHoldingLimit,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
         oracle::{FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
@@ -2946,18 +2946,15 @@ mod tests {
         let emitted_events = &stx.world.internal_event_buf[internal_events_before..];
         assert_eq!(
             emitted_events.len(),
-            6,
-            "each bilateral leg must emit Removed, Added, and Transferred"
+            8,
+            "each bilateral leg creates its destination and emits Removed, Added, and Transferred"
         );
         assert_eq!(
             emitted_events
                 .iter()
                 .filter(|event| matches!(
                     event.as_ref(),
-                    DataEvent::Domain(DomainEvent::Asset(ScopedAsset {
-                        event: AssetEvent::Transferred(_),
-                        ..
-                    }))
+                    DataEvent::Asset(AssetEvent::Transferred(_))
                 ))
                 .count(),
             2,
@@ -3010,12 +3007,12 @@ mod tests {
         );
     }
     #[test]
-    fn dvp_persists_balances_after_commit_in_dataspace_context() {
+    fn dvp_persists_balances_after_commit_on_universal_coordinator() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        let dataspace = DataSpaceId::new(7);
+        let dataspace = DataSpaceId::UNIVERSAL;
         stx.current_dataspace_id = Some(dataspace);
         stx.world.current_dataspace_id = Some(dataspace);
         let instruction = DvpIsi {
@@ -3086,8 +3083,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        stx.current_dataspace_id = Some(DataSpaceId::new(7));
-        stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
+        stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let instruction = DvpIsi {
             settlement_id: "dvp_partial_commit".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
@@ -3160,7 +3157,7 @@ mod tests {
         );
     }
     #[test]
-    fn dvp_uses_the_exact_counterparty_authorized_dataspace_balance() {
+    fn dvp_rejects_counterparty_consent_outside_execution_dataspace() {
         let ds1 = DataSpaceId::new(7);
         let ds2 = DataSpaceId::new(11);
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -3286,64 +3283,68 @@ mod tests {
             Quantity::from(1_000_u32),
         );
         grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
-        instruction
+        let events_before = stx.world.internal_event_buf.len();
+        let transcripts_before = stx.pending_transfer_transcript_count_for_testing();
+        let error = instruction
+            .clone()
             .execute(&ALICE_ID, &mut stx)
-            .expect("explicit consent may authorize the exact counterparty dataspace balance");
-        let alice_delivery_ds1 = AssetId::with_scope(
-            delivery_def_id.clone(),
-            ALICE_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds1),
+            .expect_err("counterparty consent cannot authorize execution in a different dataspace");
+        assert!(
+            matches!(error,
+                InstructionExecutionError::InvariantViolation(ref message)
+                    if message.contains("committed public balance scope 11 does not match execution dataspace 7")
+            ),
+            "unexpected scope rejection: {error:?}"
         );
-        let bob_delivery_ds1 = AssetId::with_scope(
-            delivery_def_id,
-            BOB_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds1),
-        );
-        let alice_payment_ds2 = AssetId::with_scope(
-            payment_def_id.clone(),
-            ALICE_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
-        );
-        let bob_payment_ds2 = AssetId::with_scope(
-            payment_def_id,
-            BOB_ID.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
-        );
+        for (definition, source, destination, dataspace, balance) in [
+            (
+                delivery_def_id,
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+                ds1,
+                10_u32,
+            ),
+            (
+                payment_def_id,
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+                ds2,
+                1_000_u32,
+            ),
+        ] {
+            assert_eq!(
+                asset_balance_or_zero(
+                    &stx,
+                    &AssetId::with_scope(
+                        definition.clone(),
+                        source,
+                        AssetBalanceScope::Dataspace(dataspace),
+                    )
+                ),
+                Quantity::from(balance)
+            );
+            assert_eq!(
+                asset_balance_or_zero(
+                    &stx,
+                    &AssetId::with_scope(
+                        definition,
+                        destination,
+                        AssetBalanceScope::Dataspace(dataspace),
+                    )
+                ),
+                Quantity::zero()
+            );
+        }
+        assert_eq!(stx.world.internal_event_buf.len(), events_before);
         assert_eq!(
-            stx.world
-                .asset(&alice_delivery_ds1)
-                .expect("delivery source bucket")
-                .value()
-                .as_ref()
-                .clone(),
-            Quantity::zero(),
+            stx.pending_transfer_transcript_count_for_testing(),
+            transcripts_before
         );
-        assert_eq!(
+        assert!(
             stx.world
-                .asset(&bob_delivery_ds1)
-                .expect("delivery destination bucket")
-                .value()
-                .as_ref()
-                .clone(),
-            Quantity::from(10_u32),
-        );
-        assert_eq!(
-            stx.world
-                .asset(&alice_payment_ds2)
-                .expect("payment destination bucket")
-                .value()
-                .as_ref()
-                .clone(),
-            Quantity::from(1_000_u32),
-        );
-        assert_eq!(
-            stx.world
-                .asset(&bob_payment_ds2)
-                .expect("counterparty payment bucket")
-                .value()
-                .as_ref()
-                .clone(),
-            Quantity::zero(),
+                .settlement_receipts
+                .get(instruction.settlement_id())
+                .is_none()
         );
     }
     #[test]
@@ -3685,8 +3686,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                InstructionExecutionError::InvariantViolation(ref message)
-                if message.contains("available")
+                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
             ),
             "unexpected error: {err:?}"
         );
@@ -3850,8 +3850,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                InstructionExecutionError::InvariantViolation(ref message)
-                if message.contains("available")
+                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
             ),
             "unexpected error: {err:?}"
         );
@@ -4013,8 +4012,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                InstructionExecutionError::InvariantViolation(ref message)
-                    if message.contains("available")
+                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
             ),
             "unexpected error: {err:?}"
         );
@@ -4075,8 +4073,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                InstructionExecutionError::InvariantViolation(ref message)
-                    if message.contains("available")
+                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
             ),
             "unexpected error: {err:?}"
         );

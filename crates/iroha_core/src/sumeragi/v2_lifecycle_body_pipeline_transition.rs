@@ -30,28 +30,47 @@ use crate::sumeragi::{
     v2_runtime::PendingRuntimeEffectBinding,
 };
 impl DurableContinuationEdge {
-    const fn parent(self) -> (LifecycleWorkClass, LifecyclePhase, LifecycleStageKind) {
+    const fn parent(
+        self,
+        decision_owned: bool,
+    ) -> (LifecycleWorkClass, LifecyclePhase, LifecycleStageKind) {
         match self {
             Self::FetchToStore => (
                 LifecycleWorkClass::Fetch,
-                LifecyclePhase::Fetch,
+                if decision_owned {
+                    LifecyclePhase::FetchDecision
+                } else {
+                    LifecyclePhase::Fetch
+                },
                 LifecycleStageKind::FetchBody,
             ),
             Self::StoreToValidate => (
                 LifecycleWorkClass::Store,
-                LifecyclePhase::Store,
+                if decision_owned {
+                    LifecyclePhase::StoreDecision
+                } else {
+                    LifecyclePhase::Store
+                },
                 LifecycleStageKind::StoreBody,
             ),
             Self::ValidateToApply => (
                 LifecycleWorkClass::Validate,
-                LifecyclePhase::Validate,
+                if decision_owned {
+                    LifecyclePhase::ValidateDecision
+                } else {
+                    LifecyclePhase::Validate
+                },
                 LifecycleStageKind::ValidateBody,
             ),
             Self::ValidateToInvalidBodyReport
             | Self::ValidateToSignPrepare
             | Self::ValidateToSignCommit => (
                 LifecycleWorkClass::Validate,
-                LifecyclePhase::Validate,
+                if decision_owned {
+                    LifecyclePhase::ValidateDecision
+                } else {
+                    LifecyclePhase::Validate
+                },
                 LifecycleStageKind::ValidateBody,
             ),
             Self::SignProposalToBroadcast => (
@@ -76,16 +95,27 @@ impl DurableContinuationEdge {
             ),
         }
     }
-    const fn child(self) -> (LifecycleWorkClass, LifecyclePhase, LifecycleStageKind) {
+    const fn child(
+        self,
+        decision_owned: bool,
+    ) -> (LifecycleWorkClass, LifecyclePhase, LifecycleStageKind) {
         match self {
             Self::FetchToStore => (
                 LifecycleWorkClass::Store,
-                LifecyclePhase::Store,
+                if decision_owned {
+                    LifecyclePhase::StoreDecision
+                } else {
+                    LifecyclePhase::Store
+                },
                 LifecycleStageKind::StoreBody,
             ),
             Self::StoreToValidate => (
                 LifecycleWorkClass::Validate,
-                LifecyclePhase::Validate,
+                if decision_owned {
+                    LifecyclePhase::ValidateDecision
+                } else {
+                    LifecyclePhase::Validate
+                },
                 LifecycleStageKind::ValidateBody,
             ),
             Self::ValidateToApply => (
@@ -192,8 +222,10 @@ pub(super) fn durable_continuation_successor_is_exact(
         && parent_stage.predecessor_scope() == PredecessorScope::Independent
         && child_stage.predecessor_scope() == PredecessorScope::Independent
         && {
-            let (expected_parent, parent_phase, parent_kind) = edge.parent();
-            let (expected_child, child_phase, child_kind) = edge.child();
+            let (expected_parent, parent_phase, parent_kind) =
+                edge.parent(parent_key.phase().is_decision_body());
+            let (expected_child, child_phase, child_kind) =
+                edge.child(parent_key.phase().is_decision_body());
             parent_work_class == expected_parent
                 && parent_key.phase() == parent_phase
                 && parent_stage.kind() == parent_kind
@@ -249,7 +281,7 @@ pub(super) fn durable_validate_payload_is_exact(
     payload: DurablePayloadReference,
 ) -> bool {
     matches!(payload, DurablePayloadReference::BodyFrame(frame) if frame.matches_key(key))
-        && key.phase() == LifecyclePhase::Validate
+        && key.phase().is_validate()
 }
 /// Closed pre-commit failure inventory for one staged body-pipeline edge.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -557,7 +589,7 @@ fn stage_validate_no_successor_transition(
     release_consensus_reservation: bool,
 ) -> Result<StagedBodyNoSuccessorTransition, BodyStageTransitionError> {
     if lease.work_class() != LifecycleWorkClass::Validate
-        || lease.key().phase() != LifecyclePhase::Validate
+        || !lease.key().phase().is_validate()
         || lease.stage().kind() != LifecycleStageKind::ValidateBody
         || lease.stage().predecessor_scope() != PredecessorScope::Independent
         || lease.physical_slots().len() != 1
@@ -1055,8 +1087,10 @@ fn stage_body_stage_transition_with_payload_relation(
     payload_relation: BodyStagePayloadRelationV1,
     ordinal_count: usize,
 ) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
-    let (parent_work_class, parent_phase, parent_stage) = edge.parent();
-    let (child_work_class, child_phase, child_stage) = edge.child();
+    let (parent_work_class, parent_phase, parent_stage) =
+        edge.parent(lease.key().phase().is_decision_body());
+    let (child_work_class, child_phase, child_stage) =
+        edge.child(lease.key().phase().is_decision_body());
     let child_capacity = child_work_class.capacity_class();
     if parent_work_class.capacity_class() != CapacityClass::Effect
         || !matches!(
@@ -2729,7 +2763,87 @@ impl core::fmt::Display for ReleasedValidateApplyPublicationErrorV1 {
     }
 }
 
+/// Minted only after the production owner authenticates an existing Report.
+/// Consuming this permit commits a reducer occurrence without new output work.
+pub(in crate::sumeragi) struct ExistingResolvedReportCommitPermitV1(());
+
 impl super::ProductionLifecycleOwnerV1 {
+    /// Reuse only the existing canonical Report for this immutable terminal.
+    /// Generic candidate equality remains exact; a new view or QC signer subset
+    /// may repair reducer state while the original output owner stays unchanged.
+    fn has_exact_resolved_report_owner(
+        &self,
+        pending: &super::work_registry::PendingResolvedValidateReplayV1,
+        candidate: &CandidateAdmission,
+    ) -> Result<bool, &'static str> {
+        let Some(ordinal) = self.coordinator.key_index.get(&candidate.key).copied() else {
+            return Ok(false);
+        };
+        let ledger = super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .map_err(|_| "terminal Validate Report lost its exact durable ledger")?;
+        let report = ledger
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == ordinal)
+            .ok_or("terminal Validate Report lost its indexed row")?;
+        let terminal = ledger
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == pending.terminal().ordinal())
+            .ok_or("terminal Validate Report lost its original terminal")?;
+        let metadata = self
+            .coordinator
+            .durable_records
+            .get(&ordinal)
+            .ok_or("terminal Validate Report lost its durable source")?;
+        let record = &self.coordinator.records[&ordinal];
+        let state_is_owned = matches!(
+            record.state,
+            LifecycleState::Ready
+                | LifecycleState::Waiting(_)
+                | LifecycleState::Terminal(TerminalOutcome::Advanced)
+        );
+        if !state_is_owned
+            || candidate.work_class != LifecycleWorkClass::InvalidBodyReport
+            || report.work_class() != Some(candidate.work_class)
+            || report.stage() != Some(candidate.stage)
+            || report.owner().causal_root() != candidate.causal_root
+            || report.owner().first_admission_ordinal() != ordinal
+            || report.reconstruction_source() != candidate.reconstruction_source
+            || report.durable_payload() != Some(DurablePayloadReference::None)
+            || report.continuation() != Some(DurableContinuation::None)
+            || !pending
+                .terminal()
+                .matches_ledger_record(ledger.context(), terminal)
+            || !report.has_exact_invalid_body_validate_origin(ledger.context(), terminal)
+            || !super::replay_authority::authenticates_resolved_invalid_body_report(
+                &metadata.replay_authority,
+                &self.verified,
+                pending.terminal(),
+            )
+        {
+            return Err("terminal Validate Report changed its exact existing output owner");
+        }
+        let outputs = self
+            .exact_lifecycle_output_ordinals_for_registry_census()
+            .ok_or("terminal Validate Report lost its owner-held output census")?;
+        let registry = self.registry.registry();
+        if !registry.exactly_covers_all_live_work(&self.verified, &self.coordinator)
+            && !registry.exactly_covers_recovered_ready_work_with_owner_held_outputs(
+                &self.coordinator,
+                &outputs,
+            )
+            && !registry
+                .exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+                    &self.coordinator,
+                    &outputs,
+                )
+        {
+            return Err("terminal Validate Report lost its exact concrete output census");
+        }
+        Ok(true)
+    }
+
     /// Authenticate the immutable physical result before any reducer or WAL
     /// mutation. Child capacity is checked after the closed preview selects it.
     pub(in crate::sumeragi) fn preflight_resolved_validate_replay(
@@ -2761,7 +2875,9 @@ impl super::ProductionLifecycleOwnerV1 {
         use crate::sumeragi::v2::ReadyDurableValidateAdapterPublicationKind as Kind;
         let class = match kind {
             Kind::ValidatedPersist | Kind::ValidatedApply => CapacityClass::Effect,
-            Kind::RejectedReport => CapacityClass::Consensus,
+            // Report capacity is checked after its exact existing-owner join.
+            // An already owned output does not need a second Consensus slot.
+            Kind::RejectedReport => return true,
             _ => return true,
         };
         super::schema::has_lifecycle_record_capacity(self.coordinator.records.len(), 1)
@@ -2771,11 +2887,12 @@ impl super::ProductionLifecycleOwnerV1 {
 
     /// Publish only the successor selected by replaying the actual fsynced
     /// result. The old Validate row and ordinal remain byte-for-byte terminal.
+    /// Returns false only when a fresh Report needs unavailable capacity.
     pub(in crate::sumeragi) fn publish_resolved_validate_result(
         &mut self,
         pending: &super::work_registry::PendingResolvedValidateReplayV1,
         publication: crate::sumeragi::v2::PreparedReadyDurableValidateAdapterPublication<'_>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<bool, &'static str> {
         use super::{
             concrete_admission::AdapterEffectAdmissionTransaction,
             work_registry::{
@@ -2794,7 +2911,7 @@ impl super::ProductionLifecycleOwnerV1 {
             | Kind::RejectedInactive
             | Kind::RejectedNoEffect => {
                 publication.commit_no_successor_after_durable_ledger();
-                Ok(())
+                Ok(true)
             }
             Kind::ValidatedPersist => {
                 let bound = publication
@@ -2826,7 +2943,7 @@ impl super::ProductionLifecycleOwnerV1 {
                         ..
                     }) => {
                         prepared.commit_after_standalone_admission();
-                        Ok(())
+                        Ok(true)
                     }
                     _ => Err("terminal Validate Sign did not publish one fresh durable child"),
                 }
@@ -2842,6 +2959,19 @@ impl super::ProductionLifecycleOwnerV1 {
                         &self.verified,
                     )
                     .map_err(|_| "terminal Validate rejection candidate projection failed")?;
+                if self.has_exact_resolved_report_owner(pending, &candidate)? {
+                    replay.commit_after_existing_report(ExistingResolvedReportCommitPermitV1(()));
+                    return Ok(true);
+                }
+                if !super::schema::has_lifecycle_record_capacity(self.coordinator.records.len(), 1)
+                    || self.coordinator.capacity_used[&CapacityClass::Consensus]
+                        >= self
+                            .coordinator
+                            .capacity_geometry
+                            .limit(CapacityClass::Consensus)
+                {
+                    return Ok(false);
+                }
                 let mut prepared = replay
                     .prepare_registry_work(LiveValidateReportWorkProjectionPermit::new(candidate))
                     .map_err(|_| "terminal Validate rejection concrete preparation failed")?;
@@ -2857,7 +2987,7 @@ impl super::ProductionLifecycleOwnerV1 {
                         ..
                     }) => {
                         prepared.commit_after_standalone_admission();
-                        Ok(())
+                        Ok(true)
                     }
                     _ => Err("terminal Validate rejection did not publish one fresh durable child"),
                 }

@@ -20,6 +20,7 @@ const RESPONSE_READ_BUFFER_BYTES: usize = 16 * 1024;
 #[derive(Clone)]
 pub struct DefaultHttpTransport {
     inner: Arc<dyn HttpTransport>,
+    deadline: Option<std::time::Instant>,
 }
 
 impl std::fmt::Debug for DefaultHttpTransport {
@@ -53,19 +54,72 @@ impl DefaultHttpTransport {
                 asynchronous: build_async_http_client()?,
                 asynchronous_direct_loopback: build_direct_loopback_async_http_client()?,
             }),
+            deadline: None,
         })
     }
 
     pub(crate) fn from_shared(transport: Arc<dyn HttpTransport>) -> Self {
-        Self { inner: transport }
+        Self {
+            inner: transport,
+            deadline: None,
+        }
+    }
+
+    pub(crate) fn with_deadline(&self, deadline: std::time::Instant) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            deadline: Some(
+                self.deadline
+                    .map_or(deadline, |current| current.min(deadline)),
+            ),
+        }
+    }
+
+    pub(crate) fn deadline(&self) -> Option<std::time::Instant> {
+        self.deadline
+    }
+
+    fn bound_request(&self, mut request: TransportRequest) -> Result<TransportRequest> {
+        if let Some(deadline) = self.deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(request_deadline_elapsed());
+            }
+            request.timeout = Some(
+                request
+                    .timeout
+                    .map_or(remaining, |limit| limit.min(remaining)),
+            );
+        }
+        Ok(request)
     }
 
     fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
-        self.inner.send_blocking(request)
+        let response = self.inner.send_blocking(self.bound_request(request)?);
+        if self
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(request_deadline_elapsed());
+        }
+        response
     }
 
     fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
-        self.inner.send(request)
+        Box::pin(async move {
+            // Recompute on dispatch, including requests built before earlier I/O.
+            let request = self.bound_request(request)?;
+            if let Some(deadline) = self.deadline {
+                tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    self.inner.send(request),
+                )
+                .await
+                .map_err(|_| request_deadline_elapsed())?
+            } else {
+                self.inner.send(request).await
+            }
+        })
     }
 
     #[cfg(test)]
@@ -79,8 +133,17 @@ impl DefaultHttpTransport {
     ) -> Self {
         Self {
             inner: Arc::new(MockHttpTransport { responder }),
+            deadline: None,
         }
     }
+}
+
+pub(crate) fn request_deadline_elapsed() -> Error {
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "HTTP operation deadline elapsed",
+    )
+    .into()
 }
 fn header_name_from_str(str: &str) -> Result<HeaderName> {
     str.parse::<HeaderName>()
@@ -737,6 +800,102 @@ mod tests {
         assert!(transport.shares_pools_with(&clone));
         drop(clone);
         drop(transport);
+    }
+
+    #[test]
+    fn operation_deadline_bounds_sequential_blocking_dispatches() {
+        use std::sync::Mutex;
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&observed);
+        let transport = DefaultHttpTransport::mock(Arc::new(move |request| {
+            recorded
+                .lock()
+                .expect("recorded budgets")
+                .push(request.timeout.expect("deadline budget"));
+            thread::sleep(Duration::from_millis(25));
+            Ok(Response::new(Vec::new()))
+        }))
+        .with_deadline(Instant::now() + Duration::from_secs(2));
+        let request = || {
+            DefaultRequestBuilder::new(Method::GET, "http://localhost/status".parse().unwrap())
+                .with_transport(transport.clone())
+                .timeout(Duration::from_secs(70))
+                .build()
+                .unwrap()
+        };
+        // Build both first: the second dispatch must account for earlier I/O.
+        let first = request();
+        let second = request();
+        first.send_blocking().expect("first observation");
+        second.send_blocking().expect("second observation");
+        let budgets = observed.lock().expect("recorded budgets");
+        assert!(budgets[0] <= Duration::from_secs(2));
+        assert!(budgets[1] < budgets[0]);
+    }
+
+    #[test]
+    fn expired_operation_deadline_prevents_dispatch_and_cannot_be_extended() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let count = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&count);
+        let original = DefaultHttpTransport::mock(Arc::new(move |_| {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(Response::new(Vec::new()))
+        }));
+        let bounded = original
+            .with_deadline(Instant::now())
+            .with_deadline(Instant::now() + Duration::from_secs(60));
+        let request = |transport| {
+            DefaultRequestBuilder::new(
+                Method::POST,
+                "http://localhost/transaction".parse().unwrap(),
+            )
+            .with_transport(transport)
+            .body(vec![1, 2, 3])
+            .build()
+            .unwrap()
+        };
+        let error = request(bounded)
+            .send_blocking()
+            .expect_err("expired POST must never dispatch");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            ErrorKind::TimedOut
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        request(original)
+            .send_blocking()
+            .expect("source transport remains unbounded");
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn operation_deadline_cancels_injected_async_transport() {
+        #[derive(Debug)]
+        struct NeverCompletes;
+        impl HttpTransport for NeverCompletes {
+            fn send_blocking(&self, _: TransportRequest) -> Result<Response<Bytes>> {
+                panic!("asynchronous test")
+            }
+            fn send(&self, _: TransportRequest) -> TransportFuture<'_> {
+                Box::pin(std::future::pending())
+            }
+        }
+        let transport = DefaultHttpTransport::from_shared(Arc::new(NeverCompletes))
+            .with_deadline(Instant::now() + Duration::from_millis(30));
+        let request =
+            DefaultRequestBuilder::new(Method::GET, "http://localhost/status".parse().unwrap())
+                .with_transport(transport)
+                .build()
+                .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), request.send())
+            .await
+            .expect("absolute deadline cancels custom transport");
+        let error = result.expect_err("pending transport cannot outlive deadline");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            ErrorKind::TimedOut
+        );
     }
 
     #[test]

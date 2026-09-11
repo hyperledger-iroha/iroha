@@ -230,6 +230,22 @@ impl InvalidBodyReplaySourceV1 {
     }
 }
 
+/// Authenticate an already owned Report against the actual retained rejection.
+/// The caller still checks its exact ledger row and canonical terminal relation.
+pub(super) fn authenticates_resolved_invalid_body_report(
+    authority: &LifecycleReplayAuthorityV1,
+    verified: &VerifiedHeightContext,
+    terminal: &super::ResolvedLifecycleValidateOutcomeV1,
+) -> bool {
+    let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &authority.source else {
+        return false;
+    };
+    source.cryptographically_authenticates(verified)
+        && terminal
+            .rejected_body_outcome()
+            .is_some_and(|outcome| source.exactly_matches_rejected_body_outcome(outcome))
+}
+
 /// Re-authenticate one exact output row from its canonical V1 replay source.
 ///
 /// `invalid_parent` is either the exact linked Validate predecessor or an
@@ -291,6 +307,17 @@ pub(super) fn authenticate_durable_lifecycle_output(
             let origin = invalid_parent?;
             if !source.cryptographically_authenticates(verified)
                 || !authority.matches_invalid_body_validate_origin(context, origin)
+            {
+                return None;
+            }
+            if let RecoveredInvalidBodyValidateOriginV1::Resolved(claim) = origin
+                && resolved_invalid_body_report_causal_key(
+                    claim.causal_root(),
+                    claim.ordinal(),
+                    authority,
+                )?
+                .as_ref()
+                    != owner.causal_root().digest().as_bytes()
             {
                 return None;
             }

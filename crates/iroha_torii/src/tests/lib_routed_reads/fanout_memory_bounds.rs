@@ -907,6 +907,40 @@ fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation()
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 #[test]
+fn versioned_ingress_accepts_payload_only_roots_without_frame_identity() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // No NoritoSchema: this helper emits a version byte and adaptive payload.
+    struct PayloadOnly<'a>(&'a AtomicUsize);
+    impl norito::core::SerializePayload for PayloadOnly<'_> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::io::Write::write_all(writer, &[0xA5; 4])?;
+            Ok(())
+        }
+    }
+    impl iroha_version::Version for PayloadOnly<'_> {
+        fn version(&self) -> u8 {
+            1
+        }
+        fn supported_versions() -> core::ops::Range<u8> {
+            1..2
+        }
+    }
+    let calls = AtomicUsize::new(0);
+    let payload = PayloadOnly(&calls);
+    let rejected = encode_versioned_norito_bounded(&payload, 4)
+        .expect_err("the version byte is part of the exact admission bound");
+    assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let bytes = encode_versioned_norito_bounded(&payload, 5)
+        .expect("a payload-only root fits its exact versioned boundary");
+    assert_eq!(bytes, [1, 0xA5, 0xA5, 0xA5, 0xA5]);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+#[test]
 fn fixed_capacity_norito_writer_refuses_growth_past_preflight() {
     use std::io::Write as _;
     let mut bytes = Vec::new();

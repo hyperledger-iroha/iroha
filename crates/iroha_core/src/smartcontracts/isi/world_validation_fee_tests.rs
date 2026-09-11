@@ -668,7 +668,7 @@ fn verified_fee_sponsor_registration_rejects_oversized_proof_before_decode() {
     let error = execute_verified_fee_sponsor_registration(&state, instruction)
         .expect_err("oversized proof payload must fail before canonical decode");
     assert!(
-        error.to_string().contains("decode limit"),
+        format!("{error:?}").contains("decode limit"),
         "unexpected oversized proof rejection: {error:?}"
     );
 }
@@ -684,7 +684,7 @@ fn verified_fee_sponsor_registration_rejects_missing_or_rotated_frozen_policy() 
     );
     let error = execute_verified_fee_sponsor_registration(&state, instruction)
         .expect_err("missing frozen source policy must fail");
-    assert!(error.to_string().contains("no frozen AXT policy"));
+    assert!(format!("{error:?}").contains("no frozen AXT policy"));
 
     let (state, instruction) = verified_fee_sponsor_registration_fixture(
         Some([0x64; 32]),
@@ -695,7 +695,7 @@ fn verified_fee_sponsor_registration_rejects_missing_or_rotated_frozen_policy() 
     );
     let error = execute_verified_fee_sponsor_registration(&state, instruction)
         .expect_err("proof under a rotated manifest must fail");
-    assert!(error.to_string().contains("frozen AXT policy"));
+    assert!(format!("{error:?}").contains("frozen AXT policy"));
 }
 #[test]
 fn verified_fee_sponsor_registration_rejects_wrong_policy_da_and_expiry() {
@@ -709,7 +709,7 @@ fn verified_fee_sponsor_registration_rejects_wrong_policy_da_and_expiry() {
     );
     let error = execute_verified_fee_sponsor_registration(&state, instruction)
         .expect_err("owner-selected policy commitment must fail");
-    assert!(error.to_string().contains("policy commitment mismatch"));
+    assert!(format!("{error:?}").contains("policy commitment mismatch"));
 
     let (state, instruction) = verified_fee_sponsor_registration_fixture(
         Some(manifest_root),
@@ -720,7 +720,7 @@ fn verified_fee_sponsor_registration_rejects_wrong_policy_da_and_expiry() {
     );
     let error = execute_verified_fee_sponsor_registration(&state, instruction)
         .expect_err("fee sponsor proof with DA must fail");
-    assert!(error.to_string().contains("must not carry a DA commitment"));
+    assert!(format!("{error:?}").contains("must not carry a DA commitment"));
 
     let (state, instruction) = verified_fee_sponsor_registration_fixture(
         Some(manifest_root),
@@ -731,11 +731,7 @@ fn verified_fee_sponsor_registration_rejects_wrong_policy_da_and_expiry() {
     );
     let error = execute_verified_fee_sponsor_registration(&state, instruction)
         .expect_err("proof expiry must equal the lease deadline");
-    assert!(
-        error
-            .to_string()
-            .contains("must equal the allocation lease expiry")
-    );
+    assert!(format!("{error:?}").contains("must equal the allocation lease expiry"));
 }
 #[test]
 fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
@@ -892,11 +888,7 @@ fn post_genesis_authority_cannot_bootstrap_another_sponsors_program() {
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("height-two authority must not manage another sponsor's program");
-    assert!(
-        error
-            .to_string()
-            .contains("cannot manage fee sponsor program")
-    );
+    assert!(format!("{error:?}").contains("cannot manage fee sponsor program"));
 }
 #[test]
 fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
@@ -909,15 +901,7 @@ fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    {
-        let mut hashes = state.block_hashes.block();
-        hashes.push_for_tests(
-            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                Hash::new(b"fee-sponsor-genesis-replay-guard"),
-            ),
-        );
-        hashes.commit_for_tests();
-    }
+    seed_committed_world_test_block(&state);
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
@@ -939,11 +923,7 @@ fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("committed history must disable the height-one owner exception");
-    assert!(
-        error
-            .to_string()
-            .contains("cannot manage fee sponsor program")
-    );
+    assert!(format!("{error:?}").contains("cannot manage fee sponsor program"));
     assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
 }
 #[test]
@@ -1022,11 +1002,7 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
     .execute(&BOB_ID, &mut stx)
     .expect_err("height-two non-owner funding must fail before moving assets");
 
-    assert!(
-        error
-            .to_string()
-            .contains("cannot manage fee sponsor program")
-    );
+    assert!(format!("{error:?}").contains("cannot manage fee sponsor program"));
     assert_eq!(
         stx.world
             .assets
@@ -1077,11 +1053,7 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
         .clone()
         .execute(&ALICE_ID, &mut stx)
         .expect_err("an unregistered payout account must fail closed");
-    assert!(
-        error
-            .to_string()
-            .contains("unknown fee sponsor payout account")
-    );
+    assert!(format!("{error:?}").contains("unknown fee sponsor payout account"));
     assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
     Register::account(Account::new(BOB_ID.clone()))
         .execute(&ALICE_ID, &mut stx)
@@ -1100,7 +1072,7 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
     let error = Unregister::account(BOB_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect_err("a live program's immutable payout account must remain registered");
-    assert!(error.to_string().contains("immutable payout account"));
+    assert!(format!("{error:?}").contains("immutable payout account"));
 }
 #[test]
 fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
@@ -1189,7 +1161,7 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
         .clone()
         .execute(&BOB_ID, &mut stx)
         .expect_err("a delegated manager must not withdraw sponsor funds");
-    assert!(error.to_string().contains("only sponsor"));
+    assert!(format!("{error:?}").contains("only sponsor"));
     assert_eq!(
         stx.world
             .fee_sponsor_vaults
@@ -1290,11 +1262,7 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("ordinary accounts must not reserve a sponsor vault");
-    assert!(
-        error
-            .to_string()
-            .contains("cannot manage fee sponsor program")
-    );
+    assert!(format!("{error:?}").contains("cannot manage fee sponsor program"));
     let mut permissions = Permissions::new();
     permissions.insert(
         CanManageFeeSponsorProgram {
@@ -1871,7 +1839,7 @@ fn enacted_validation_fee_account_references_reject_unregister_atomically() {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained enacted validation-fee account reference must reject");
         assert!(
-            error.to_string().contains(reference_kind),
+            format!("{error:?}").contains(reference_kind),
             "unexpected {reference_kind} rejection: {error}"
         );
         assert_eq!(
@@ -1950,7 +1918,7 @@ fn enacted_validation_fee_asset_references_reject_unregister_atomically() {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained enacted validation-fee asset reference must reject");
         assert!(
-            error.to_string().contains(reference_kind),
+            format!("{error:?}").contains(reference_kind),
             "unexpected {reference_kind} rejection: {error}"
         );
         assert!(
@@ -2049,7 +2017,7 @@ fn enacted_validation_fee_asset_references_reject_containing_domain_unregister_a
             .execute(&ALICE_ID, &mut stx)
             .expect_err("domain containing retained validation-fee asset must reject");
         assert!(
-            error.to_string().contains(reference_kind),
+            format!("{error:?}").contains(reference_kind),
             "unexpected {reference_kind} domain rejection: {error}"
         );
         assert!(stx.world.domain(domain_id).is_ok());

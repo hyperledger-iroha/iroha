@@ -1131,6 +1131,38 @@ mod tests {
         );
         assert_eq!(parent.key.phase(), LifecyclePhase::Store);
         assert_eq!(child.key.phase(), LifecyclePhase::Validate);
+        let decision_key = |key: super::super::LifecycleKey, phase| {
+            super::super::LifecycleKey::new(
+                key.context(),
+                key.round(),
+                key.proposal_round(),
+                key.subject(),
+                phase,
+                key.execution_commitment(),
+            )
+        };
+        let decision_parent = decision_key(parent.key, LifecyclePhase::StoreDecision);
+        let decision_child = decision_key(child.key, LifecyclePhase::ValidateDecision);
+        for (parent_key, child_key, exact) in [
+            (parent.key, child.key, true),
+            (decision_parent, decision_child, true),
+            (parent.key, decision_child, false),
+            (decision_parent, child.key, false),
+        ] {
+            assert_eq!(
+                durable_continuation_successor_is_exact(
+                    DurableContinuationEdge::StoreToValidate,
+                    parent.work_class,
+                    parent_key,
+                    parent.stage,
+                    child.work_class,
+                    child_key,
+                    child.stage,
+                ),
+                exact,
+                "a body continuation preserves the exact Prepare or Decision phase family",
+            );
+        }
         assert_eq!(
             prepared.staged.capacity_used[&CapacityClass::Effect],
             capacity_used_before[&CapacityClass::Effect]

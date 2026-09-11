@@ -321,10 +321,7 @@ fn streaming_writer_errors_never_return_a_partial_digest() {
 
 /// A serializer-owned allocation charge tests the adapter's inherited-budget error path.
 #[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_core::state::fastpq_source_inventory::public_seal::tests::BudgetedField",
-    frame = "u8"
-)]
+#[norito_schema(name = "test::iroha_core::BudgetedField", frame = "u8")]
 struct BudgetedField;
 
 impl norito::SerializePayload for BudgetedField {

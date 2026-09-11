@@ -1739,7 +1739,10 @@ fn sample_full_bootstrap_execution_verification_case() -> (
     let mut job = sample_fhe_job(Vec::new());
     job.operation = FheJobOperationV1::Bootstrap;
     job.bootstrap_count = 1;
-    let input = sample_fhe_envelope(b"abc", b"soracloud-full-bootstrap-execution-proof-input");
+    let mut input = sample_fhe_envelope(b"abc", b"soracloud-full-bootstrap-execution-proof-input");
+    // Native execution accepts bounded slot vectors; two slots exercise ordering,
+    // omission, and duplication without replaying every identifier-padding slot.
+    input.slots.truncate(2);
     let (output, input_bound, output_bound) = sample_full_bootstrap_execution_output_and_bounds(
         &params,
         &evaluation_keys,
@@ -1808,7 +1811,10 @@ fn sample_full_bootstrap_execution_verification_case_with_verifier_key(
     let mut job = sample_fhe_job(Vec::new());
     job.operation = FheJobOperationV1::Bootstrap;
     job.bootstrap_count = 1;
-    let input = sample_fhe_envelope(b"abc", b"soracloud-full-bootstrap-execution-proof-input");
+    let mut input = sample_fhe_envelope(b"abc", b"soracloud-full-bootstrap-execution-proof-input");
+    // Native execution accepts bounded slot vectors; two slots exercise ordering,
+    // omission, and duplication without replaying every identifier-padding slot.
+    input.slots.truncate(2);
     let (output, input_bound, output_bound) = sample_full_bootstrap_execution_output_and_bounds(
         &params,
         &evaluation_keys,
@@ -2315,44 +2321,30 @@ fn sample_full_bootstrap_execution_output_and_bounds(
         .expect("sample bundle carries a full-bootstrap key");
     let input_bound =
         bfv_encrypted_zero_refresh_residual_multiple_bound(params).expect("input bound");
-    let reviewer_key_pair = checked_keypair();
-    let (release_audit_package, release_audit_package_digest) =
-        sample_full_bootstrap_release_audit_package_and_digest(
-            params,
-            evaluation_keys,
-            artifacts,
-            &reviewer_key_pair,
-        );
+    // Fixtures exercise the arithmetic relation independently of release qualification.
+    // The production audit gate is tested separately and cannot be satisfied by this trace.
+    let mut output_bound = None;
     let slots = input
-            .slots
-            .iter()
-            .map(|slot| {
-                iroha_crypto::fhe_bfv::full_bootstrap_ciphertext_with_release_audited_artifacts_registered_rns_exact_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    &evaluation_keys.galois_keys,
-                    slot,
-                    &release_audit_package,
-                    release_audit_package_digest,
-                    "sora-zk-audit-wg-2026",
-                    reviewer_key_pair.public_key(),
-                )
-                .expect("execute sample full-bootstrap output")
-            })
-            .collect();
-    let output_bound = iroha_crypto::fhe_bfv::bfv_full_bootstrap_with_release_audited_artifacts_output_residual_multiple_bound_v1(
+        .slots
+        .iter()
+        .map(|slot| {
+            let (trace, bounds) = iroha_crypto::fhe_bfv::bfv_full_bootstrap_diagnostic_execution_v1(
             params,
             bootstrap_key,
             artifacts,
             &evaluation_keys.galois_keys,
+            slot,
+            iroha_crypto::fhe_bfv::BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
             input_bound,
-            &release_audit_package,
-            release_audit_package_digest,
-            "sora-zk-audit-wg-2026",
-            reviewer_key_pair.public_key(),
-        )
-        .expect("sample full-bootstrap output bound");
+        ).expect("execute artifact-bound arithmetic diagnostic");
+            if let Some(previous) = output_bound {
+                assert_eq!(previous, bounds.slot_to_coefficient);
+            }
+            output_bound = Some(bounds.slot_to_coefficient);
+            trace.slot_to_coefficient_output
+        })
+        .collect();
+    let output_bound = output_bound.expect("sample input contains a slot");
     (BfvIdentifierCiphertext { slots }, input_bound, output_bound)
 }
 #[allow(clippy::too_many_arguments)]
@@ -7462,10 +7454,7 @@ fn assert_bfv_bootstrap_refresh_vectors(
             refresh_rounds > 0,
             "bootstrap refresh vector rounds must be non-zero"
         );
-        assert!(
-            refresh_rounds <= bootstrap_key.max_refresh_rounds,
-            "bootstrap refresh vector rounds exceed key capacity"
-        );
+
         let input_plaintext = fixture_u64_array(vector, "input_plaintext_slots");
         let input = encrypt_from_seed(
             params,
@@ -7485,14 +7474,26 @@ fn assert_bfv_bootstrap_refresh_vectors(
             sha256_hex(&encoded_input),
             "bootstrap input SHA-256"
         );
-        let refreshed = bootstrap_ciphertext_rns_exact_rounds(
+        let refresh_result = bootstrap_ciphertext_rns_exact_rounds(
             params,
             &rns_chain,
             bootstrap_key,
             &input,
             refresh_rounds,
-        )
-        .expect("fixture bootstrap refresh must apply");
+        );
+        if vector.get("expected_error").is_some() {
+            assert!(refresh_rounds > bootstrap_key.max_refresh_rounds);
+            assert_eq!(
+                refresh_result
+                    .expect_err("unsupported refresh count must reject")
+                    .to_string(),
+                fixture_str(vector, "expected_error")
+            );
+            assert!(vector.get("expected_output_ciphertext_sha256").is_none());
+            continue;
+        }
+        assert!(refresh_rounds <= bootstrap_key.max_refresh_rounds);
+        let refreshed = refresh_result.expect("fixture bootstrap refresh must apply");
         let encoded_output = norito::to_bytes(&refreshed).expect("encode bootstrap output");
         assert_eq!(
             fixture_u64(vector, "expected_output_ciphertext_bytes"),
@@ -10259,7 +10260,7 @@ fn soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof() 
 }
 #[cfg(feature = "zk-stark")]
 #[test]
-fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_release_package() {
+fn soracloud_fhe_arithmetic_prover_binds_claims_while_production_qualification_is_unavailable() {
     let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
     full_bootstrap_execution_case!(with &vk_box => (params, evaluation_keys, transcript, artifacts, _job, input, output, input_bound, output_bound));
     let reviewer_key_pair = checked_keypair();
@@ -10270,7 +10271,7 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_release_package
             &artifacts,
             &reviewer_key_pair,
         );
-    let proofs =
+    let error =
         prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
             &params,
             &evaluation_keys,
@@ -10287,7 +10288,24 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_release_package
             "sora-zk-audit-wg-2026",
             reviewer_key_pair.public_key(),
         )
-        .expect("trusted release audit package authorizes native proof generation");
+        .expect_err("signed audit fixtures cannot supply missing production qualification");
+    assert_invalid_parameter_contains(
+        error,
+        "BFV production qualification unavailable: MissingRegisteredHeOrgLatticeNoiseAndQromEvidence",
+    );
+    let proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+        &params,
+        &evaluation_keys,
+        &transcript,
+        &artifacts,
+        &input,
+        &output,
+        BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        input_bound,
+        output_bound,
+        &vk_box,
+    )
+    .expect("artifact-bound arithmetic proof generation");
     assert_eq!(proofs.len(), input.slots.len());
     let expected_claim_proofs = sample_full_bootstrap_execution_proofs_for_claims(
         &params,
@@ -10333,7 +10351,8 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_release_package
 }
 #[cfg(feature = "zk-stark")]
 #[test]
-fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_release_package() {
+fn soracloud_fhe_bounded_arithmetic_prover_binds_claims_while_production_qualification_is_unavailable()
+ {
     let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
     let params = ram_lfe_bfv_parameters_v1();
     let (secret_key, public_key, mut evaluation_keys, _refresh_transcript, _digest) =
@@ -10384,20 +10403,38 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
         trusted_reviewer_id: "sora-zk-audit-wg-2026",
         trusted_reviewer_public_key: reviewer_key_pair.public_key(),
     };
-    let (output, output_bound) =
-        execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
-            &params,
-            &evaluation_keys,
-            &job,
-            std::slice::from_ref(&input),
-            &[input_bound],
-            Some(&artifacts),
-            Some(&release_audit),
-        )
-        .expect("bounded release-audited full-bootstrap execution emits output");
-    let output_bound =
-        output_bound.expect("bounded release-audited full-bootstrap execution emits a bound");
-    let proofs =
+    let error = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+        &params,
+        &evaluation_keys,
+        &job,
+        std::slice::from_ref(&input),
+        &[input_bound],
+        Some(&artifacts),
+        Some(&release_audit),
+    )
+    .expect_err("signed audit fixtures cannot qualify production execution");
+    assert_invalid_parameter_contains(
+        error,
+        "BFV production qualification unavailable: MissingRegisteredHeOrgLatticeNoiseAndQromEvidence",
+    );
+    let (trace, bounds) = iroha_crypto::fhe_bfv::bfv_full_bootstrap_diagnostic_execution_v1(
+        &params,
+        evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("bootstrap key"),
+        &artifacts,
+        &evaluation_keys.galois_keys,
+        &input.slots[0],
+        BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,
+        input_bound,
+    )
+    .expect("bounded arithmetic diagnostic");
+    let output = BfvIdentifierCiphertext {
+        slots: vec![trace.slot_to_coefficient_output],
+    };
+    let output_bound = bounds.slot_to_coefficient;
+    let error =
         prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
             &params,
             &evaluation_keys,
@@ -10414,7 +10451,24 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
             "sora-zk-audit-wg-2026",
             reviewer_key_pair.public_key(),
         )
-        .expect("trusted release audit package authorizes bounded-noise proof generation");
+        .expect_err("signed audit fixtures cannot qualify production proof generation");
+    assert_invalid_parameter_contains(
+        error,
+        "BFV production qualification unavailable: MissingRegisteredHeOrgLatticeNoiseAndQromEvidence",
+    );
+    let proofs = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+        &params,
+        &evaluation_keys,
+        &transcript,
+        &artifacts,
+        &input,
+        &output,
+        BfvCiphertextBoundModeV1::BoundedNoise,
+        input_bound,
+        output_bound,
+        &vk_box,
+    )
+    .expect("bounded artifact-bound arithmetic proof generation");
     assert_eq!(proofs.len(), input.slots.len());
     let expected_claim_proofs = sample_full_bootstrap_execution_proofs_for_claims_with_bound_mode(
         &params,
@@ -10448,7 +10502,7 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
     }
     let mut drifted_output = output.clone();
     drifted_output.slots[0].c0[0] = (drifted_output.slots[0].c0[0] + 1) % params.ciphertext_modulus;
-    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         &params,
         &evaluation_keys,
         &transcript,
@@ -10459,19 +10513,18 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
         input_bound,
         output_bound,
         &vk_box,
-        &release_audit_package,
-        release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        reviewer_key_pair.public_key(),
     )
     .expect_err("bounded release-audited execution proof generation must reject output drift");
-    assert_invalid_parameter_contains(err, "release-audited bounded-noise output mismatch");
+    assert_invalid_parameter_contains(
+        err,
+        "output ciphertext does not match deterministic governed trace",
+    );
     let drifted_output_bound = if output_bound == u128::MAX {
         output_bound - 1
     } else {
         output_bound + 1
     };
-    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         &params,
         &evaluation_keys,
         &transcript,
@@ -10482,13 +10535,9 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
         input_bound,
         drifted_output_bound,
         &vk_box,
-        &release_audit_package,
-        release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        reviewer_key_pair.public_key(),
     )
     .expect_err("bounded release-audited execution proof generation must reject bound drift");
-    assert_invalid_parameter_contains(err, "release-audited output bound");
+    assert_invalid_parameter_contains(err, "output bound");
     let mut downgraded_package = release_audit_package.clone();
     downgraded_package
         .record
@@ -10537,7 +10586,7 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
     );
     assert_invalid_parameter_contains(err, "release audit package digest mismatch");
     let wrong_vk_box = sample_fhe_bootstrap_key_stark_vk_box();
-    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         &params,
         &evaluation_keys,
         &transcript,
@@ -10548,10 +10597,6 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_accepts_bounded_noise_r
         input_bound,
         output_bound,
         &wrong_vk_box,
-        &release_audit_package,
-        release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        reviewer_key_pair.public_key(),
     )
     .expect_err(
         "bounded release-audited execution proof generation must reject wrong verifier keys",
@@ -10599,20 +10644,12 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_air_root_query_
 }
 #[cfg(feature = "zk-stark")]
 #[test]
-fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_output_or_bound_drift() {
+fn soracloud_fhe_full_bootstrap_arithmetic_prover_rejects_output_or_bound_drift() {
     let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
     full_bootstrap_execution_case!(with &vk_box => (params, evaluation_keys, transcript, artifacts, _job, input, output, input_bound, output_bound));
-    let reviewer_key_pair = checked_keypair();
-    let (release_audit_package, release_audit_package_digest) =
-        sample_full_bootstrap_release_audit_package_and_digest(
-            &params,
-            &evaluation_keys,
-            &artifacts,
-            &reviewer_key_pair,
-        );
     let mut drifted_output = output.clone();
     drifted_output.slots[0].c0[0] = (drifted_output.slots[0].c0[0] + 1) % params.ciphertext_modulus;
-    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         &params,
         &evaluation_keys,
         &transcript,
@@ -10623,19 +10660,18 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_output_or_bound
         input_bound,
         output_bound,
         &vk_box,
-        &release_audit_package,
-        release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        reviewer_key_pair.public_key(),
     )
     .expect_err("release-audited execution proof generation must reject output drift");
-    assert_invalid_parameter_contains(err, "release-audited exact output mismatch");
+    assert_invalid_parameter_contains(
+        err,
+        "output ciphertext does not match deterministic governed trace",
+    );
     let drifted_output_bound = if output_bound == u128::MAX {
         output_bound - 1
     } else {
         output_bound + 1
     };
-    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
+    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         &params,
         &evaluation_keys,
         &transcript,
@@ -10646,13 +10682,9 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_output_or_bound
         input_bound,
         drifted_output_bound,
         &vk_box,
-        &release_audit_package,
-        release_audit_package_digest,
-        "sora-zk-audit-wg-2026",
-        reviewer_key_pair.public_key(),
     )
     .expect_err("release-audited execution proof generation must reject bound drift");
-    assert_invalid_parameter_contains(err, "release-audited output bound");
+    assert_invalid_parameter_contains(err, "output bound");
 }
 #[cfg(feature = "zk-stark")]
 #[test]
@@ -11313,6 +11345,23 @@ fn soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_wrong_verifier_
         reviewer_key_pair.public_key(),
     )
     .expect_err("wrong verifier key must fail before audited execution proof generation");
+    assert_invalid_parameter_contains(
+        err,
+        "BFV production qualification unavailable: MissingRegisteredHeOrgLatticeNoiseAndQromEvidence",
+    );
+    let err = prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
+        &params,
+        &evaluation_keys,
+        &transcript,
+        &artifacts,
+        &input,
+        &output,
+        BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        input_bound,
+        output_bound,
+        &wrong_vk_box,
+    )
+    .expect_err("arithmetic prover must independently reject a different governed verifier key");
     assert_invalid_parameter_contains(err, "verifier key must match governed artifact");
 }
 #[cfg(feature = "zk-stark")]
@@ -11344,13 +11393,35 @@ fn soracloud_fhe_full_bootstrap_execution_prover_rejects_unbound_verifier_key() 
         prover_input_material; params, evaluation_keys, transcript, artifacts; input, output,
         input_bound, output_bound
     );
+    let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk_box.bytes)
+        .expect("decode sample full-bootstrap execution verifier key");
+
+    let mut excessive_queries = payload.clone();
+    excessive_queries.queries += 1;
+    let mut oversized_vk_box = vk_box.clone();
+    oversized_vk_box.bytes =
+        norito::to_bytes(&excessive_queries).expect("encode excessive-query verifier key");
+    let error = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
+        &params,
+        &evaluation_keys,
+        &artifacts,
+        &prover_input_material,
+        &oversized_vk_box,
+    )
+    .expect_err("a query count above the native ceiling must fail before proof generation");
+    assert_invalid_parameter_contains(error, "verifier key exceeds native verifier limits");
+
+    let mut unbound_payload = payload;
+    unbound_payload.n_log2 += 1;
+    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
+        &unbound_payload,
+        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        "unbound verifier fixture",
+    )
+    .expect("the unbound key must pass structural admission to exercise exact key binding");
     let mut unbound_vk_box = vk_box.clone();
-    let mut payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-        norito::decode_from_bytes(&unbound_vk_box.bytes)
-            .expect("decode sample full-bootstrap execution verifier key");
-    payload.queries = payload.queries.saturating_add(1);
     unbound_vk_box.bytes =
-        norito::to_bytes(&payload).expect("encode unbound execution verifier key");
+        norito::to_bytes(&unbound_payload).expect("encode unbound execution verifier key");
     let err = prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
         &params,
         &evaluation_keys,
@@ -12546,7 +12617,7 @@ fn soracloud_fhe_bootstrap_key_proof_backend_uses_bootstrap_attachment_context()
 }
 #[test]
 fn soracloud_fhe_base_attachments_require_canonical_bfv_backend() {
-    let noncanonical_backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;
+    let noncanonical_backend = "stark/fri";
     let service_name: Name = "portal".parse().expect("valid service name");
     let binding_name: Name = "vault".parse().expect("valid binding name");
     let state_key = "/state/private/base-noncanonical-backend";
@@ -12861,7 +12932,7 @@ fn print_soracloud_bfv_operation_vectors() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let encoded_public_key = norito::to_bytes(&public_key).expect("encode public key");
     let encoded_public_parameters =
@@ -12941,7 +13012,7 @@ fn print_soracloud_bfv_operation_vectors() {
                 &params,
                 &public_key,
                 "bootstrap-test-key",
-                2,
+                1,
                 b"soracloud-fhe-bootstrap-key",
             )
             .expect("bootstrap key"),
@@ -13178,30 +13249,28 @@ fn print_soracloud_bfv_operation_vectors() {
         coefficient_vector_sha256_hex(&bootstrap_output.c0),
         coefficient_vector_sha256_hex(&bootstrap_output.c1)
     );
-    let second_bootstrap_output = bootstrap_ciphertext_rns_exact_round(
+    let second_round_error = bootstrap_ciphertext_rns_exact_rounds(
         &params,
         &rns_chain,
         bootstrap_key,
-        &bootstrap_output,
-        1,
+        &bootstrap_input,
+        2,
     )
-    .expect("apply second bootstrap refresh");
-    let encoded_second_bootstrap_output =
-        norito::to_bytes(&second_bootstrap_output).expect("encode second bootstrap output");
-    let second_bootstrap_plaintext = decrypt(&params, &secret_key, &second_bootstrap_output)
-        .expect("decrypt second bootstrap refresh output");
+    .expect_err("a second refresh exceeds the canonical key capacity");
+    let rejected_refresh = norito::json!({
+        "name": "soracloud-bootstrap-refresh-rejects-two-rounds",
+        "purpose": "BFV bootstrap refresh rejects an unsupported two-round request",
+        "key_id": (bootstrap_key.key_id),
+        "refresh_rounds": 2,
+        "seed_utf8": "soracloud-fhe-bootstrap-refresh-input",
+        "input_plaintext_slots": bootstrap_input_plaintext,
+        "expected_input_ciphertext_bytes": (encoded_bootstrap_input.len()),
+        "expected_input_ciphertext_sha256": (sha256_hex(&encoded_bootstrap_input)),
+        "expected_error": (second_round_error.to_string()),
+    });
     println!(
-        "bootstrap-refresh-vector: {{\"name\":\"soracloud-bootstrap-refresh-two-round-output\",\"purpose\":\"BFV bounded two-round bootstrap encrypted-zero refresh output over one scalar ciphertext\",\"key_id\":\"{}\",\"refresh_rounds\":2,\"seed_utf8\":\"soracloud-fhe-bootstrap-refresh-input\",\"input_plaintext_slots\":[{}],\"expected_input_ciphertext_bytes\":{},\"expected_input_ciphertext_sha256\":\"{}\",\"expected_output_ciphertext_bytes\":{},\"expected_output_ciphertext_sha256\":\"{}\",\"expected_plaintext_sha256\":\"{}\",\"output_components\":{{\"coefficient_count\":{},\"c0_sha256\":\"{}\",\"c1_sha256\":\"{}\"}}}}",
-        bootstrap_key.key_id,
-        u64_json_array(&bootstrap_input_plaintext),
-        encoded_bootstrap_input.len(),
-        sha256_hex(&encoded_bootstrap_input),
-        encoded_second_bootstrap_output.len(),
-        sha256_hex(&encoded_second_bootstrap_output),
-        coefficient_vector_sha256_hex(&second_bootstrap_plaintext),
-        params.polynomial_degree,
-        coefficient_vector_sha256_hex(&second_bootstrap_output.c0),
-        coefficient_vector_sha256_hex(&second_bootstrap_output.c1)
+        "bootstrap-refresh-vector: {}",
+        norito::json::to_json(&rejected_refresh).expect("encode rejected refresh vector")
     );
     let specs = [
         (
@@ -13829,7 +13898,7 @@ fn soracloud_bounded_noise_bootstrap_full_mode_rejects_multi_count_before_refres
     job.bootstrap_count = 2;
     let err = execute_soracloud_fhe_job_bounded_noise(&params, &evaluation_keys, &job, &[input])
         .expect_err("bounded bootstrap full mode must fail before capacity checks");
-    assert_invalid_parameter_contains(err, "bootstrap_count exactly 1");
+    assert_invalid_parameter_contains(err, "BFV bootstrap refresh rounds 2 exceed budget 1");
 }
 #[test]
 fn soracloud_multi_input_add_matches_plaintext_slots() {
@@ -14104,7 +14173,7 @@ fn soracloud_fhe_job_residual_metadata_rejects_over_capacity_add() {
     assert_invalid_parameter_contains(err, "FHE add residual bound exceeded");
 }
 #[test]
-fn soracloud_fhe_job_residual_metadata_rejects_bootstrap_count_above_key_capacity() {
+fn soracloud_fhe_job_residual_metadata_rejects_bootstrap_count_above_evaluation_budget() {
     let params = ram_lfe_bfv_parameters_v1();
     let evaluation_keys = sample_bfv_evaluation_key_bundle();
     let input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&params)
@@ -14126,7 +14195,7 @@ fn soracloud_fhe_job_residual_metadata_rejects_bootstrap_count_above_key_capacit
         &[input_bound],
     )
     .expect_err("bootstrap residual admission must reject counts above key capacity");
-    assert_invalid_parameter_contains(err, "max_refresh_rounds");
+    assert_invalid_parameter_contains(err, "BFV bootstrap refresh rounds 2 exceed budget 1");
 }
 #[test]
 fn soracloud_fhe_job_residual_metadata_tracks_multiply_output() {
@@ -14308,7 +14377,7 @@ fn soracloud_bootstrap_rejects_missing_refresh_key() {
     assert_invalid_parameter_contains(err, "missing BFV bootstrap key");
 }
 #[test]
-fn soracloud_bootstrap_rejects_refresh_count_above_key_capacity() {
+fn soracloud_bootstrap_rejects_refresh_count_above_evaluation_budget() {
     let params = ram_lfe_bfv_parameters_v1();
     let evaluation_keys = sample_bfv_evaluation_key_bundle();
     let mut job = sample_fhe_job(Vec::new());
@@ -14322,7 +14391,7 @@ fn soracloud_bootstrap_rejects_refresh_count_above_key_capacity() {
     let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-over-capacity");
     let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
         .expect_err("bootstrap must reject counts above the key capacity");
-    assert_invalid_parameter_contains(err, "max_refresh_rounds");
+    assert_invalid_parameter_contains(err, "BFV bootstrap refresh rounds 2 exceed budget 1");
 }
 #[test]
 fn soracloud_bootstrap_full_mode_rejects_multi_count_before_refresh_capacity() {
@@ -14341,7 +14410,7 @@ fn soracloud_bootstrap_full_mode_rejects_multi_count_before_refresh_capacity() {
     let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-full-mode");
     let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
         .expect_err("bootstrap full mode must fail before capacity checks");
-    assert_invalid_parameter_contains(err, "bootstrap_count exactly 1");
+    assert_invalid_parameter_contains(err, "BFV bootstrap refresh rounds 2 exceed budget 1");
 }
 #[cfg(feature = "zk-stark")]
 #[test]
@@ -14410,18 +14479,17 @@ fn soracloud_full_bootstrap_runtime_requires_policy_pinned_release_audit() {
         Some("sora-zk-audit-wg-2026".to_owned());
     policy.full_bootstrap_release_audit_trusted_reviewer_public_key =
         Some(reviewer_key_pair.public_key().clone());
-    let context = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
+    let error = soracloud_fhe_full_bootstrap_release_audit_runtime_context(
         &params,
         &evaluation_keys,
         &job,
         Some(&artifacts),
         &policy,
     )
-    .expect("matching policy-pinned release audit package authorizes runtime execution")
-    .expect("full-bootstrap runtime returns release audit context");
-    assert_eq!(
-        context.expected_package_digest,
-        release_audit_package_digest
+    .expect_err("a policy-pinned synthetic audit cannot supply missing production evidence");
+    assert_invalid_parameter_contains(
+        error,
+        "BFV production qualification unavailable: MissingRegisteredHeOrgLatticeNoiseAndQromEvidence",
     );
     let complete_policy = policy.clone();
     let governed_material = evaluation_keys
@@ -15443,7 +15511,7 @@ fn training_model_text_helpers_reject_rewrites_and_preserve_free_form_reasons() 
     );
     assert_invalid_parameter_contains(
         parse_training_model_name("mode\u{301}l").expect_err("NFC-rewritten model name must fail"),
-        "model_name must use its exact canonical Name representation",
+        "invalid model_name: Name must already use the exact NFC spelling",
     );
     for job_id in [" job-1", "job-1 "] {
         assert_invalid_parameter_contains(
@@ -16789,6 +16857,106 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
         "queueing transfers only the storage lease fees"
     );
     drop(view);
+    // A rejoin before expiry needs the last available sequence. At expiry the
+    // queued activation and join need two sequences and must both remain unwritten.
+    for (at_ms, watermark, succeeds) in [
+        (current_pool_expiry - 1, u64::MAX - 1, true),
+        (current_pool_expiry, u64::MAX - 1, false),
+        (current_pool_expiry, u64::MAX - 2, true),
+    ] {
+        soracloud_transaction_at!(state, boundary_header, boundary_block, boundary_tx, at_ms);
+        *boundary_tx.world.soracloud_sequence_watermark.get_mut() = watermark;
+        let join_fee = if at_ms < current_pool_expiry {
+            &base_fee
+        } else {
+            &renewed_fee
+        };
+        let snapshot = |tx: &StateTransaction<'_, '_>| {
+            (
+                tx.world
+                    .soracloud_hf_sources
+                    .iter()
+                    .map(|(key, value)| (*key, value.clone()))
+                    .collect::<Vec<_>>(),
+                tx.world
+                    .soracloud_hf_shared_lease_pools
+                    .iter()
+                    .map(|(key, value)| (*key, value.clone()))
+                    .collect::<Vec<_>>(),
+                tx.world
+                    .soracloud_hf_shared_lease_members
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                tx.world
+                    .soracloud_hf_shared_lease_audit_events
+                    .iter()
+                    .map(|(key, value)| (*key, value.clone()))
+                    .collect::<Vec<_>>(),
+                tx.world
+                    .assets
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                *tx.world.soracloud_sequence_watermark.get(),
+            )
+        };
+        let before = snapshot(&boundary_tx);
+        let result = isi::JoinSoracloudHfSharedLease {
+            repo_id: repo_id.to_owned(),
+            resolved_revision: resolved_revision.to_owned(),
+            service_name: service_name.clone(),
+            apartment_name: None,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id: lease_asset_definition_id.clone(),
+            base_fee: join_fee.clone(),
+            provenance: hf_shared_lease_join_provenance(
+                repo_id,
+                resolved_revision,
+                &service_name,
+                None,
+                storage_class,
+                lease_term_ms,
+                &lease_asset_definition_id,
+                join_fee,
+            ),
+        }
+        .execute(&ALICE_ID, &mut boundary_tx);
+        if succeeds {
+            result.expect("the complete event range must accept the exact audit sequence boundary");
+            assert_eq!(
+                *boundary_tx.world.soracloud_sequence_watermark.get(),
+                u64::MAX
+            );
+            assert_eq!(
+                boundary_tx
+                    .world
+                    .soracloud_hf_shared_lease_audit_events
+                    .get(&u64::MAX)
+                    .expect("last sequence records the rejoin")
+                    .action,
+                SoraHfSharedLeaseActionV1::Join
+            );
+            if at_ms == current_pool_expiry {
+                assert_eq!(
+                    boundary_tx
+                        .world
+                        .soracloud_hf_shared_lease_audit_events
+                        .get(&(u64::MAX - 1))
+                        .expect("penultimate sequence records queued activation")
+                        .action,
+                    SoraHfSharedLeaseActionV1::Activate
+                );
+            }
+        } else {
+            assert_invariant_contains(
+                result.expect_err("queued activation plus join needs two available sequences"),
+                "audit sequence is exhausted",
+            );
+            assert_eq!(snapshot(&boundary_tx), before);
+        }
+    }
     let alternate_asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "usd".parse().expect("alternate asset"),
@@ -18864,12 +19032,14 @@ fn inrou_reconciliation_excludes_inactive_validator_with_live_capability()
     deploy_block.commit_world_overlay_for_testing()?;
 
     soracloud_transaction_at!(state, reconcile_header, reconcile_block, reconcile_tx, 200);
-    reconcile_tx
+    let deactivation_height = reconcile_tx.block_height();
+    let validator = reconcile_tx
         .world
         .public_lane_validators
         .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
-        .expect("active validator fixture")
-        .status = PublicLaneValidatorStatus::Exited;
+        .expect("active validator fixture");
+    validator.status = PublicLaneValidatorStatus::Exited;
+    validator.deactivation_height = Some(deactivation_height);
     assert!(
         reconcile_tx
             .world
@@ -19091,7 +19261,7 @@ fn deploy_soracloud_service_rejects_missing_replica_private_http_service_data_vo
     Ok(())
 }
 #[test]
-fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
+fn initial_executor_soracloud_lease_usage_and_runtime_preserve_exact_assignment()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let mut bundle = sample_bundle("portal", "1.0.0", 0);
@@ -19117,15 +19287,18 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
     bundle.service.handlers.clear();
     bundle.service.artifacts[0].handler_name = None;
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    soracloud_transaction!(state, block_header, state_block, stx);
-    isi::DeploySoracloudService {
-        bundle: bundle.clone(),
-        initial_service_configs: BTreeMap::new(),
-        initial_service_secrets: BTreeMap::new(),
-        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
-        provenance: bundle_provenance(&bundle),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    soracloud_transaction_at_height!(state, block_header, state_block, stx, 2);
+    execute_initial_soracloud(
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
+            provenance: bundle_provenance(&bundle),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
     let lease_started_height = stx
         .world
         .soracloud_service_deployments
@@ -19133,7 +19306,7 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         .and_then(|deployment| deployment.service_lease.as_ref())
         .expect("hosted service lease")
         .lease_started_height;
-    let runtime_state = sample_inrou_replica_runtime_state_for(
+    let mut runtime_state = sample_inrou_replica_runtime_state_for(
         bundle.service.service_name.clone(),
         &bundle.service.service_version,
         1,
@@ -19168,17 +19341,76 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         .and_then(|deployment| deployment.service_lease.as_ref())
         .map(|lease| (lease.lease_started_height, lease.reporting_epoch))
         .expect("hosted service lease");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: runtime_state.placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    execute_initial_soracloud(
+        isi::ReportSoracloudServiceLeaseUsage {
+            service_name: bundle.service.service_name.clone(),
+            lease_started_height,
+            reporting_epoch,
+            active_service_version: bundle.service.service_version.clone(),
+            replica_slot: 1,
+            placement_incarnation: runtime_state.placement_incarnation,
+            replica_accounted_egress_bytes: 0,
+            finalize_reporter: false,
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
+    runtime_state.reporting_epoch = reporting_epoch;
+    runtime_state.materialized_bundle_hash = bundle.container.bundle_hash;
+    execute_initial_soracloud(
+        isi::SetSoracloudInrouReplicaRuntimeState {
+            state: runtime_state.clone(),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
+    let runtime_key = inrou_replica_runtime_key(
+        &runtime_state.service_name,
+        &runtime_state.service_version,
+        runtime_state.replica_slot,
+    );
+    let recorded_runtime = stx
+        .world
+        .soracloud_inrou_replica_runtime
+        .get(&runtime_key)
+        .cloned()
+        .expect("Initial executor must persist the assigned replica projection");
+    let mut wrong_bundle = runtime_state.clone();
+    wrong_bundle.materialized_bundle_hash = Hash::new(b"unadmitted-inrou-bundle");
+    assert_initial_soracloud_core_denial(
+        execute_initial_soracloud(
+            isi::SetSoracloudInrouReplicaRuntimeState {
+                state: wrong_bundle,
+            },
+            &ALICE_ID,
+            &mut stx,
+        )
+        .unwrap_err(),
+        "admitted bundle hash",
+    );
+    let clear = isi::ClearSoracloudInrouReplicaRuntimeState {
+        service_name: runtime_state.service_name.clone(),
+        service_version: runtime_state.service_version.clone(),
+        replica_slot: runtime_state.replica_slot,
+        expected_placement_incarnation: runtime_state.placement_incarnation,
+    };
+    let mut stale_clear = clear.clone();
+    stale_clear.expected_placement_incarnation = Hash::new(b"stale-incarnation");
+    assert_initial_soracloud_core_denial(
+        execute_initial_soracloud(stale_clear, &ALICE_ID, &mut stx).unwrap_err(),
+        "compare-and-swap incarnation is stale",
+    );
+    assert_eq!(
+        stx.world.soracloud_inrou_replica_runtime.get(&runtime_key),
+        Some(&recorded_runtime)
+    );
+    execute_initial_soracloud(clear, &ALICE_ID, &mut stx)?;
+    assert!(
+        stx.world
+            .soracloud_inrou_replica_runtime
+            .get(&runtime_key)
+            .is_none()
+    );
     stx.apply();
     state_block.commit_world_overlay_for_testing()?;
 
@@ -19186,17 +19418,20 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
         .checked_add(1)
         .expect("the test lease height has a successor");
     soracloud_transaction_at_height!(state, usage_header, usage_block, usage_tx, successor_height);
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: runtime_state.placement_incarnation,
-        replica_accounted_egress_bytes: 1024 * 1024,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut usage_tx)?;
+    execute_initial_soracloud(
+        isi::ReportSoracloudServiceLeaseUsage {
+            service_name: bundle.service.service_name.clone(),
+            lease_started_height,
+            reporting_epoch,
+            active_service_version: bundle.service.service_version.clone(),
+            replica_slot: 1,
+            placement_incarnation: runtime_state.placement_incarnation,
+            replica_accounted_egress_bytes: 1024 * 1024,
+            finalize_reporter: false,
+        },
+        &ALICE_ID,
+        &mut usage_tx,
+    )?;
     let deployment = usage_tx
         .world
         .soracloud_service_deployments
@@ -22749,12 +22984,12 @@ fn soracloud_uploaded_model_register_rejects_signed_padded_identifiers_without_s
         (
             0xEC,
             |bundle| bundle.model_id = " vision_model ".to_owned(),
-            "invalid model_id",
+            "sora uploaded model bundle field `model_id` is invalid: must not include surrounding whitespace",
         ),
         (
             0xED,
             |bundle| bundle.weight_version = " v1 ".to_owned(),
-            "weight_version must not contain surrounding whitespace",
+            "sora uploaded model bundle field `weight_version` is invalid: must not include surrounding whitespace",
         ),
     ];
     for (digest_byte, mutate, expected) in malformed_cases {
@@ -23558,3 +23793,5 @@ fn soracloud_uploaded_model_finalize_rejects_pin_metadata_changed_after_register
     Ok(())
 }
 include!("soracloud_uploaded_model_finalize_tail_tests.rs");
+
+include!("soracloud_initial_executor_tests.rs");

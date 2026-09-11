@@ -24,7 +24,7 @@ use crate::{
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
-use iroha_torii_shared::{PipelineTransactionDetailsResponse, uri as torii_uri};
+use iroha_torii_shared::{ErrorEnvelope, PipelineTransactionDetailsResponse, uri as torii_uri};
 use iroha_version::codec::EncodeVersioned;
 use norito::{codec::Encode as _, json};
 use std::{
@@ -36,6 +36,50 @@ use std::{
 use url::Url;
 
 const TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// The exact details route must never manufacture proof absence from an HTTP status.
+fn decode_transaction_details_failure(response: &http::Response<Vec<u8>>) -> QueryError {
+    let protocol_error = |reason: &str| {
+        QueryError::Other(eyre!(
+            "transaction-details HTTP {} failure {reason}",
+            response.status()
+        ))
+    };
+    let content_type_values = response.headers().get_all(CONTENT_TYPE);
+    let mut content_types = content_type_values.iter();
+    if content_types.next().map(|value| value.as_bytes()) != Some(APPLICATION_NORITO.as_bytes())
+        || content_types.next().is_some()
+    {
+        return protocol_error("requires one Content-Type: application/x-norito header");
+    }
+    let body = response.body();
+    if body.is_empty() || body.len() > TRANSACTION_DETAILS_RESPONSE_MAX_BYTES {
+        return protocol_error("must contain a nonempty bounded canonical Norito payload");
+    }
+    match norito::decode_canonical_with_limits::<ErrorEnvelope>(
+        body,
+        norito::canonical_decode_limits(body.len()),
+    ) {
+        Ok(failure) if failure.code() == "transaction_details_not_found" => {
+            if response.status() == StatusCode::NOT_FOUND {
+                QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
+            } else {
+                protocol_error("claims query absence without HTTP 404")
+            }
+        }
+        Ok(failure) => {
+            let code = match failure.code() {
+                "query_validation_failed" => "query_validation_failed",
+                "internal_server_error" => "internal_server_error",
+                _ => "unrecognized_error_code",
+            };
+            protocol_error(&format!("has code {code}"))
+        }
+        // A codec EOF is a protocol failure, not a dropped network response. Do not
+        // expose a nested decoder I/O error to transport-only reconciliation.
+        Err(_) => protocol_error("is not one canonical Norito ErrorEnvelope payload"),
+    }
+}
 
 #[derive(Debug)]
 struct ClientQueryRequestHead {
@@ -518,12 +562,7 @@ impl Client {
             )));
         }
         if response.status() != StatusCode::OK {
-            return match decode_query_response(&response) {
-                Err(error) => Err(error),
-                Ok(_) => Err(QueryError::Other(eyre!(
-                    "transaction-details endpoint returned an unexpected query response"
-                ))),
-            };
+            return Err(decode_transaction_details_failure(&response));
         }
         let details: PipelineTransactionDetailsResponse = Client::decode_canonical_norito_response(
             &response,
@@ -1411,6 +1450,172 @@ mod query_errors_handling {
                 .expect_err("fixture result must be rejected"),
             &reason
         );
+    }
+    fn transaction_details_http_failure(
+        status: StatusCode,
+        content_types: Vec<&'static str>,
+        body: Vec<u8>,
+    ) -> QueryError {
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, _) = successful_transaction_details_fixture();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&sends);
+        let error = with_mock_http(
+            move |snapshot| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(snapshot.method, HttpMethod::POST);
+                assert_eq!(snapshot.url.path(), torii_uri::TRANSACTION_DETAILS);
+                assert_eq!(
+                    snapshot.max_response_bytes,
+                    TRANSACTION_DETAILS_RESPONSE_MAX_BYTES
+                );
+                let mut response = Response::builder().status(status);
+                for content_type in &content_types {
+                    response = response.header(CONTENT_TYPE, *content_type);
+                }
+                Ok(response
+                    .body(body.clone())
+                    .expect("exact details HTTP fixture"))
+            },
+            |mock_transport| {
+                let client = client.with_test_http_transport(mock_transport);
+                *client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("fixture compatibility") = DataModelCompatibility::SubmitCompatible;
+                client.get_transaction_details(entrypoint_hash)
+            },
+        )
+        .expect_err("fixture must reject the exact details lookup");
+        assert_eq!(
+            sends.load(Ordering::Relaxed),
+            1,
+            "failure must never retry the query"
+        );
+        error
+    }
+    #[test]
+    fn transaction_details_failure_only_maps_the_exact_missing_envelope_to_absence() {
+        let error = transaction_details_http_failure(
+            StatusCode::NOT_FOUND,
+            vec![APPLICATION_NORITO],
+            norito::to_bytes(&ErrorEnvelope::new(
+                "transaction_details_not_found",
+                "missing",
+            ))
+            .expect("canonical missing envelope"),
+        );
+        assert!(matches!(
+            error,
+            QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
+        ));
+        for (status, code) in [
+            (StatusCode::FORBIDDEN, "query_validation_failed"),
+            (StatusCode::NOT_FOUND, "query_validation_failed"),
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal_server_error"),
+            (StatusCode::NOT_FOUND, "substituted_untrusted_code"),
+        ] {
+            let error = transaction_details_http_failure(
+                status,
+                vec![APPLICATION_NORITO],
+                norito::to_bytes(&ErrorEnvelope::new(code, "secret-runtime-message-sentinel"))
+                    .expect("canonical failure envelope"),
+            );
+            assert!(matches!(error, QueryError::Other(_)));
+            let diagnostic = error.to_string();
+            assert!(diagnostic.contains(status.as_str()));
+            assert!(!diagnostic.contains("secret-runtime-message-sentinel"));
+            assert!(!diagnostic.contains("substituted_untrusted_code"));
+        }
+    }
+    #[test]
+    fn transaction_details_failure_rejects_absence_with_a_non_404_status() {
+        for status in [StatusCode::BAD_REQUEST, StatusCode::SERVICE_UNAVAILABLE] {
+            let error = transaction_details_http_failure(
+                status,
+                vec![APPLICATION_NORITO],
+                norito::to_bytes(&ErrorEnvelope::new(
+                    "transaction_details_not_found",
+                    "missing",
+                ))
+                .expect("canonical missing envelope"),
+            );
+            assert!(matches!(error, QueryError::Other(_)));
+            assert!(error.to_string().contains("without HTTP 404"));
+        }
+    }
+    #[test]
+    fn transaction_details_failure_rejects_plain_404_and_malformed_norito_without_codec_io() {
+        let missing = norito::to_bytes(&ErrorEnvelope::new(
+            "transaction_details_not_found",
+            "missing",
+        ))
+        .expect("canonical missing envelope");
+        let mut trailing = missing.clone();
+        trailing.push(0);
+        for (status, content_type, body) in [
+            (StatusCode::NOT_FOUND, "text/plain", b"not found".to_vec()),
+            (
+                StatusCode::NOT_FOUND,
+                "text/html",
+                b"<html>missing endpoint</html>".to_vec(),
+            ),
+            (StatusCode::NOT_FOUND, APPLICATION_NORITO, b"NRT0".to_vec()),
+            (
+                StatusCode::NOT_FOUND,
+                APPLICATION_NORITO,
+                missing[..missing.len() - 1].to_vec(),
+            ),
+            (StatusCode::NOT_FOUND, APPLICATION_NORITO, trailing),
+            (StatusCode::NOT_FOUND, APPLICATION_NORITO, Vec::new()),
+            (
+                StatusCode::NOT_FOUND,
+                APPLICATION_NORITO,
+                norito::to_bytes(&ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
+                    .expect("unsupported alternate error format"),
+            ),
+            (StatusCode::OK, APPLICATION_NORITO, b"NRT0".to_vec()),
+        ] {
+            let error = transaction_details_http_failure(status, vec![content_type], body);
+            assert!(matches!(error, QueryError::Other(_)));
+            let report = eyre::Report::new(error);
+            assert!(
+                !report
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()),
+                "a received malformed proof is a protocol failure, not transport EOF"
+            );
+        }
+    }
+    #[test]
+    fn transaction_details_failure_requires_one_exact_norito_media_type() {
+        for content_types in [
+            Vec::new(),
+            vec!["application/json"],
+            vec![APPLICATION_NORITO, APPLICATION_NORITO],
+            vec![APPLICATION_NORITO, "text/plain"],
+        ] {
+            let error = transaction_details_http_failure(
+                StatusCode::NOT_FOUND,
+                content_types,
+                norito::to_bytes(&ErrorEnvelope::new(
+                    "transaction_details_not_found",
+                    "missing",
+                ))
+                .expect("canonical missing envelope"),
+            );
+            assert!(matches!(error, QueryError::Other(_)));
+            assert!(error.to_string().contains("Content-Type"));
+        }
+    }
+    #[test]
+    fn transaction_details_failure_rejects_response_over_the_wire_bound() {
+        let error = transaction_details_http_failure(
+            StatusCode::NOT_FOUND,
+            vec![APPLICATION_NORITO],
+            vec![0; TRANSACTION_DETAILS_RESPONSE_MAX_BYTES + 1],
+        );
+        assert!(matches!(error, QueryError::Other(_)));
     }
     #[test]
     fn successful_transaction_details_reader_still_rejects_rejected_result() {

@@ -253,9 +253,7 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
 fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     let temp_dir = TempDir::new().expect("prune temp-crash temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("prune temp-crash Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let mut generator = DummyBlocks::new();
     let blocks: Vec<_> = (0..3).map(|_| generator.next()).collect();
     for block in &blocks[..2] {
@@ -297,8 +295,16 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     ));
     assert_eq!(
         kura.blocks_count(),
+        0,
+        "recovery-required storage must not advertise a usable chain",
+    );
+    assert_eq!(
+        kura.block_store
+            .lock()
+            .read_index_count()
+            .expect("read durable index count"),
         2,
-        "the unpublished temp crash must latch out in-process canonical mutation",
+        "the rejected append must preserve both durable blocks",
     );
     assert_eq!(
         kura.refresh_disk_usage_bytes()
@@ -612,11 +618,12 @@ fn pending_v2_prune_intents_are_rejected_before_mutation() {
 }
 #[test]
 fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     let temp_dir = TempDir::new().expect("empty current-tip prune temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("empty current-tip Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let directory = kura.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&directory).expect("create empty current-tip pipeline directory");
     let data_path = directory.join(PIPELINE_SIDECARS_DATA_FILE);
@@ -683,6 +690,9 @@ fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
 }
 #[test]
 fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     let temp_dir = TempDir::new().expect("current-tip prune-capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =

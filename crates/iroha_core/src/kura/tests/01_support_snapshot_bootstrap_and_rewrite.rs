@@ -1009,6 +1009,16 @@ pub(crate) fn persist_v2_finality_chain_through(
     }
     artifacts
 }
+fn store_finalized_fixture_block(kura: &Kura, block: Arc<SignedBlock>) {
+    let height = NonZeroUsize::new(
+        usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+    )
+    .expect("fixture height is non-zero");
+    kura.store_block(block)
+        .expect("store canonical fixture block");
+    persist_v2_finality_chain_through(kura, height);
+}
+
 fn retained_archive_sccp_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
     iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
         version: 1,
@@ -2026,8 +2036,7 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("open persistent telemetry Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block))
             .expect("store persistent telemetry fixture block");
@@ -2066,8 +2075,7 @@ fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() 
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("open persistent telemetry Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let mut generator = DummyBlocks::new();
         let blocks = vec![generator.next(), generator.next()];
         for block in &blocks {
@@ -2476,8 +2484,12 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     std::fs::write(&staging_path, b"orphan-stage").expect("write orphan stage");
     assert!(matches!(
         kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaFinalitySidecar(_))
+        Err(Error::NoritoFrame(_))
     ));
+    assert_eq!(
+        fs::read(&staging_path).expect("read rejected stage"),
+        b"orphan-stage"
+    );
     std::fs::remove_file(&staging_path).expect("remove orphan stage");
     let final_dir = kura.kagemusha_finality_sidecar_dir();
     create_dir_all_with_context(&final_dir).expect("create final directory");
@@ -2485,8 +2497,12 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     std::fs::write(&final_path, b"orphan-final").expect("write orphan final sidecar");
     assert!(matches!(
         kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaFinalitySidecar(_))
+        Err(Error::NoritoFrame(_))
     ));
+    assert_eq!(
+        fs::read(&final_path).expect("read rejected final sidecar"),
+        b"orphan-final"
+    );
 }
 #[test]
 fn finality_cache_rejects_a_path_swap_between_decode_and_verification() {
@@ -3125,24 +3141,65 @@ fn startup_replay_auxiliary_capture_rejects_configured_historical_byte_overflow(
     fs::create_dir_all(&historical)
         .expect("publish configured-limit historical recovery namespace");
     let lower_limit = V2_PENDING_CONTROL_SIDECAR_BYTES_MIN;
-    let first_len = lower_limit / 2;
-    let second_len = lower_limit.saturating_sub(first_len).saturating_add(1);
-    for (stem, byte, length) in [("a", b'a', first_len), ("b", b'b', second_len)] {
-        let path = historical.join(format!(
-            "{}.norito",
-            stem.repeat(Hash::LENGTH.saturating_mul(2))
-        ));
-        fs::write(path, vec![byte; length])
-            .expect("write individually bounded historical recovery record");
-    }
-    kura.capture_v2_startup_replay_lane_auxiliary_sidecars()
-        .expect("the default aggregate bound accepts the two-record fixture");
-    drop(kura);
     let mut tightened_limits = initial_limits;
     tightened_limits.pending_control_sidecar_bytes =
         NonZeroUsize::new(lower_limit).expect("configured lower byte limit is non-zero");
-    let error = open_configured_kura_with_pending_limits(&config, &tightened_limits)
+    let tight_temp = TempDir::new().expect("temporary tight-bound startup Kura root");
+    let tight_config = kura_config_for_dir(&tight_temp, BLOCKS_IN_MEMORY);
+    let (tight_kura, _) =
+        open_configured_kura_with_pending_limits(&tight_config, &tightened_limits)
+            .expect("configure capture's aggregate limit before installing its namespace fixture");
+    let tight_lane = tight_kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("tight primary lane");
+    let tight_historical = Kura::historical_autonomous_recovery_directory_for_entry(
+        &tight_lane,
+        &tight_kura.store_root(),
+    );
+    fs::create_dir_all(&tight_historical).expect("create tight-bound capture namespace");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let mut encoded_bytes = 0_usize;
+    let mut index = 0_u64;
+    while encoded_bytes <= lower_limit {
+        index += 1;
+        let tag = format!("bounded-history-{index}-{}", "x".repeat(512 * 1024));
+        let (_, _, payload) = historical_capacity_payload_for_kura(
+            lane.lane_id,
+            lane.dataspace_id,
+            index,
+            &tag,
+            &signer,
+        );
+        let record =
+            historical_autonomous_recovery_record_for_kura(&payload, &signer, tag.as_bytes());
+        let bytes = historical_autonomous_recovery_record_bytes(&record);
+        assert!(bytes.len() <= HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES);
+        let path = historical.join(format!("{}.norito", record.recovery_id));
+        kura.validate_historical_autonomous_recovery_record_shape(&record, &path)
+            .expect("each recovery record is independently canonical and valid");
+        encoded_bytes += bytes.len();
+        fs::write(
+            tight_historical.join(format!("{}.norito", record.recovery_id)),
+            &bytes,
+        )
+        .expect("write the same canonical record under the configured tight limit");
+        fs::write(path, bytes)
+            .expect("write individually valid bounded historical recovery record");
+    }
+    assert!(
+        index > 1,
+        "only the aggregate budget may reject the fixture"
+    );
+    kura.capture_v2_startup_replay_lane_auxiliary_sidecars()
+        .expect("the default aggregate bound accepts every canonical fixture record");
+    let before_capture = snapshot_regular_test_tree(tight_temp.path());
+    let error = tight_kura
+        .capture_v2_startup_replay_lane_auxiliary_sidecars()
         .expect_err("startup auxiliary capture must enforce the configured aggregate bound");
+    assert_eq!(
+        snapshot_regular_test_tree(tight_temp.path()),
+        before_capture
+    );
     assert!(
         error
             .to_string()

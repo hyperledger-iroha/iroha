@@ -203,7 +203,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
     ) -> Result<PreparedReadyDurableValidateExecution<'_>, ReadyDurableValidateExecutionError> {
         if lease.work_class() != LifecycleWorkClass::Validate
-            || lease.key().phase() != LifecyclePhase::Validate
+            || !lease.key().phase().is_validate()
             || lease.stage().kind() != LifecycleStageKind::ValidateBody
             || lease.stage().predecessor_scope() != PredecessorScope::Independent
             || !lease
@@ -404,7 +404,7 @@ impl ConcreteLifecycleWorkRegistry {
                     .exactly_binds_adapter_effect(&validate.effect)
                 || validate.pending.causal_lifecycle_key() != &request.causal_lifecycle_key
                 || validate.pending.candidate_statement() != request.candidate_statement
-                || request.lifecycle_key.phase() != LifecyclePhase::Validate
+                || !request.lifecycle_key.phase().is_validate()
                 || request.lifecycle_stage.kind() != LifecycleStageKind::ValidateBody
                 || request.lifecycle_stage.predecessor_scope() != PredecessorScope::Independent
             {

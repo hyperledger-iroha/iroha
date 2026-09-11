@@ -394,6 +394,14 @@ Before preflight, use the same compiled CLI to create the inventory and owner
 signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
 approved endpoints and host pins, target occupancy, previous/next genesis anchors,
 source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+The required `qualification_scope` is `core_testnet` for basic Taira/BPNG
+testing or `inrou` for the additional VM workload qualification. Core scope
+runs the onboarding, faucet and write canaries, four-validator convergence and
+restart persistence, and public Torii/MCP checks. Inrou scope adds its four
+prepared mutations and live workload checks. Inventory, authorization, journal
+and report bind the same scope; recovery cannot change it. A core result does
+not establish Inrou workload readiness. Both scopes retain the installation
+stage/preseed barrier and the same host rollback plan.
 It fills derived hashes, sizes, modes, source/stage identities and validator
 fingerprints from the actual files, then runs the existing admission checks.
 Generate its source manifest with `iroha taira public-reset source-manifest

@@ -1585,3 +1585,54 @@ fn completed_musubi_effect_error_classes_are_fail_closed() {
         ProviderIngestCompletedMusubiAttestationDriveErrorV1::EffectUnavailable,
     );
 }
+
+#[test]
+fn completed_capture_transcript_roots_use_the_actual_including_module() {
+    use crate::schema_identity_test_support::assert_identity;
+    assert_identity::<ProviderIngestCompletedMusubiCaptureSessionMaterialV1>(
+        "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCaptureSessionMaterialV1",
+    );
+    assert_identity::<ProviderIngestCompletedMusubiCaptureRequestMaterialV1>(
+        "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCaptureRequestMaterialV1",
+    );
+    assert_identity::<ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1>(
+        "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1",
+    );
+    let ledger = CaptureScannerLedgerV1::new(Vec::new(), 8, CaptureScannerLedgerFaultV1::None);
+    let request = ProviderIngestCompletedMusubiCaptureRequestV1::new(
+        ledger.binding.clone(),
+        None,
+        None,
+        1,
+        1,
+    )
+    .unwrap();
+    let page = canonical_capture_page_fixture();
+    let request_bytes =
+        norito::encode_canonical(&completed_musubi_capture_request_material(&request)).unwrap();
+    let page_bytes =
+        norito::encode_canonical(&completed_musubi_capture_page_header_material(&page).unwrap())
+            .unwrap();
+    let request_header = norito::core::Header::read(request_bytes.as_slice()).unwrap();
+    let page_header = norito::core::Header::read(page_bytes.as_slice()).unwrap();
+    assert_ne!(request_header.schema, page_header.schema);
+    let expected =
+        provider_ingest_completed_musubi_capture_transcript_digest_v1(&request, &page).unwrap();
+    let mut changed = page.clone();
+    changed.finalized_block_time_ms += 1;
+    assert_ne!(
+        provider_ingest_completed_musubi_capture_transcript_digest_v1(&request, &changed).unwrap(),
+        expected
+    );
+    for flags in canonical_order_test_layouts() {
+        let _caller = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            provider_ingest_completed_musubi_capture_transcript_digest_v1(&request, &page).unwrap(),
+            expected
+        );
+        assert_eq!(
+            norito::encode_canonical(&completed_musubi_capture_request_material(&request)).unwrap(),
+            request_bytes
+        );
+    }
+}

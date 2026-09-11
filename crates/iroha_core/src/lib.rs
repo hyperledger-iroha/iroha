@@ -1663,8 +1663,8 @@ mod tests {
         }
         assert_eq!(
             raw_sumeragi_topic_for_synthetic_tag(10)
-                .expect("classify canonical global-v2 safety message"),
-            NetworkTopic::ConsensusSafety,
+                .expect("classify canonical global-v2 chunk message"),
+            NetworkTopic::ConsensusChunk,
             "global-v2 discriminant must preserve its inner protocol topic"
         );
         assert!(
@@ -2343,7 +2343,12 @@ mod tests {
                 "Torii proxy request/response carriers must use recoverable best-effort admission, not the reliable-progress corridor"
             );
         }
-        let target = PeerId::from(checked_topic_keypair().public_key().clone());
+        let target = PeerId::from(
+            KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .expect("generate canonical relay peer")
+                .public_key()
+                .clone(),
+        );
         let capped = crate::IrohaNetwork::closed_for_tests()
             .with_topic_plaintext_frame_cap_for_tests(NetworkTopic::Control, 1);
         for message in [torii_request.clone(), torii_response.clone()] {
@@ -2749,7 +2754,11 @@ mod tests {
             NetworkMessage::TransactionGossiper(gossip) => {
                 assert_eq!(gossip.txs.len(), 1);
                 assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                let wire = gossip.txs[0].encode();
+                let (_, wire, certificate) = gossip.txs[0]
+                    .clone()
+                    .into_entrypoint_with_payload()
+                    .expect("recover cached entrypoint frame");
+                assert!(certificate.is_none());
                 assert_eq!(wire.as_slice(), payload.as_slice());
                 assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
@@ -2809,7 +2818,11 @@ mod tests {
                 NetworkMessage::TransactionGossiper(gossip) => {
                     assert_eq!(gossip.txs.len(), 1);
                     assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                    let wire = gossip.txs[0].encode();
+                    let (_, wire, certificate) = gossip.txs[0]
+                        .clone()
+                        .into_entrypoint_with_payload()
+                        .expect("recover context-free cached entrypoint frame");
+                    assert!(certificate.is_none());
                     assert_eq!(wire.as_slice(), canonical_payload.as_slice());
                     assert!(wire.starts_with(&ncore::MAGIC));
                     assert_eq!(gossip.routes.len(), 1);

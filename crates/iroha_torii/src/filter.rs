@@ -799,6 +799,64 @@ mod tests {
         );
     }
     #[test]
+    fn filter_frame_identity_is_explicit_and_rejects_a_foreign_root() {
+        use norito::NoritoSchema as _;
+        let name = "iroha_torii::filter::FilterExpr";
+        assert_eq!(FilterExpr::nominal_name(), name);
+        assert_eq!(FilterExpr::frame_name(), name);
+        assert_eq!(
+            norito::schema::identity::frame_hash::<FilterExpr>(),
+            norito::core::schema_hash_for_name(name),
+        );
+        let expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
+        let canonical = norito::encode_canonical(&expr).expect("valid filter frame");
+        let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+        assert_eq!(header.schema, norito::core::schema_hash_for_name(name));
+        let mut layouts = 0;
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            layouts += 1;
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(norito::encode_canonical(&expr).unwrap(), canonical);
+            assert_eq!(
+                norito::decode_canonical::<FilterExpr>(&canonical).unwrap(),
+                expr
+            );
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        assert_eq!(layouts, 10);
+        let json = json::to_string(&filter_expr_to_value(&expr)).unwrap();
+        let foreign = norito::encode_canonical(&json).unwrap();
+        assert!(matches!(
+            norito::decode_canonical::<FilterExpr>(&foreign),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+    #[test]
+    fn filter_wrappers_keep_their_exact_bare_payload_contract() {
+        fn bare<T: Encode + Decode + PartialEq + core::fmt::Debug>(value: T, expected: Vec<u8>) {
+            let encoded = value.encode();
+            assert_eq!(encoded, expected);
+            let decoded = T::decode(&mut encoded.as_slice()).expect("bare wrapper replay");
+            assert_eq!(decoded, value);
+        }
+        let path = FieldPath("metadata.note".into());
+        bare(path.clone(), path.0.encode());
+        bare(Selector(vec![path.clone()]), vec![path.clone()].encode());
+        bare(Order::Asc, 0_u8.encode());
+        bare(Order::Desc, 1_u8.encode());
+        bare(
+            SortKey {
+                key: path.clone(),
+                order: Order::Desc,
+            },
+            (path, Order::Desc).encode(),
+        );
+        assert!(Order::decode(&mut 2_u8.encode().as_slice()).is_err());
+    }
+    #[test]
     fn reject_unsupported_field_path() {
         let json = obj(vec![
             ("op", val("eq")),

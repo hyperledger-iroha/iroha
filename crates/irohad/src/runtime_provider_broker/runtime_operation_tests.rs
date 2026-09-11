@@ -70,6 +70,7 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
         viewer_account: "viewer".to_owned(),
         role: sorafs_node::evidence_viewer::EvidenceViewerRoleV1::Juror,
         purpose_digest: [0x13; 32],
+        issuance_nonce: [0x14; 32],
         generation: 1,
         issued_at_unix_ms: now_unix_ms,
         expires_at_unix_ms: now_unix_ms + 60_000,
@@ -1951,5 +1952,79 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
             &server_test_network_id(),
         ),
         Err(BrokerError::Protocol)
+    );
+}
+
+#[test]
+fn evidence_viewer_grant_nonce_is_required_by_canonical_broker_requests() {
+    let binding = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority);
+    let now_unix_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    let claims = sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1 {
+        session_id: [0x11; 16],
+        case_id: "case-1".to_owned(),
+        round_id: "round-1".to_owned(),
+        quarantine_id: [0x12; 16],
+        viewer_account: "viewer".to_owned(),
+        role: sorafs_node::evidence_viewer::EvidenceViewerRoleV1::Juror,
+        purpose_digest: [0x13; 32],
+        issuance_nonce: [0x14; 32],
+        generation: 1,
+        issued_at_unix_ms: now_unix_ms,
+        expires_at_unix_ms: now_unix_ms + 60_000,
+    };
+    let request = EvidenceViewerGrantIssueRequestWireV1 {
+        claims: claims.clone(),
+    };
+    let canonical = encode_canonical(&request, MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1).unwrap();
+    let layouts = (0..=u8::MAX)
+        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        .collect::<Vec<_>>();
+    assert_eq!(layouts.len(), 10);
+    for flags in layouts {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        assert_eq!(
+            encode_canonical(&request, MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1).unwrap(),
+            canonical
+        );
+        let valid = validated_test_operation(
+            binding.clone(),
+            OPERATION_EVIDENCE_VIEWER_GRANT_ISSUE_V1,
+            canonical.clone(),
+        );
+        validate_operation_request(&valid).expect("complete nonce-bearing request");
+    }
+    let mut zero = claims;
+    zero.issuance_nonce = [0; 32];
+    let mut invalid =
+        validated_test_operation(binding, OPERATION_EVIDENCE_VIEWER_GRANT_ISSUE_V1, canonical);
+    invalid.payload = encode_canonical(
+        &EvidenceViewerGrantIssueRequestWireV1 { claims: zero },
+        MAX_EVIDENCE_VIEWER_CLAIMS_BYTES_V1,
+    )
+    .unwrap();
+    invalid.payload_digest = operation_payload_digest(&invalid.payload);
+    assert_eq!(
+        validate_operation_request(&invalid),
+        Err(BrokerError::Protocol),
+        "the stale envelope digest is rejected before nonce validation"
+    );
+    let invalid = make_operation_request(
+        invalid.session_id,
+        invalid.request_id,
+        invalid.binding.clone(),
+        invalid.provider_metadata_digest,
+        invalid.operation,
+        std::mem::take(&mut invalid.payload),
+    )
+    .expect("bind the zero-nonce payload into a canonical request envelope");
+    assert_eq!(
+        validate_operation_request(&invalid),
+        Err(BrokerError::Rejected)
     );
 }

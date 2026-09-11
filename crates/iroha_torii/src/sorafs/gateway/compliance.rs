@@ -834,6 +834,10 @@ pub struct GatewayComplianceFetchLimits {
     /// Maximum encoded response bytes.
     pub max_encoded_bytes: usize,
     /// Maximum decoded response bytes.
+    ///
+    /// The Zstandard history window is capped at the greatest power of two no larger
+    /// than this limit, with a 1 KiB minimum window. The exact decoded-byte limit
+    /// still applies even when it is below that minimum window.
     pub max_decoded_bytes: usize,
     /// Maximum redirect count.
     pub max_redirects: u8,
@@ -3778,9 +3782,16 @@ fn decompress_bounded(
             read_bounded(GzDecoder::new(Cursor::new(bytes)), maximum, "gzip")
         }
         GatewayComplianceContentEncoding::Zstd => {
-            let decoder =
+            let mut decoder =
                 zstd::stream::read::Decoder::new(Cursor::new(bytes)).map_err(|error| {
                     GatewayComplianceError::Decompression(format!("zstd header: {error}"))
+                })?;
+            // Bound frame-requested history before the decoder can allocate its window.
+            // Zstandard requires at least 1 KiB; emitted bytes keep the exact limit below.
+            decoder
+                .window_log_max(maximum.max(1024).ilog2())
+                .map_err(|error| {
+                    GatewayComplianceError::Decompression(format!("zstd window bound: {error}"))
                 })?;
             read_bounded(decoder, maximum, "zstd")
         }

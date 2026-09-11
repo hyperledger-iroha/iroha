@@ -34,11 +34,11 @@ use crate::privacy_engines::transparent_stark::{
 use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
 #[cfg(test)]
-pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree801:mask-coefficients802:quotient-bound3151335:quotient-coset-capacity4194303:fri-chunk-capacity1048575:four-chunk-composition-capacity4194303:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-der-stark-air-v1-incompatible:native-log19:base76:aux196:fixed14:constraints898:degree7:two-base-and-four-aux-physical-chunks:registered-expression-degree-ceiling7:multi-direction-affine-audit-attains-seven:mask-multiplier-degree1815:mask-coefficients1816:quotient-bound3158433:quotient-coset-capacity4194303:fri-chunk-capacity589823:six-chunk-composition-capacity3538943:zero-sized-public-shape:constant-registration-transcript:no-private-document-count-length-parser-or-comparator-disclosure:committed-private-parser-and-comparator-active-prefixes:canonical-inactive-rows:carried-private-document-count-range-bound:parser-cap65536:comparator-cap262144:padding196608:proof-document-max4096:proof-total-document-bytes32768:generic-oracle-max16384:streaming-byte-parser:identifier-u32-base128-minimal:length-definite-minimal-max16384:node-count-max2048:depth-max16:constructed-frame-push-pop-four-lane-product:universal-tag-one-hot-without-witness-branch:primitive-boolean-null-integer-enumerated-oid-bit-string:set-pair-four-lane-product:set-byte-zero-safe-log-derivative-with-singular-count-equality:input-byte-and-node-event-four-lane-products:private-document-product-internal-not-public:verifier-fixed-parser-and-comparator-and-padding-ranges:cross-adapter-claims:rfc5280-and-byte-memory-consumer-registrations=complete:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 #[cfg(test)]
 pub(crate) const ZK_X509_DER_STARK_AIR_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0xd5, 0x2f, 0xc3, 0x6d, 0x71, 0x55, 0xc6, 0x4c, 0xa1, 0xe9, 0xe0, 0x1f, 0x96, 0x8b, 0xac, 0x70,
-    0x21, 0xc9, 0x2f, 0x18, 0x1e, 0x41, 0x5b, 0x45, 0x20, 0x72, 0x19, 0x94, 0x71, 0x94, 0xb5, 0x83,
+    0x79, 0xb2, 0xff, 0x93, 0x5e, 0xaf, 0xb3, 0x0e, 0x78, 0xee, 0x6f, 0x68, 0x01, 0x6c, 0x8e, 0xa2,
+    0xd9, 0x54, 0xce, 0xb7, 0x6f, 0x52, 0x92, 0xbb, 0xc2, 0xa3, 0xc7, 0x0c, 0x05, 0x80, 0x1c, 0x4a,
 ];
 /// The aggregate native domain shared with SHA, projection, and every bus.
 pub(crate) const ZK_X509_DER_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -55,8 +55,8 @@ pub(crate) const ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1: usize =
     ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1 as usize
         * (ZK_X509_DER_STARK_TRACE_SIZE_V1 + ZK_X509_TRACE_MASK_DEGREE_V1 as usize)
         - ZK_X509_DER_STARK_TRACE_SIZE_V1;
-const _: () = assert!(ZK_X509_TRACE_MASK_DEGREE_V1 == 801);
-const _: () = assert!(ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1 == 3_151_335);
+const _: () = assert!(ZK_X509_TRACE_MASK_DEGREE_V1 == 1_815);
+const _: () = assert!(ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1 == 3_158_433);
 /// Four independent copy/lookup lanes.
 pub(crate) const ZK_X509_DER_STARK_BUS_LANES_V1: usize = 4;
 /// Maximum number of top-level plus extension-embedded documents.
@@ -4196,9 +4196,9 @@ mod tests {
         assert_eq!(
             digest,
             [
-                0xea, 0x1b, 0xfd, 0xfe, 0xef, 0xe7, 0xc0, 0x8a, 0xd9, 0xd8, 0x63, 0x42, 0x7e, 0xff,
-                0x74, 0xb7, 0x33, 0xf4, 0xc8, 0x0b, 0x64, 0x42, 0x1f, 0x8f, 0x9b, 0x40, 0x65, 0xa6,
-                0x8e, 0xf2, 0x2f, 0x12,
+                0x47, 0xe6, 0xe4, 0xae, 0xb0, 0x96, 0x0d, 0x09, 0xaa, 0x2d, 0xfe, 0x4b, 0x37, 0xff,
+                0x2e, 0x59, 0x37, 0x34, 0x79, 0xf2, 0x9f, 0x44, 0xe9, 0x9e, 0xb1, 0xec, 0x64, 0x4b,
+                0xd8, 0x64, 0x6e, 0x6f,
             ]
         );
         let mut changed_root = transcript_with_base_root(0x26);

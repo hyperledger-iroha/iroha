@@ -1387,9 +1387,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             deterministic_snapshot,
         )
         .expect("empty validation block should advertise its deterministic AXT post-state");
-    // Empty live validation still commits its deterministic internal block
-    // phases, so advertise the exact count that validation will recompute.
-    base_block.set_committed_fragment_count(2);
+    // Empty live validation commits one deterministic pipeline-event fragment.
+    base_block.set_committed_fragment_count(1);
     let valid_block = ValidBlock::validate_unchecked(base_block, &mut state_block).unpack(|_| {});
     let mut committed = valid_block.commit_unchecked().unpack(|_| {});
     let mut replay_snapshot = committed
@@ -1422,7 +1421,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             replay_snapshot,
         )
         .expect("replay fixture should retain its AXT envelope");
-    committed.as_mut().set_committed_fragment_count(2);
+    committed.as_mut().set_committed_fragment_count(1);
     let peer_id = PeerId::new(signer.public_key().clone());
     let _ = state_block.apply_without_execution(&committed, vec![peer_id.clone()]);
     state_block
@@ -1454,9 +1453,11 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     replay_block.commit().expect("commit replayed state");
     let replay_key = AxtHandleReplayKey::from_handle(dsid, &envelope.handles[0].handle);
     let replay_view = replay_state.view();
-    let Some(ledger_entry) = replay_view.world().axt_replay_ledger().get(&replay_key) else {
-        return;
-    };
+    let ledger_entry = replay_view
+        .world()
+        .axt_replay_ledger()
+        .get(&replay_key)
+        .expect("replayed envelope must persist its exact handle replay key");
     assert_eq!(ledger_entry.dataspace, dsid);
     let updated_policy = replay_view
         .world()
@@ -2366,9 +2367,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             deterministic_snapshot,
         )
         .expect("empty validation block should advertise its deterministic AXT post-state");
-    // Empty live validation still commits its deterministic internal block
-    // phases, so advertise the exact count that validation will recompute.
-    base_block.set_committed_fragment_count(2);
+    // Empty live validation commits one deterministic pipeline-event fragment.
+    base_block.set_committed_fragment_count(1);
     let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
         .unpack(|_| {});
     let mut committed = valid.commit_unchecked().unpack(|_| {});
@@ -2399,7 +2399,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             replay_snapshot,
         )
         .expect("empty committed test block should attach AXT envelope results");
-    committed.as_mut().set_committed_fragment_count(2);
+    committed.as_mut().set_committed_fragment_count(1);
     assert_eq!(
         committed
             .as_ref()

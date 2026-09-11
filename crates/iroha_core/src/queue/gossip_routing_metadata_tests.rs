@@ -33,6 +33,7 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
     ]);
     let queue = Queue::test(config_factory(), &time_source);
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let tx = accepted_tx_with(
         account_id,
         &key_pair,

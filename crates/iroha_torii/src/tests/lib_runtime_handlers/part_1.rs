@@ -100,6 +100,40 @@ fn query_conversion_message(err: &Error) -> Option<&str> {
 pub fn mk_app_state_for_tests() -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
 }
+#[tokio::test]
+async fn readiness_rejects_closed_consensus_ingress() {
+    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
+        .unwrap_or_else(|_| panic!("unique readiness app"));
+    app.sumeragi = Some(iroha_core::sumeragi::SumeragiHandle::emergency_fast_disabled());
+    assert_eq!(
+        handler_readyz(State(Arc::new(app))).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "completed Queue startup alone cannot open consensus ingress"
+    );
+}
+
+#[tokio::test]
+async fn readiness_rejects_empty_queue_startup_reconciliation() {
+    let app = mk_app_state_for_tests();
+    assert_eq!(
+        handler_readyz(State(Arc::clone(&app))).await.status(),
+        StatusCode::OK
+    );
+    let directory = tempfile::tempdir().expect("readiness journal root");
+    app.queue
+        .install_lane_reservation_journal(
+            &directory.path().join("reservations.norito"),
+            1024 * 1024,
+        )
+        .expect("install actual empty startup journal");
+    assert!(app.queue.lane_reservation_startup_reconciliation_pending());
+    assert_eq!(
+        handler_readyz(State(app)).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "an HTTP listener and empty queue do not establish write readiness"
+    );
+}
+
 fn mk_app_state_for_tests_with_chain_id(chain_id: ChainId) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_chain_id(
         World::default(),
@@ -665,6 +699,33 @@ struct AutoscaleLaneCommitteeFixtureV1 {
     validator_pops: Vec<Vec<u8>>,
     validator_count: u32,
     min_quorum: u32,
+}
+#[test]
+fn autoscale_fixture_declares_its_nominal_identity_and_core_frame_projection() {
+    use norito::NoritoSchema as _;
+    let nominal = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1";
+    let frame = "iroha_core::state::AutoscaleLaneCommitteeV1";
+    assert_eq!(AutoscaleLaneCommitteeFixtureV1::nominal_name(), nominal);
+    assert_eq!(AutoscaleLaneCommitteeFixtureV1::frame_name(), frame);
+    assert_ne!(nominal, frame);
+    assert_eq!(
+        Vec::<AutoscaleLaneCommitteeFixtureV1>::nominal_name(),
+        format!("alloc::vec::Vec<{nominal}>"),
+    );
+    assert_eq!(
+        norito::schema::identity::frame_hash::<AutoscaleLaneCommitteeFixtureV1>(),
+        norito::core::schema_hash_for_name(frame),
+    );
+    let keys = (0xa1_u8..=0xa4)
+        .map(|seed| checked_torii_test_bls_keypair(seed, "declared autoscale fixture identity"))
+        .collect::<Vec<_>>();
+    let mut lane = iroha_data_model::nexus::LaneConfig::default();
+    let peers = pin_autoscale_lane_committee_for_test(&mut lane, &keys);
+    assert_eq!(peers.len(), 4);
+    let bytes = hex::decode(&lane.metadata[iroha_data_model::nexus::AUTOSCALE_META_COMMITTEE])
+        .expect("actual fixture committee frame");
+    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::core::schema_hash_for_name(frame));
 }
 /// Attach a canonical, PoP-valid immutable committee to an autoscale fixture.
 fn pin_autoscale_lane_committee_for_test(
@@ -2090,6 +2151,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         stream_token_issuer,
         #[cfg(feature = "app_api")]
         stream_token_admission_capture: None,
+        #[cfg(feature = "app_api")]
+        stream_token_cleanup: None,
         #[cfg(feature = "app_api")]
         stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker::default(),
         #[cfg(feature = "app_api")]

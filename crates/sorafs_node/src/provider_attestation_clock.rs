@@ -3320,4 +3320,59 @@ mod tests {
             "{error:?}"
         );
     }
+
+    #[test]
+    fn clock_and_checkpoint_frames_keep_distinct_scopes_and_record_domains() {
+        use crate::schema_identity_test_support::assert_canonical_frame;
+        let clock_scope = scope(0x55);
+        let journal_scope = checkpoint_scope(0x55);
+        let clock = MusubiProviderAttestationClockSealRecordV1::initial(
+            clock_scope.scope_digest().unwrap(),
+            1_000,
+        )
+        .unwrap();
+        let journal = MusubiProviderAttestationJournalCheckpointHeadRecordV1::initial(
+            journal_scope.scope_digest().unwrap(),
+        )
+        .unwrap();
+        let clock_bytes = assert_canonical_frame(
+            &clock_scope,
+            "sorafs_node::provider_attestation_clock::MusubiProviderAttestationClockScopeV1",
+        );
+        let journal_bytes = assert_canonical_frame(
+            &journal_scope,
+            "sorafs_node::provider_attestation_clock::MusubiProviderAttestationJournalCheckpointScopeV1",
+        );
+        let clock_material = assert_canonical_frame(
+            &clock.material,
+            "sorafs_node::provider_attestation_clock::ClockRecordMaterialV1",
+        );
+        let journal_material = assert_canonical_frame(
+            &journal.material,
+            "sorafs_node::provider_attestation_clock::JournalCheckpointHeadRecordMaterialV1",
+        );
+        assert_ne!(clock_bytes, journal_bytes);
+        assert_ne!(clock_material, journal_material);
+        assert_ne!(
+            clock_scope.scope_digest().unwrap(),
+            journal_scope.scope_digest().unwrap()
+        );
+        assert!(matches!(
+            norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&journal_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<JournalCheckpointHeadRecordMaterialV1>(&clock_material),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert_eq!(
+            domain_hash_norito(CLOCK_RECORD_DOMAIN_V1, &clock.material).unwrap(),
+            clock.record_digest()
+        );
+        assert_eq!(
+            domain_hash_norito(JOURNAL_CHECKPOINT_HEAD_RECORD_DOMAIN_V1, &journal.material)
+                .unwrap(),
+            journal.record_digest()
+        );
+    }
 }

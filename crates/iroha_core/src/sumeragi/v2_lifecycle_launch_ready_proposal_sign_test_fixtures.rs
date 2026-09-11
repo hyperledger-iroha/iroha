@@ -266,3 +266,141 @@ impl LaunchedProductionLifecycleV1 {
         inspect(&mut self.owner, &mut self.executor, &mut self.services)
     }
 }
+
+impl LaunchedProductionLifecycleV1 {
+    /// Transfer a genuine recovered Decision owner into synchronous test I/O,
+    /// retaining the production WAL gate, ordinal pair, and exact body instance.
+    /// The enclosing worker test supplies its four-validator service fixture.
+    #[inline(never)]
+    pub(in crate::sumeragi) fn recovered_decision_services_for_restart_test(
+        mut owner: Box<ProductionLifecycleOwnerV1>,
+        mut services: Box<ProductionV2Services>,
+        wal_path: &std::path::Path,
+        started_at: Instant,
+        local_validator: wire::ValidatorIndex,
+        output_guard: Arc<ConsensusOutputGuard>,
+        ingress: Arc<FairV2Ingress>,
+    ) -> (
+        Box<Self>,
+        Box<crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture>,
+    ) {
+        let context = owner.verified.context().clone();
+        assert!(owner.exact_recovered_body_pipeline_join_for_test());
+        let mut startup = owner
+            .adapter_startup
+            .take()
+            .expect("retain the recovered adapter");
+        let launch = startup
+            .prepare_leader_wire_launch(wal_path)
+            .expect("derive launch custody from the exact recovered safety WAL");
+        let (runtime_authority, coordinator_authority) =
+            super::super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                owner.coordinator.high_water(),
+            );
+        let ordinals = RuntimeLifecycleOrdinalSource::from_authority(runtime_authority);
+        if let Some(high_water) = launch.restored_producer_ordinal_high_watermark() {
+            ordinals
+                .advance_past(high_water)
+                .expect("preserve recovered producer ordinals");
+        }
+        let (gate, restore, _recovery_authority) = launch
+            .open_gate(
+                &context,
+                owner
+                    .body_store
+                    .as_ref()
+                    .expect("retain exact recovered body store"),
+            )
+            .expect("open the genuine WAL-adjacent gate with its recovered body census");
+        ordinals
+            .advance_past(restore.scheduler_ordinal_high_watermark())
+            .expect("preserve the restored scheduler high-water mark");
+        owner
+            .coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_authority)
+            .expect("bind the same live ordinal cursor to the recovered registry");
+        let (runtime, pending_kura_apply_replay, recovered_local_proposal_attempt) = startup
+            .into_serialized_runtime(
+                started_at,
+                Duration::from_secs(2),
+                RuntimeQueueConfig::new(8, 2, 2),
+                ordinals.clone(),
+            )
+            .expect("consume the genuine recovered adapter into its runtime");
+        assert!(pending_kura_apply_replay.is_none());
+        assert!(recovered_local_proposal_attempt.is_none());
+        let (executor, planner) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+            &mut services,
+            runtime,
+            output_guard,
+            local_validator,
+            4,
+        );
+        let binding = ProductionLeaderWireIngressBindingV1::bind(
+            ingress,
+            gate,
+            restore,
+            ordinals,
+            context.id(),
+            context.height,
+        )
+        .expect("bind the recovered WAL gate to the service's exact ingress instance");
+        (
+            Box::new(Self {
+                owner: *owner,
+                executor,
+                services: *services,
+                pending_kura_apply_replay,
+                recovered_local_proposal_attempt,
+                pending_lifecycle_completion: None,
+                pending_ingress_capacity: None,
+                completion_observer_activation: None,
+                leader_wire_ingress_binding: binding,
+            }),
+            Box::new(planner),
+        )
+    }
+
+    /// Consume the genuine guarded worker completion through production settlement.
+    pub(in crate::sumeragi) fn settle_decision_fetch_worker_for_test(&mut self) {
+        assert!(self.pending_lifecycle_completion.is_none());
+        let crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::DecisionFetch(completion) = self
+            .services
+            .take_next_lifecycle_completion()
+            .expect("one real recovered Fetch worker completion")
+        else {
+            panic!("the exact physical completion must be recovered Decision Fetch")
+        };
+        self.pending_lifecycle_completion = Some(
+            PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
+        );
+        assert_eq!(
+            self.settle_recovered_decision_fetch_store(),
+            ProductionRecoveredDecisionFetchStoreSettlementV1::Applied,
+            "the actual response must publish its typed durable Store successor",
+        );
+    }
+
+    /// Return the already-settled owner trio after its exact ingress has drained.
+    pub(in crate::sumeragi) fn into_settled_body_fixture_for_test(
+        self,
+    ) -> (
+        ProductionLifecycleOwnerV1,
+        V2EffectExecutor<SerializedV2Runtime>,
+        ProductionV2Services,
+    ) {
+        assert!(self.pending_kura_apply_replay.is_none());
+        assert!(self.recovered_local_proposal_attempt.is_none());
+        assert!(self.pending_lifecycle_completion.is_none());
+        assert!(self.pending_ingress_capacity.is_none());
+        assert!(self.owner.coordinator.active_lease.is_none());
+        assert_eq!(self.leader_wire_ingress_binding.ingress.len(), 0);
+        let Self {
+            owner,
+            executor,
+            services,
+            ..
+        } = self;
+        (owner, executor, services)
+    }
+}

@@ -8,6 +8,7 @@ import json
 import re
 import unittest
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -128,8 +129,8 @@ FAMILIES = {
                 trailing_comma=False,
             ),
         ),
-        definition_sha256="3b69a1e1c6dc7f56af788a13a1202eeeea56539d294ae06fd9e86e3dbbf421b5",
-        expanded_preimage_sha256="dbf99e521129694239c6791f9440608cb67c49b56b8ea2025c0c546522de21dc",
+        definition_sha256="665f1868ce2a5974afe2cd89c5df4f07120e9eadd7ddf444278695ff233677cd",
+        expanded_preimage_sha256="027100af5ea6483b2916b151ddd318d6e3166cc6801e205488029a6a587e527e",
     ),
     "account_recovery_command_handlers": WrapperFamily(
         parameters=("handler", "dto", "metric", "route", "routing_handler"),
@@ -255,12 +256,13 @@ FAMILIES = {
 }
 
 ROUTE_MACRO_DEFINITION_SHA256 = {
+    "mount_subscription_mutation": "68947e4ed41a19abd272c78f0aa36e7155064773b2d22242651dcfaec36803ee",
     "catalog_route_policy": "4d08cd3741b5fba7bb81c791a1188229a0f3db6a1e6ee9e77a2a358201e0882f",
     "mount_catalog_route_rows": "3e8928222d7cc7586d5d380b04183132188cc9e4b74f70816a51816d637da23e",
     "mount_local_catalog_route_rows": "74c42676d5766d5d942f9d3dc2d4e7ebbda33330ab1e25be73b355771c57b25d",
 }
-ROUTE_ROW_COUNT = 540
-ROUTE_TUPLE_SHA256 = "a533e964147dba190bd4d69ee9215493a0fd864f54fbb6d260fcc41348dcbf26"
+ROUTE_ROW_COUNT = 556
+ROUTE_TUPLE_SHA256 = "4c99e2b882090243f0cc49717aee27c34f73c6891b07c4a1ccbaa12e371f6d3a"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -349,8 +351,79 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_MACRO_SOURCE_TOKEN = re.compile(
+    r'\s+|//[^\n]*|/\*|(?:br|cr|r)(?P<raw_hashes>\#{0,255})"'
+    r'|(?:b|c)?"(?:\\.|[^"\\])*"|(?:b)?\'(?:\\.|[^\'\\\r\n])\''
+    r'|r#[A-Za-z_][A-Za-z_0-9]*|[A-Za-z_][A-Za-z_0-9]*|.',
+    re.DOTALL,
+)
+
+
+@lru_cache(maxsize=1)
+def _macro_definition_starts(source: str) -> tuple[tuple[str, int], ...]:
+    """Locate code declarations; cache one source while its families are checked."""
+
+    declarations: list[tuple[str, int]] = []
+    previous: list[tuple[str, int]] = []
+    cursor = 0
+    while cursor < len(source):
+        match = _MACRO_SOURCE_TOKEN.match(source, cursor)
+        assert match is not None
+        token = match.group()
+        position = match.start()
+        cursor = match.end()
+        if token.isspace() or token.startswith("//"):
+            continue
+        if token == "/*":
+            depth = 1
+            while depth:
+                opening = source.find("/*", cursor)
+                closing = source.find("*/", cursor)
+                if closing < 0:
+                    return ()
+                if 0 <= opening < closing:
+                    depth += 1
+                    cursor = opening + 2
+                else:
+                    depth -= 1
+                    cursor = closing + 2
+            continue
+        if match.group("raw_hashes") is not None:
+            marker = '"' + match.group("raw_hashes")
+            closing = source.find(marker, cursor)
+            if closing < 0:
+                return ()
+            cursor = closing + len(marker)
+            previous.clear()
+            continue
+        if token.startswith(('"', 'b"', 'c"')) or (
+            token.startswith(("'", "b'")) and len(token) > 1
+        ):
+            previous.clear()
+            continue
+        identifier = token.removeprefix("r#")
+        if (
+            len(previous) == 2
+            and previous[0][0] == "macro_rules"
+            and previous[1][0] == "!"
+            and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", identifier)
+        ):
+            declarations.append((identifier, previous[0][1]))
+        previous = (previous + [(token, position)])[-2:]
+    return tuple(declarations)
+
+
+def _unique_macro_start(source: str, name: str) -> int:
+    """Reject missing or shadowing declarations, including comment separators."""
+
+    starts = [position for declared, position in _macro_definition_starts(source) if declared == name]
+    if len(starts) != 1:
+        raise GuardError(f"{name} must have exactly one definition")
+    return starts[0]
+
+
 def _macro_definition(source: str, name: str) -> tuple[str, str]:
-    start = source.index(f"macro_rules! {name}")
+    start = _unique_macro_start(source, name)
     invocation = source.index(f"{name}!", start)
     definition = source[start:invocation]
     body_start_marker = "\n        $(\n"
@@ -581,7 +654,7 @@ def _split_top_level(source: str, delimiter: str) -> list[str]:
 
 def _route_macro_definition(source: str, name: str) -> str:
     try:
-        start = source.index(f"macro_rules! {name}")
+        start = _unique_macro_start(source, name)
         opening = source.index("{", start)
     except ValueError as error:
         raise GuardError(f"{name} definition is missing") from error
@@ -829,6 +902,33 @@ def _route_table_rows(source: str) -> list[tuple[str, str, str, str, str, str]]:
                         ),
                     )
                 )
+    # This local macro applies both an HTTP body limit and canonical account
+    # authentication. Its exact definition is checked independently above.
+    for position, invocation in _macro_invocations(source, "mount_subscription_mutation"):
+        if not corridor_start <= position < corridor_end:
+            raise GuardError("subscription mutation escaped the route-builder corridor")
+        opening = invocation.index("(")
+        closing = _matching_delimiter(invocation, opening)
+        arguments = _split_top_level(invocation[opening + 1 : closing], ",")
+        if (
+            len(arguments) != 2
+            or re.fullmatch(r"[A-Z0-9_]+", arguments[0]) is None
+            or re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*", arguments[1]) is None
+        ):
+            raise GuardError("subscription mutation route arguments drifted")
+        positioned_rows.append(
+            (
+                position,
+                (
+                    _route_cfg_at(position, cfg_ranges),
+                    "POST",
+                    f"route_catalog::application_api::{arguments[0]}",
+                    arguments[1],
+                    "max(transaction_max_content_len);auth(transaction_max_content_len)",
+                    "canonical-account-body(app_state.clone())",
+                ),
+            )
+        )
     positioned_rows.sort(key=lambda item: item[0])
     return [row for _, row in positioned_rows]
 
@@ -920,6 +1020,129 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text(encoding="utf-8")
+        validate_source(cls.source)
+
+    def test_subscription_authority_precedes_every_bypass_and_dispatch(self) -> None:
+        definition, _ = _macro_definition(self.source, "subscription_action_handlers")
+        extractor = "Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,"
+        check = 'require_subscription_draft_account(&req.authority, &verified, "subscription action draft")?;'
+        self.assertLess(definition.index(check), definition.index("if limits::is_allowed_by_cidr"))
+        self.assertLess(definition.index(check), definition.index("return routing::$routing_handler"))
+        variants = (
+            (extractor, ""),
+            (check, ""),
+            (check, check.replace("&req.authority", "&verified.account")),
+        )
+        for old, new in variants:
+            with self.subTest(old=old, new=new):
+                self.assertEqual(definition.count(old), 1)
+                changed = definition.replace(old, new, 1)
+                self.assertNotEqual(changed, definition)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(definition, changed, 1))
+        check_line = next(line for line in definition.splitlines(True) if check in line)
+        changed = definition.replace(check_line, "", 1)
+        anchor = "                let enforce ="
+        self.assertEqual(changed.count(anchor), 1)
+        changed = changed.replace(anchor, check_line + anchor, 1)
+        with self.assertRaises(GuardError):
+            validate_source(self.source.replace(definition, changed, 1))
+
+    def test_subscription_mount_auth_method_and_limits_are_inventoried(self) -> None:
+        definition = _route_macro_definition(self.source, "mount_subscription_mutation")
+        variants = (
+            ("catalog_post($handler)", "catalog_get($handler)"),
+            (".authenticated_canonical_account_body(", ".authenticated_operator("),
+            ("DefaultBodyLimit::max(transaction_max_content_len)", "DefaultBodyLimit::max(0)"),
+            ("app_state.clone(),", "app_state,"),
+            ("                            transaction_max_content_len,", "                            0,"),
+        )
+        for old, new in variants:
+            with self.subTest(old=old, new=new):
+                self.assertEqual(definition.count(old), 1)
+                changed = definition.replace(old, new, 1)
+                self.assertNotEqual(changed, definition)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(definition, changed, 1))
+
+    def test_subscription_mount_route_selection_order_and_cfg_are_inventoried(self) -> None:
+        invocations = _macro_invocations(self.source, "mount_subscription_mutation")
+        self.assertEqual(len(invocations), 8)
+        first, second = invocations[0][1], invocations[1][1]
+        for old in (first, second):
+            self.assertEqual(self.source.count(old), 1)
+        variants = (
+            "",
+            first + "\n" + first,
+            first.replace("SUBSCRIPTIONS_PLANS_POST", "SUBSCRIPTIONS_POST", 1),
+            first.replace("handler_subscription_plans_create", "handler_subscriptions_create", 1),
+            '#[cfg(feature = "telemetry")]\n' + first,
+            first.replace("handler_subscription_plans_create", "|request| handler_subscriptions_create(request)", 1),
+        )
+        for changed in variants:
+            with self.subTest(changed=changed):
+                self.assertNotEqual(changed, first)
+                with self.assertRaises(GuardError):
+                    validate_source(self.source.replace(first, changed, 1))
+        changed = self.source.replace(first, "__subscription_swap__", 1)
+        changed = changed.replace(second, first, 1).replace("__subscription_swap__", second, 1)
+        with self.assertRaises(GuardError):
+            validate_source(changed)
+
+    def test_missing_and_shadowing_macro_definitions_fail(self) -> None:
+        for name in (*FAMILIES, *ROUTE_MACRO_DEFINITION_SHA256):
+            with self.subTest(name=name):
+                marker = f"macro_rules! {name}"
+                self.assertEqual(self.source.count(marker), 1)
+                with self.assertRaisesRegex(GuardError, "exactly one definition"):
+                    validate_source(self.source.replace(marker, f"macro_rules! unguarded_{name}", 1))
+                calls = list(re.finditer(rf"\b{re.escape(name)}!\s*[(\[{{]", self.source))
+                self.assertTrue(calls)
+                position = calls[-1].start()
+                comment_cases = name in {"subscription_action_handlers", "mount_subscription_mutation"}
+                separators = (" ", "/* outer /* nested */ tail */", "// separator\n") if comment_cases else (" ",)
+                delimiters = ("!", "/* before bang */!", "// before bang\n!") if comment_cases else ("!",)
+                for separator in separators:
+                    for delimiter in delimiters:
+                        duplicate = f"macro_rules{delimiter}{separator}{name} {{ ($($ignored:tt)*) => {{}}; }}\n"
+                        changed = self.source[:position] + duplicate + self.source[position:]
+                        self.assertNotEqual(changed, self.source)
+                        with self.assertRaisesRegex(GuardError, "exactly one definition"):
+                            validate_source(changed)
+
+    def test_raw_identifier_shadowing_rejects_every_macro_body_delimiter(self) -> None:
+        for name in ("subscription_action_handlers", "mount_subscription_mutation"):
+            position = _macro_invocations(self.source, name)[-1][0]
+            for body in ("{ ($($ignored:tt)*) => {}; }", "(($($ignored:tt)*) => {});", "[($($ignored:tt)*) => {}];"):
+                with self.subTest(name=name, body=body):
+                    duplicate = f"macro_rules /* separator */ ! r#{name} {body}\n"
+                    changed = self.source[:position] + duplicate + self.source[position:]
+                    self.assertNotEqual(changed, self.source)
+                    with self.assertRaisesRegex(GuardError, "exactly one definition"):
+                        validate_source(changed)
+
+    def test_macro_declaration_discovery_ignores_literal_and_comment_decoys(self) -> None:
+        source = (
+            '// macro_rules! decoy {}\n'
+            '/* outer /* macro_rules! nested {} */ tail */\n'
+            '"macro_rules! quoted {}";\n'
+            'r###"macro_rules! raw {}"###;\n'
+            'br#"macro_rules! raw_byte {}"#;\n'
+            'cr#"macro_rules! raw_c {}"#;\n'
+            "'{' '\\\\' 'a\n"
+            'macro_rules /* before */ ! /* after */ actual { () => {}; }\n'
+            'macro_rules! second (() => {});\n'
+            'macro_rules! r#raw_named { () => {}; }\n'
+        )
+        expected = (
+            ("actual", source.index("macro_rules /* before */")),
+            ("second", source.index("macro_rules! second")),
+            ("raw_named", source.index("macro_rules! r#raw_named")),
+        )
+        self.assertEqual(_macro_definition_starts(source), expected)
+        self.assertEqual(_unique_macro_start(source, "actual"), expected[0][1])
+        self.assertEqual(_macro_definition_starts("/* unterminated"), ())
+        self.assertEqual(_macro_definition_starts('r##"unterminated'), ())
 
     def test_current_source_reconstructs_exact_preimage(self) -> None:
         validate_source(self.source)

@@ -3929,6 +3929,7 @@ v2_apply_test!(
     }
 );
 include!("v2_apply_unsealed_01c_historical_recovery.rs");
+include!("v2_apply_unsealed_01c_ordinary_to_autonomous.rs");
 v2_apply_test!(pending_merge_split_group_is_rejected, {
     let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
     let producer = KeyPair::try_from_seed(vec![0xBB; 32], Algorithm::BlsNormal)

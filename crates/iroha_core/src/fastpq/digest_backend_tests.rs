@@ -4,30 +4,7 @@ use super::*;
 use iroha_data_model::fastpq::TransferSmtWitness;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use std::{cell::Cell, rc::Rc, sync::MutexGuard};
-
-struct AccelerationGuard {
-    previous: bool,
-    _lock: MutexGuard<'static, ()>,
-}
-
-impl AccelerationGuard {
-    fn new() -> Self {
-        let lock = DIGEST_ACCELERATION_TEST_LOCK
-            .lock()
-            .expect("digest acceleration test lock poisoned");
-        Self {
-            previous: poseidon_digest_acceleration_enabled(),
-            _lock: lock,
-        }
-    }
-}
-
-impl Drop for AccelerationGuard {
-    fn drop(&mut self) {
-        set_poseidon_digest_acceleration_enabled(self.previous);
-    }
-}
+use std::{cell::Cell, rc::Rc};
 
 fn transcript(tag: u8) -> TransferTranscript {
     TransferTranscript {
@@ -67,8 +44,35 @@ fn scalar_digests(transcripts: &[TransferTranscript]) -> Vec<Hash> {
 }
 
 #[test]
+fn acceleration_test_guard_serializes_and_restores_shared_lane_state() {
+    let guard = DigestAccelerationTestGuard::new();
+    let previous = poseidon_digest_acceleration_enabled();
+    set_poseidon_digest_acceleration_enabled(!previous);
+    let (contended, observed_contention) = std::sync::mpsc::channel();
+    let contender = std::thread::spawn(move || {
+        assert!(matches!(
+            DIGEST_ACCELERATION_TEST_LOCK.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        contended.send(()).expect("report held acceleration guard");
+        let _guard = DigestAccelerationTestGuard::new();
+        assert_eq!(poseidon_digest_acceleration_enabled(), previous);
+        set_poseidon_digest_acceleration_enabled(!previous);
+    });
+    observed_contention
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("contender observes the shared acceleration lock");
+    drop(guard);
+    contender
+        .join()
+        .expect("contending acceleration test joins");
+    let _guard = DigestAccelerationTestGuard::new();
+    assert_eq!(poseidon_digest_acceleration_enabled(), previous);
+}
+
+#[test]
 fn accelerator_results_require_exact_cardinality_before_acceptance() {
-    let _guard = AccelerationGuard::new();
+    let _guard = DigestAccelerationTestGuard::new();
     let batch = batch(&[transcript(1), transcript(2)]);
     for output in [
         None,
@@ -91,7 +95,7 @@ fn accelerator_results_require_exact_cardinality_before_acceptance() {
 
 #[test]
 fn pending_result_failure_recomputes_the_complete_cpu_batch() {
-    let _guard = AccelerationGuard::new();
+    let _guard = DigestAccelerationTestGuard::new();
     let transcripts = [transcript(1), transcript(2)];
     let original = batch(&transcripts);
     let current = batch(&transcripts);
@@ -127,7 +131,7 @@ fn pending_result_failure_recomputes_the_complete_cpu_batch() {
 
 #[test]
 fn same_count_pending_inputs_bind_every_preimage_field_and_occurrence_order() {
-    let _guard = AccelerationGuard::new();
+    let _guard = DigestAccelerationTestGuard::new();
     let original_transcripts = [transcript(1), transcript(2)];
     let original = batch(&original_transcripts);
     for changed_field in 0..6 {
@@ -170,7 +174,7 @@ fn same_count_pending_inputs_bind_every_preimage_field_and_occurrence_order() {
 
 #[test]
 fn pending_identity_includes_slice_order_and_missing_digest_membership() {
-    let _guard = AccelerationGuard::new();
+    let _guard = DigestAccelerationTestGuard::new();
     let transcripts = [transcript(1), transcript(2)];
     let original = batch(&transcripts);
     let mut reordered = batch(&transcripts);
@@ -198,7 +202,7 @@ fn stale_pending_capture_is_dropped_without_collecting_result_bytes() {
             self.0.set(true);
         }
     }
-    let _guard = AccelerationGuard::new();
+    let _guard = DigestAccelerationTestGuard::new();
     let original = batch(&[transcript(1)]);
     let current = batch(&[transcript(2)]);
     let dropped = Rc::new(Cell::new(false));
@@ -304,7 +308,7 @@ fn slice_installer_checks_remaining_length_before_writing_first_digest() {
 
 #[test]
 fn malformed_pending_output_installs_a_complete_ordered_cpu_fallback() {
-    let _guard = AccelerationGuard::new();
+    let _guard = DigestAccelerationTestGuard::new();
     let original = grouped_map();
     let mut prepared = PoseidonDigestBatch::default();
     for transcripts in original.values() {

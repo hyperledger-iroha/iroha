@@ -1200,6 +1200,7 @@ fn two_lane_relabel_files_applied_restart_recovers_exact_chain() {
     ]);
     let activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
     let kura = open_kura(&root, &initial);
+    install_retirement_test_lane_markers(&kura, &initial, &incarnations, &activations);
     let _ = durable_geometry_snapshot_identity(&kura, 3);
     let exact_chain = |kura: &Kura| {
         (1..=kura.exact_durable_blocks_count().unwrap())
@@ -2227,4 +2228,39 @@ fn checkpoint_rejects_stale_height_and_lane_incarnation_aba() {
         )
         .expect("fresh incarnation checkpoint");
     assert_eq!(summary.compacted_transitions, 1);
+}
+
+#[test]
+fn fixture_lane_marker_provisions_paired_storage_and_preserves_existing_binding() {
+    let kura = Kura::blank_kura_for_testing();
+    let (_, extended) = initial_and_extended_configs();
+    let lane = extended
+        .entries()
+        .iter()
+        .find(|entry| entry.lane_id == LaneId::new(1))
+        .expect("secondary fixture lane");
+    let incarnation = Hash::prehashed([0x42; Hash::LENGTH]);
+    kura.install_lane_incarnation_marker_if_missing_for_test(lane, incarnation, 9)
+        .expect("provision complete fixture storage");
+    let incarnations = BTreeMap::from([(lane.lane_id, incarnation)]);
+    let heights = BTreeMap::from([(lane.lane_id, 9)]);
+    let binding = kura
+        .geometry_binding(lane, &incarnations, &heights)
+        .expect("exact fixture binding");
+    assert!(kura.binding_blocks_path(&binding).is_dir());
+    assert!(kura.binding_merge_path(&binding).is_file());
+    kura.require_lane_marker(&binding)
+        .expect("exact fixture marker");
+    let marker_path = kura.binding_blocks_path(&binding).join(MARKER_FILE_NAME);
+    let original = fs::read(&marker_path).expect("read exact marker");
+    kura.install_lane_incarnation_marker_if_missing_for_test(
+        lane,
+        Hash::prehashed([0x43; Hash::LENGTH]),
+        10,
+    )
+    .expect("an existing binding is retained");
+    assert_eq!(
+        fs::read(marker_path).expect("reread exact marker"),
+        original
+    );
 }

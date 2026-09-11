@@ -3203,7 +3203,8 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
 include!("v2_adapter_04_wal_recovery_decision_classifier_cases.rs");
 
 impl SumeragiV2Adapter {
-    /// Reopen the exact certified-body regression WAL through the real startup owner factory.
+    /// Reopen the exact certified-body regression WAL and semantically replay
+    /// its durable markers with the same deterministic fixture validator.
     pub(in crate::sumeragi) fn reopen_cancelled_body_owner_for_test(
         wal_path: &std::path::Path,
         storage_root: &std::path::Path,
@@ -3212,6 +3213,9 @@ impl SumeragiV2Adapter {
         local_signer: &KeyPair,
         fingerprints: AdapterFingerprints,
         consensus_key_hash: [u8; 32],
+        validator: impl FnMut(
+            &iroha_data_model::block::SignedBlock,
+        ) -> Result<wire::ExecutionCommitment, String>,
     ) -> ProductionLifecycleOwnerV1 {
         let startup = Self::open_recovered_startup_with_aggregator(
             wal_path,
@@ -3229,14 +3233,25 @@ impl SumeragiV2Adapter {
             .unwrap_or_else(|(error, _)| {
                 panic!("authenticate the post-cancellation WAL frontier: {error}")
             });
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            storage_root.join("body"),
+            authenticated.adapter.wire_context.clone(),
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        )
+        .expect("reopen the same durable fixture body store");
+        body_store
+            .revalidate_recovered_markers(validator)
+            .expect("reproduce each recovered fixture validation outcome");
+        let body_store = body_store
+            .into_revalidated_startup()
+            .expect("seal the semantically replayed fixture body store");
         authenticated
-            .open_production_lifecycle_owner_v1_from_roots_for_test(
+            .open_production_lifecycle_owner_v1_with_store_for_test(
                 &lifecycle_owner_config(),
                 4,
                 &storage_root.join("ledger"),
                 &storage_root.join("serve"),
-                &storage_root.join("body"),
-                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                body_store,
                 local_signer,
             )
             .unwrap_or_else(|error| {

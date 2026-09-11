@@ -1194,13 +1194,13 @@ fn fetch_exact_three(
         .map(|_| store.create_anonymous_fetch_file())
         .collect::<Result<Vec<_>, _>>()?;
     let fetched = std::thread::scope(|scope| {
-        config
+        let workers = config
             .replicas
             .iter()
             .zip(files)
             .map(|replica| {
                 let (replica, mut file) = replica;
-                scope.spawn(move || {
+                std::thread::Builder::new().spawn_scoped(scope, move || {
                     let length = iroha_core::panic_hook::catch_unwind_suppressed(|| {
                         source.fetch_to(
                             replica,
@@ -1211,22 +1211,18 @@ fn fetch_exact_three(
                     })
                     .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
                     .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?;
+                    // Enforce the owner bound even when an injected adapter violates its contract.
+                    if length == 0 || length > config.max_response_bytes {
+                        return Err(ToriiSccpReplayStartupErrorV1::Transport);
+                    }
                     file.flush()
                         .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
                     validate_anonymous_fetch_file(&file, length)?;
                     Ok((file, length))
                 })
             })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Vec<_>>();
+        join_replica_fetch_workers(workers)
     })?;
 
     let mut fetched = fetched.into_iter();
@@ -1279,6 +1275,35 @@ fn fetch_exact_three(
         }
     }
     Ok(agreed)
+}
+
+/// Settle every started replica worker before returning any creation or fetch failure.
+#[expect(
+    single_use_lifetimes,
+    reason = "a scoped handle inside impl Trait's associated type requires a named lifetime"
+)]
+fn join_replica_fetch_workers<'scope>(
+    workers: impl IntoIterator<
+        Item = std::io::Result<
+            std::thread::ScopedJoinHandle<
+                'scope,
+                Result<(File, usize), ToriiSccpReplayStartupErrorV1>,
+            >,
+        >,
+    >,
+) -> Result<Vec<(File, usize)>, ToriiSccpReplayStartupErrorV1> {
+    // Collect outcomes first: Result collection must not drop handles after an earlier error.
+    workers
+        .into_iter()
+        .map(|worker| {
+            worker
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
+                .join()
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn validate_candidate(
@@ -4533,4 +4558,9 @@ mod tests {
         );
         assert_eq!(service.checkpoint_set_sha256(), Ok(before));
     }
+
+    #[cfg(feature = "app_api")]
+    include!("sccp_replay/worker_boundary_tests.rs");
+
+    include!("sccp_replay/replica_fetch_boundary_tests.rs");
 }

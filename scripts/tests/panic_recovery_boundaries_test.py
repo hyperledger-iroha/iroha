@@ -843,10 +843,8 @@ def test_source_closure_rejects_unreviewed_build_script_path(tmp_path: Path) -> 
         "crates/iroha_torii/Cargo.toml: package build script escapes the audited "
         "source roots: ../../outside.rs"
     ) in failures
-    assert (
-        "crates/iroha_torii/Cargo.toml: build script escaped the audited source closure "
-        "(expected crates/build-support/script.rs)"
-    ) in failures
+    # Generic Cargo target closure remains the sole build-source boundary.
+    assert len(failures) == 1
 
 
 def test_source_closure_rejects_escaping_explicit_cargo_targets(
@@ -1350,3 +1348,161 @@ def test_source_closure_resolves_nested_inline_path_before_sealing(tmp_path: Pat
         "crates/iroha_torii/src/outer/worker.inc: textual module source is outside "
         "the sealed repository-file inventory"
     ) in failures
+
+
+def test_relocated_token_issuance_retains_bounded_worker_owner() -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    relative = "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs"
+    source = (root / relative).read_text(encoding="utf-8")
+    parent = (root / "crates/iroha_torii/src/sorafs/api.rs").read_text(encoding="utf-8")
+    assert relative in module.NO_BARE_BLOCKING
+    assert parent.count('include!("api/storage_token_issuance.rs");') == 1
+    assert "async fn handle_post_sorafs_storage_token_authenticated(" not in parent
+    assert source.count("async fn handle_post_sorafs_storage_token_authenticated(") == 1
+    assert source.count(".issue_token(") == 1
+    assert module._bare_blocking_lines(source) == []
+    assert module._required_recovery_marker_failures(relative, source) == []
+    for required in module.REQUIRED_SNIPPETS[relative]:
+        assert required in source
+        tampered = source.replace(required, "removed_worker_boundary", 1)
+        assert module._required_recovery_marker_failures(relative, tampered) == [
+            f"{relative}: missing audited recovery marker {required!r}"
+        ]
+
+
+@pytest.mark.parametrize("raw_spawn", ["tokio::task::spawn_blocking", "handle.spawn_blocking"])
+def test_relocated_token_issuance_rejects_bare_worker_substitution(raw_spawn: str) -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    relative = "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs"
+    source = (root / relative).read_text(encoding="utf-8")
+    guarded = 'sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move ||'
+    assert guarded in source
+    tampered = source.replace(guarded, f"{raw_spawn}(move ||", 1)
+    assert module._bare_blocking_lines(tampered)
+    assert guarded not in tampered
+
+
+def test_required_recovery_marker_helper_preserves_original_owner_diagnostics() -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    relative = "crates/iroha_torii/src/sorafs/api.rs"
+    source = (root / relative).read_text(encoding="utf-8")
+    assert module._required_recovery_marker_failures(relative, source) == []
+    missing = module.REQUIRED_SNIPPETS[relative]
+    for required in missing:
+        source = source.replace(required, "removed_original_worker_owner")
+    assert module._required_recovery_marker_failures(relative, source) == [
+        f"{relative}: missing audited recovery marker {required!r}"
+        for required in missing
+    ]
+
+
+@pytest.mark.parametrize("relative", [
+    "crates/iroha_torii/src/sorafs/api/stream_token_enforcement.rs",
+    "crates/iroha_torii/src/sorafs/api/stream_token_body.rs",
+    "crates/iroha_torii/src/sorafs/stream_token_cleanup.rs",
+])
+def test_range_lease_workers_retain_physical_owner_markers(relative: str) -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    source = (root / relative).read_text(encoding="utf-8")
+    assert relative in module.NO_BARE_BLOCKING
+    assert module._bare_blocking_lines(source) == []
+    assert module._required_recovery_marker_failures(relative, source) == []
+    for required in module.REQUIRED_SNIPPETS[relative]:
+        # Remove every occurrence: the body deliberately checks the lease twice.
+        tampered = source.replace(required, "removed_range_lease_worker_boundary")
+        assert module._required_recovery_marker_failures(relative, tampered) == [
+            f"{relative}: missing audited recovery marker {required!r}"
+        ]
+
+
+@pytest.mark.parametrize("relative, guarded", [
+    ("crates/iroha_torii/src/sorafs/api/stream_token_enforcement.rs",
+     'sorafs_heavy_blocking_task(state, "SoraFS stream-token admission", move ||'),
+    ("crates/iroha_torii/src/sorafs/api/stream_token_body.rs",
+     'sorafs_heavy_blocking_task(state, "SoraFS chunk read", move ||'),
+    ("crates/iroha_torii/src/sorafs/stream_token_cleanup.rs",
+     "crate::panic_recovery::spawn_blocking_recoverable(move ||"),
+])
+@pytest.mark.parametrize("raw_spawn", ["tokio::task::spawn_blocking", "handle.spawn_blocking"])
+def test_range_lease_workers_reject_bare_physical_substitution(
+    relative: str, guarded: str, raw_spawn: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    module = load_guard_module()
+    source = (root / relative).read_text(encoding="utf-8")
+    assert guarded in source
+    assert module._bare_blocking_lines(source) == []
+    tampered = source.replace(guarded, f"{raw_spawn}(move ||", 1)
+    assert module._bare_blocking_lines(tampered)
+
+
+@pytest.mark.parametrize("build", [None, False, "../build-support/script.rs", "build.rs"])
+def test_source_closure_uses_actual_cargo_build_target_or_none(tmp_path: Path, build) -> None:
+    module = load_guard_module()
+    torii = tmp_path / "crates/iroha_torii"
+    support = tmp_path / "crates/build-support"
+    (torii / "src").mkdir(parents=True)
+    support.mkdir(parents=True)
+    (torii / "src/lib.rs").write_text("pub fn library() {}\n", encoding="utf-8")
+    manifest = '[package]\nname = "iroha_torii"\n'
+    if build is False:
+        manifest += 'build = false\n'
+    elif build is not None:
+        manifest += f'build = "{build}"\n'
+        (torii / build).write_text("fn main() {}\n", encoding="utf-8")
+    (torii / "Cargo.toml").write_text(manifest, encoding="utf-8")
+    assert module.torii_source_path_failures(tmp_path) == []
+    records, _, _ = module.torii_boundary_inventory(tmp_path)
+    if isinstance(build, str):
+        rel = (torii / build).resolve().relative_to(tmp_path).as_posix()
+        assert any(record.startswith(rel + "\t") for record in records)
+    else:
+        assert not any("/build.rs\t" in record or "/script.rs\t" in record for record in records)
+
+
+def test_source_closure_binds_auto_discovered_build_script(tmp_path: Path) -> None:
+    module = load_guard_module()
+    torii = tmp_path / "crates/iroha_torii"
+    torii.mkdir(parents=True)
+    (tmp_path / "crates/build-support").mkdir(parents=True)
+    (torii / "Cargo.toml").write_text('[package]\nname = "iroha_torii"\n', encoding="utf-8")
+    script = torii / "build.rs"
+    script.write_text("fn main() {}\n", encoding="utf-8")
+    assert module.torii_source_path_failures(tmp_path) == []
+    expected, _, _ = module.torii_boundary_inventory(tmp_path)
+    script.write_text("fn main() { std::thread::spawn(|| {}); }\n", encoding="utf-8")
+    failures = module.closed_torii_boundary_inventory_failures(tmp_path, expected)
+    assert "Torii task_spawn site count drifted (expected 0, found 1)" in failures
+    assert any("source inventory drifted" in failure for failure in failures)
+
+
+def test_source_closure_rejects_ignored_auto_build_script(tmp_path: Path) -> None:
+    module = load_guard_module()
+    torii = tmp_path / "crates/iroha_torii"
+    torii.mkdir(parents=True)
+    (tmp_path / "crates/build-support").mkdir(parents=True)
+    (torii / "Cargo.toml").write_text('[package]\nname = "iroha_torii"\n', encoding="utf-8")
+    (torii / "build.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("build.rs\n", encoding="utf-8")
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "crates/iroha_torii/Cargo.toml"], cwd=tmp_path, check=True)
+    failures = module.torii_source_path_failures(tmp_path)
+    assert any("auto-discovered package build script is outside the sealed repository-file inventory: build.rs" in failure for failure in failures)
+
+
+def test_source_closure_rejects_symlinked_auto_build_script(tmp_path: Path) -> None:
+    module = load_guard_module()
+    torii = tmp_path / "crates/iroha_torii"
+    torii.mkdir(parents=True)
+    (tmp_path / "crates/build-support").mkdir(parents=True)
+    (torii / "Cargo.toml").write_text('[package]\nname = "iroha_torii"\n', encoding="utf-8")
+    outside = tmp_path / "outside.rs"
+    outside.write_text("fn main() {}\n", encoding="utf-8")
+    (torii / "build.rs").symlink_to(outside)
+    failures = module.torii_source_path_failures(tmp_path)
+    assert any("symlink is forbidden" in failure for failure in failures)
+    assert any("auto-discovered package build script escapes the audited source roots" in failure for failure in failures)

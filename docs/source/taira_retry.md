@@ -9,10 +9,23 @@ build or transfer unchanged binaries or source.
 
 For a changed release, freeze the source once and run `scripts/taira_release.py
 prepare` with the existing repository `target/` lane. Preparation runs the native
-CLI regressions before the Linux build. Use the routine development check while
+configuration checks first from the combined native test build, followed by CLI
+canary command composition checks before the consensus regressions. Every
+independent test still completes before the four-peer gate and Linux build.
+Use the routine development check while
 editing; a separate cold development check adds a second dependency build to a
 release that already runs the same gate. Keep each lane's Cargo home, profile and
 source location consistent so subsequent builds reuse its artifacts.
+
+Preparation records an independent-test checkpoint, including the six proof
+regressions and canonical Kagami projection, before the four-peer check.
+After a later failure, retrying the same request still acquires and checks
+the actual Cargo artifacts but can reuse that independent pass. Reuse requires
+the exact source, tools, native environment, selected test census and executable
+identities. All shipping entry points must compile again, while matching proof
+passes can be reused. Network checks run again after partial failure; changed
+inputs cannot inherit the checkpoint. Completed preparation remains a separate
+receipt and does not establish deployment readiness.
 
 After an operator has prepared one owner-only runtime plan, each retry is:
 

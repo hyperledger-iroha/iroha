@@ -210,6 +210,36 @@ fn metrics_log_rejects_every_partial_tail_and_preserves_clean_eof() {
 }
 
 #[test]
+fn metrics_log_rejects_valid_foreign_frame_before_allocation() {
+    #[derive(
+        Debug, PartialEq, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "sorafs_orchestrator::incentives::tests::ForeignMetricsFrame")]
+    struct ForeignMetricsFrame {
+        epoch: u32,
+    }
+    let foreign = ForeignMetricsFrame { epoch: 7 };
+    let bytes = norito::encode_canonical(&foreign).expect("valid foreign root frame");
+    assert_eq!(
+        norito::decode_canonical::<ForeignMetricsFrame>(&bytes).unwrap(),
+        foreign
+    );
+    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+    assert_eq!(header.flags, norito::core::default_encode_flags());
+    assert_eq!(header.compression, norito::Compression::None);
+    assert_ne!(
+        header.schema,
+        norito::schema::identity::frame_hash::<RelayEpochMetricsV1>()
+    );
+    let zero = norito::DecodeLimits::new(0, 0, 0, 0, 0);
+    let mut reader = io::Cursor::new(bytes);
+    let (result, used) =
+        norito::core::with_decode_limits_measured(zero, || read_test_metrics_frame(&mut reader));
+    assert!(matches!(result, Err(norito::Error::SchemaMismatch)));
+    assert_eq!(used.total_allocated_bytes(), 0);
+    assert_eq!(reader.position(), norito::core::Header::SIZE as u64);
+}
+#[test]
 fn metrics_log_header_admission_precedes_allocation() {
     use norito::core::Header;
     let entry = log_test_entries().remove(0);

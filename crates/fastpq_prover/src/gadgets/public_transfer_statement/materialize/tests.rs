@@ -70,6 +70,86 @@ fn verify_paths(
 }
 
 #[test]
+fn intermediate_roots_preserve_whole_batch_boundaries_and_equal_occurrences() {
+    let first = delta(Quantity::from(u128::MAX), Quantity::zero(), Quantity::one());
+    let second = delta(
+        first.from_balance_after.clone(),
+        first.to_balance_after.clone(),
+        tiny(),
+    );
+    let third = delta(
+        second.from_balance_after.clone(),
+        second.to_balance_after.clone(),
+        Quantity::one(),
+    );
+    let mut unchanged = delta(maximum(), maximum(), Quantity::zero());
+    unchanged.to_account = unchanged.from_account.clone();
+    for deltas in [
+        vec![delta(maximum(), Quantity::zero(), maximum())],
+        vec![first.clone()],
+        vec![first, second, third],
+        vec![unchanged.clone(), unchanged.clone(), unchanged],
+    ] {
+        let pair_count = deltas.len();
+        let (claims, _, inputs) = fixture(deltas);
+        let built = materialize(&claims, inputs);
+        let prepared = prepare_quantity_public_transfers(
+            built.transitions(),
+            &claims,
+            built.public_inputs(),
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        verify_paths(&prepared, built.witnesses());
+        let work = built.witnesses().work();
+        let expected: Vec<_> = prepared
+            .pairs()
+            .iter()
+            .zip(built.witnesses().pairs())
+            .take(pair_count - 1)
+            .map(|(pair, paths)| {
+                let credit = &pair.updates[1];
+                fold(credit.new_leaf, credit.path, &paths[1].siblings)
+            })
+            .collect();
+        let mut roots = built.witnesses().intermediate_roots();
+        assert_eq!(roots.len(), pair_count - 1);
+        assert_eq!(roots.next(), expected.first().copied());
+        if pair_count > 1 {
+            assert_eq!(roots.len(), pair_count - 2);
+            assert_eq!(roots.next_back(), expected.last().copied());
+        }
+        assert_eq!(roots.next(), None);
+        assert_eq!(roots.next_back(), None);
+        assert_eq!(
+            built.witnesses().intermediate_roots().collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(built.witnesses().work(), work);
+        if built.witnesses().roots().0 == built.witnesses().roots().1 {
+            assert_eq!(expected, vec![built.witnesses().roots().0; pair_count - 1]);
+        } else if pair_count > 1 {
+            assert_ne!(expected[0], expected[1]);
+            assert_ne!(expected[1], built.witnesses().roots().1);
+        }
+    }
+    let empty = materialize_quantity_public_transfers(
+        &[],
+        PublicInputs::default(),
+        ProofSemantics::StateTransition,
+        PublicTransferLimits::default(),
+        limits(0),
+    )
+    .unwrap();
+    let mut roots = empty.witnesses().intermediate_roots();
+    assert_eq!(roots.len(), 0);
+    assert_eq!(roots.next(), None);
+    assert_eq!(roots.next_back(), None);
+    assert_eq!(empty.witnesses().work(), TransferSmtBuildWork::default());
+}
+
+#[test]
 fn full_domain_materialization_preserves_claims_and_authenticates_every_private_path() {
     for d in [
         delta(Quantity::from(u128::MAX), Quantity::zero(), Quantity::one()),

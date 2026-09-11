@@ -3967,3 +3967,9 @@ where
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),
     }
 }
+
+#[cfg(test)]
+mod two_slot_schema_tests {
+    use super::*;
+    include!("two_slot_schema_tests.rs");
+}

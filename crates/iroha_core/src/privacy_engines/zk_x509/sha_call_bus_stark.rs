@@ -218,9 +218,17 @@ pub(crate) const ZK_X509_SHA_EAGER_NATIVE_BYTES_V1: u64 =
 #[cfg(test)]
 pub(crate) const ZK_X509_SHA_PROVER_MEMORY_LIMIT_BYTES_V1: u64 =
     ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1;
-/// Exact SHA-only maximum proof estimate under the current aggregate wire.
+/// SHA trace opening bytes before Merkle, FRI, and DEEP overhead.
 #[cfg(test)]
-pub(crate) const ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1: usize = 1_542_072;
+pub(crate) const ZK_X509_SHA_TRACE_OPENING_BYTES_V1: usize =
+    super::profile::ZK_X509_FRI_QUERY_COUNT_V1 as usize
+        * 2
+        * (ZK_X509_SHA_BUCKET_BASE_WIDTH_V1 + ZK_X509_SHA_BUCKET_AUX_WIDTH_V1)
+        * core::mem::size_of::<F>();
+/// Maximum SHA-only aggregate wire before DEEP openings under the canonical
+/// 136-query, log-22 domain and twelve-round FRI schedule.
+#[cfg(test)]
+pub(crate) const ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1: usize = 3_492_704;
 #[cfg(test)]
 const _: () = assert!(ZK_X509_SHA_NATIVE_REPLAY_COLUMN_BYTES_V1 == 4 * 1024 * 1024);
 #[cfg(test)]
@@ -351,7 +359,7 @@ const _: () = {
     assert!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1 == 4);
 };
 /// Stable identity of the release SHA batch and call bus.
-pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree4:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-preserve-degree3-recurrences:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log25:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof1542072:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
+pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree4:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-preserve-degree3-recurrences:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof1542072:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
 /// Semantic owner of one canonical SHA call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509ShaCallRoleV1 {
@@ -5345,7 +5353,7 @@ mod tests {
         assert!(total_bits > 165.65, "{total_bits}");
     }
     #[test]
-    fn log25_streaming_resource_estimate_uses_the_real_hash_state_width() {
+    fn log22_streaming_resource_estimate_uses_the_real_hash_state_width() {
         assert_eq!(ZK_X509_SHA_ONE_NATIVE_SEGMENT_BYTES_V1, 668 * 1024 * 1024);
         let retained_fields_per_row = ZK_X509_SHA_BATCH_BASE_WIDTH_V1
             + ZK_X509_SHA_BATCH_AUX_WIDTH_V1
@@ -5360,8 +5368,8 @@ mod tests {
             ZK_X509_SHA_MAX_RETAINED_CALL_FIELD_BYTES_V1 < ZK_X509_SHA_ONE_NATIVE_SEGMENT_BYTES_V1
         );
         assert_eq!(ZK_X509_SHA_EAGER_NATIVE_BYTES_V1, 2_672 * 1024 * 1024);
-        assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 25);
-        assert_eq!(ZK_X509_COMMON_LDE_COLUMN_BYTES_V1, 256 * 1024 * 1024);
+        assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 22);
+        assert_eq!(ZK_X509_COMMON_LDE_COLUMN_BYTES_V1, 32 * 1024 * 1024);
         assert_eq!(
             ZK_X509_SHA_ROW_HASH_STATE_BYTES_V1,
             (1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1) * core::mem::size_of::<Sha256>() as u64
@@ -5374,7 +5382,7 @@ mod tests {
                 + ZK_X509_SHA_STREAMING_SCRATCH_BYTES_V1
         );
         assert!(ZK_X509_SHA_STREAMING_PEAK_BYTES_V1 < ZK_X509_SHA_PROVER_MEMORY_LIMIT_BYTES_V1);
-        assert_eq!(ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1, 1_542_072);
+        assert_eq!(ZK_X509_SHA_TRACE_OPENING_BYTES_V1, 1_453_568);
     }
     #[test]
     fn invalid_public_shapes_and_event_boundaries_fail_closed() {

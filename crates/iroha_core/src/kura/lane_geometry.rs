@@ -11870,7 +11870,7 @@ impl Kura {
         }
         Ok(())
     }
-    /// Install the exact active lane marker required by an isolated test fixture.
+    /// Provision paired block and merge storage with the exact marker for a test fixture.
     pub(crate) fn install_lane_incarnation_marker_for_test(
         &self,
         entry: &LaneConfigEntry,
@@ -11884,9 +11884,10 @@ impl Kura {
             blocks_path: self.relative_geometry_path(&entry.blocks_dir(&self.store_root))?,
             merge_path: self.relative_geometry_path(&entry.merge_log_path(&self.store_root))?,
         };
-        self.write_lane_marker(&binding)
+        self.write_lane_marker(&binding)?;
+        self.provision_geometry_binding(&binding)
     }
-    /// Install a marker for a blank test store without rewriting existing geometry.
+    /// Install paired storage for a blank test store without rewriting existing geometry.
     pub(crate) fn install_lane_incarnation_marker_if_missing_for_test(
         &self,
         entry: &LaneConfigEntry,

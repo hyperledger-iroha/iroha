@@ -351,6 +351,36 @@ impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
         Ok(sealed)
     }
 
+    /// Seal the ordinary exact rejection projection first, then give a released
+    /// terminal Report one independent owner without changing its immutable source.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn seal_resolved_invalid_body_report_replay(
+        self,
+        terminal: Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+        validate_origin: DurableValidateReplayEvidenceV1,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<PreparedInvalidBodyReportAdapterReplay<'a>, Self> {
+        let mut replay = self.seal_invalid_body_report_replay(
+            validate_origin,
+            validate_effect,
+            validate_pending,
+            receipt,
+        )?;
+        let Some(pending) = replay.replay_evidence.bind_resolved_report_pending(
+            terminal,
+            replay.prepared.report_effect(),
+            &replay.child_pending,
+        ) else {
+            return Err(Self(
+                ReadyDurableValidateAdapterPublicationState::RejectedReport(replay.prepared),
+            ));
+        };
+        replay.child_pending = pending;
+        Ok(replay)
+    }
+
     /// Bind only the exact validated Apply branch to the registry-minted
     /// predecessor and the adapter's retained Decision-WAL replay seal.
     #[allow(clippy::result_large_err)]
@@ -418,6 +448,32 @@ impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
     }
 }
 impl<'a> PreparedInvalidBodyReportAdapterReplay<'a> {
+    /// Consume only the new reducer occurrence after the owner proves the
+    /// canonical Report already has durable custody. No new registry work exists.
+    pub(in crate::sumeragi) fn commit_after_existing_report(
+        self,
+        _permit: super::v2_lifecycle_coordinator::ExistingResolvedReportCommitPermitV1,
+    ) {
+        let PreparedDirectValidationFailedReport {
+            _adapter: adapter,
+            next_reducer,
+            next_registry,
+            event,
+            core_effect,
+            next_fence_generation,
+            report_effect: _,
+        } = self.prepared;
+        adapter.reducer = next_reducer;
+        adapter.registry = next_registry;
+        adapter.reducer_fence_generation = next_fence_generation;
+        adapter.record_reducer_outcome(
+            &event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&core_effect),
+        );
+        adapter.log_body_progress(&event, reducer::StepDisposition::Applied, 1);
+    }
+
     /// Compare the complete adapter report and canonical replay envelope with
     /// one already-retained Validate origin without exposing either side.
     pub(in crate::sumeragi) fn exactly_matches(
@@ -443,6 +499,10 @@ impl<'a> PreparedInvalidBodyReportAdapterReplay<'a> {
                         &capability,
                     )
             });
+        let projected = projected.and_then(|pending| {
+            self.replay_evidence
+                .project_report_pending(report_effect, pending)
+        });
         capability.exactly_matches_report(report_effect)
             && projected.as_ref() == Some(&self.child_pending)
             && self.replay_evidence.exactly_matches(

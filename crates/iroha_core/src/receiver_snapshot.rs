@@ -23,7 +23,7 @@ pub struct FastpqSourceOpeningBuildLimits {
     pub max_ordinary_write_bytes: usize,
     /// Maximum complete executed-entry count.
     pub max_executed_entries: u32,
-    /// Maximum recorded transfer-operation statements across all entries.
+    /// Maximum complete nonempty execution-entry transfer-bundle statements.
     pub max_statements: u32,
     /// Manifest decoding budget, preserving any stricter enclosing Norito scope.
     pub manifest_decode: norito::DecodeLimits,

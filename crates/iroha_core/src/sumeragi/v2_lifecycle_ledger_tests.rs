@@ -32,6 +32,7 @@ pub(crate) mod tests {
     pub(crate) mod durable_ready_fetch_recovery {
         include!("v2_lifecycle_ledger_tests_durable_recovery_01.rs");
         include!("v2_lifecycle_ledger_tests_durable_recovery_02.rs");
+        include!("tests/v2_lifecycle_complete_tip_retained_body_cases.rs");
     }
     include!("v2_lifecycle_ledger_tests_frame_and_store.rs");
 

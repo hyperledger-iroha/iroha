@@ -482,3 +482,81 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    fn roundtrip<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let frame = norito::encode_canonical(value).expect("canonical fixture frame");
+        let header = norito::core::Header::read(frame.as_slice()).expect("typed frame header");
+        assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&frame).expect("same root canonical replay");
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        assert!(matches!(
+            norito::decode_canonical::<Vec<T>>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            StagePayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::StagePayloadV1",
+            "iroha.kagemusha.device.v1.stage-inbound-payment-command"
+        );
+        identity!(
+            RecoverStagedPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::RecoverStagedPayloadV1",
+            "iroha.kagemusha.device.v1.recover-staged-inbound-payment-command"
+        );
+        identity!(
+            PagePayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::PagePayloadV1",
+            "iroha.kagemusha.device.v1.recover-inbound-inbox-page-command"
+        );
+        identity!(
+            StagedReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::StagedReplyV1",
+            "iroha.kagemusha.device.v1.staged-inbound-payment-reply"
+        );
+        identity!(
+            PageReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::PageReplyV1",
+            "iroha.kagemusha.device.v1.inbound-inbox-page-reply"
+        );
+
+        let (credit_id, frame) = canonical_command_body_for_tests(RECOVER_STAGED).unwrap();
+        let payload: RecoverStagedPayloadV1 = norito::decode_canonical(&frame).unwrap();
+        assert_eq!(roundtrip(&payload), frame);
+        assert!(decode_receiver_command_v1(RECOVER_STAGED, credit_id, &frame).is_ok());
+        assert_eq!(
+            decode_receiver_command_v1(RECOVER_STAGED, [8; 32], &frame),
+            Err(ReceiverErrorV1::Binding)
+        );
+    }
+}

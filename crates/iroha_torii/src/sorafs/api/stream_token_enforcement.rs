@@ -1,12 +1,12 @@
 //! Production stream-token admission for SoraFS serving routes.
 use super::*;
-use crate::sorafs::{
-    StreamTokenAdmissionCaptureV1, StreamTokenGatewayAdmissionErrorV1,
-    StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
-    StreamTokenGatewayQuotaRequestV1,
-};
 #[cfg(test)]
 use crate::sorafs::{StreamTokenConcurrencyPermit, StreamTokenQuotaError};
+use crate::sorafs::{
+    StreamTokenGatewayAdmissionErrorV1, StreamTokenGatewayAdmissionRecordV1,
+    StreamTokenGatewayAdmissionRequestV1, StreamTokenGatewayQuotaRequestV1,
+    stream_token_cleanup::ExternalStreamTokenLeaseV1,
+};
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
     reputation::{
@@ -16,44 +16,79 @@ use iroha_data_model::sorafs::{
     },
 };
 use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
-#[derive(Debug)]
-struct ExternalStreamTokenLease {
-    capture: Arc<StreamTokenAdmissionCaptureV1>,
-    record: StreamTokenGatewayAdmissionRecordV1,
+/// An immutable lifetime bound derived from the authenticated accepted record.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RangeFetchLeaseWindow {
+    /// The exact time bound into the returned external admission record.
+    pub(super) validated_at_unix_ms: u64,
+    /// The exclusive authenticated token/lease expiry.
+    pub(super) expires_at_unix_ms: u64,
+    /// A conservative bound retained from before the admission worker's wall-clock sample.
+    pub(super) monotonic_deadline: std::time::Instant,
 }
-impl Drop for ExternalStreamTokenLease {
-    fn drop(&mut self) {
-        if let Err(error) = self.capture.release_lease(self.record) {
-            error!(
-                ?error,
-                gateway_sequence = self.record.outcome.binding.gateway_sequence,
-                "failed to release the external stream-token concurrency lease"
-            );
-        }
+impl RangeFetchLeaseWindow {
+    fn from_record(
+        record: &StreamTokenGatewayAdmissionRecordV1,
+        monotonic_anchor: std::time::Instant,
+    ) -> Result<Self, Response> {
+        let validated_at_unix_ms = record.outcome.validated_at_unix_ms;
+        let expires_at_unix_ms = record.lease_expires_at_unix_ms.ok_or_else(|| {
+            external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
+        })?;
+        let duration = expires_at_unix_ms
+            .checked_sub(validated_at_unix_ms)
+            .filter(|duration| *duration != 0)
+            .ok_or_else(|| {
+                external_admission_unavailable(
+                    StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome,
+                )
+            })?;
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|value| u64::try_from(value.as_millis()).ok())
+            .filter(|now| *now >= validated_at_unix_ms && *now < expires_at_unix_ms)
+            .ok_or_else(|| {
+                external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+            })?;
+        let monotonic_deadline = monotonic_anchor
+            .checked_add(std::time::Duration::from_millis(duration))
+            .filter(|deadline| *deadline > std::time::Instant::now())
+            .ok_or_else(|| {
+                external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+            })?;
+        Ok(Self {
+            validated_at_unix_ms,
+            expires_at_unix_ms,
+            monotonic_deadline,
+        })
     }
 }
 #[derive(Debug)]
 pub(super) struct RangeFetchConcurrencyGuard {
     telemetry: MaybeTelemetry,
-    external_lease: Option<ExternalStreamTokenLease>,
+    external_lease: Option<ExternalStreamTokenLeaseV1>,
+    lease_window: Option<RangeFetchLeaseWindow>,
     #[cfg(test)]
     local_permit: Option<StreamTokenConcurrencyPermit>,
 }
 impl RangeFetchConcurrencyGuard {
     fn external(
         telemetry: MaybeTelemetry,
-        capture: Arc<StreamTokenAdmissionCaptureV1>,
-        record: StreamTokenGatewayAdmissionRecordV1,
+        lease: ExternalStreamTokenLeaseV1,
+        window: RangeFetchLeaseWindow,
     ) -> Self {
-        telemetry.with_metrics(|metrics| {
-            metrics.inc_sorafs_range_fetch_concurrency();
-        });
-        Self {
+        let guard = Self {
             telemetry,
-            external_lease: Some(ExternalStreamTokenLease { capture, record }),
+            external_lease: Some(lease),
+            lease_window: Some(window),
             #[cfg(test)]
             local_permit: None,
-        }
+        };
+        guard.telemetry.with_metrics(|metrics| {
+            metrics.inc_sorafs_range_fetch_concurrency();
+        });
+        guard
     }
     #[cfg(test)]
     fn local(telemetry: MaybeTelemetry, permit: Option<StreamTokenConcurrencyPermit>) -> Self {
@@ -65,8 +100,13 @@ impl RangeFetchConcurrencyGuard {
         Self {
             telemetry,
             external_lease: None,
+            lease_window: None,
             local_permit: permit,
         }
+    }
+    /// Return the fixed authenticated lease window; only the test-local path has no window.
+    pub(super) fn lease_window(&self) -> Option<RangeFetchLeaseWindow> {
+        self.lease_window
     }
     #[cfg(test)]
     pub(super) fn has_permit(&self) -> bool {
@@ -123,8 +163,8 @@ fn capture_terminal(
     material: Option<DecodedAdmissionMaterial<'_>>,
 ) -> Result<
     Option<(
-        Arc<StreamTokenAdmissionCaptureV1>,
         StreamTokenGatewayAdmissionRecordV1,
+        Option<ExternalStreamTokenLeaseV1>,
     )>,
     Response,
 > {
@@ -153,10 +193,27 @@ fn capture_terminal(
         status,
         quota,
     };
+    let ticket = if status == StreamTokenValidationStatusV1::Accepted {
+        let cleanup = state.stream_token_cleanup.as_ref().ok_or_else(|| {
+            external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+        })?;
+        Some(cleanup.try_reserve().map_err(|_| {
+            external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::Unavailable)
+        })?)
+    } else {
+        None
+    };
     let record = capture
         .admit(&request)
         .map_err(external_admission_unavailable)?;
-    Ok(Some((capture, record)))
+    // Capture can commit then fail callback/acknowledgement without returning a record. That
+    // path retains its durable reconciliation/expiry semantics; no release is fabricated here.
+    let lease = if record.outcome.status == StreamTokenValidationStatusV1::Accepted {
+        ticket.map(|ticket| ticket.arm(capture, record))
+    } else {
+        None // The unused ticket is released for every external quota terminal.
+    };
+    Ok(Some((record, lease)))
 }
 fn capture_then_reject(
     state: &SharedAppState,
@@ -247,8 +304,24 @@ fn context_error_response(error: StreamTokenRequestContextErrorV1) -> Response {
         )
     }
 }
+pub(super) async fn enforce_stream_token_for_request(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    manifest: &StoredManifest,
+    request_nonce: &str,
+    route: StreamTokenRequestRouteV1,
+) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
+    let worker_state = Arc::clone(state);
+    let headers = headers.clone();
+    let manifest = manifest.clone();
+    let request_nonce = request_nonce.to_owned();
+    sorafs_heavy_blocking_task(state, "SoraFS stream-token admission", move || {
+        enforce_stream_token_in_worker(&worker_state, &headers, &manifest, &request_nonce, route)
+    })
+    .await
+}
 #[allow(clippy::result_large_err)]
-pub(super) fn enforce_stream_token_for_request(
+fn enforce_stream_token_in_worker(
     state: &SharedAppState,
     headers: &HeaderMap,
     manifest: &StoredManifest,
@@ -280,6 +353,7 @@ pub(super) fn enforce_stream_token_for_request(
                     "stream token provider identity is not configured",
                 )
             })?;
+    let monotonic_anchor = std::time::Instant::now();
     let validated_at_unix_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -503,7 +577,38 @@ pub(super) fn enforce_stream_token_for_request(
             json_error(StatusCode::FORBIDDEN, "stream token provider mismatch"),
         );
     }
-    if let Some((capture, record)) = capture_terminal(
+    if now >= token.body.ttl_epoch {
+        return capture_then_reject(
+            state,
+            &context,
+            validated_at_unix_ms,
+            StreamTokenValidationStatusV1::ProviderViolation(StreamTokenViolationKindV1::Expired),
+            material,
+            json_error(StatusCode::UNAUTHORIZED, "stream token has expired"),
+        );
+    }
+    // Each new admission has its own challenged current-custody observation. The driver resamples
+    // trusted time after observer I/O and local finality, including token issue/expiry checks.
+    let validated_at_unix_ms = match issuer.before_admission(&token.body) {
+        Ok(validated_at) => validated_at,
+        Err(error) => {
+            error!(
+                ?error,
+                "stream token signer authority failed closed before admission"
+            );
+            return capture_then_reject(
+                state,
+                &context,
+                validated_at_unix_ms,
+                StreamTokenValidationStatusV1::Excluded(
+                    StreamTokenExcludedKindV1::SignerAuthorityUnavailable,
+                ),
+                material,
+                external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::Unavailable),
+            );
+        }
+    };
+    if let Some((record, lease)) = capture_terminal(
         state,
         &context,
         validated_at_unix_ms,
@@ -513,13 +618,24 @@ pub(super) fn enforce_stream_token_for_request(
         if let Some(response) = response_for_external_terminal(&telemetry, record) {
             return Err(response);
         }
+        let lease = lease.ok_or_else(|| {
+            external_admission_unavailable(StreamTokenGatewayAdmissionErrorV1::SubstitutedOutcome)
+        })?;
+        // Lease ownership is already armed: every checked-window failure queues release.
+        let window = RangeFetchLeaseWindow::from_record(&record, monotonic_anchor)?;
         return Ok((
-            RangeFetchConcurrencyGuard::external(telemetry, capture, record),
+            RangeFetchConcurrencyGuard::external(telemetry, lease, window),
             token.body,
         ));
     }
     #[cfg(test)]
-    return enforce_test_local_admission(state, telemetry, token, route, now);
+    return enforce_test_local_admission(
+        state,
+        telemetry,
+        token,
+        route,
+        validated_at_unix_ms / 1_000,
+    );
     #[cfg(not(test))]
     Err(external_admission_unavailable(
         StreamTokenGatewayAdmissionErrorV1::Unavailable,
@@ -614,3 +730,7 @@ fn enforce_test_local_admission(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stream_token_lease_window_tests.rs"]
+mod lease_window_tests;

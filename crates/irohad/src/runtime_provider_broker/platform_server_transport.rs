@@ -1139,18 +1139,24 @@ fn connect_broker_connection(
     io_timeout: Option<Duration>,
     decode_pool: &Arc<DecodeResourcePoolV1>,
 ) -> Result<(BrokerConnection, Vec<ProviderObservationWireV1>), BrokerError> {
-    let mut stream = connect_verified(policy)?;
-    if let Some(io_timeout) = io_timeout {
-        if io_timeout.is_zero() {
-            return Err(BrokerError::Unavailable);
-        }
-        stream
-            .set_read_timeout(Some(io_timeout))
-            .map_err(|_| BrokerError::Unavailable)?;
-        stream
-            .set_write_timeout(Some(io_timeout))
-            .map_err(|_| BrokerError::Unavailable)?;
-    }
+    connect_broker_connection_before(
+        policy,
+        chain_id,
+        network_id,
+        requested_catalog,
+        BrokerDeadlineV1::new(io_timeout.unwrap_or(BROKER_IO_TIMEOUT_V1))?,
+        decode_pool,
+    )
+}
+fn connect_broker_connection_before(
+    policy: &EndpointPolicy,
+    chain_id: &str,
+    network_id: NetworkId,
+    requested_catalog: Vec<ProviderBindingWireV1>,
+    deadline: BrokerDeadlineV1,
+    decode_pool: &Arc<DecodeResourcePoolV1>,
+) -> Result<(BrokerConnection, Vec<ProviderObservationWireV1>), BrokerError> {
+    let mut stream = connect_verified_before(policy, deadline)?;
     let mut client_nonce = [0_u8; 32];
     rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut client_nonce)
         .map_err(|_| BrokerError::Unavailable)?;
@@ -1163,8 +1169,15 @@ fn connect_broker_connection(
         &request,
         MAX_HANDSHAKE_FRAME_BYTES_V1,
     )?;
-    write_length_prefixed(&mut stream, &request_frame, MAX_HANDSHAKE_FRAME_BYTES_V1)?;
-    let response_frame = read_length_prefixed(&mut stream, MAX_HANDSHAKE_FRAME_BYTES_V1)?;
+    write_length_prefixed(
+        &mut DeadlineUnixStreamV1::new(&mut stream, deadline),
+        &request_frame,
+        MAX_HANDSHAKE_FRAME_BYTES_V1,
+    )?;
+    let response_frame = read_length_prefixed(
+        &mut DeadlineUnixStreamV1::new(&mut stream, deadline),
+        MAX_HANDSHAKE_FRAME_BYTES_V1,
+    )?;
     let response = decode_frame_with_policy_from::<HandshakeResponseV1>(
         &response_frame,
         FRAME_KIND_HANDSHAKE_RESPONSE_V1,
@@ -1173,6 +1186,7 @@ fn connect_broker_connection(
         Arc::clone(decode_pool),
     )?;
     validate_handshake_response(&request, &response)?;
+    deadline.remaining()?;
     Ok((
         BrokerConnection {
             stream,
@@ -1192,12 +1206,29 @@ impl BrokerSession {
         requested_catalog: Vec<ProviderBindingWireV1>,
         decode_pool: Arc<DecodeResourcePoolV1>,
     ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
-        let (connection, observations) = connect_broker_connection(
+        Self::connect_before(
+            policy,
+            chain_id,
+            network_id,
+            requested_catalog,
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?,
+            decode_pool,
+        )
+    }
+    fn connect_before(
+        policy: &EndpointPolicy,
+        chain_id: &str,
+        network_id: NetworkId,
+        requested_catalog: Vec<ProviderBindingWireV1>,
+        deadline: BrokerDeadlineV1,
+        decode_pool: Arc<DecodeResourcePoolV1>,
+    ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
+        let (connection, observations) = connect_broker_connection_before(
             policy,
             chain_id,
             network_id,
             requested_catalog.clone(),
-            None,
+            deadline,
             &decode_pool,
         )?;
         Ok((
@@ -1248,13 +1279,13 @@ impl BrokerSession {
         &self,
         scope: Option<BrokerPendingOperation>,
     ) -> Result<(), BrokerError> {
-        self.reconnect_using(scope, || {
-            connect_broker_connection(
+        self.reconnect_using(scope, |deadline| {
+            connect_broker_connection_before(
                 &self.endpoint,
                 &self.chain_id,
                 self.network_id,
                 self.requested_catalog.clone(),
-                None,
+                deadline,
                 &self.decode_pool,
             )
             .map(|(connection, _)| connection)
@@ -1263,14 +1294,12 @@ impl BrokerSession {
     fn reconnect_using(
         &self,
         scope: Option<BrokerPendingOperation>,
-        connect: impl FnOnce() -> Result<BrokerConnection, BrokerError>,
+        connect: impl FnOnce(BrokerDeadlineV1) -> Result<BrokerConnection, BrokerError>,
     ) -> Result<(), BrokerError> {
         // Keep the exchange mutex through authentication. A delayed reconnect
         // cannot replace a newer connection or discard its request/poison state.
-        let mut current = self
-            .connection
-            .lock()
-            .map_err(|_| BrokerError::Unavailable)?;
+        let deadline = BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?;
+        let mut current = deadline.lock(&self.connection)?;
         let pending = match current.poison_reason {
             None => return Ok(()),
             Some(BrokerConnectionFailure::Unavailable) => None,
@@ -1286,8 +1315,9 @@ impl BrokerSession {
             }
             Some(failure) => return Err(failure.reason()),
         };
-        match connect() {
+        match connect(deadline) {
             Ok(mut connection) => {
+                deadline.remaining()?;
                 // Authentication restores transport, not knowledge of a write's
                 // outcome. Only a verified readback may release this gate.
                 connection.poison_reason = pending.map(BrokerConnectionFailure::AwaitingReadback);
@@ -1315,10 +1345,8 @@ impl BrokerSession {
                 OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1,
             )
             .ok_or(BrokerError::BindingMismatch)?;
-        let mut current = self
-            .connection
-            .lock()
-            .map_err(|_| BrokerError::Unavailable)?;
+        let deadline = BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?;
+        let mut current = deadline.lock(&self.connection)?;
         match current.poison_reason {
             None if current.session_id == response_session_id => Ok(()),
             None => Err(BrokerError::Unavailable),
@@ -1429,10 +1457,25 @@ impl BrokerSession {
         self.exchange(binding, metadata_digest, operation, payload, mutating)
             .map(|(result, _)| result)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one request owns its full authenticated exchange"
-    )]
+    fn call_before(
+        &self,
+        binding: &ProviderBindingWireV1,
+        metadata_digest: [u8; 32],
+        operation: u16,
+        payload: ScrubbedBytes,
+        mutating: bool,
+        deadline: BrokerDeadlineV1,
+    ) -> Result<ScrubbedBytes, BrokerError> {
+        self.exchange_before(
+            binding,
+            metadata_digest,
+            operation,
+            payload,
+            mutating,
+            deadline,
+        )
+        .map(|(result, _)| result)
+    }
     fn exchange(
         &self,
         binding: &ProviderBindingWireV1,
@@ -1441,11 +1484,31 @@ impl BrokerSession {
         payload: ScrubbedBytes,
         mutating: bool,
     ) -> Result<(ScrubbedBytes, [u8; 32]), BrokerError> {
+        self.exchange_before(
+            binding,
+            metadata_digest,
+            operation,
+            payload,
+            mutating,
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?,
+        )
+    }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one request owns its full authenticated exchange"
+    )]
+    fn exchange_before(
+        &self,
+        binding: &ProviderBindingWireV1,
+        metadata_digest: [u8; 32],
+        operation: u16,
+        payload: ScrubbedBytes,
+        mutating: bool,
+        deadline: BrokerDeadlineV1,
+    ) -> Result<(ScrubbedBytes, [u8; 32]), BrokerError> {
+        deadline.remaining()?;
         let frame_limit = operation_frame_limit(operation);
-        let mut connection = self
-            .connection
-            .lock()
-            .map_err(|_| BrokerError::Unavailable)?;
+        let mut connection = deadline.lock(&self.connection)?;
         let request_scope = self.operation_scope(binding, metadata_digest, operation);
         if let Some(failure) = connection.poison_reason {
             failure.check_call(request_scope, mutating)?;
@@ -1489,12 +1552,15 @@ impl BrokerSession {
             payload,
         )?;
         let request_frame = encode_frame(FRAME_KIND_OPERATION_REQUEST_V1, &request, frame_limit)?;
+        deadline.remaining()?;
         // Retire the identifier before the first write so a partially
         // dispatched request can never be replayed with the same id.
         connection.next_request_id = next_request_id;
-        if let Err(cause) =
-            write_operation_request_frame(&mut connection.stream, &request, &request_frame)
-        {
+        if let Err(cause) = write_operation_request_frame(
+            &mut DeadlineUnixStreamV1::new(&mut connection.stream, deadline),
+            &request,
+            &request_frame,
+        ) {
             let error = if mutating {
                 BrokerError::Ambiguous
             } else {
@@ -1509,7 +1575,7 @@ impl BrokerSession {
         }
         drop(request_frame);
         let response_frame = match read_length_prefixed_with_decode_admission(
-            &mut connection.stream,
+            &mut DeadlineUnixStreamV1::new(&mut connection.stream, deadline),
             frame_limit,
             &decode_admission,
         ) {
@@ -1552,6 +1618,15 @@ impl BrokerSession {
                 error
             };
             connection.poison_reason = Some(BrokerConnectionFailure::Permanent(error));
+            return Err(error);
+        }
+        if deadline.remaining().is_err() {
+            let error = if mutating {
+                BrokerError::Ambiguous
+            } else {
+                BrokerError::Unavailable
+            };
+            connection.poison_reason = Some(transport_failure);
             return Err(error);
         }
         match response.status {
@@ -1735,7 +1810,7 @@ mod scoped_readback_recovery_tests {
             }),
         ] {
             assert_eq!(
-                session.reconnect_using(attempted, || panic!("must not handshake")),
+                session.reconnect_using(attempted, |_| panic!("must not handshake")),
                 Err(BrokerError::Ambiguous)
             );
         }
@@ -1750,7 +1825,7 @@ mod scoped_readback_recovery_tests {
         session.connection.lock().unwrap().poison_reason =
             Some(BrokerConnectionFailure::Ambiguous(other_operation));
         assert_eq!(
-            session.reconnect_using(Some(other_operation), || panic!("not recoverable")),
+            session.reconnect_using(Some(other_operation), |_| panic!("not recoverable")),
             Err(BrokerError::Ambiguous)
         );
     }
@@ -1762,14 +1837,14 @@ mod scoped_readback_recovery_tests {
         session.connection.lock().unwrap().poison_reason =
             Some(BrokerConnectionFailure::Ambiguous(pending));
         assert_eq!(
-            session.reconnect_using(Some(pending), || Ok(connection(2, None))),
+            session.reconnect_using(Some(pending), |_| Ok(connection(2, None))),
             Ok(())
         );
         let gate = BrokerConnectionFailure::AwaitingReadback(pending);
         assert_eq!(failure(&session), Some(gate));
         assert_eq!(session.reconnect(), Err(BrokerError::Ambiguous));
         assert_eq!(
-            session.reconnect_using(Some(pending), || panic!("already authenticated")),
+            session.reconnect_using(Some(pending), |_| panic!("already authenticated")),
             Ok(())
         );
         for operation in [
@@ -1832,6 +1907,36 @@ mod scoped_readback_recovery_tests {
     }
 
     #[test]
+    fn readback_deadline_preserves_the_pending_mutation_and_releases_decode_admission() {
+        let session = session();
+        let pending = pending(&session);
+        let (stream, _peer) = UnixStream::pair().expect("local deadline exchange");
+        {
+            let mut current = session.connection.lock().unwrap();
+            current.stream = stream;
+            current.poison_reason = Some(BrokerConnectionFailure::AwaitingReadback(pending));
+        }
+        let payload = encode_sensitive_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
+            .expect("qualification payload");
+        let result = session.exchange_before(
+            &binding(),
+            pending.metadata_digest,
+            OPERATION_QUALIFY_V1,
+            payload,
+            false,
+            BrokerDeadlineV1::new(Duration::from_millis(100)).unwrap(),
+        );
+        assert!(matches!(result, Err(BrokerError::Unavailable)));
+        assert_eq!(
+            failure(&session),
+            Some(BrokerConnectionFailure::Ambiguous(pending))
+        );
+        assert_eq!(session.connection.lock().unwrap().next_request_id, 2);
+        assert_eq!(session.decode_pool.used_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(session.reconnect(), Err(BrokerError::Ambiguous));
+    }
+
+    #[test]
     fn repeated_mutation_calls_remain_sticky_scrubbed_and_never_write() {
         let session = session();
         let pending = pending(&session);
@@ -1881,7 +1986,7 @@ mod scoped_readback_recovery_tests {
             Err(BrokerError::Ambiguous)
         );
         assert_eq!(
-            session.reconnect_using(Some(pending), || Ok(connection(3, None))),
+            session.reconnect_using(Some(pending), |_| Ok(connection(3, None))),
             Ok(())
         );
         assert_eq!(
@@ -1924,7 +2029,7 @@ mod scoped_readback_recovery_tests {
             session.connection.lock().unwrap().poison_reason =
                 Some(BrokerConnectionFailure::Ambiguous(pending));
             assert_eq!(
-                session.reconnect_using(Some(pending), || Err(BrokerError::Unavailable)),
+                session.reconnect_using(Some(pending), |_| Err(BrokerError::Unavailable)),
                 Err(BrokerError::Unavailable)
             );
             assert_eq!(
@@ -1932,7 +2037,7 @@ mod scoped_readback_recovery_tests {
                 Some(BrokerConnectionFailure::Ambiguous(pending))
             );
             assert_eq!(
-                session.reconnect_using(Some(pending), || Err(error)),
+                session.reconnect_using(Some(pending), |_| Err(error)),
                 Err(error)
             );
             assert_eq!(
@@ -1941,7 +2046,7 @@ mod scoped_readback_recovery_tests {
             );
             session.poison_with_reason(BrokerError::Unavailable);
             assert_eq!(
-                session.reconnect_using(Some(pending), || panic!("permanent fault")),
+                session.reconnect_using(Some(pending), |_| panic!("permanent fault")),
                 Err(error)
             );
             assert_eq!(session.reconnect(), Err(error));
@@ -1972,7 +2077,7 @@ mod scoped_readback_recovery_tests {
         session.connection.lock().unwrap().poison_reason =
             Some(BrokerConnectionFailure::Permanent(BrokerError::Ambiguous));
         assert_eq!(
-            session.reconnect_using(Some(pending), || panic!(
+            session.reconnect_using(Some(pending), |_| panic!(
                 "bad mutation response is permanent"
             )),
             Err(BrokerError::Ambiguous)
@@ -1991,7 +2096,7 @@ mod scoped_readback_recovery_tests {
             let session = Arc::clone(&session);
             let calls = Arc::clone(&calls);
             std::thread::spawn(move || {
-                session.reconnect_using(None, || {
+                session.reconnect_using(None, |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
                     entered_tx.send(()).unwrap();
                     release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -2006,7 +2111,7 @@ mod scoped_readback_recovery_tests {
             let session = Arc::clone(&session);
             let calls = Arc::clone(&calls);
             std::thread::spawn(move || {
-                session.reconnect_using(None, || {
+                session.reconnect_using(None, |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
                     Ok(connection(3, None))
                 })
@@ -2017,7 +2122,7 @@ mod scoped_readback_recovery_tests {
         assert_eq!(second.join().unwrap(), Ok(()));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(
-            session.reconnect_using(None, || panic!("healthy reconnect")),
+            session.reconnect_using(None, |_| panic!("healthy reconnect")),
             Ok(())
         );
         let current = session.connection.lock().unwrap();
@@ -2035,7 +2140,7 @@ mod scoped_readback_recovery_tests {
         let reconnect = {
             let session = Arc::clone(&session);
             std::thread::spawn(move || {
-                session.reconnect_using(None, || {
+                session.reconnect_using(None, |_| {
                     entered_tx.send(()).unwrap();
                     release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
                     Ok(connection(2, None))
@@ -2057,7 +2162,7 @@ mod scoped_readback_recovery_tests {
             ))
         );
         assert_eq!(
-            session.reconnect_using(None, || panic!("revocation must survive")),
+            session.reconnect_using(None, |_| panic!("revocation must survive")),
             Err(BrokerError::StaleOrRevoked)
         );
     }
@@ -2259,7 +2364,7 @@ mod scoped_readback_recovery_tests {
         );
         assert_eq!(session.reconnect(), Err(BrokerError::Ambiguous));
         assert_eq!(
-            session.reconnect_using(Some(pending), || Ok(connection(2, None))),
+            session.reconnect_using(Some(pending), |_| Ok(connection(2, None))),
             Ok(())
         );
         assert_eq!(

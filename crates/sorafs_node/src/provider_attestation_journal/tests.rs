@@ -2718,3 +2718,56 @@ async fn signer_validation_rechecks_eligibility_after_approval() {
         0
     );
 }
+
+#[test]
+fn journal_checkpoint_frames_recover_intents_and_reject_an_entry_as_the_root() {
+    use crate::schema_identity_test_support::{assert_canonical_frame, assert_identity};
+    assert_identity::<ApprovalIdPreimageV1>(
+        "sorafs_node::provider_attestation_journal::ApprovalIdPreimageV1",
+    );
+    assert_identity::<InventoryHandoffIdPreimageV1>(
+        "sorafs_node::provider_attestation_journal::InventoryHandoffIdPreimageV1",
+    );
+    assert_identity::<JournalPolicyDigestMaterialV1>(
+        "sorafs_node::provider_attestation_journal::JournalPolicyDigestMaterialV1",
+    );
+    let fixture = fixture(0x51, 0x52);
+    let checkpoint = awaiting_checkpoint(&fixture);
+    let bytes = assert_canonical_frame(
+        &checkpoint,
+        "sorafs_node::provider_attestation_journal::StoredJournalCheckpointV1",
+    );
+    assert_eq!(
+        encode_checkpoint(&checkpoint, test_policy()).unwrap(),
+        bytes
+    );
+    let entry_bytes = assert_canonical_frame(
+        &checkpoint.entries[0],
+        "sorafs_node::provider_attestation_journal::StoredJournalEntryV1",
+    );
+    assert_canonical_frame(
+        &checkpoint.entries[0].intent,
+        "sorafs_node::provider_attestation_journal::StoredApprovalIntentV1",
+    );
+    let snapshot =
+        MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(bytes).unwrap();
+    assert_eq!(
+        decode_checkpoint(&snapshot, test_policy()).unwrap(),
+        checkpoint
+    );
+    assert_eq!(
+        checkpoint.entries[0].intent.approval_id,
+        musubi_provider_attestation_approval_id_v1(&fixture.request).unwrap()
+    );
+    assert!(matches!(
+        norito::decode_canonical::<StoredJournalCheckpointV1>(&entry_bytes),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    let foreign =
+        MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(entry_bytes)
+            .unwrap();
+    assert_eq!(
+        decode_checkpoint(&foreign, test_policy()),
+        Err(MusubiProviderAttestationJournalErrorV1::CorruptCheckpoint)
+    );
+}

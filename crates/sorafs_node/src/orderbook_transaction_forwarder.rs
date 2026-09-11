@@ -2814,4 +2814,62 @@ mod tests {
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
     }
+    #[test]
+    fn persisted_checkpoint_and_operation_frames_use_distinct_declared_identities() {
+        let context = context(&key(1), &key(2), 7, cursor(10, 0xA1));
+        let operation = match_operation(&context);
+        let directory = TempDir::new().unwrap();
+        let forwarder = OrderbookTransactionForwarder::open(directory.path(), policy()).unwrap();
+        let id = forwarder
+            .enqueue_unsigned_operation(operation.clone(), &context)
+            .unwrap()
+            .operation_id();
+        let bytes = fs::read(
+            directory
+                .path()
+                .join(ORDERBOOK_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1),
+        )
+        .unwrap();
+        let checkpoint =
+            decode_checkpoint(&bytes, policy()).expect("persisted canonical checkpoint");
+        assert_eq!(checkpoint.pending.len(), 1);
+        assert_eq!(checkpoint.pending[0].operation, operation);
+        assert_eq!(norito::to_bytes(&checkpoint).unwrap(), bytes);
+        let operation_bytes = norito::to_bytes(&operation).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<OrderbookOperationV1>(&operation_bytes).unwrap(),
+            operation
+        );
+        for (frame, identity) in [
+            (
+                bytes.as_slice(),
+                "sorafs_node::orderbook_transaction_forwarder::OrderbookTransactionForwarderCheckpointV1",
+            ),
+            (
+                operation_bytes.as_slice(),
+                "sorafs_node::orderbook_transaction_forwarder::OrderbookOperationV1",
+            ),
+        ] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        assert!(matches!(
+            norito::decode_from_bytes::<OrderbookTransactionForwarderCheckpointV1>(
+                &operation_bytes
+            ),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            decode_checkpoint(&operation_bytes, policy()),
+            Err(OrderbookTransactionForwarderError::InvalidCheckpoint)
+        ));
+        drop(forwarder);
+        let reopened = OrderbookTransactionForwarder::open(directory.path(), policy()).unwrap();
+        assert_eq!(
+            reopened.operation_for_reconciliation(id).unwrap().operation,
+            operation
+        );
+    }
 }

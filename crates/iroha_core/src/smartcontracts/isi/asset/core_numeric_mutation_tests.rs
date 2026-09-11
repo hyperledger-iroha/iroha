@@ -783,7 +783,7 @@ fn find_assets_filters_by_exact_id_with_extra_predicate() {
             __asset_definition_id.clone(),
             "rose".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         )
     }
     .build(&ALICE_ID);
@@ -840,7 +840,7 @@ fn find_assets_filters_by_account_and_domain_predicate() {
             __asset_definition_id.clone(),
             "rose".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(primary_domain_id.clone()),
         )
     }
     .build(&ALICE_ID);
@@ -850,7 +850,7 @@ fn find_assets_filters_by_account_and_domain_predicate() {
             __asset_definition_id.clone(),
             "lily".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(secondary_domain_id.clone()),
         )
     }
     .build(&ALICE_ID);
@@ -1021,7 +1021,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
 #[test]
 fn asset_transfer_controls_require_asset_owner_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let alice_alias = AccountAlias::new(
@@ -1520,7 +1520,12 @@ fn transfer_rejects_when_account_is_blacklisted_for_asset() {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("blacklisted outbound transfer must be rejected");
     assert!(
-        err.to_string().contains("blacklisted"),
+        matches!(
+            err,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::Blacklisted(_)
+            )
+        ),
         "unexpected error: {err}"
     );
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
@@ -2337,7 +2342,7 @@ fn find_assets_filters_by_domain_predicate() {
                 __asset_definition_id.clone(),
                 "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(wonderland_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2347,7 +2352,7 @@ fn find_assets_filters_by_domain_predicate() {
                 __asset_definition_id.clone(),
                 "spice".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(oasis_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2427,7 +2432,7 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
                 __asset_definition_id.clone(),
                 "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(wonderland_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2437,7 +2442,7 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
                 __asset_definition_id.clone(),
                 "spice".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(oasis_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2461,8 +2466,9 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-    let predicate =
-        CompoundPredicate::<Asset>::build(|p| p.equals("definition.domain", "wonderland"));
+    let predicate = CompoundPredicate::<Asset>::build(|p| {
+        p.equals("definition.domain", wonderland_id.to_string())
+    });
     let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
         .expect("query execution succeeds")
         .collect();

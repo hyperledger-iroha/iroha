@@ -1386,4 +1386,5 @@ mod tests {
             EvidenceViewerTransparencyProducerErrorV1::PublisherUnavailable
         );
     }
+    include!("transparency_producer_schema_identity_tests.rs");
 }

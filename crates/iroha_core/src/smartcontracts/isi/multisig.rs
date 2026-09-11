@@ -6557,7 +6557,7 @@ seiyaku TriggerDispatch {
               }}
 
               kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
-                require(run_impl(ev).is_some(), StagedMintError::MissingOrInvalidField);
+                require(run_impl(ev: ev).is_some(), StagedMintError::MissingOrInvalidField);
               }}
             }}
             "#,
@@ -6595,7 +6595,7 @@ seiyaku TriggerDispatch {
             .execute(&multisig_id, &mut tx)
             .expect("register event-argument-aware staged mint trigger");
         let args_json = format!(
-            r#"{{"ev":{{"action":"create","amount":"111","asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","created_at_ms":1779225455574,"expires_at_ms":1779311855574,"request_id":"mrtest","requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d","to_account_id":"{multisig_id}"}}}}"#,
+            r#"{{"ev":{{"action":"create","amount":"111","asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","created_at_ms":"1779225455574","expires_at_ms":"1779311855574","request_id":"mrtest","requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d","to_account_id":"{multisig_id}"}}}}"#,
             multisig_id = multisig_id,
         );
         let instructions = vec![InstructionBox::from(

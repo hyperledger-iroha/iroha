@@ -427,7 +427,7 @@ fn der_reduced_deep_coefficient_accumulator_matches_pointwise_oracle_and_rejects
     assert_eq!(bounded, before);
 }
 #[test]
-#[ignore = "native log19/log22/log25 retained-coefficient proof, FRI, and RSS gate"]
+#[ignore = "native log19/log22/log22 retained-coefficient proof, FRI, and RSS gate"]
 fn native_log19_der_proof_roundtrips_and_rejects_cross_layer_mutations() {
     let _guard = proof_guard();
     DER_FIXED_OPENING_EVALUATIONS_V1.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -704,7 +704,7 @@ fn sha_batch_registration_is_exact_and_every_range_mutation_fails_closed() {
     let layout = sha_word_aggregate_layout();
     layout.validate().expect("canonical SHA-word registration");
     assert!(layout.validate_full_profile_registration().is_err());
-    assert_eq!(layout.common_lde_log2, 25);
+    assert_eq!(layout.common_lde_log2, 22);
     assert_eq!(layout.trace_groups.len(), 1);
     assert_eq!(layout.trace_groups[0].native_trace_log2, 19);
     assert_eq!(
@@ -780,7 +780,7 @@ fn sha_batch_registration_is_exact_and_every_range_mutation_fails_closed() {
     changed.registered_segments[0].segment.lde_log2 -= 1;
     mutations.push(changed);
     changed = layout.clone();
-    changed.registered_segments[0].segment.lde_log2 = 22;
+    changed.registered_segments[0].segment.lde_log2 += 1;
     mutations.push(changed);
     changed = layout.clone();
     changed.registered_segments[0].segment.base_width -= 1;
@@ -822,7 +822,7 @@ fn sha_batch_registration_is_exact_and_every_range_mutation_fails_closed() {
     changed.common_lde_log2 -= 1;
     mutations.push(changed);
     changed = layout.clone();
-    changed.common_lde_log2 = 22;
+    changed.common_lde_log2 += 1;
     mutations.push(changed);
     for (index, mutation) in mutations.iter().enumerate() {
         assert!(

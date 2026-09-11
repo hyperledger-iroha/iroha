@@ -91,7 +91,7 @@ fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
     }
 }
 #[test]
-fn halo2_ipa_profile_labels_use_family_curve_segment() {
+fn halo2_ipa_profile_labels_require_the_canonical_backend() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
@@ -123,7 +123,7 @@ fn halo2_ipa_profile_labels_use_family_curve_segment() {
             Some(vk_commitment),
             true,
         ),
-        PreverifyResult::Accepted,
-        "Halo2 IPA profile labels must be checked as IPA/Pasta labels before metadata preverify"
+        PreverifyResult::UnsupportedBackend,
+        "circuit identity must not be embedded in the canonical backend tag"
     );
 }

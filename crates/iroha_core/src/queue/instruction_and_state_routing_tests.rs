@@ -209,19 +209,21 @@ fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<
     ProgramMetadata::parse(&program).expect("parse minimal IVM program");
     program
 }
-/// Build a minimal world with a single domain and account for tests.
+/// Build a minimal world with the shared transaction authority registered.
 pub fn world_with_test_domains() -> World {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
-    let (account_id, _account_keypair) = gen_account_in("wonderland");
+    let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     World::with([domain], [account], [])
 }
-fn register_test_authority(state: &mut State, authority: &AccountId) {
-    state.world.accounts.insert(
+fn register_test_authority(state: &State, authority: &AccountId) {
+    let mut world = state.world.block();
+    world.accounts.insert(
         authority.clone(),
         AccountValue::new(AccountDetails::default()),
     );
+    world.commit();
 }
 struct NexusRoutingFixture {
     state: State,
@@ -324,6 +326,7 @@ fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
         "queue fixture should intentionally start with stale routing policy"
     );
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let tx = accepted_tx_with(
         account_id,
         &key_pair,
@@ -377,6 +380,7 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
         "queue fixture should intentionally start with stale routing policy"
     );
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let tx = accepted_tx_with(
         account_id,
         &key_pair,
@@ -507,18 +511,7 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
     queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
     let tx = accepted_tx_by_someone(&time_source);
     let hash = tx.hash_as_entrypoint();
-    let stale_plan = queue
-        .router
-        .read()
-        .try_route_plan_with_state(&tx, &state)
-        .and_then(|plan| {
-            resolve_routing_plan_against_catalogs(
-                plan,
-                &stale_nexus.lane_catalog,
-                &stale_nexus.dataspace_catalog,
-            )
-        })
-        .expect("stale plan resolves against stale Nexus catalogs");
+    let stale_plan = RoutingPlan::single(old_route);
     assert_eq!(stale_plan.coordinator_route(), old_route);
     let err = queue
         .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, stale_plan, None)

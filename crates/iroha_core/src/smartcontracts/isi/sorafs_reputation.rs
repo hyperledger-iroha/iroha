@@ -2608,6 +2608,7 @@ impl ValidSingularQuery for FindSorafsReputationJournalEvents {
 }
 #[cfg(test)]
 mod tests {
+    include!("sorafs_reputation/schema_identity_tests.rs");
     use super::*;
     use crate::{
         kura::Kura,

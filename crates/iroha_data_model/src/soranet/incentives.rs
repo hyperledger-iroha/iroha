@@ -986,6 +986,33 @@ mod tests {
         assert!(!RelayComplianceStatusV1::Suspended.is_reward_eligible());
     }
     #[test]
+    fn relay_epoch_metrics_canonical_frame_declares_identity_and_roundtrips() {
+        let metrics = RelayEpochMetricsV1 {
+            relay_id: [0x53; 32],
+            epoch: 7,
+            uptime_seconds: 90,
+            scheduled_uptime_seconds: 100,
+            verified_bandwidth_bytes: 4_096,
+            compliance: RelayComplianceStatusV1::Warning,
+            reward_score: 91,
+            confidence_floor_per_mille: 950,
+            measurement_ids: vec![[0x42; 32]],
+            metadata: Metadata::default(),
+        };
+        let bytes = norito::encode_canonical(&metrics).expect("canonical metrics frame");
+        let header = norito::core::Header::read(bytes.as_slice()).expect("metrics header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name(
+                "iroha_data_model::soranet::incentives::RelayEpochMetricsV1"
+            )
+        );
+        let decoded: RelayEpochMetricsV1 =
+            norito::decode_canonical(&bytes).expect("decode canonical metrics");
+        assert_eq!(decoded, metrics);
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+    }
+    #[test]
     fn relay_epoch_metrics_frame_preserves_epoch_and_measurement_binding() {
         let mut metadata = Metadata::default();
         metadata.insert(

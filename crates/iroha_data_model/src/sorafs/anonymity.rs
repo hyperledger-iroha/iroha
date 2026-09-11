@@ -3,6 +3,10 @@
 //! Citizen bonds are deliberately not proof of personhood. They make parallel
 //! identities economically costly while keeping the bond serial and
 //! authorization material hidden behind commitments.
+//!
+//! These are offline record and snapshot schemas. They do not establish consensus
+//! custody or authorize asset movement; production bond registration, rotation,
+//! and exit require a qualified native lifecycle and are not exposed as instructions.
 
 use crate::asset::AssetDefinitionId;
 

@@ -42,7 +42,7 @@ impl ConcreteLifecycleWorkRegistry {
             && validate.durable_receipt.context_id().0.as_ref()
                 == identity.lifecycle_key().context().as_bytes()
             && identity.lifecycle_key().round().height() == identity.round().height
-            && identity.lifecycle_key().phase() == LifecyclePhase::Validate
+            && identity.lifecycle_key().phase().is_validate()
             && identity.lifecycle_stage().kind() == LifecycleStageKind::ValidateBody
             && identity.lifecycle_stage().predecessor_scope() == PredecessorScope::Independent
             && durable_validation_wait_source_from_exact_parts(

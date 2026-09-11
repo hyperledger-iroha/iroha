@@ -163,10 +163,10 @@ fn assert_source_counts(source: &str, expected: &[(&str, usize)]) {
     }
 }
 const SOURCE_CONTRACT_GROUPS_V1: &[u8] = include_bytes!("tests/source_contract_groups_v1.json");
-const SOURCE_CONTRACT_GROUPS_V1_LEN: usize = 40_117;
+const SOURCE_CONTRACT_GROUPS_V1_LEN: usize = 40_108;
 const SOURCE_CONTRACT_GROUPS_V1_SHA256: [u8; 32] = [
-    0x10, 0x2c, 0xa2, 0xe2, 0x07, 0xe0, 0x56, 0x0f, 0x7c, 0x67, 0x9a, 0x7a, 0x53, 0x45, 0xf8, 0x2a,
-    0x22, 0x04, 0xf7, 0x00, 0x79, 0xc0, 0x90, 0x86, 0xdd, 0x03, 0x6d, 0x97, 0x48, 0x99, 0x63, 0xd5,
+    0xab, 0x65, 0xde, 0x4c, 0xc1, 0x54, 0x09, 0xe2, 0x79, 0x2c, 0x43, 0x39, 0xb6, 0x55, 0xf5, 0x8b,
+    0xf7, 0xfa, 0x67, 0x45, 0x73, 0xe3, 0x3e, 0xf7, 0x39, 0xc1, 0x98, 0x36, 0xaa, 0x67, 0x87, 0x29,
 ];
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -256,19 +256,13 @@ fn assert_source_contract_group(id: &str, source: &str) {
             }
         }
         "order" => {
-            let positions = group
-                .needles
-                .iter()
-                .map(|needle| {
-                    source
-                        .find(needle)
-                        .unwrap_or_else(|| panic!("{id}: missing ordered source {needle}"))
-                })
-                .collect::<Vec<_>>();
-            assert!(
-                positions.windows(2).all(|pair| pair[0] < pair[1]),
-                "{id}: source order changed"
-            );
+            let mut cursor = 0;
+            for needle in &group.needles {
+                let offset = source[cursor..]
+                    .find(needle)
+                    .unwrap_or_else(|| panic!("{id}: missing ordered source {needle}"));
+                cursor += offset + needle.len();
+            }
         }
         "counts" => {
             for (needle, count) in group.needles.iter().zip(&group.counts) {

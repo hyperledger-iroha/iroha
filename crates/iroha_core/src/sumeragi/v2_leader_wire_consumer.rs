@@ -137,7 +137,7 @@ impl LeaderWireRecoveryAuthority {
             })
             .transpose()?;
         Ok(Self {
-            context_id: adapter.wire_context.id(),
+            context_id: adapter.frozen_wire_context_id(),
             height: adapter.wire_context.height,
             owner: adapter.fingerprints.node.into(),
             consumer_tag: tag,

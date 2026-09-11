@@ -438,3 +438,80 @@ fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    fn roundtrip<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let frame = norito::encode_canonical(value).expect("canonical fixture frame");
+        let header = norito::core::Header::read(frame.as_slice()).expect("typed frame header");
+        assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&frame).expect("same root canonical replay");
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        assert!(matches!(
+            norito::decode_canonical::<Vec<T>>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            EnrolledOpenAccountChallengeV1,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::enrolled_open::EnrolledOpenAccountChallengeV1",
+            "iroha.kagemusha.v1.enrolled-open-account-challenge"
+        );
+
+        use crate::kagemusha_core_coordinator_v1::startup_qualification::tests as fixture;
+        let qualification = fixture::qualification(1);
+        let enrollment = fixture::enrollment_binding(&qualification);
+        let challenge = EnrolledOpenAccountChallengeV1 {
+            version: 1,
+            domain: ACCOUNT_DOMAIN.to_owned(),
+            enrollment_id: enrollment.enrollment_id,
+            owner: enrollment.owner,
+            nonce: [71; 32],
+            authority_source: EnrolledOpenAuthoritySourceV1::InitialCertificate {
+                certificate_digest: [77; 32],
+            },
+            release_id: qualification.release_id,
+            hardware_policy_digest: qualification.hardware_policy_digest,
+            core_authorization_key_reference: qualification.core_authorization_key_reference,
+            lifetime_ms: LIFETIME_MS,
+        };
+        let frame = roundtrip(&challenge);
+        assert_eq!(
+            encode_bounded(&challenge, CHALLENGE_MAX_BYTES).unwrap(),
+            frame
+        );
+        let replay: EnrolledOpenAccountChallengeV1 = norito::decode_canonical(&frame).unwrap();
+        assert_eq!(HashOf::new(&challenge), HashOf::new(&replay));
+        let mut altered = replay;
+        altered.nonce[0] ^= 1;
+        assert_ne!(HashOf::new(&challenge), HashOf::new(&altered));
+    }
+}

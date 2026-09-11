@@ -15,7 +15,7 @@
 //! 7. derive mixes over every DEEP quotient;
 //! 8. commit each FRI layer before deriving its fold challenge;
 //! 9. grind the completed commitment transcript;
-//! 10. derive 58 unique query positions from the post-grinding transcript.
+//! 10. derive 136 unique query positions from the post-grinding transcript.
 //!
 //! Proof dimensions are reconstructed from the verifier statement. The wire contains no
 //! caller-selected parameter and the strict reader rejects every truncation and trailing suffix.
@@ -283,7 +283,7 @@ use thiserror::Error;
 /// Complete proof-system descriptor for the implemented aggregate adapters.
 ///
 /// The descriptor is transcript-bound and records the first-release geometry.
-pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log25:compact-ca-local-lde-log14:ordered-native-stride-trace-groups:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log7-13-chunks:sha256-vector-row-merkle:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-openings-canonical-sorted-unique-current-next-union-max116-after-grinding:x5b1-shared-challenge-pre-aux=all-six-main-base-roots-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-four-composition-chunks:ca-three-composition-chunks:fri-rate1over32:binary-fri:affine-batching-m3-arities2,2,2:58-uniform-distinct-queries-without-replacement:main-terminal1024-degree31:ca-terminal512-degree15:main-mask802-coefficients:ca-mask306-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=governance-gated";
+pub(crate) const ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-aggregate-stark-v1-incompatible:wire=outer-X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-ca:X5M1-claims-plus-length-delimited-aggregate-only-no-fixed-sidecar-no-legacy:exact-statement-derived-shape:goldilocks-fp4-w4=7:main-common-lde-log22:compact-ca-local-lde-log16:ordered-native-stride-trace-groups:verifier-owned-logical-adapter-registration:exact-column-ranges-widths-constraint-counts-and-degrees-transcript-bound:64-column-physical-budget-chunks:main-49-registrations-6-groups-logs5,8,15,16,18,19-80-chunks:compact-ca-dedicated-log13-13-chunks:goldilocks-poseidon-x7-six-lane-vector-row-merkle:sha-fixed-algebraic-width472-verifier-derived-no-proof-bytes:p256-fixed-algebraic-width404-verifier-derived-no-proof-bytes:fixed-openings-canonical-sorted-unique-current-next-union-max272-after-grinding:x5b1-shared-challenge-pre-aux=all-six-main-base-roots-then-ca-base-root+main-profile+ca-profile+main-public+ca-public+sample-exact272-goldilocks-post-base-challenges-in-11-family-order=sha-call28,rfc48,projection28,io20,der52,sha-word-memory16,sha-word-base-fold4,p256-value28,p256-cross16,p256-scalar20,p256-arithmetic-copy12+opaque-main-post-base-session:main-io=statement-compiled-40+5d-declarations-logical55922+4736d-active-rows-padded-to262144:rfc5280-output-role-products=18-independent-four-lane-aux-accumulators:all-aux-roots-and-X5M1-terminal-claims-before-fp4-constraint-alphas:one-fp4-composition-lane:main-six-composition-chunks:ca-four-composition-chunks:fri-rate9over64:binary-fri:affine-batching-m3-arities2,2,2:136-uniform-distinct-queries-without-replacement:main-terminal1024-degree143:ca-terminal1024-degree143:main-mask1816-coefficients:ca-mask696-coefficients:one-transcript-derived-deep-point-per-subproof-current+next-openings:grinding20:p256-four-independent-base-field-bus-lanes-per-family:all-roots-transcript-ordered:subproof-machinery-complete:X5M1-codec-and-accounting-complete:full-main-production-provider-verifier=complete:activation=unavailable-proof-cap";
 const PROOF_MAGIC_V1: [u8; 4] = *b"X5S1";
 const SECURITY_LANES: usize = ZK_X509_COMPOSITION_LANES_V1 as usize;
 const QUERY_COUNT: usize = ZK_X509_FRI_QUERY_COUNT_V1 as usize;
@@ -298,13 +298,13 @@ const COMPOSITION_DEGREE_CHUNKS: usize = ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1 as
 /// Inclusive degree of the trace mask multiplier.
 ///
 /// Haböck--Al Kindi Equation (3), with reduced AIR degree six, Fp4 extension degree four, one DEEP
-/// point, and 58 FRI queries, requires `h = 802` randomizer coefficients.
+/// point, and 136 FRI queries, requires `h = 1816` randomizer coefficients.
 const MASK_DEGREE: usize = ZK_X509_TRACE_MASK_DEGREE_V1 as usize;
-const _: () = assert!(MASK_DEGREE == 801);
+const _: () = assert!(MASK_DEGREE == 1_815);
 const DER_QUOTIENT_COSET_LOG2_V1: u8 = 22;
 const DER_QUOTIENT_COSET_SIZE_V1: usize = 1 << DER_QUOTIENT_COSET_LOG2_V1;
 const DER_MAXIMUM_QUOTIENT_DEGREE_V1: usize = ZK_X509_DER_STARK_MAXIMUM_QUOTIENT_DEGREE_V1;
-const _: () = assert!(DER_MAXIMUM_QUOTIENT_DEGREE_V1 == 3_151_335);
+const _: () = assert!(DER_MAXIMUM_QUOTIENT_DEGREE_V1 == 3_158_433);
 const _: () = assert!(
     DER_MAXIMUM_QUOTIENT_DEGREE_V1 < DER_QUOTIENT_COSET_SIZE_V1
         && DER_QUOTIENT_COSET_SIZE_V1 / ZK_X509_DER_STARK_TRACE_SIZE_V1 == 8
@@ -316,19 +316,16 @@ const IO_FIXED_WIDTH: usize = 17;
 const IO_CONSTRAINT_COUNT: usize = 91;
 const IO_CONSTRAINT_DEGREE: u8 = 4;
 const MIN_TRACE_LOG2: u8 = 4;
-/// Smallest byte-memory trace whose rate-1/64 FRI domain can carry both the
-/// release mask and all four exact quotient chunks.
-///
-/// At log nine the masked trace has degree 1313 while FRI accepts only degree
-/// 1023. Log ten raises the FRI input bound to 2047 and the four-chunk
-/// composition bound to 8191, covering masked degree 1825 and quotient degree 6276 respectively.
-const IO_MIN_SECURE_TRACE_LOG2_V1: u8 = 10;
-const _: () = assert!((1_usize << 9) + MASK_DEGREE > 1_023);
-const _: () = assert!((1_usize << IO_MIN_SECURE_TRACE_LOG2_V1) + MASK_DEGREE <= 2_047);
+/// Smallest byte-memory trace whose shared FRI domain carries the release mask.
+/// At log thirteen the 1/8 native-row masking margin is only 1,024 coefficients;
+/// log fourteen provides 2,048 and carries all six composition chunks.
+const IO_MIN_SECURE_TRACE_LOG2_V1: u8 = 14;
+const _: () = assert!((1_usize << 13) / 8 <= MASK_DEGREE);
+const _: () = assert!((1_usize << IO_MIN_SECURE_TRACE_LOG2_V1) / 8 > MASK_DEGREE);
 const _: () = assert!(
     IO_CONSTRAINT_DEGREE as usize * ((1_usize << IO_MIN_SECURE_TRACE_LOG2_V1) + MASK_DEGREE)
         - (1_usize << IO_MIN_SECURE_TRACE_LOG2_V1)
-        <= 8_191
+        < COMPOSITION_DEGREE_CHUNKS * (1_usize << IO_MIN_SECURE_TRACE_LOG2_V1) * 9 / 8
 );
 #[cfg(test)]
 const ACCUMULATOR_REGISTRATION_COUNT_V1: usize = 1;
@@ -379,10 +376,10 @@ const CA_BLOWUP_LOG2_V1: u8 = ZK_X509_CA_FRI_LDE_LOG2_V1 - ZK_X509_CA_ACCUMULATO
 const CA_TERMINAL_SIZE_V1: usize = 1 << ZK_X509_CA_FRI_TERMINAL_LOG2_V1;
 const CA_MASK_DEGREE_V1: usize = ZK_X509_CA_TRACE_MASK_DEGREE_V1 as usize;
 const CA_COMPOSITION_DEGREE_CHUNKS_V1: usize = ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1 as usize;
-const _: () = assert!(CA_BLOWUP_LOG2_V1 == 7);
-const _: () = assert!(CA_TERMINAL_SIZE_V1 == 512);
-const _: () = assert!(CA_MASK_DEGREE_V1 == 305);
-const _: () = assert!(CA_COMPOSITION_DEGREE_CHUNKS_V1 == 3);
+const _: () = assert!(CA_BLOWUP_LOG2_V1 == 3);
+const _: () = assert!(CA_TERMINAL_SIZE_V1 == 1024);
+const _: () = assert!(CA_MASK_DEGREE_V1 == 695);
+const _: () = assert!(CA_COMPOSITION_DEGREE_CHUNKS_V1 == 4);
 const CA_AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
         proof_magic: PROOF_MAGIC_V1,
@@ -1089,6 +1086,7 @@ struct SegmentLayoutV1 {
 #[derive(Clone, Copy)]
 struct SegmentDegreeCapacityProfileV1 {
     mask_degree: usize,
+    fixed_selector_degree_terms: usize,
     minimum_trace_log2: u8,
     maximum_trace_log2: u8,
     minimum_blowup_log2: u8,
@@ -1100,6 +1098,7 @@ struct SegmentDegreeCapacityProfileV1 {
 const MAIN_DEGREE_CAPACITY_PROFILE_V1: SegmentDegreeCapacityProfileV1 =
     SegmentDegreeCapacityProfileV1 {
         mask_degree: MASK_DEGREE,
+        fixed_selector_degree_terms: 0,
         minimum_trace_log2: MIN_TRACE_LOG2,
         maximum_trace_log2: ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
         minimum_blowup_log2: BLOWUP_LOG2,
@@ -1111,6 +1110,7 @@ const MAIN_DEGREE_CAPACITY_PROFILE_V1: SegmentDegreeCapacityProfileV1 =
 const CA_DEGREE_CAPACITY_PROFILE_V1: SegmentDegreeCapacityProfileV1 =
     SegmentDegreeCapacityProfileV1 {
         mask_degree: CA_MASK_DEGREE_V1,
+        fixed_selector_degree_terms: 2,
         minimum_trace_log2: ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
         maximum_trace_log2: ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1,
         minimum_blowup_log2: CA_BLOWUP_LOG2_V1,
@@ -1146,6 +1146,12 @@ fn checked_segment_degree_capacity_for_profile_v1(
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
     let maximum_quotient_degree = usize::from(constraint_degree)
         .checked_mul(maximum_masked_trace_degree)
+        .and_then(|degree| {
+            profile
+                .fixed_selector_degree_terms
+                .checked_mul(trace_size - 1)
+                .and_then(|selectors| degree.checked_add(selectors))
+        })
         .and_then(|degree| degree.checked_sub(trace_size))
         .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
     let fold_factor = 1_usize
@@ -1206,7 +1212,7 @@ impl SegmentLayoutV1 {
         ) {
             // Every canonical P-256 registration contains its log19 value and
             // arithmetic groups, so all smaller component polynomials are
-            // committed on the verifier-fixed MAIN log25 domain. The
+            // committed on the verifier-fixed MAIN log22 domain. The
             // aggregate layout validates that actual common domain again.
             ZK_X509_MAIN_COMMON_LDE_LOG2_V1
         } else {
@@ -1433,8 +1439,13 @@ impl SegmentLayoutV1 {
             .trace_log2
             .checked_add(capacity_profile.minimum_blowup_log2)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-        let fri_rounds = self
-            .lde_log2
+        let evaluation_lde_log2 = if self.adapter == SegmentAdapterIdV1::CaAccumulator {
+            self.lde_log2
+        } else {
+            self.main_capacity_lde_log2_v1()
+        };
+        let evaluation_lde_size = 1_usize << evaluation_lde_log2;
+        let fri_rounds = evaluation_lde_log2
             .checked_sub(capacity_profile.terminal_log2)
             .filter(|rounds| *rounds != 0)
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -1456,7 +1467,7 @@ impl SegmentLayoutV1 {
             || self.fixed_width == 0
             || self.constraint_count == 0
             || self.constraint_count > usize::from(u16::MAX)
-            || (self.lde_size() >> fri_rounds) != terminal_size
+            || (evaluation_lde_size >> fri_rounds) != terminal_size
             || self.column_chunks()? > FULL_PROFILE_PHYSICAL_CHUNKS_V1
             || (self.adapter != SegmentAdapterIdV1::CaAccumulator
                 && self.physical_chunks != paired_chunks)
@@ -2247,14 +2258,14 @@ pub(crate) fn validate_zk_x509_main_registration_shape_v1()
 }
 /// Complete verifier-owned first-release MAIN profile.
 ///
-/// The registration census and sole 28-field compiled-profile digest are
+/// The registration census and sole 29-field compiled-profile digest are
 /// constructed together. Fixed rows are evaluated from the manifest-bound
 /// algebraic schedules and never selected by a caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509MainVerifierProfileV1 {
     /// Exact 49-registration topology.
     pub(crate) registration: ZkX509MainRegistrationShapeV1,
-    /// Digest of the complete 28-field algebraic release manifest.
+    /// Digest of the complete 29-field algebraic release manifest.
     pub(crate) compiled_profile_digest: [u8; 32],
 }
 /// Construct the sole MAIN verifier profile from independently pinned release material.
@@ -2277,6 +2288,26 @@ pub(crate) fn validate_zk_x509_main_verifier_profile_v1(
         || supplied.compiled_profile_digest != expected.compiled_profile_digest
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(())
+}
+/// Reject a full MAIN proof whose fixed opening schedule exceeds its X5S1 budget.
+///
+/// Registration and fixed-polynomial diagnostics remain independently usable.
+/// Proof construction must pass this bounded geometry check before any entropy
+/// is consumed or a commitment is emitted.
+pub(crate) fn validate_zk_x509_main_proof_budget_v1() -> Result<(), ZkX509StarkErrorV1> {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+    let inner_bytes = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
+        AGGREGATE_PARAMETERS_V1,
+        &layout.as_shared()?,
+    )
+    .map_err(map_aggregate_error_v1)?;
+    let encoded_bytes = inner_bytes
+        .checked_add(super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize)
+        .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
+    if encoded_bytes > super::credential_stark::ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1 {
+        return Err(ZkX509StarkErrorV1::ProofTooLarge);
     }
     Ok(())
 }
@@ -7184,7 +7215,8 @@ const P256_MAIN_LOG16_AUX_WIDTH_V1: usize = P256_SIGNATURE_COUNT_V1
     * (P256_WINDOW_AGGREGATE_AUX_WIDTH_V1
         + super::p256_cross_trace_bus::P256_CROSS_TRACE_SINK_AUX_WIDTH_V1);
 const P256_MAIN_LOG16_PHYSICAL_CHUNKS_V1: usize = 10;
-const P256_MAIN_LOG16_NEXT_STRIDE_V1: usize = 512;
+const P256_MAIN_LOG16_NEXT_STRIDE_V1: usize =
+    1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - P256_WINDOW_AGGREGATE_TRACE_LOG2_V1);
 const _: () = assert!(P256_MAIN_LOG16_BASE_WIDTH_V1 == 430);
 const _: () = assert!(P256_MAIN_LOG16_AUX_WIDTH_V1 == 375);
 const _: () = assert!(P256_MAIN_LOG16_PHYSICAL_CHUNKS_V1 == 10);
@@ -7284,7 +7316,8 @@ const P256_MAIN_LOG19_AUX_WIDTH_V1: usize = P256_SIGNATURE_COUNT_V1
         + P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1
         + P256_VALUE_BUS_STARK_AUX_WIDTH_V1);
 const P256_MAIN_LOG19_PHYSICAL_CHUNKS_V1: usize = 35;
-const P256_MAIN_LOG19_NEXT_STRIDE_V1: usize = 64;
+const P256_MAIN_LOG19_NEXT_STRIDE_V1: usize =
+    1 << (ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - ZK_X509_MAX_NATIVE_TRACE_LOG2_V1);
 const P256_MAIN_LOG19_BASE_STARTS_V1: [usize; P256_MAIN_LOG19_REGISTRATION_COUNT_V1] = [
     545, 756, 967, 1_178, 1_389, 1_600, 1_634, 1_668, 1_702, 1_736, 1_770, 1_804, 1_838, 1_872,
     1_906,
@@ -9803,7 +9836,7 @@ struct MainLog19InstalledFixedOpeningsV1 {
 /// This is the only production route that can evaluate DER, RFC 5280, all
 /// four SHA registrations, and the fifteen P-256 registrations. It owns the
 /// exact 21-registration layout and cannot be initialized without the one
-/// verifier-derived opening token bound to all 58 transcript-order queries.
+/// verifier-derived opening token bound to all 136 transcript-order queries.
 struct MainLog19VerifierConstraintSourceV1 {
     registrations: Vec<RegisteredSegmentLayoutV1>,
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
@@ -11325,7 +11358,7 @@ impl MainTraceGroupSourceV1 for MainProjectionTraceGroupSourceV1<'_> {
 ///
 /// Fixed columns are interpolated one at a time and handed to the caller through a scoped zeroizing
 /// buffer. This is deliberately separate from the bounded sampled-opening verifier below: a full
-/// prover traversal cannot consume, or exhaust, the verifier's 116-opening cache.
+/// prover traversal cannot consume, or exhaust, the verifier's 272-opening cache.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct MainProjectionProverConstraintSourceV1 {
     registration: RegisteredSegmentLayoutV1,

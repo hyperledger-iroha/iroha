@@ -9647,125 +9647,7 @@ mod tests {
         )
         .expect("valid retention test proposal")
     }
-    #[test]
-    fn retention_authority_binding_rejects_test_stale_and_substituted_identity() {
-        assert!(matches!(
-            ReputationFinalizedArchiveRetentionAuthorityBindingV1::try_new(
-                "sealed.reputation.archive.test".to_owned(),
-                7,
-                [0xA7; 32],
-            ),
-            Err(ReputationFinalizedArchiveError::InvalidRetentionAuthorityBinding)
-        ));
-        assert!(matches!(
-            ReputationFinalizedArchiveRetentionAuthorityBindingV1::try_new(
-                "sealed.reputation.archive.primary".to_owned(),
-                0,
-                [0xA7; 32],
-            ),
-            Err(ReputationFinalizedArchiveError::InvalidRetentionAuthorityBinding)
-        ));
-        let expected = TestRetentionAuthority::new();
-        let binding = expected.binding();
-        let mut substituted = TestRetentionAuthority::new();
-        substituted.handle = "sealed.reputation.archive.secondary".to_owned();
-        assert!(matches!(
-            assert_retention_authority_identity(&binding, &substituted),
-            Err(ReputationFinalizedArchiveError::RetentionAuthoritySubstitution)
-        ));
-        let mut stale = TestRetentionAuthority::new();
-        stale.qualification =
-            ReputationFinalizedArchiveRetentionAuthorityQualificationV1::new(8, [0xA7; 32]);
-        assert!(matches!(
-            assert_retention_authority_identity(&binding, &stale),
-            Err(ReputationFinalizedArchiveError::RetentionAuthoritySubstitution)
-        ));
-    }
-    #[test]
-    fn retention_approval_codec_and_cas_readback_fail_closed() {
-        let authority = TestRetentionAuthority::new();
-        let binding = authority.binding();
-        let proposal = retention_test_proposal(1, 0x31);
-        let approval = ReputationFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            binding.qualification(),
-            proposal,
-            None,
-            None,
-        )
-        .expect("valid first approval");
-        let canonical = approval.to_canonical_bytes().expect("encode approval");
-        assert_eq!(
-            ReputationFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(&canonical)
-                .expect("decode canonical approval"),
-            approval
-        );
-        let mut trailing = canonical;
-        trailing.push(0);
-        assert!(
-            ReputationFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(&trailing)
-                .is_err()
-        );
-        assert!(
-            ReputationFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(&vec![
-                0;
-                RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1
-                    + 1
-            ])
-            .is_err()
-        );
-        authority.set_behavior(TestRetentionCasBehavior::ApplyAmbiguous);
-        compare_and_read_back_retention_approval(
-            &binding,
-            &authority,
-            &proposal_network_id(&approval),
-            None,
-            &approval,
-        )
-        .expect("applied ambiguous CAS is proven by exact readback");
-        compare_and_read_back_retention_approval(
-            &binding,
-            &authority,
-            &proposal_network_id(&approval),
-            None,
-            &approval,
-        )
-        .expect("replica that loses an identical CAS converges by exact readback");
-        let unchanged = TestRetentionAuthority::new();
-        unchanged.set_behavior(TestRetentionCasBehavior::LeaveUnchanged);
-        assert!(matches!(
-            compare_and_read_back_retention_approval(
-                &unchanged.binding(),
-                &unchanged,
-                &proposal_network_id(&approval),
-                None,
-                &approval,
-            ),
-            Err(ReputationFinalizedArchiveError::RetentionAuthorityCasUnchanged)
-        ));
-        let equivocation = TestRetentionAuthority::new();
-        equivocation.set_behavior(TestRetentionCasBehavior::Equivocate);
-        let competing_proposal = retention_test_proposal(1, 0x41);
-        let competing = ReputationFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            equivocation.binding().qualification(),
-            competing_proposal,
-            None,
-            None,
-        )
-        .expect("valid competing approval");
-        equivocation.set_competing(competing);
-        assert!(matches!(
-            compare_and_read_back_retention_approval(
-                &equivocation.binding(),
-                &equivocation,
-                &proposal_network_id(&approval),
-                None,
-                &approval,
-            ),
-            Err(ReputationFinalizedArchiveError::RetentionAuthorityEquivocation)
-        ));
-    }
+    include!("reputation_finalized/archive_codec_tests.rs");
     fn proposal_network_id(
         approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     ) -> NetworkId {
@@ -10395,7 +10277,7 @@ mod tests {
             .checkpoint
             .journal_prefix_source_heads
             .push(duplicate_head);
-        replace_test_checkpoint_with_recomputed_content_address(
+        replace_test_checkpoint_with_recomputed_checkpoint_digest(
             &archive_root(&duplicate_directory).join(CHECKPOINTS_DIRECTORY),
             duplicate,
         );
@@ -10408,7 +10290,7 @@ mod tests {
         ));
         let (reordered_directory, mut reordered) = archive_with_two_source_checkpoint();
         reordered.checkpoint.journal_prefix_source_heads.swap(0, 1);
-        replace_test_checkpoint_with_recomputed_content_address(
+        replace_test_checkpoint_with_recomputed_checkpoint_digest(
             &archive_root(&reordered_directory).join(CHECKPOINTS_DIRECTORY),
             reordered,
         );
@@ -11162,11 +11044,28 @@ mod tests {
                 event
             })
             .collect();
+        let predecessor = projection.clone();
+        projection.key.height += 1;
+        projection.key.block_hash = [0x72; 32];
+        projection.journal_events.extend((16_u8..32).map(|offset| {
+            let mut event = journal_event(
+                &projection.authority_policy.policy,
+                u64::from(offset) + 1,
+                projection.key.height,
+                projection.key.block_hash,
+                0x20 + offset,
+            );
+            event.event_index = u32::from(offset - 16);
+            event
+        }));
         let (persisted, checkpoint_bytes, anchor_bytes, fence) = {
             let archive = open_archive(&directory, bounds());
             archive
+                .insert(predecessor.clone())
+                .expect("insert many-source predecessor");
+            archive
                 .insert(projection.clone())
-                .expect("insert many-source projection");
+                .expect("insert the bounded successor delta");
             let (persisted, checkpoint_bytes, _) =
                 test_checkpoint_artifact(&archive, &projection.key);
             let fence = archive
@@ -11198,6 +11097,15 @@ mod tests {
         )
         .expect("construct anchor-fitting checkpoint-rejecting bounds");
         assert!(anchor_bytes <= tight_bounds.max_record_bytes());
+        let anchor_path = archive_root(&directory)
+            .join(ANCHORS_DIRECTORY)
+            .join(anchor_file_name(&projection.key).expect("anchor name"));
+        let anchor_wire = fs::read(anchor_path).expect("read retained anchor");
+        decode_from_bytes_with_limits::<PersistedReputationFinalizedAnchorV1>(
+            &anchor_wire,
+            tight_bounds.decode_limits(),
+        )
+        .expect("the retained anchor fits both the wire and allocation ceilings");
         let archive = open_archive(&directory, tight_bounds);
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
@@ -11257,7 +11165,14 @@ mod tests {
             fs::read_dir(&archive.anchors)
                 .expect("read retained anchor namespace")
                 .count(),
-            1
+            2,
+            "both retained anchors must survive the rejected checkpoint"
+        );
+        assert_eq!(
+            archive
+                .get_exact(&predecessor.key)
+                .expect("predecessor remains queryable"),
+            Some(predecessor)
         );
         assert_eq!(
             fs::read_dir(&archive.checkpoints)
@@ -12201,7 +12116,7 @@ mod tests {
         assert!(matches!(
             future_prefix.validate(),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
-                reason: "feed prefix terminal cursor crosses or disagrees with its retention-floor anchor",
+                reason: "journal prefix source head lies outside its compacted prefix",
             })
         ));
     }
@@ -12285,7 +12200,7 @@ mod tests {
         ));
     }
     #[test]
-    fn checkpoint_tamper_and_policy_gc_fail_closed() {
+    fn checkpoint_tamper_rejects_and_policy_gc_preserves_predecessor_closure() {
         let tampered_directory = tempdir().expect("create tamper archive directory");
         let projection = sample_projection(7, [0x71; 32]);
         let checkpoint_path = {
@@ -12347,7 +12262,7 @@ mod tests {
             fs::read_dir(&reopened.policies)
                 .expect("read policies after GC")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             reopened.health_generation().expect("stable GC generation"),
@@ -13430,38 +13345,5 @@ mod tests {
                 Err(ReputationFinalizedArchiveError::InvalidStorage { .. })
             ));
         }
-    }
-    #[test]
-    fn persisted_record_is_byte_canonical_norito() {
-        let directory = tempdir().expect("create archive directory");
-        let archive = open_archive(&directory, bounds());
-        let projection = sample_projection(7, [0x71; 32]);
-        archive
-            .insert(projection.clone())
-            .expect("insert projection");
-        let bytes = fs::read(
-            archive
-                .record_path(&projection.key)
-                .expect("derive record path"),
-        )
-        .expect("read canonical record");
-        let decoded: PersistedReputationFinalizedAnchorV1 =
-            decode_from_bytes_with_limits(&bytes, bounds().decode_limits())
-                .expect("decode canonical record");
-        assert_eq!(
-            norito::to_bytes(&decoded).expect("re-encode canonical record"),
-            bytes
-        );
-        assert_eq!(decoded.manifest.key, projection.key);
-        assert_eq!(
-            decoded.manifest.high_water_marks,
-            ReputationFeedHighWaterMarksV1::default()
-        );
-        assert_eq!(decoded.manifest.journal_source_head_count, 0);
-        assert_eq!(
-            decoded.manifest.journal_source_head_root,
-            journal_prefix_source_head_root(&[]).expect("digest empty source-head set")
-        );
-        assert_eq!(decoded.delta, ReputationFinalizedAnchorDeltaV1::default());
     }
 }

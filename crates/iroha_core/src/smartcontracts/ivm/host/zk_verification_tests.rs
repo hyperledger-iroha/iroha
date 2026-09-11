@@ -9,7 +9,7 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
     let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = vec![1u8, 2, 3, 4];
+    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -52,7 +52,7 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
     let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = vec![1u8, 2, 3, 4];
+    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -79,8 +79,8 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
         (
             "oversized circuit id",
             |env| {
-                env.circuit_id = "a"
-                    .repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
+                env.circuit_id =
+                    "a".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1);
             },
             ivm::host::ERR_ENVELOPE_SIZE,
         ),
@@ -162,7 +162,7 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
     let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = vec![9u8, 8, 7, 6];
+    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -213,7 +213,7 @@ fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
     let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = vec![1u8, 2, 3, 4];
+    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -411,8 +411,8 @@ fn zk_verify_batch_rejects_configured_count_cap_after_metered_prepare() {
         vec![0xAA; 16],
     ))
     .expect("decode metering envelope");
-    let payload = norito::to_bytes(&vec![envelope.clone(), envelope])
-        .expect("encode over-limit ZK batch");
+    let payload =
+        norito::to_bytes(&vec![envelope.clone(), envelope]).expect("encode over-limit ZK batch");
     let mut vm = IVM::new(u64::MAX);
     let pointer = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
     vm.set_register(10, pointer);
@@ -563,8 +563,8 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
         vec![vec![[7u8; 32]]],
     )
     .expect("prove STARK envelope");
-    let env = ivm::host::decode_canonical_zk_envelope(&proof.bytes)
-        .expect("decode OpenVerifyEnvelope");
+    let env =
+        ivm::host::decode_canonical_zk_envelope(&proof.bytes).expect("decode OpenVerifyEnvelope");
     let commitment = crate::zk::hash_vk(&vk_box);
     let rec = active_vk_record(
         commitment,
@@ -661,7 +661,7 @@ fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
     let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = vec![3u8, 1, 4, 1, 5, 9];
+    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,

@@ -846,16 +846,15 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         load_factor_bps: 125,
         materialized_bundle_hash: bundle.container.bundle_hash,
     };
-    let runtime_state_error = isi::SetSoracloudRuntimeState {
-        state: runtime_state.clone(),
-    }
-    .execute(&BOB_ID, &mut stx)
+    let runtime_state_error = execute_initial_soracloud(
+        isi::SetSoracloudRuntimeState {
+            state: runtime_state.clone(),
+        },
+        &BOB_ID,
+        &mut stx,
+    )
     .expect_err("a validator assigned elsewhere must not replace runtime state");
-    assert!(matches!(
-        runtime_state_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.contains("is not assigned to service")
-    ));
+    assert_initial_soracloud_core_denial(runtime_state_error, "is not assigned to service");
     assert!(
         stx.world
             .soracloud_service_runtime
@@ -878,23 +877,22 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .as_ref()
         .expect("unassigned hosted-service lease")
         .lease_started_height;
-    let lease_error = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: lease_victim_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: lease_victim_version.to_owned(),
-        replica_slot: 1,
-        placement_incarnation: Hash::new(b"placement-1"),
-        replica_accounted_egress_bytes: u64::MAX,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
+    let lease_error = execute_initial_soracloud(
+        isi::ReportSoracloudServiceLeaseUsage {
+            service_name: lease_victim_name.clone(),
+            lease_started_height,
+            reporting_epoch,
+            active_service_version: lease_victim_version.to_owned(),
+            replica_slot: 1,
+            placement_incarnation: Hash::new(b"placement-1"),
+            replica_accounted_egress_bytes: u64::MAX,
+            finalize_reporter: false,
+        },
+        &BOB_ID,
+        &mut stx,
+    )
     .expect_err("a validator assigned elsewhere must not inflate lease usage");
-    assert!(matches!(
-        lease_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.contains("is not assigned to service")
-    ));
+    assert_initial_soracloud_core_denial(lease_error, "is not assigned to service");
     assert_eq!(
         stx.world
             .soracloud_service_deployments
@@ -918,6 +916,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         available_after_height: 0,
         expires_at_height: 0,
     };
+    let sequence_before_mailbox = *stx.world.soracloud_sequence_watermark.get();
     let mailbox_error = isi::RecordSoracloudMailboxMessage {
         message: mailbox_message.clone(),
     }
@@ -943,18 +942,33 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             if message.contains("source service")
     ));
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
-    isi::RecordSoracloudMailboxMessage {
+    let closed_mailbox = isi::RecordSoracloudMailboxMessage {
         message: mailbox_message.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("the service manager may enqueue an admitted ordered-mailbox message");
-    let recorded_mailbox_message = stx
-        .world
-        .soracloud_mailbox_messages
-        .iter()
-        .next()
-        .map(|(_message_id, message)| message.clone())
-        .expect("ordered mailbox admission must persist the canonical message");
+    .expect_err("ordered mailbox admission remains disabled even for a manager");
+    assert_invariant_contains(
+        closed_mailbox,
+        "disabled until consensus can re-execute the exact admitted IVM bundle",
+    );
+    assert!(stx.world.soracloud_mailbox_messages.is_empty());
+    let closed_initial_mailbox = execute_initial_soracloud(
+        isi::RecordSoracloudMailboxMessage {
+            message: mailbox_message.clone(),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )
+    .expect_err("Initial executor must explicitly close unfinished mailbox admission");
+    assert!(
+        matches!(closed_initial_mailbox, ValidationFail::NotPermitted(message)
+        if message.contains("explicitly closed"))
+    );
+    assert!(stx.world.soracloud_mailbox_messages.is_empty());
+    assert_eq!(
+        *stx.world.soracloud_sequence_watermark.get(),
+        sequence_before_mailbox
+    );
     let mut runtime_receipt = SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: Hash::new(b"cross-service-runtime-receipt"),
@@ -980,24 +994,63 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         service_version: victim_version.to_owned(),
         handler_name: "update".parse().expect("valid handler"),
         handler_class: SoraServiceHandlerClassV1::Update,
-        request_commitment: recorded_mailbox_message.payload_commitment,
+        request_commitment: mailbox_message.payload_commitment,
         result_commitment: Hash::new(b"mailbox-result"),
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence: 0,
         execution_host: None,
-        mailbox_message_id: Some(recorded_mailbox_message.message_id),
+        mailbox_message_id: Some(Hash::new(b"unadmitted-mailbox-message")),
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
     };
-    let direct_mailbox_receipt_error = isi::RecordSoracloudRuntimeReceipt {
-        receipt: mailbox_receipt.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("ordered mailbox work must be consumed through its atomic result instruction");
+    let closed_result = isi::ApplySoracloudOrderedMailboxResult {
+        result: iroha_data_model::soracloud::SoraOrderedMailboxResultV1 {
+            schema_version: iroha_data_model::soracloud::SORA_ORDERED_MAILBOX_RESULT_VERSION_V1,
+            observed_height: 1,
+            observed_block_hash: None,
+            observed_sequence: 1,
+            state_mutations: Vec::new(),
+            outbound_mailbox_messages: Vec::new(),
+            response_commitment: Hash::new(b"closed-mailbox-response"),
+            runtime_execution_commitment: Hash::new(b"closed-mailbox-execution"),
+            content_type: None,
+            observed_runtime_state: None,
+            runtime_state: None,
+            runtime_receipt: mailbox_receipt.clone(),
+        },
+    };
+    let initial_error = execute_initial_soracloud(closed_result.clone(), &ALICE_ID, &mut stx)
+        .expect_err(
+            "Initial must close atomic mailbox results until consensus re-execution exists",
+        );
     assert!(
-        direct_mailbox_receipt_error
-            .to_string()
-            .contains("ApplySoracloudOrderedMailboxResult")
+        matches!(initial_error, ValidationFail::NotPermitted(message)
+        if message.contains("explicitly closed"))
+    );
+    let core_error = closed_result
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("Core must independently keep ordered mailbox execution disabled");
+    assert_invariant_contains(
+        core_error,
+        "disabled until consensus can re-execute the exact admitted IVM bundle",
+    );
+    assert!(stx.world.soracloud_mailbox_messages.is_empty());
+    assert!(stx.world.soracloud_runtime_receipts.is_empty());
+    assert_eq!(
+        *stx.world.soracloud_sequence_watermark.get(),
+        sequence_before_mailbox
+    );
+    let direct_mailbox_receipt_error = execute_initial_soracloud(
+        isi::RecordSoracloudRuntimeReceipt {
+            receipt: mailbox_receipt.clone(),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )
+    .expect_err("ordered mailbox work must be consumed through its atomic result instruction");
+    assert_initial_soracloud_core_denial(
+        direct_mailbox_receipt_error,
+        "ordered-mailbox runtime receipts must use ApplySoracloudOrderedMailboxResult",
     );
     assert!(
         stx.world
@@ -1005,26 +1058,31 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             .get(&mailbox_receipt.receipt_id)
             .is_none()
     );
-    let receipt_error = isi::RecordSoracloudRuntimeReceipt {
-        receipt: runtime_receipt.clone(),
-    }
-    .execute(&BOB_ID, &mut stx)
+    let receipt_error = execute_initial_soracloud(
+        isi::RecordSoracloudRuntimeReceipt {
+            receipt: runtime_receipt.clone(),
+        },
+        &BOB_ID,
+        &mut stx,
+    )
     .expect_err("a validator assigned elsewhere must not forge runtime receipts");
-    assert!(matches!(
+    assert_initial_soracloud_core_denial(
         receipt_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.contains("must carry exact execution_host attribution")
-    ));
+        "validator-attributed runtime receipts must use ApplySoracloudOrderedMailboxResult",
+    );
     assert!(
         stx.world
             .soracloud_runtime_receipts
             .get(&runtime_receipt.receipt_id)
             .is_none()
     );
-    isi::RecordSoracloudRuntimeReceipt {
-        receipt: runtime_receipt.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
+    execute_initial_soracloud(
+        isi::RecordSoracloudRuntimeReceipt {
+            receipt: runtime_receipt.clone(),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )?;
     let persisted_runtime_receipt = stx
         .world
         .soracloud_runtime_receipts
@@ -1032,16 +1090,15 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .cloned()
         .expect("runtime receipt persisted with a ledger-assigned sequence");
     assert!(persisted_runtime_receipt.emitted_sequence > 0);
-    let receipt_collision_error = isi::RecordSoracloudRuntimeReceipt {
-        receipt: runtime_receipt.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)
+    let receipt_collision_error = execute_initial_soracloud(
+        isi::RecordSoracloudRuntimeReceipt {
+            receipt: runtime_receipt.clone(),
+        },
+        &ALICE_ID,
+        &mut stx,
+    )
     .expect_err("an exact runtime receipt must not be recorded twice");
-    assert!(matches!(
-        receipt_collision_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.contains("has already been recorded")
-    ));
+    assert_initial_soracloud_core_denial(receipt_collision_error, "has already been recorded");
     assert_eq!(
         stx.world
             .soracloud_runtime_receipts
@@ -1061,16 +1118,18 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         validator_account_id: ALICE_ID.clone(),
         peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string(),
     });
-    let attribution_error = isi::RecordSoracloudRuntimeReceipt {
-        receipt: falsely_attributed_receipt.clone(),
-    }
-    .execute(&BOB_ID, &mut stx)
+    let attribution_error = execute_initial_soracloud(
+        isi::RecordSoracloudRuntimeReceipt {
+            receipt: falsely_attributed_receipt.clone(),
+        },
+        &BOB_ID,
+        &mut stx,
+    )
     .expect_err("an assigned validator must identify itself in its runtime receipt");
-    assert!(matches!(
+    assert_initial_soracloud_core_denial(
         attribution_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.contains("must identify submitting validator")
-    ));
+        "validator-attributed runtime receipts must use ApplySoracloudOrderedMailboxResult",
+    );
     assert!(
         stx.world
             .soracloud_runtime_receipts
@@ -1085,10 +1144,13 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         load_factor_bps: 125,
         materialized_bundle_hash: other_bundle.container.bundle_hash,
     };
-    isi::SetSoracloudRuntimeState {
-        state: other_runtime_state.clone(),
-    }
-    .execute(&BOB_ID, &mut stx)?;
+    execute_initial_soracloud(
+        isi::SetSoracloudRuntimeState {
+            state: other_runtime_state.clone(),
+        },
+        &BOB_ID,
+        &mut stx,
+    )?;
     assert_eq!(
         stx.world.soracloud_service_runtime.get(&other_name),
         Some(&other_runtime_state)

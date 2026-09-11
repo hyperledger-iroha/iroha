@@ -137,18 +137,23 @@ enum DurableValidateRetrySealV1 {
 
 /// Check the currently protected occurrence without upgrading weaker input
 /// from a retained terminal's stronger historical authority.
-fn current_protected_validate_occurrence(
+fn current_protected_body_occurrence(
     effect: &AdapterEffect,
     incoming: &RuntimeEffectOwnership,
     frontier: RuntimeReconciliationFrontier,
 ) -> Result<bool, String> {
-    let AdapterEffect::ValidateBody {
+    let (AdapterEffect::ValidateBody {
         tag,
         round,
         subject,
-    } = effect
+    }
+    | AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    }) = effect
     else {
-        return Err("resolved Validate retry changed its effect kind".to_owned());
+        return Err("resolved body retry changed its effect kind".to_owned());
     };
     if frontier.tag != Some(*tag) {
         return Ok(false);
@@ -170,7 +175,8 @@ fn current_protected_validate_occurrence(
         Some(wire::GlobalPhase::Prepare) => {
             frontier.decision.is_none()
                 && frontier.lock_is_authoritative
-                && frontier.locked_body == Some((*round, *subject))
+                && (frontier.locked_body == Some((*round, *subject))
+                    || current_prepare_statement_matches_frontier(statement, *tag, frontier))
                 && statement.execution_commitment().is_some()
         }
         Some(wire::GlobalPhase::Commit) => frontier.decision.is_some_and(|decision| {
@@ -180,6 +186,27 @@ fn current_protected_validate_occurrence(
                 && statement.execution_commitment() == Some(decision.3)
         }),
     })
+}
+
+/// A current observed Prepare may request validation before LockAndCommit.
+/// Require the whole durable certificate identity; a historical high is only
+/// retention evidence and cannot become current validation authority.
+fn current_prepare_statement_matches_frontier(
+    statement: RuntimeCandidateSemanticStatement,
+    tag: EventTag,
+    frontier: RuntimeReconciliationFrontier,
+) -> bool {
+    frontier.tag == Some(tag)
+        && frontier.decision.is_none()
+        && frontier.highest_prepare.is_some_and(|certificate| {
+            certificate.phase == wire::GlobalPhase::Prepare
+                && certificate.round.view == tag.view()
+                && statement.phase() == Some(wire::GlobalPhase::Prepare)
+                && certificate.round == statement.round()
+                && certificate.proposal_round == statement.proposal_round()
+                && Some(certificate.subject) == statement.subject()
+                && Some(certificate.execution_commitment) == statement.execution_commitment()
+        })
 }
 
 struct DurableValidateRetryProjectionV1 {
@@ -385,7 +412,7 @@ impl DurableValidateRetrySealV1 {
         ) {
             return Ok(false);
         }
-        current_protected_validate_occurrence(effect, incoming, frontier)
+        current_protected_body_occurrence(effect, incoming, frontier)
     }
 
     /// Project one late durable Store carrier through the inert predecessor
@@ -1016,12 +1043,6 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
         self.lifecycle_ordinal.is_some()
     }
 
-    /// Return the exact terminal Validate ordinal after no-successor
-    /// publication released its executable row.
-    const fn terminal_no_successor_ordinal(&self) -> Option<u128> {
-        self.terminal_no_successor_ordinal
-    }
-
     fn bind_lifecycle_ordinal(&mut self, ordinal: u128) -> Result<(), String> {
         if ordinal == 0 {
             return Err("published lifecycle Validate received a zero ordinal".to_owned());
@@ -1139,65 +1160,6 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
         })
     }
 
-    /// Return whether this terminal marker is the exact Commit-authorized
-    /// Validate owner for one already-fsynced successful validation.
-    ///
-    /// This is comparison-only. It cannot create work and deliberately rejects
-    /// an ordinal-bound marker because that marker still has a concrete row
-    /// which must settle under its original lifecycle owner.
-    fn is_unbound_exact_decision_owner(
-        &self,
-        decision: DurableDecision,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> bool {
-        let AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } = &self.latest_effect
-        else {
-            return false;
-        };
-        !self.owns_live_lifecycle_row()
-            && tag.height() == decision.0.height
-            && *round == decision.1
-            && *subject == decision.2
-            && self.durable_receipt == *validated_receipt.durable()
-            && validated_receipt.execution_commitment() == decision.3
-            && self.latest_statement.context_id() == decision.0.context_id
-            && self.latest_statement.round() == decision.0
-            && self.latest_statement.proposal_round() == decision.1
-            && self.latest_statement.subject() == Some(decision.2)
-            && self.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
-            && self.latest_statement.execution_commitment() == Some(decision.3)
-            && self
-                .store_terminal
-                .exactly_precedes_validate_marker(&self.latest_effect, self.latest_statement)
-    }
-
-    /// Return whether a resolved direct-lifecycle marker must redispatch one
-    /// exact Commit authority refinement into normal Validate admission.
-    ///
-    /// Projection already rejects tag regression. Authority can strengthen in
-    /// the same tag after a Prepare retry, so only its strict Upgrade relation
-    /// distinguishes a new Decision from an already-projected duplicate.
-    fn is_unbound_exact_decision_upgrade(
-        &self,
-        projected: &Self,
-        decision: DurableDecision,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> bool {
-        !self.owns_live_lifecycle_row()
-            && !projected.owns_live_lifecycle_row()
-            && self.durable_receipt == projected.durable_receipt
-            && self.store_terminal == projected.store_terminal
-            && self
-                .latest_statement
-                .body_stage_authority_relation_to(projected.latest_statement)
-                == Some(RuntimeFetchAuthorityRelation::Upgrade)
-            && projected.is_unbound_exact_decision_owner(decision, validated_receipt)
-    }
-
     fn project_store_retry(
         &self,
         durable_receipt: &DurableBodyReceipt,
@@ -1223,6 +1185,38 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
                 "published lifecycle Store retry outran its published Validate authority"
                     .to_owned(),
             );
+        }
+        Ok(())
+    }
+
+    /// Reuse the immutable Store receipt for a new certified incarnation after
+    /// the published Validate has durably ended without a successor.
+    fn project_resolved_store_retry(
+        &self,
+        receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<(), String> {
+        if self.lifecycle_ordinal.is_some()
+            || self.resolved_outcome.as_ref().is_none_or(|outcome| {
+                outcome.key() != (receipt.round(), receipt.subject())
+                    || self.terminal_no_successor_ordinal != Some(outcome.ordinal())
+            })
+            || !self
+                .store_terminal
+                .exactly_precedes_validate_marker(&self.latest_effect, self.latest_statement)
+        {
+            return Err("resolved Store retry lost its exact terminal Validate".to_owned());
+        }
+        let statement = self
+            .store_terminal
+            .project_retry(receipt, effect, incoming)?;
+        if !matches!(
+            self.latest_statement
+                .body_stage_authority_relation_to(statement),
+            Some(RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade)
+        ) {
+            return Err("resolved Store retry regressed its exact body authority".to_owned());
         }
         Ok(())
     }
@@ -3033,10 +3027,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 Kind::ValidatedBusy | Kind::RejectedBusy => Ok(None),
                 Kind::ValidatedApply => Ok(Some(true)),
                 _ => {
-                    owner
+                    let settled = owner
                         .publish_resolved_validate_result(&pending, prepared)
                         .map_err(|reason| EffectExecutorError::Contract(reason.to_owned()))?;
-                    Ok(Some(false))
+                    Ok(settled.then_some(false))
                 }
             }
         })();
@@ -3649,15 +3643,27 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 });
         };
-        let certificate = self
+        let frontier = self
             .runtime
-            .durable_body_authority_certificate()
-            .map_err(EffectExecutorError::Runtime)?
-            .ok_or_else(|| {
-                EffectExecutorError::Contract(
-                    "authority-refined Proposal Validate omitted its durable QC".to_owned(),
-                )
-            })?;
+            .reconciliation_frontier()
+            .map_err(EffectExecutorError::Runtime)?;
+        let current_prepare = match effect {
+            AdapterEffect::ValidateBody { tag, .. } => {
+                current_prepare_statement_matches_frontier(statement, *tag, frontier)
+            }
+            _ => false,
+        };
+        let certificate = if current_prepare {
+            self.runtime.current_prepare_authority_certificate()
+        } else {
+            self.runtime.durable_body_authority_certificate()
+        }
+        .map_err(EffectExecutorError::Runtime)?
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "authority-refined Proposal Validate omitted its durable QC".to_owned(),
+            )
+        })?;
         self.runtime
             .verify_certificate(&self.context, &certificate)
             .map_err(|reason| {
@@ -3678,8 +3684,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let protected = match phase {
             wire::GlobalPhase::Prepare => {
                 self.protected_decision.is_none()
-                    && self.protected_lock
+                    && (self.protected_lock
                         == Some((certificate.proposal_round, certificate.subject))
+                        || current_prepare)
             }
             wire::GlobalPhase::Commit => {
                 self.protected_decision
@@ -4077,7 +4084,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .runtime
                 .reconciliation_frontier()
                 .map_err(EffectExecutorError::Runtime)?;
-            if !current_protected_validate_occurrence(&effect, &ownership, frontier)
+            if !current_protected_body_occurrence(&effect, &ownership, frontier)
                 .map_err(EffectExecutorError::Contract)?
             {
                 return Err(EffectExecutorError::Contract(

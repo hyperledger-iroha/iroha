@@ -92,7 +92,14 @@ fn route_resolution_rejects_unknown_lane() {
     let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
     let state = blank_state();
     install_router_nexus(&state, &router);
-    let tx = sample_transaction(&alice_id, alice_keypair.private_key(), Vec::new());
+    let tx = sample_transaction(
+        &alice_id,
+        alice_keypair.private_key(),
+        vec![InstructionBox::from(Log::new(
+            iroha_logger::Level::INFO,
+            "unknown lane".into(),
+        ))],
+    );
     let direct_err = router
         .try_route_with_view(&tx, &state.view())
         .expect_err("unknown lane must not fall back to the universal route");
@@ -199,9 +206,10 @@ fn route_resolution_rejects_missing_default_dataspace() {
     let tx = sample_transaction(
         &alice_id,
         alice_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("fallback", "universal").expect("domain"),
-        )))],
+        vec![InstructionBox::from(Log::new(
+            iroha_logger::Level::INFO,
+            "default dataspace".into(),
+        ))],
     );
     let state = blank_state();
     install_router_nexus(&state, &router);

@@ -4173,8 +4173,10 @@ pub struct Queue {
     /// Sticky process-lifetime fault when accepted work exposes internally inconsistent immutable
     /// routing or fee-admission identity. Expected catalog retirement evicts affected work instead.
     accepted_work_validation_fault: AtomicBool,
-    /// Startup publication gate retained until V2 has classified every
-    /// replayed reservation owner against one State/Kura evidence snapshot.
+    /// Startup publication gate retained from journal installation until V2
+    /// has reconciled the exact QueuePlan/reservation replay with State/Kura.
+    /// An empty replay still requires that publication boundary; emptiness
+    /// does not authorize ordinary admission to change its replay identity.
     ///
     /// QueuePlan replay may materialize quarantined payload bytes while this
     /// bit is set, but ordinary admission, gossip, and global/lane selection
@@ -6035,13 +6037,11 @@ impl Queue {
         self.apply_durable_fifo_order_reconciliation_locked(fifo_plan);
         self.remove_hashes_from_fifo_locked(&hashes);
         *store = candidate_store;
-        self.lane_reservation_reconciliation_pending.store(
-            !store.live_by_entrypoint.is_empty()
-                || !store.commit_barriers.is_empty()
-                || !store.release_barriers.is_empty()
-                || !store.completed_releases.is_empty(),
-            Ordering::Release,
-        );
+        // Even an empty owner replay must remain closed until the exact
+        // QueuePlan replay and State/Kura lifecycle cut are reconciled. Opening
+        // here would let ingress change live claims beneath the startup receipt.
+        self.lane_reservation_reconciliation_pending
+            .store(true, Ordering::Release);
         self.missing_reservation_payload_count
             .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
         *self.lane_reservation_snapshot_replay_receipt.lock() = Some(replay_receipt);
@@ -10523,14 +10523,12 @@ impl Queue {
         {
             return Ok(None);
         }
-        let expected_pending = !expected_snapshot.is_empty();
-        if self
+        if !self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
-            != expected_pending
         {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "lane reservation reconciliation publication gate disagrees with replay ownership"
+                "lane reservation reconciliation publication gate opened before exact startup completion"
                     .to_owned(),
             ));
         }
@@ -11047,6 +11045,7 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
         if self.lane_reservation_startup_completion.lock().is_some()
+            || !self.lane_reservation_startup_reconciliation_pending()
             || receipt.initial_snapshot != *expected_snapshot
             || receipt.replay_receipt != self.lane_reservation_snapshot_replay_receipt()?
             || receipt.plan_replay_receipt != self.queue_plan_startup_replay_receipt()?
@@ -11069,6 +11068,7 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
         if self.lane_reservation_startup_completion.lock().is_some()
+            || !self.lane_reservation_startup_reconciliation_pending()
             || receipt.initial_snapshot != *expected_snapshot
             || self
                 .lane_reservation_snapshot_replay_receipt
@@ -11144,10 +11144,12 @@ impl Queue {
             .as_ref()
             == Some(observation))
     }
-    /// Return whether replayed reservation ownership is still quarantined
-    /// behind the State/Kura-aware startup publication gate.
+    /// Return whether journal startup is still quarantined behind the exact
+    /// State/Kura-aware publication gate, including an empty owner replay.
+    /// Readiness and ingress consumers must remain closed while this is true;
+    /// only successful exact startup reconciliation opens the installed Queue.
     #[must_use]
-    pub(crate) fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
+    pub fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
         self.lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
     }
@@ -11194,9 +11196,7 @@ impl Queue {
         let reconciliation_pending = self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire);
-        if self.lane_reservation_startup_completion.lock().is_some()
-            || (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)
-        {
+        if self.lane_reservation_startup_completion.lock().is_some() || !reconciliation_pending {
             return Err(LaneQueueReservationError::InvalidIdentity(
                 "startup reconciliation receipt is stale at the final publication gate".to_owned(),
             ));
@@ -16023,6 +16023,15 @@ impl Queue {
             Ok(())
         }
     }
+    fn check_startup_admission(&self) -> Result<(), Error> {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return Err(Error::PlanJournalDurabilityRejected {
+                reason: "queue journal startup is awaiting exact State/Kura reconciliation"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    }
     /// Push transaction into queue.
     ///
     /// # Errors
@@ -16034,6 +16043,10 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        self.check_startup_admission().map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         self.sync_nexus_routing_with_view(state_view);
         let routing_plan = match self
             .router
@@ -16152,6 +16165,10 @@ impl Queue {
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<QueuePushOutcome, Failure> {
+        self.check_startup_admission().map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
@@ -16287,6 +16304,12 @@ impl Queue {
             };
             loop {
                 let queue_guard = self.push_remove_lock.lock();
+                // The retry path can replace a durable claim before reaching
+                // prepared admission. It must retain the same startup fence.
+                self.check_startup_admission().map_err(|err| Failure {
+                    tx: tx.clone().into(),
+                    err,
+                })?;
                 if self.durability_transition_active(&tx_hash) {
                     drop(queue_guard);
                     self.wait_for_durability_transitions(&[tx_hash]);
@@ -22665,6 +22688,31 @@ pub mod tests {
             queue.plan_journal.lock().is_some(),
             "globally certified reservation fixtures require a queue-plan journal"
         );
+        if queue.lane_reservation_startup_reconciliation_pending() {
+            // This fixture starts with empty journals. Exercise their real startup boundary
+            // before seeding ordinary certified work, just as the production runner does.
+            let snapshot = queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("capture empty fixture startup ownership");
+            assert!(
+                snapshot.is_empty(),
+                "fixture startup must not own reservations"
+            );
+            let replay = queue
+                .replay_plan_journal(state)
+                .expect("replay fixture QueuePlan journal before admission");
+            assert_eq!(
+                replay.records, 0,
+                "fixture startup must have no retained plans"
+            );
+            let receipt = queue
+                .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+                .expect("bind exact empty fixture startup receipt")
+                .expect("fixture ownership remains unchanged during startup");
+            queue
+                .complete_lane_reservation_startup_reconciliation(receipt)
+                .expect("complete empty fixture startup before admitting work");
+        }
         let authority = transaction.authority().clone();
         if state.view().world().accounts().get(&authority).is_none() {
             let mut world = state.world.block();
@@ -22947,7 +22995,7 @@ pub mod tests {
         );
         assert_eq!(
             queue.router.read().try_route(&tx),
-            Err(RoutingResolveError::UnknownDataspace {
+            Err(RoutingResolveError::NoLaneForDataspace {
                 dataspace_id: unknown_dataspace,
             })
         );
@@ -23616,6 +23664,7 @@ pub mod tests {
         }
         seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
+        let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
         assert_eq!(
@@ -23646,8 +23695,12 @@ pub mod tests {
         assert!(!queue.accepted_work_validation_faulted());
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         assert!(
-            state.lane_manifests.read().status(LaneId::new(1)).is_some(),
-            "committed queue reconfiguration must publish the same manifest registry to consensus state even when background polling is disabled"
+            queue.lane_manifests.read().status(LaneId::new(1)).is_some(),
+            "queue reconfiguration must refresh its manifest projection for the current catalog"
+        );
+        assert!(
+            Arc::ptr_eq(&state.lane_manifests.read(), &authoritative_manifests),
+            "refreshing a queue projection must preserve State's authoritative manifest registry"
         );
         assert_eq!(
             state.lane_manifests.read().consensus_policy_digest(),
@@ -24417,7 +24470,9 @@ pub mod tests {
         let time_source = TimeSource::new_system();
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id.clone()],
@@ -24470,7 +24525,9 @@ pub mod tests {
         let time_source = TimeSource::new_system();
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id],
@@ -24579,7 +24636,9 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_primary, primary_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_primary);
         let (validator_secondary, _secondary_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_secondary);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24739,7 +24798,9 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24820,6 +24881,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24909,6 +24971,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -25073,6 +25136,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -25267,7 +25331,7 @@ pub mod tests {
     async fn governance_manifest_rejects_cross_namespace_rebind() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut world = world_with_test_domains();
+        let world = world_with_test_domains();
         let (validator, keypair) = gen_account_in("wonderland");
         let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25278,10 +25342,8 @@ pub mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        world
-            .contract_instances
-            .insert(existing_contract_address.clone(), Hash::new(b"demo"));
         let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
+        register_test_authority(&state, &validator);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let mut protected = BTreeSet::new();
@@ -25358,6 +25420,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             hooks: GovernanceHooks {
@@ -25432,6 +25495,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut statuses = BTreeMap::new();
         let metadata_key = Name::from_str("gov_upgrade_id").expect("static metadata key");
         let mut allowed_ids = BTreeSet::new();
@@ -25548,14 +25612,16 @@ pub mod tests {
         );
     }
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
-        accepted_tx_by(account_id, &key_pair, time_source)
+        accepted_tx_by(
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
+            time_source,
+        )
     }
     fn accepted_queue_plan_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         accepted_queue_plan_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             vec![sample_unregister_instruction()],
             Metadata::default(),
@@ -25570,14 +25636,13 @@ pub mod tests {
     fn accepted_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("reservation");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
@@ -25586,14 +25651,13 @@ pub mod tests {
     fn accepted_queue_plan_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("reservation");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_queue_plan_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
@@ -25604,18 +25668,44 @@ pub mod tests {
         dataspace_alias: &str,
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("dummy");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, dataspace_alias).unwrap(),
         ))];
         accepted_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
         )
+    }
+    #[test]
+    fn shared_queue_transactions_have_registered_authority_and_unique_entrypoints() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let transactions = [
+            accepted_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
+            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+        ];
+        let view = state.view();
+        let mut hashes = BTreeSet::new();
+        for transaction in transactions {
+            assert!(
+                view.world()
+                    .accounts()
+                    .get(transaction.as_ref().authority())
+                    .is_some()
+            );
+            assert!(hashes.insert(transaction.hash_as_entrypoint()));
+        }
     }
     #[test]
     fn compute_tx_encoded_len_matches_payload() {
@@ -26558,19 +26648,13 @@ pub mod tests {
             &plan,
             &context,
         ));
-        let mutated_tx_error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                mutated_tx,
-                &state,
-                plan.clone(),
-                &context,
-            )
-            .expect_err("a different transaction must not reuse an earlier durable claim");
-        assert!(matches!(
-            mutated_tx_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("admission context no longer matches")
-        ));
+        assert_eq!(
+            queue
+                .durable_plan_admission_claim_with_state(&mutated_tx, &state)
+                .expect("an unrelated transaction has no existing claim"),
+            None,
+            "a historical context does not transfer ownership of an earlier transaction claim"
+        );
         mutable_router.set(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(42)));
         assert_eq!(
             queue
@@ -27500,19 +27584,16 @@ pub mod tests {
         let original_journal_len = std::fs::metadata(&journal_path)
             .expect("stale-incarnation journal metadata")
             .len();
-        {
-            // This queue-only ABA test changes the authoritative routing/incarnation state.
-            // Keep the test Kura's marker projection synchronized so the fixture remains a
-            // valid State even though the assertion concerns only durable queue claims.
-            let nexus = state.nexus.get_mut();
-            let mut lanes = nexus.lane_catalog.lanes().to_vec();
-            lanes[0].alias = "recreated-single-lane".to_owned();
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(1_u32), lanes).expect("recreated lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-        state.reseed_static_lane_incarnations_for_tests();
+        let recreated_incarnation = Hash::new(b"recreated lane incarnation for queue claim replay");
+        state.set_lane_incarnation_for_test(LaneId::SINGLE, recreated_incarnation);
+        state
+            .kura()
+            .install_lane_incarnation_marker_for_test(
+                state.nexus_snapshot().lane_config.primary(),
+                recreated_incarnation,
+                0,
+            )
+            .expect("replace exact incarnation marker for queue replay fixture");
         let current_context = make_queue()
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture recreated incarnation context");
@@ -27530,19 +27611,32 @@ pub mod tests {
             ),
             "same lane id with a new active incarnation must not reuse the old claim"
         );
-        let recreated_retry_error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                tx.clone(),
-                &state,
-                plan.clone(),
+        for (context, expected_reason) in [
+            (
                 &original_context,
-            )
-            .expect_err("same-ID ABA must invalidate a same-process durable-claim retry");
-        assert!(matches!(
-            recreated_retry_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("active lane incarnation")
-        ));
+                "neither the existing claim nor the exact current generation",
+            ),
+            (&current_context, "active lane incarnation"),
+        ] {
+            let error = queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    context,
+                )
+                .expect_err(
+                    "same-ID ABA must invalidate original retries and current-generation rollover",
+                );
+            assert!(
+                matches!(
+                    &error.err,
+                    Error::UnresolvedRoute { reason } if reason.contains(expected_reason)
+                ),
+                "unexpected ABA retry failure: {:?}",
+                error.err
+            );
+        }
         assert_eq!(queue.active_len(), 1);
         assert_eq!(
             std::fs::metadata(&journal_path)
@@ -27716,9 +27810,10 @@ pub mod tests {
         assert_eq!(
             replay_queue
                 .route_plan_with_state(&tx, &state)
-                .expect("resolve current policy")
-                .coordinator_route(),
-            current_route
+                .expect_err("the replacement policy targets an unavailable dataspace"),
+            RoutingResolveError::UnknownDataspace {
+                dataspace_id: current_route.dataspace_id,
+            }
         );
         let summary = replay_queue
             .replay_plan_journal(&state)
@@ -28785,6 +28880,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install stateless-rejection journal");
         let (authority, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority);
         let wrong_network_id =
             crate::sumeragi::synthetic_network_id("wrong-network-for-queue-journal-replay");
         let signed = TransactionBuilder::new_with_time_source(
@@ -28988,18 +29084,7 @@ pub mod tests {
             .expect("install journal");
         let tx = accepted_tx_by(authority_id, &authority_keypair, &time_source);
         let hash = tx.hash_as_entrypoint();
-        let stale_plan = queue
-            .router
-            .read()
-            .try_route_plan_with_state(&tx, &state)
-            .and_then(|plan| {
-                resolve_routing_plan_against_catalogs(
-                    plan,
-                    &stale_nexus.lane_catalog,
-                    &stale_nexus.dataspace_catalog,
-                )
-            })
-            .expect("stale plan resolves against stale Nexus catalogs");
+        let stale_plan = RoutingPlan::single(old_route);
         assert_eq!(stale_plan.coordinator_route(), old_route);
         let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
@@ -29147,6 +29232,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
             authority_id.clone(),
             &authority_keypair,
@@ -29271,6 +29357,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let (tx, stale_plan) = (0_u32..512)
             .map(|idx| {
                 let tx = accepted_tx_with(
@@ -29538,6 +29625,7 @@ pub mod tests {
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
             authority_id,
             &authority_keypair,

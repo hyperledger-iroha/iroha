@@ -11191,6 +11191,36 @@ mod tests {
                 let mut state = fixture.state();
                 state.bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x33));
                 fixture.set_state(state);
+            } => "fields do not match the governed bootstrap digest";
+            |fixture| {
+                let head = *fixture
+                    .root_heads
+                    .view()
+                    .get(&fixture.head_key)
+                    .expect("bootstrap head");
+                let substituted_origin = PrivacyRootProvenanceV1::orchard_pool_bootstrap(
+                    PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x33)),
+                    9,
+                )
+                .expect("locally valid substituted origin");
+                let root_key = PrivacyRootKeyV1::new(
+                    fixture.namespace,
+                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                    head.epoch(),
+                    head.root(),
+                )
+                .expect("same canonical root identity");
+                fixture.roots.insert(root_key, substituted_origin);
+                fixture.root_heads.insert(
+                    fixture.head_key,
+                    PrivacyRootHeadRecordV1::new(
+                        head.epoch(),
+                        head.root(),
+                        substituted_origin,
+                        None,
+                    )
+                    .expect("head and history agree on the substituted origin"),
+                );
             } => "origin differs from its pool state";
             |fixture| {
                 let snapshot = fixture
@@ -13233,8 +13263,8 @@ mod tests {
             record
         );
         let unknown_origin = encoded.replacen(
-            "\"zk_x509_verified_certificate_nullifier\"",
-            "\"zk_x509_verified_certificate_nullifier_legacy\"",
+            "\"ZkX509VerifiedCertificateNullifier\"",
+            "\"UnknownCertificateNullifierOrigin\"",
             1,
         );
         assert_ne!(

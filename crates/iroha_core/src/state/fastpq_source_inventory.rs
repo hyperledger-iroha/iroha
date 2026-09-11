@@ -25,7 +25,11 @@ mod content_verification;
 #[cfg(test)]
 mod owned_d7_capture;
 mod public_seal;
+mod statement_reservation;
 use public_seal::{SourceTranscriptSeal, seal_public_transcripts};
+pub use statement_reservation::{
+    FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1, FastpqSourceStatementUsageV1,
+};
 
 /// Complete local source projection captured by a validator's block execution.
 ///

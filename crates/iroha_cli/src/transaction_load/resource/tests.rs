@@ -368,6 +368,7 @@ fn sampling_geometry_is_exact_bounded_and_covers_final_endpoint() {
     let args = Args {
         resource_program: "/unused/python".into(),
         resource_worker: "/unused/worker".into(),
+        resource_budget_sha256: "a".repeat(64),
         resource_config: "/unused/secret".into(),
         resource_capture_dir: "/unused/new".into(),
         resource_interval_ms: 1000,
@@ -407,6 +408,7 @@ fn sampling_geometry_is_exact_bounded_and_covers_final_endpoint() {
             resource_max_start_lag_ms: lag,
             resource_program: args.resource_program.clone(),
             resource_worker: args.resource_worker.clone(),
+            resource_budget_sha256: args.resource_budget_sha256.clone(),
             resource_config: args.resource_config.clone(),
             resource_capture_dir: args.resource_capture_dir.clone(),
         };
@@ -499,6 +501,8 @@ fn resource_arguments_are_mandatory_and_never_create_an_unsampled_mode() {
         "/unused/python",
         "--resource-worker",
         "/unused/worker",
+        "--resource-budget-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--resource-config",
         "/unused/runtime-secret",
         "--resource-capture-dir",

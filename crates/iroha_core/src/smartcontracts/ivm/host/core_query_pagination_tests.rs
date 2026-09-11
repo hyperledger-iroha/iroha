@@ -69,7 +69,10 @@ fn every_core_query_page_family_uses_canonical_id_order_and_next_offset() {
         build_fixture_account(&second_account, &authority),
         build_fixture_account(&authority, &authority),
     ];
-    let world = World::with_assets(domains, accounts, asset_definitions, assets, nfts);
+    let world = ledger_reader_world_for_core_query_tests(
+        World::with_assets(domains, accounts, asset_definitions, assets, nfts),
+        &authority,
+    );
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -228,7 +231,8 @@ fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
         build_fixture_account(&fixture_account("bob"), &authority),
         build_fixture_account(&fixture_account("carol"), &authority),
     ];
-    let world = World::with([domain], accounts, []);
+    let world =
+        ledger_reader_world_for_core_query_tests(World::with([domain], accounts, []), &authority);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
@@ -291,7 +295,8 @@ fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
         build_fixture_account(&fixture_account("bob"), &authority),
         build_fixture_account(&fixture_account("carol"), &authority),
     ];
-    let world = World::with([domain], accounts, []);
+    let world =
+        ledger_reader_world_for_core_query_tests(World::with([domain], accounts, []), &authority);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
@@ -367,11 +372,11 @@ fn execute_query_syscall_out_of_gas_when_budget_exhausted() {
 }
 #[test]
 fn execute_query_syscall_out_of_gas_when_response_bytes_exceed_budget() {
-    let world = World::new();
+    let authority: AccountId = fixture_account("alice");
+    let world = ledger_reader_world_for_core_query_tests(World::new(), &authority);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
-    let authority: AccountId = fixture_account("alice");
     let view = state.view();
     let mut host = CoreHostImpl::new(authority);
     host.set_query_state(&view);

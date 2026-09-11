@@ -7860,6 +7860,21 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
     assert_eq!(trace.coefficient_to_slot_output, ciphertext);
     let_row! { input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound") };
     let_row! { prefix_bounds = bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1( &params, &bootstrap_key, &artifacts, &galois_keys, input_bound, ) .expect("exact prefix trace bounds") };
+    let diagnostic = bfv_full_bootstrap_diagnostic_execution_v1(
+        &params,
+        &bootstrap_key,
+        &artifacts,
+        &galois_keys,
+        &ciphertext,
+        BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+        input_bound,
+    )
+    .expect("exact arithmetic diagnostic");
+    assert_eq!(diagnostic, (trace.clone(), prefix_bounds.clone()));
+    assert!(matches!(
+        require_ram_lfe_bfv_production_qualification_v1(),
+        Err(BfvError::ProductionQualificationUnavailable(_))
+    ));
     validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
         &params,
         BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
@@ -8012,6 +8027,20 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
     assert_eq!(bounded_trace.coefficient_to_slot_output, bounded_ciphertext);
     let_row! { input_noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound") };
     let_row! { bounded_prefix_bounds = bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1( &params, &bounded_bootstrap_key, &bounded_artifacts, &bounded_galois_keys, input_noise_bound, ) .expect("bounded prefix trace bounds") };
+    let diagnostic = bfv_full_bootstrap_diagnostic_execution_v1(
+        &params,
+        &bounded_bootstrap_key,
+        &bounded_artifacts,
+        &bounded_galois_keys,
+        &bounded_ciphertext,
+        BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,
+        input_noise_bound,
+    )
+    .expect("bounded-noise arithmetic diagnostic");
+    assert_eq!(
+        diagnostic,
+        (bounded_trace.clone(), bounded_prefix_bounds.clone())
+    );
     validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
         &params,
         BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,

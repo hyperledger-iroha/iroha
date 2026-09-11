@@ -214,7 +214,7 @@ fn authenticate_signed_snapshot_physical_fixture(
     assert_eq!(plan.audited_bootstrap_prefix_height(), 3);
     assert_eq!(plan.first_full_body_height(), None);
     let authorization =
-        crate::sumeragi::authenticate_v2_snapshot_startup(&fixture.kura, &state, &plan)
+        crate::sumeragi::authenticate_v2_snapshot_startup(&fixture.kura, &state, &plan, &crate::sumeragi::V2SnapshotStartupPolicy::from_state(&state).expect("fixture startup policy"))
             .unwrap()
             .expect("the public exact-boundary verifier must mint the consumed token");
     assert_eq!(authorization.mode(), fixture.record.context.mode);

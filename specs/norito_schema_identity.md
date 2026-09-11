@@ -999,14 +999,14 @@ helper is not a compiler capture or coverage proof.
 | `queries!` | All 127 concrete query declarations supply captured literal names; the template emits one identity derive and requires each declaration's identity. |
 | `enum_type!` | All 12 current instruction enum callers supply captured literal identities; the template emits one identity derive. The compiler exposed two callers absent from the historical review, and both received their own pre-declaration capture. Private discriminators keep their visibility. |
 | `isi_box!` | All 12 current callers supply captured literal identities; the template emits one identity derive. Exhaustive matches and immutable fixtures cover all 68 variants, including populated generic instruction payloads. |
-| `isi!` | All 292 current declarations supply captured literal identities; the template emits one identity derive. The 283 nongeneric records and 39 instantiated generic forms preserve 357 values and 1,428 complete frames. All 325 record tests and the 12-argument marker test pass. |
+| `isi!` | All 289 current declarations supply captured literal identities; the template emits one identity derive. The 280 nongeneric records and 39 instantiated generic forms preserve 354 values and 1,416 complete frames. Tests cover every retained record and the 12 generic argument markers. |
 | Musubi digest/text/page macros | All 12 digests, three bounded-text wrappers and two page wrappers supply captured literal identities. Each template emits one identity derive. |
 | Governance hash macros | All 16 handwritten-codec wrappers supply captured literal identities; the generator emits one independent identity derive and retains the codec bodies. |
 | Privacy/spentness carrier macros | All 62 generated types supply required captured literals; each of the four templates emits one identity derive without changing constructors, codecs or validation. |
 | `EnumRef` | Explicit child identities only for existing codec or typed-marker uses; no new wire surface for ordinary helpers. |
 
 The historical generated-family review is a capture subset. A current source
-inventory finds 292 `isi!`, 12 `isi_box!` and 12 `enum_type!` invocations,
+inventory finds 289 `isi!`, 12 `isi_box!` and 12 `enum_type!` invocations,
 compared with its 144, ten and ten named observations respectively. The two
 additional enum callers now have separate compiler captures. The current
 instruction callers now have their own capture and populated value coverage;
@@ -1022,7 +1022,9 @@ exposed 51 nongeneric instruction records missing value fixtures. The
 subsequent box capture adds deterministic generic values and closes all box
 variants. A further capture fills all 51 record gaps from typed fixture values
 before the declarations change. The [record fixture](../crates/iroha_data_model/tests/fixtures/instruction_record_generated_identity_frames.md)
-now covers all 322 current instantiated record types and preserves 1,428 frames.
+now covers all 319 current instantiated record types and preserves 1,416 frames,
+after removing three unimplemented citizen-bond operations from the instruction
+surface without changing the remaining captures.
 Neither the registry nor the historical capture is used as a proxy for this
 coverage. Twelve additional generic argument markers retain their captured
 nominal names; both existing codec directions match the independent identity.

@@ -8432,6 +8432,66 @@ fn validate_initial_permission_payload_constraints(
         }};
     }
     match permission.name().as_ref() {
+        "CanManageSoracloud"
+        | "CanBindSorafsAlias"
+        | "CanDeclareSorafsCapacity"
+        | "CanSubmitSorafsTelemetry"
+        | "CanFileSorafsCapacityDispute"
+        | "CanIssueSorafsReplicationOrder"
+        | "CanCompleteSorafsReplicationOrder"
+        | "CanSetSorafsPricing"
+        | "CanSetSorafsReservePolicy"
+        | "CanManageSorafsModeration"
+        | "CanManageSorafsPopRegistry"
+        | "CanOperateSorafsPopIssuer"
+        | "CanUpsertSorafsProviderCredit"
+        | "CanManageSorafsProofOutcomePolicy"
+        | "CanManageSorafsReputationJournalPolicy"
+        | "CanRecordSorafsReputationJournal"
+        | "CanResolveSorafsCapacityDispute" => {
+            if permission.payload() != &Json::new(()) {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the unit payload",
+                ));
+            }
+        }
+        "CanOperateSorafsRepair" => {
+            let token = executor_permission::sorafs::CanOperateSorafsRepair::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact provider scope",
+                ));
+            }
+        }
+        "CanRecordSorafsProofOutcome" => {
+            let token =
+                executor_permission::sorafs::CanRecordSorafsProofOutcome::try_from(permission)
+                    .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact provider scope",
+                ));
+            }
+        }
+        "CanGovernSoracloudFhe" => {
+            let scope = permission
+                .payload()
+                .try_into_any_norito::<iroha_data_model::soracloud::SoracloudFheGovernancePermissionScopeV1>()
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            scope
+                .validate()
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if permission.payload() != &Json::new(scope) {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact service and policy scope",
+                ));
+            }
+        }
         "CanManageRuntimeUpgrades" => validate_exact_unit_permission!(
             executor_permission::governance::CanManageRuntimeUpgrades
         ),
@@ -9495,6 +9555,12 @@ fn can_modify_asset_metadata_initial(
 }
 fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
+    if let Some(admission) =
+        crate::smartcontracts::isi::registered_native_instruction_initial_admission(instruction)
+    {
+        return admission
+            == crate::smartcontracts::isi::InitialNativeInstructionAdmission::CoreAuthorized;
+    }
     let any = instruction.as_any();
     macro_rules! is_any {
         ($($ty:ty),+ $(,)?) => {
@@ -9590,74 +9656,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Orderbook handlers bind owner payload signatures and governed matcher
-    // authority in Core. Receipts remain relayable only under the provider's
-    // signature and the immutable channel's custody-release authority.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy,
-        iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder,
-        iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder,
-        iroha_data_model::isi::sorafs::MatchSorafsOrderbook,
-        iroha_data_model::isi::sorafs::MaintainSorafsOrderbook,
-        iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt,
-    ) {
-        return true;
-    }
-    // Reserve policy, operations, decisions, and provider requests retain their
-    // exact native permission, governed-account, and provider-owner checks.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsReservePolicy,
-        iroha_data_model::isi::sorafs::RegisterSorafsReserveAccount,
-        iroha_data_model::isi::sorafs::RequestSorafsReserveMovement,
-        iroha_data_model::isi::sorafs::DecideSorafsReserveMovement,
-        iroha_data_model::isi::sorafs::ChargeSorafsReserveRent,
-        iroha_data_model::isi::sorafs::AdvanceSorafsReserveLifecycle,
-        iroha_data_model::isi::sorafs::DrawSorafsReserveCredit,
-        iroha_data_model::isi::sorafs::RepaySorafsReserveCredit,
-        iroha_data_model::isi::sorafs::SubmitSorafsReserveAppeal,
-        iroha_data_model::isi::sorafs::DecideSorafsReserveAppeal,
-    ) {
-        return true;
-    }
-    // Repair ingress enforces provider-scoped worker permissions, current lease
-    // authority, and owner-only appeals in Core. Admit the complete lifecycle
-    // so an escalated task retains its native appeal path.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SubmitSorafsRepairTask,
-        iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction,
-        iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal,
-    ) {
-        return true;
-    }
-    // PoP registry mutations retain exact governance/issuer permissions, the
-    // current issuer account and signed canonical publication bindings in Core.
-    // Revocations only append committed nonces under the active version chain.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy,
-        iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch,
-        iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList,
-    ) {
-        return true;
-    }
-    // Moderation management retains exact governed permissions in Core. Public
-    // ingress binds the authenticated appellant, juror proof, ballot, or bond;
-    // expiry derives only the native grace-deadline outcome.
-    if is_any!(
-        iroha_data_model::isi::sorafs::SetSorafsModerationPolicy,
-        iroha_data_model::isi::sorafs::SubmitSorafsModerationAppeal,
-        iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility,
-        iroha_data_model::isi::sorafs::FinalizeSorafsModerationSortition,
-        iroha_data_model::isi::sorafs::AcceptSorafsModerationJurorAssignment,
-        iroha_data_model::isi::sorafs::ActivateSorafsModerationCase,
-        iroha_data_model::isi::sorafs::SubmitSorafsModerationCommit,
-        iroha_data_model::isi::sorafs::RaiseSorafsModerationChallenge,
-        iroha_data_model::isi::sorafs::ResolveSorafsModerationChallenge,
-        iroha_data_model::isi::sorafs::ExpireSorafsModerationChallenge,
-        iroha_data_model::isi::sorafs::SubmitSorafsModerationReveal,
-        iroha_data_model::isi::sorafs::FinalizeSorafsModerationCase,
-    ) {
-        return true;
-    }
     // Privacy activation remains governance-bound in Core, while proof
     // submission consumes the rollback-safe signed transaction-intent binding
     // and runs the exhaustive native verifier before any persistent world,
@@ -9691,6 +9689,20 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::game::ExpireGameSessionV1,
         iroha_data_model::isi::game::ClaimGamePayoutV1,
         iroha_data_model::isi::game::StakeGameItemV1,
+    ) {
+        return true;
+    }
+    // Marketplace escrow handlers authenticate the seller, buyer, or dispute
+    // resolver in Core and enforce the native asset-transfer controls. Admit
+    // the complete lifecycle so opening custody always has a terminal path.
+    if is_any!(
+        iroha_data_model::isi::escrow::OpenAssetEscrow,
+        iroha_data_model::isi::escrow::AcceptAssetEscrow,
+        iroha_data_model::isi::escrow::MarkEscrowPaymentSent,
+        iroha_data_model::isi::escrow::ReleaseAssetEscrow,
+        iroha_data_model::isi::escrow::CancelAssetEscrow,
+        iroha_data_model::isi::escrow::OpenEscrowDispute,
+        iroha_data_model::isi::escrow::ResolveEscrowDispute,
     ) {
         return true;
     }
@@ -10281,6 +10293,14 @@ fn validate_initial_native_instruction_authority(
         )?
     {
         return deny("only the asset-definition owner may change its alias");
+    }
+    if matches!(
+        crate::smartcontracts::isi::registered_native_instruction_initial_admission(instruction),
+        Some(crate::smartcontracts::isi::InitialNativeInstructionAdmission::Closed)
+    ) {
+        return Err(ValidationFail::NotPermitted(
+            crate::smartcontracts::isi::INITIAL_NATIVE_INSTRUCTION_CLOSED_REASON.to_owned(),
+        ));
     }
     if !initial_native_instruction_is_explicitly_admitted(instruction)
         && !(is_genesis && initial_genesis_instruction_is_explicitly_admitted(instruction))
@@ -10887,6 +10907,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageParliament",
     "CanSlashGovernanceLock",
     "CanRestituteGovernanceLock",
+    "CanManageSoracloud",
+    "CanGovernSoracloudFhe",
     "CanBindSorafsAlias",
     "CanDeclareSorafsCapacity",
     "CanSubmitSorafsTelemetry",
@@ -11482,6 +11504,28 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         )
     }
+    fn bind_executor_test_contract(
+        world: &mut World,
+        address: &ContractAddress,
+        owner: &AccountId,
+        code_hash: Hash,
+    ) {
+        world.accounts.insert(
+            address.subject_id(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.contract_instances.insert(address.clone(), code_hash);
+        world
+            .contract_subject_addresses
+            .insert(address.subject_id(), address.clone());
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            crate::smartcontracts::code::ContractSubjectBinding::new_direct(address, owner.clone())
+                .with_active_code_hash(code_hash),
+        );
+    }
     fn state_after_genesis(world: World) -> State {
         let state = State::new(
             world,
@@ -11539,6 +11583,10 @@ mod tests {
             ..ivm::ProgramMetadata::default()
         }
         .encode();
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 1, 0, 1)
+                .to_le_bytes(),
+        );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let trigger = Trigger::new(
             trigger_id.clone(),
@@ -12480,10 +12528,8 @@ mod tests {
                 .execute_instruction(&mut state_transaction, &authority, instruction)
                 .expect_err("Initial executor must preserve Core's reserved metadata guard");
             assert!(
-                error
-                    .to_string()
-                    .contains("reserved for native asset transfer controls"),
-                "unexpected Initial-executor rejection: {error}"
+                format!("{error:?}").contains("reserved for native asset transfer controls"),
+                "unexpected Initial-executor rejection: {error:?}"
             );
         }
     }
@@ -12560,21 +12606,20 @@ mod tests {
     #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
         let source = include_str!("executor.rs");
-        let start = source
-            .find("// Native VPN escrow admission is one signed lifecycle surface.")
-            .expect("VPN lifecycle allowlist marker");
-        let tail = &source[start..];
-        let end = tail
-            .find("// Cross-border settlement and relays")
-            .expect("VPN lifecycle allowlist terminator");
-        let allowlist = &tail[..end];
+        let allowlist = source
+            .split_once("fn initial_native_instruction_is_explicitly_admitted(")
+            .expect("native Initial-executor classifier")
+            .1
+            .split_once("fn initial_genesis_instruction_is_explicitly_admitted(")
+            .expect("end of native Initial-executor classifier")
+            .0;
         for instruction in [
             "OpenVpnLeaseEscrow",
             "SettleVpnLease",
             "RefundExpiredVpnLease",
         ] {
             assert!(
-                allowlist.contains(instruction),
+                allowlist.contains(&format!("iroha_data_model::isi::vpn::{instruction},")),
                 "Initial executor VPN lifecycle allowlist omitted {instruction}"
             );
         }
@@ -12724,13 +12769,15 @@ mod tests {
         }
     }
     fn initial_executor_seed_pending_consensus_evidence(
-        world: &mut World,
+        state_transaction: &mut StateTransaction<'_, '_>,
         evidence: &iroha_data_model::block::consensus::Evidence,
     ) -> Hash {
         use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
 
         let key = crate::sumeragi::evidence::evidence_key(evidence);
-        world.consensus_evidence.insert(
+        // These authorization unit tests exercise an already-admitted record
+        // projection; durable evidence authentication has its own fixture suite.
+        state_transaction.world.consensus_evidence.insert(
             key.clone(),
             EvidenceRecord {
                 evidence: evidence.clone(),
@@ -12750,11 +12797,12 @@ mod tests {
 
         let authority = checked_account_id();
         let evidence = initial_executor_consensus_evidence_fixture();
-        let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
+        let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let state = state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
         let mut state_transaction = block.transaction();
+        let evidence_key =
+            initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
 
         let error = super::Executor::Initial
             .execute_instruction(
@@ -12788,7 +12836,6 @@ mod tests {
         let authority = checked_account_id();
         let evidence = initial_executor_consensus_evidence_fixture();
         let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
         world.account_permissions.insert(
             authority.clone(),
             BTreeSet::from([Permission::from(executor_permission::peer::CanManagePeers)]),
@@ -12796,6 +12843,8 @@ mod tests {
         let state = state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
         let mut state_transaction = block.transaction();
+        let evidence_key =
+            initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
 
         super::Executor::Initial
             .execute_instruction(
@@ -12823,7 +12872,6 @@ mod tests {
         let authority = checked_account_id();
         let evidence = initial_executor_consensus_evidence_fixture();
         let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let evidence_key = initial_executor_seed_pending_consensus_evidence(&mut world, &evidence);
         let role_id: RoleId = "consensus_evidence_penalty_manager"
             .parse()
             .expect("role id");
@@ -12838,6 +12886,8 @@ mod tests {
         let state = state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
         let mut state_transaction = block.transaction();
+        let evidence_key =
+            initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
 
         super::Executor::Initial
             .execute_instruction(
@@ -15056,9 +15106,7 @@ mod tests {
         .expect("contract address");
         let code_hash = Hash::new(b"proved durable-state contract");
         let mut world = World::with([domain], [account], []);
-        world
-            .contract_instances
-            .insert(contract_address.clone(), code_hash);
+        bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = state_for_testing(world);
         let tx = TransactionBuilder::new(
             state.network_id,
@@ -15629,13 +15677,10 @@ mod tests {
     #[test]
     fn initial_genesis_context_rejects_height_one_replay_over_committed_history() {
         let (state, _, _, _, _, _, _) = pipeline_fee_state_fixture();
-        {
-            let mut hashes = state.block_hashes.block();
-            hashes.push_for_tests(HashOf::from_untyped_unchecked(Hash::new(
-                b"already-committed-height-one",
-            )));
-            hashes.commit_for_tests();
-        }
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit_empty_block_for_testing()
+            .expect("commit the prior authenticated genesis block");
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let state_transaction = block.transaction();
         assert!(state_transaction._curr_block.is_genesis());
@@ -15777,6 +15822,12 @@ mod tests {
                 ENTRYPOINT_PERMISSION.to_owned(),
                 Json::new(()),
             )]),
+        );
+        state_transaction.world.accounts.insert(
+            contract_address.subject_id(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
         );
         let subject_binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
             &contract_address,
@@ -17500,12 +17551,12 @@ mod tests {
         let vk_commitment = crate::zk::hash_vk(&vk);
         let mut vk_record = VerifyingKeyRecord::new_with_owner(
             1,
-            "preverify",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            [0; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             vk_commitment,
         );
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -17522,14 +17573,14 @@ mod tests {
         // exercises deduplication after production-shaped proof admission.
         let envelope = OpenVerifyEnvelope::new(
             BackendTag::Halo2IpaPasta,
-            "halo2/ipa:preverify",
+            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             vk_commitment,
-            b"preverify-test-schema".to_vec(),
+            crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
             vec![1u8, 2, 3],
         );
         let proof = ProofBox::new(
             backend.clone(),
-            norito::to_bytes(&envelope).expect("encode preverify envelope"),
+            norito::encode_canonical(&envelope).expect("encode preverify envelope"),
         );
         let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
@@ -17599,12 +17650,12 @@ mod tests {
             let vk_commitment = crate::zk::hash_vk(&vk);
             let mut vk_record = VerifyingKeyRecord::new_with_owner(
                 1,
-                "height-window",
+                crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
                 "pasta",
-                [0xAA; 32],
+                crate::zk::ivm_execution_public_inputs_schema_hash(),
                 vk_commitment,
             );
             vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -17616,14 +17667,14 @@ mod tests {
             world.verifying_keys.insert(vk_id.clone(), vk_record);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                "halo2/ipa:height-window",
+                crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
                 vk_commitment,
-                b"height-window-public-inputs".to_vec(),
+                crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
                 vec![1u8, 2, 3],
             );
             let proof = ProofBox::new(
                 backend.clone(),
-                norito::to_bytes(&envelope).expect("encode preverify envelope"),
+                norito::encode_canonical(&envelope).expect("encode preverify envelope"),
             );
             let mut attachment = ProofAttachment::new_ref(backend, proof, vk_id);
             attachment.vk_commitment = Some(vk_commitment);
@@ -18007,7 +18058,7 @@ mod tests {
         let seller_asset = Asset::new(seller_asset_id.clone(), Quantity::from(100_u64));
         let world = World::with_assets(
             [domain],
-            [seller_account],
+            [seller_account, Account::new(BOB_ID.clone()).build(&seller)],
             [asset_definition],
             [seller_asset],
             [],
@@ -18054,6 +18105,32 @@ mod tests {
             .expect("custody balance");
         assert_eq!(seller_balance, Quantity::from(60_u64));
         assert_eq!(custody_balance, Quantity::from(40_u64));
+        let cancel = iroha_data_model::isi::escrow::CancelAssetEscrow::new(escrow_id);
+        let error = super::Executor::Initial
+            .execute_instruction(&mut stx, &BOB_ID, cancel.clone().into())
+            .expect_err("a different authority cannot refund the seller's escrow");
+        assert!(
+            format!("{error:?}").contains("only seller may cancel escrow"),
+            "the escrow must reach its native ownership guard: {error:?}"
+        );
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&custody_asset_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(40_u64)),
+            "a denied refund leaves custody untouched"
+        );
+        super::Executor::Initial
+            .execute_instruction(&mut stx, &seller, cancel.into())
+            .expect("the seller can terminalize native escrow custody");
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&seller_asset_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(100_u64))
+        );
     }
     #[test]
     fn initial_executor_rejects_domainless_asset_definition_registration_after_genesis() {
@@ -19964,16 +20041,16 @@ mod tests {
             "an Ok discriminant without an ExecutorDataModel must not decode"
         );
         let canonical_unit = MigrationUnitPayload::Ok(()).encode();
-        assert_eq!(
+        assert_ne!(
             canonical_unit.as_slice(),
             discriminant_only.as_slice(),
-            "the discriminant-only bytes are instead a complete unit-success payload"
+            "canonical unit success includes its Norito payload framing"
         );
         let context = executor_result_test_context();
         let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
-            + u64::try_from(discriminant_only.len()).expect("bounded migration result");
+            + u64::try_from(canonical_unit.len()).expect("bounded migration result");
         let unit_success =
-            loaded_executor_with_result_prefix(declared_len, discriminant_only.as_slice());
+            loaded_executor_with_result_prefix(declared_len, canonical_unit.as_slice());
         assert_eq!(
             run_executor_migration(&unit_success, &context, 1_000_000, Memory::HEAP_MAX_SIZE,)
                 .expect("a canonical unit-success migration result must be accepted"),
@@ -20226,20 +20303,7 @@ seiyaku GuardedValue {
         world
             .contract_manifests
             .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
-        world
-            .contract_instances
-            .insert(contract_address.clone(), code_hash);
-        world
-            .contract_subject_addresses
-            .insert(contract_address.subject_id(), contract_address.clone());
-        world.contract_subject_bindings.insert(
-            contract_address.clone(),
-            crate::smartcontracts::code::ContractSubjectBinding::new_direct(
-                &contract_address,
-                authority.clone(),
-            )
-            .with_active_code_hash(code_hash),
-        );
+        bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
@@ -20581,6 +20645,15 @@ seiyaku GuardedValueRebound {
             .world
             .contract_instances
             .insert(contract_address.clone(), rebound_code_hash);
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("rebound contract retains its lifecycle binding");
+            binding.lifecycle.active_code_hash = Some(rebound_code_hash);
+            binding.lifecycle.revision += 1;
+        }
         ivm::reset_argument_record_decode_count();
         let rebound = super::Executor::Initial
             .execute_transaction(
@@ -20616,6 +20689,15 @@ seiyaku GuardedValueRebound {
             .world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("restored contract retains its lifecycle binding");
+            binding.lifecycle.active_code_hash = Some(code_hash);
+            binding.lifecycle.revision += 1;
+        }
         state_tx
             .world
             .contract_code
@@ -20630,6 +20712,15 @@ seiyaku GuardedValueRebound {
             .world
             .contract_instances
             .remove(contract_address.clone());
+        {
+            let binding = state_tx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("deactivated contract retains its lifecycle binding");
+            binding.lifecycle.active_code_hash = None;
+            binding.lifecycle.revision += 1;
+        }
         ivm::reset_argument_record_decode_count();
         let deactivated = super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
@@ -20729,9 +20820,7 @@ seiyaku OrderedBatchGuard {
         world
             .contract_manifests
             .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
-        world
-            .contract_instances
-            .insert(contract_address.clone(), code_hash);
+        bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
@@ -20951,9 +21040,7 @@ seiyaku MeteredFailure {
         world
             .contract_manifests
             .insert(code_hash, manifest.signed(&ALICE_KEYPAIR));
-        world
-            .contract_instances
-            .insert(contract_address.clone(), code_hash);
+        bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),

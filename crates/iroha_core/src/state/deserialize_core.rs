@@ -822,8 +822,26 @@ fn nexus_from_snapshot_runtime(
         });
     }
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    restore_snapshot_nexus_owner_policy(&mut nexus, runtime.owner_policy)?;
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
     nexus.lane_catalog = catalog;
+    iroha_data_model::merge::validate_merge_lane_authority_geometry(
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+    )
+    .map_err(|error| json::Error::InvalidField {
+        field: "nexus_runtime.owner_policy.dataspaces".to_owned(),
+        message: error.to_string(),
+    })?;
+    validate_nexus_routing_policy(
+        &nexus.routing_policy,
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+    )
+    .map_err(|error| json::Error::InvalidField {
+        field: "nexus_runtime.owner_policy".to_owned(),
+        message: error.to_string(),
+    })?;
     // These windows determine both the serialized history cap and which retained samples
     // influence the first post-restart autoscale decision. Restore the snapshot-authenticated
     // values before canonical reserialization; substituting process defaults here makes a
@@ -838,6 +856,58 @@ fn nexus_from_snapshot_runtime(
         lane_incarnation_lineage,
         autoscale_sample_history,
     ))
+}
+fn restore_snapshot_nexus_owner_policy(
+    nexus: &mut iroha_config::parameters::actual::Nexus,
+    policy: SnapshotNexusOwnerPolicy,
+) -> Result<(), json::Error> {
+    let invalid = |message: String| json::Error::InvalidField {
+        field: "nexus_runtime.owner_policy".to_owned(),
+        message,
+    };
+    if policy
+        .dataspaces
+        .windows(2)
+        .any(|pair| pair[0].id >= pair[1].id)
+    {
+        return Err(invalid(
+            "dataspaces must be in strict canonical id order".to_owned(),
+        ));
+    }
+    let dataspaces = DataSpaceCatalog::new(
+        policy
+            .dataspaces
+            .into_iter()
+            .map(|entry| {
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: entry.id,
+                    alias: entry.alias,
+                    // Descriptions are operator-facing and excluded from the execution-policy digest.
+                    description: None,
+                    fault_tolerance: entry.fault_tolerance,
+                }
+            })
+            .collect(),
+    )
+    .map_err(|error| invalid(error.to_string()))?;
+    let nonzero = |value, field| {
+        std::num::NonZeroU32::new(value).ok_or_else(|| invalid(format!("{field} must be non-zero")))
+    };
+    nexus.staking.max_validators = nonzero(policy.max_validators, "max_validators")?;
+    nexus.autoscale.min_lane_id = nonzero(policy.autoscale_min_lane_id, "autoscale_min_lane_id")?;
+    nexus.autoscale.max_lane_id_exclusive = nonzero(
+        policy.autoscale_max_lane_id_exclusive,
+        "autoscale_max_lane_id_exclusive",
+    )?;
+    ensure_autoscale_runtime_lane_bounds(&nexus.autoscale)
+        .map_err(|error| invalid(error.to_string()))?;
+    nexus.dataspace_catalog = dataspaces;
+    nexus.staking.public_validator_mode = policy.public_validator_mode.into();
+    nexus.staking.restricted_validator_mode = policy.restricted_validator_mode.into();
+    nexus.routing_policy.default_lane = policy.routing_default_lane;
+    nexus.routing_policy.default_dataspace = policy.routing_default_dataspace;
+    nexus.autoscale.enabled = policy.autoscale_enabled;
+    Ok(())
 }
 fn validate_snapshot_autoscale_sample_history(
     runtime: &SnapshotNexusRuntime,

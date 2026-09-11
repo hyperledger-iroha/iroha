@@ -661,6 +661,7 @@ fn batch_push_per_user_limit_preserves_successful_prefix() {
     let queue = Queue::test(cfg, &time_source);
     let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let first = accepted_tx_by(account_id.clone(), &key_pair, &time_source);
     let first_hash = first.as_ref().hash_as_entrypoint();
     time_handle.advance(Duration::from_millis(1));

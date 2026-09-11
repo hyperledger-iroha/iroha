@@ -1467,6 +1467,18 @@ mod tests {
             )
             .requires_yield()
         );
+        let delayed_apply = AdvanceExecutorYieldV1::new(
+            AdvanceExecutorYieldCheckpointV1::BeforeStep,
+            AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor,
+        );
+        assert!(
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                claim,
+                delayed_apply,
+            )
+            .requires_yield(),
+            "a blocked delayed Apply must retain Completion priority over Producer work"
+        );
     }
 
     #[test]

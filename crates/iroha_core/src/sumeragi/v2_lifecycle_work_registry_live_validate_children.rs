@@ -197,15 +197,13 @@ impl LiveValidateApplyWorkProjectionPermit {
 /// older `AdvancedNoSuccessor` Validate tombstone. Neither variant grants a
 /// generic Apply capability; both remain inside the lifecycle-owned carrier.
 enum DurableLiveWalApplyValidationSourceV1 {
-    Linked(Box<DurableLiveWalApplyLinkedValidationV1>),
+    Linked(Box<LinkedLiveWalApplyValidationSourceV1>),
     Released(crate::sumeragi::v2::ReleasedLifecycleValidateTerminalProofV1),
 }
 
-/// One allocation retaining both the exact parent address and its moved Validate authority.
-///
-/// Keeping the address beside the carrier bounds the enum's inline footprint without a second
-/// allocation or a separately transferable predecessor identity.
-struct DurableLiveWalApplyLinkedValidationV1 {
+/// Single allocation retaining the exact linked Validate address and carrier.
+/// The parent stays move-only and is returned intact if Apply publication fails.
+struct LinkedLiveWalApplyValidationSourceV1 {
     parent_address: ConcreteWorkAddress,
     parent: ConcreteLifecycleWork,
 }
@@ -213,9 +211,9 @@ struct DurableLiveWalApplyLinkedValidationV1 {
 impl fmt::Debug for DurableLiveWalApplyValidationSourceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Linked(linked) => formatter
+            Self::Linked(source) => formatter
                 .debug_struct("Linked")
-                .field("parent_address", &linked.parent_address)
+                .field("parent_address", &source.parent_address)
                 .finish_non_exhaustive(),
             Self::Released(terminal) => formatter
                 .debug_struct("Released")
@@ -302,7 +300,7 @@ impl DurableLiveWalApplyWork {
             && terminal.ordinal() < self.address.ordinal
             && durable == self.validated_receipt.durable()
             && key.context() == self.context().id()
-            && key.phase() == LifecyclePhase::Validate
+            && key.phase().is_validate()
             && key.proposal_round() == Some(LifecycleRound::new(round.height, round.view))
             && key.subject() == Some(projection::block_subject(durable.subject()))
             && key.execution_commitment().is_none_or(|commitment| {
@@ -318,11 +316,11 @@ impl DurableLiveWalApplyWork {
 
     fn validation_source_is_exact(&self) -> bool {
         match &self.validation_source {
-            DurableLiveWalApplyValidationSourceV1::Linked(linked) => {
-                let DurableLiveWalApplyLinkedValidationV1 {
+            DurableLiveWalApplyValidationSourceV1::Linked(source) => {
+                let LinkedLiveWalApplyValidationSourceV1 {
                     parent_address,
                     parent,
-                } = linked.as_ref();
+                } = source.as_ref();
                 parent.validates_at(*parent_address)
                     && parent_address != &self.address
                     && parent_address.owner == self.address.owner
@@ -341,7 +339,7 @@ impl DurableLiveWalApplyWork {
 
     fn validate_predecessor_ordinal(&self) -> u128 {
         match &self.validation_source {
-            DurableLiveWalApplyValidationSourceV1::Linked(linked) => linked.parent_address.ordinal,
+            DurableLiveWalApplyValidationSourceV1::Linked(source) => source.parent_address.ordinal,
             DurableLiveWalApplyValidationSourceV1::Released(terminal) => terminal.ordinal(),
         }
     }
@@ -364,11 +362,11 @@ impl DurableLiveWalApplyWork {
         coordinator: &LifecycleCoordinator,
     ) -> bool {
         match &self.validation_source {
-            DurableLiveWalApplyValidationSourceV1::Linked(linked) => {
-                let DurableLiveWalApplyLinkedValidationV1 {
+            DurableLiveWalApplyValidationSourceV1::Linked(source) => {
+                let LinkedLiveWalApplyValidationSourceV1 {
                     parent_address,
                     parent,
-                } = linked.as_ref();
+                } = source.as_ref();
                 coordinator
                     .records
                     .get(&parent_address.ordinal)
@@ -427,11 +425,11 @@ impl DurableLiveWalApplyWork {
             return false;
         }
         match &self.validation_source {
-            DurableLiveWalApplyValidationSourceV1::Linked(linked) => {
-                let DurableLiveWalApplyLinkedValidationV1 {
+            DurableLiveWalApplyValidationSourceV1::Linked(source) => {
+                let LinkedLiveWalApplyValidationSourceV1 {
                     parent_address,
                     parent,
-                } = linked.as_ref();
+                } = source.as_ref();
                 let Some(parent_record) = ledger
                     .records()
                     .iter()
@@ -761,7 +759,7 @@ impl PreparedLiveValidateApplyRegistryWork {
                 candidate,
                 validated_receipt,
                 validation_source: DurableLiveWalApplyValidationSourceV1::Linked(Box::new(
-                    DurableLiveWalApplyLinkedValidationV1 {
+                    LinkedLiveWalApplyValidationSourceV1 {
                         parent_address,
                         parent,
                     },
@@ -787,10 +785,10 @@ impl PreparedLiveValidateApplyRegistryWork {
                 validation_source,
                 ..
             } = carrier;
-            let DurableLiveWalApplyValidationSourceV1::Linked(linked) = validation_source else {
+            let DurableLiveWalApplyValidationSourceV1::Linked(source) = validation_source else {
                 unreachable!("linked live Apply retained its moved Validate parent")
             };
-            let DurableLiveWalApplyLinkedValidationV1 { parent, .. } = *linked;
+            let LinkedLiveWalApplyValidationSourceV1 { parent, .. } = *source;
             Err((
                 Self {
                     admission: PreparedLifecycleAdmissionV1 {

@@ -358,6 +358,142 @@ mod tests {
         Client::from_client(builder.build().expect("valid status fixture"))
             .expect("blocking status fixture client")
     }
+    mod async_status_runtime {
+        use super::*;
+        use iroha::http::{HttpTransport, Method, Response, TransportFuture, TransportRequest};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        #[derive(Debug, Default)]
+        struct StatusSequenceTransport {
+            requests: AtomicUsize,
+            completed: AtomicUsize,
+            first_release: tokio::sync::Notify,
+        }
+
+        impl HttpTransport for StatusSequenceTransport {
+            fn send_blocking(&self, _: TransportRequest) -> Result<Response<Vec<u8>>> {
+                panic!("async status polling must never dispatch synchronously")
+            }
+
+            fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
+                Box::pin(async move {
+                    assert_eq!(request.method, Method::GET);
+                    assert_eq!(
+                        request.url.path(),
+                        iroha_torii_shared::route_catalog::diagnostic::STATUS.path()
+                    );
+                    let call = self.requests.fetch_add(1, Ordering::SeqCst);
+                    if call == 0 {
+                        self.first_release.notified().await;
+                    } else {
+                        tokio::task::yield_now().await;
+                    }
+                    self.completed.fetch_add(1, Ordering::SeqCst);
+                    let blocks = match call {
+                        0 | 1 => 0,
+                        2 => 1,
+                        _ => {
+                            return Err(iroha::Error::ResponseTooLarge {
+                                maximum: 7,
+                                actual: Some(8),
+                            }
+                            .into());
+                        }
+                    };
+                    Ok(Response::builder()
+                        .status(200)
+                        .header("Content-Type", "application/json")
+                        .body(norito::json::to_vec(&Status {
+                            blocks,
+                            ..Status::default()
+                        })?)?)
+                })
+            }
+        }
+
+        fn assert_async_status_runtime(mut builder: tokio::runtime::Builder) {
+            // Drop the runtime and restore the environment before releasing the lock.
+            let _env_guard = lock_env_guard();
+            let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
+            set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "2");
+            let runtime = builder.enable_all().build().expect("status test runtime");
+            let transport = Arc::new(StatusSequenceTransport::default());
+            let source = dummy_client();
+            let mut client_builder = source
+                .client()
+                .to_builder()
+                .http_transport(transport.clone());
+            client_builder.torii_request_timeout = Duration::from_secs(1);
+            let client = Client::from_client(client_builder.build().expect("async status context"))
+                .expect("status facade fixture");
+            drop(source);
+            runtime.block_on(async {
+                let (initial, executor_progressed) =
+                    tokio::join!(get_status_with_retry_async(&client), async {
+                        let pending = transport.completed.load(Ordering::SeqCst) == 0;
+                        transport.first_release.notify_one();
+                        pending
+                    });
+                assert!(
+                    executor_progressed,
+                    "the status read must yield to the executor"
+                );
+                assert_eq!(initial.expect("ordinary status read").blocks, 0);
+                let start = Instant::now();
+                let applied = get_status_with_retry_at_least_async(
+                    client.client().endpoint().as_str(),
+                    1,
+                    || async {
+                        client
+                            .client()
+                            .status()
+                            .get()
+                            .await
+                            .map_err(eyre::Report::from)
+                    },
+                )
+                .await
+                .expect("async SDK status must reach the applied genesis height");
+                assert_eq!(applied.blocks, 1);
+                assert_eq!(transport.requests.load(Ordering::SeqCst), 3);
+                assert!(start.elapsed() >= STATUS_RETRY_DELAY);
+
+                set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "100ms");
+                let error = get_status_with_retry_async(&client)
+                    .await
+                    .expect_err("the final SDK error must remain typed");
+                assert_eq!(
+                    error.downcast_ref::<iroha::Error>(),
+                    Some(&iroha::Error::ResponseTooLarge {
+                        maximum: 7,
+                        actual: Some(8),
+                    })
+                );
+                assert_eq!(transport.requests.load(Ordering::SeqCst), 4);
+                // This drops the facade's owned runtime from inside the caller runtime.
+                drop(client);
+            });
+            drop(runtime);
+            assert_eq!(Arc::strong_count(&transport), 1);
+            assert_eq!(transport.completed.load(Ordering::SeqCst), 4);
+        }
+
+        #[test]
+        fn async_status_height_barrier_and_drop_on_current_thread_runtime() {
+            assert_async_status_runtime(tokio::runtime::Builder::new_current_thread());
+        }
+
+        #[test]
+        fn async_status_height_barrier_and_drop_on_multi_thread_runtime() {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(2);
+            assert_async_status_runtime(builder);
+        }
+    }
+
     #[test]
     fn rebind_blocking_client_isolates_configuration_and_rebinds_account() {
         let original = dummy_client();

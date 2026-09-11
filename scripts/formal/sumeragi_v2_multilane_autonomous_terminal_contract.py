@@ -1087,12 +1087,19 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
     (
         "crates/iroha_core/src/queue/lane_reservation_tests.rs",
         "fn",
-        "empty_startup_reconciliation_receipt_publishes_with_gate_already_open",
+        "empty_startup_reconciliation_receipt_opens_gate_only_after_completion",
         (
             "assert!(receipt.initial_snapshot.is_empty());",
+            "an initially empty durable replay still requires exact startup completion",
             "!queue.lane_reservation_startup_reconciliation_pending()",
             "complete_lane_reservation_startup_reconciliation(receipt)",
-            "an exact empty replay receipt may idempotently publish an open gate",
+            "an exact empty replay receipt opens the startup gate once",
+            "observe_completed_lane_reservation_startup_reconciliation(&snapshot)",
+            "revalidate_completed_lane_reservation_startup_reconciliation(&observation)",
+            "queue.complete_lane_reservation_startup_reconciliation(stale_receipt)",
+            "Err(LaneQueueReservationError::InvalidIdentity(ref reason))",
+            'reason.contains("stale at the final publication gate")',
+            "rejecting the old mutation receipt preserves completion evidence",
         ),
     ),
     (

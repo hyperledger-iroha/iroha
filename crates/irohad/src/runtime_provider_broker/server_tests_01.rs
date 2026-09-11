@@ -2680,3 +2680,5 @@ impl node::ModerationQuarantineKeyWrapper for ServerTestModerationKeyWrapper {
         Ok(dek)
     }
 }
+
+include!("por_replay_archive_fixture_schema_tests.rs");

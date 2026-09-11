@@ -1089,7 +1089,7 @@ mod tests {
             panic!("unexpected error: {err:?}");
         };
         assert!(
-            message.contains("signature payload must not be all zero"),
+            message.contains("signature payload must not be empty or all zero"),
             "unexpected error message: {message}"
         );
     }

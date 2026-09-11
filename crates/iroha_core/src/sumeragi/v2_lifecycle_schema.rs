@@ -74,8 +74,14 @@ pub(crate) enum LifecyclePhase {
     Commit,
     Timeout,
     Fetch,
+    /// Body fetch authorized by a durable Commit decision.
+    FetchDecision,
     Store,
+    /// Body storage inheriting Commit decision authority.
+    StoreDecision,
     Validate,
+    /// Body validation inheriting Commit decision authority.
+    ValidateDecision,
     Apply,
     BroadcastProposal,
     BroadcastPrepareVote,
@@ -93,14 +99,17 @@ pub(crate) enum LifecyclePhase {
     ProducerTurn,
 }
 impl LifecyclePhase {
-    pub(super) const ALL: [Self; 22] = [
+    pub(super) const ALL: [Self; 25] = [
         Self::Proposal,
         Self::Prepare,
         Self::Commit,
         Self::Timeout,
         Self::Fetch,
+        Self::FetchDecision,
         Self::Store,
+        Self::StoreDecision,
         Self::Validate,
+        Self::ValidateDecision,
         Self::Apply,
         Self::BroadcastProposal,
         Self::BroadcastPrepareVote,
@@ -117,6 +126,25 @@ impl LifecyclePhase {
         Self::Serve,
         Self::ProducerTurn,
     ];
+    /// Return whether this body stage inherits a Commit decision.
+    pub(crate) const fn is_decision_body(self) -> bool {
+        matches!(
+            self,
+            Self::FetchDecision | Self::StoreDecision | Self::ValidateDecision
+        )
+    }
+    /// Return whether this phase fetches a body under ordinary or Decision authority.
+    pub(crate) const fn is_fetch(self) -> bool {
+        matches!(self, Self::Fetch | Self::FetchDecision)
+    }
+    /// Return whether this phase stores a body under ordinary or Decision authority.
+    pub(crate) const fn is_store(self) -> bool {
+        matches!(self, Self::Store | Self::StoreDecision)
+    }
+    /// Return whether this phase validates a body under ordinary or Decision authority.
+    pub(crate) const fn is_validate(self) -> bool {
+        matches!(self, Self::Validate | Self::ValidateDecision)
+    }
 }
 /// Route- and carrier-independent identity of one logical lifecycle stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -339,9 +367,21 @@ impl LifecycleWorkClass {
             | (Self::SignVote, LifecyclePhase::Prepare, LifecycleStageKind::SignPrepareVote)
             | (Self::SignVote, LifecyclePhase::Commit, LifecycleStageKind::SignCommitVote)
             | (Self::SignTimeout, LifecyclePhase::Timeout, LifecycleStageKind::SignTimeoutVote)
-            | (Self::Fetch, LifecyclePhase::Fetch, LifecycleStageKind::FetchBody)
-            | (Self::Store, LifecyclePhase::Store, LifecycleStageKind::StoreBody)
-            | (Self::Validate, LifecyclePhase::Validate, LifecycleStageKind::ValidateBody)
+            | (
+                Self::Fetch,
+                LifecyclePhase::Fetch | LifecyclePhase::FetchDecision,
+                LifecycleStageKind::FetchBody,
+            )
+            | (
+                Self::Store,
+                LifecyclePhase::Store | LifecyclePhase::StoreDecision,
+                LifecycleStageKind::StoreBody,
+            )
+            | (
+                Self::Validate,
+                LifecyclePhase::Validate | LifecyclePhase::ValidateDecision,
+                LifecycleStageKind::ValidateBody,
+            )
             | (Self::Apply, LifecyclePhase::Apply, LifecycleStageKind::ApplyDecision)
             | (
                 Self::Broadcast,
@@ -853,8 +893,11 @@ impl DurableBodyFrameReference {
             && matches!(
                 key.phase,
                 LifecyclePhase::Fetch
+                    | LifecyclePhase::FetchDecision
                     | LifecyclePhase::Store
+                    | LifecyclePhase::StoreDecision
                     | LifecyclePhase::Validate
+                    | LifecyclePhase::ValidateDecision
                     | LifecyclePhase::Apply
             )
     }
@@ -1630,7 +1673,7 @@ impl AttestedReadyValidateDemand {
         seal: ReadyValidateCarrierSeal,
     ) -> Option<Self> {
         if record.work_class != LifecycleWorkClass::Validate
-            || record.key.phase() != LifecyclePhase::Validate
+            || !record.key.phase().is_validate()
             || record.stage.kind() != LifecycleStageKind::ValidateBody
             || record.stage.predecessor_scope() != PredecessorScope::Independent
             || record.physical_slots.len() != 1
@@ -1678,7 +1721,7 @@ impl AttestedReadyValidateDemand {
     }
     fn matches_record(self, record: &LifecycleRecord) -> bool {
         record.work_class == LifecycleWorkClass::Validate
-            && record.key.phase() == LifecyclePhase::Validate
+            && record.key.phase().is_validate()
             && record.stage.kind() == LifecycleStageKind::ValidateBody
             && record.stage.predecessor_scope() == PredecessorScope::Independent
             && self.owner == record.owner

@@ -123,7 +123,7 @@ fn queue_reuses_gossip_payload_without_side_cache() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world_with_test_domains(), kura, query_handle);
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let time_source = TimeSource::new_system();
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
     let entrypoint = tx.entrypoint().clone();
@@ -241,6 +241,7 @@ fn sealed_commitment_uses_local_queue_residence_ttl() {
     );
     let network_id = state.network_id;
     let (authority, keypair) = gen_account_in("wonderland");
+    register_test_authority(&state, &authority);
     let inner_tx = TransactionBuilder::new_with_time_source(
         network_id,
         authority.clone(),

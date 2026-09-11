@@ -966,7 +966,7 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
     ));
 }
 #[test]
-fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
+fn zk_x509_projected_artifact_bound_exceeds_cap_and_cannot_qualify() {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
     let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
     let exact_x5s1_ceiling = u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1);
@@ -974,10 +974,12 @@ fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
         privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0),
         Some(exact_x5s1_ceiling)
     );
-    assert!(exact_x5s1_ceiling < PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+    assert_eq!(exact_x5s1_ceiling, 19_156_074);
+    assert!(exact_x5s1_ceiling > PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("proof-artifact-cap=8212538 exact X5S1 bytes"));
+    assert!(descriptor.contains("projected-X5S1-maximum=19156074 bytes"));
     assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
+    assert!(descriptor.contains("activation=unavailable-proof-cap"));
     let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
     let mut artifact = PrivacyReleaseProofArtifactEvidenceV1 {
         artifact_ordinal: 0,
@@ -985,7 +987,8 @@ fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
         canonical_proof_bytes,
         proof_bytes_ceiling: exact_x5s1_ceiling,
     };
-    assert!(validate_privacy_release_proof_artifacts_v1(
+    // Even a tiny artifact cannot qualify under an unsupported declared ceiling.
+    assert!(!validate_privacy_release_proof_artifacts_v1(
         protocol_id,
         case_kind,
         core::slice::from_ref(&artifact),
@@ -1002,7 +1005,7 @@ fn zk_x509_artifact_uses_exact_encoded_x5s1_ceiling_below_outer_action_cap() {
                 case_kind,
                 core::slice::from_ref(&artifact),
             ),
-            "a lower, higher, or outer action ceiling cannot replace the exact X5S1 ceiling"
+            "substituting a lower, higher, or outer action ceiling cannot qualify the oversized X5S1 profile"
         );
     }
 }
@@ -1086,7 +1089,7 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
     );
 }
 #[test]
-fn every_typed_artifact_has_one_protocol_ceiling_below_the_consensus_cap() {
+fn every_typed_artifact_has_one_exact_bound_and_oversized_bounds_reject() {
     let mut artifact_count = 0_usize;
     for protocol_id in PrivacyProtocolIdV1::ALL {
         for case_kind in PrivacyReleaseCaseKindV1::ALL {
@@ -1105,7 +1108,24 @@ fn every_typed_artifact_has_one_protocol_ceiling_below_the_consensus_cap() {
                 )
                 .expect("every required artifact has one canonical ceiling");
                 assert!(ceiling > 0);
-                assert!(ceiling <= PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+                if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+                    assert_eq!(ceiling, u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1));
+                    assert!(ceiling > PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+                    let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
+                    let artifact = PrivacyReleaseProofArtifactEvidenceV1 {
+                        artifact_ordinal: u8::try_from(ordinal).expect("at most two artifacts"),
+                        proof_sha256: sha256_v1(&canonical_proof_bytes),
+                        canonical_proof_bytes,
+                        proof_bytes_ceiling: ceiling,
+                    };
+                    assert!(!validate_privacy_release_proof_artifacts_v1(
+                        protocol_id,
+                        case_kind,
+                        core::slice::from_ref(&artifact),
+                    ));
+                } else {
+                    assert!(ceiling <= PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+                }
             }
             assert!(
                 privacy_release_proof_artifact_ceiling_v1(

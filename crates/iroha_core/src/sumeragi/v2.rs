@@ -185,8 +185,8 @@ impl RecoveredWalFrameIdentity {
             frame_hash: self.frame_hash,
         }
     }
-    #[cfg(test)]
-    fn exactly_matches_record(self, record: &RecoveredRecord) -> bool {
+    /// Match the retained WAL frame without exposing sequence or digest parts.
+    pub(in crate::sumeragi) fn exactly_matches_record(self, record: &RecoveredRecord) -> bool {
         self.frame_sequence == record.sequence()
             && self.frame_hash == record.frame_hash()
             && self.is_exact()
@@ -1091,6 +1091,54 @@ impl ProductionLifecycleAdapterStartupV1 {
                 leader_wire_launch_prepared: false,
             },
         }
+    }
+    /// Retain the Apply role of this adapter's exact recovered Decision before
+    /// its selected body carrier becomes executable. No new WAL frame, Fetch
+    /// task, or body result is created by this one-shot source transfer.
+    pub(in crate::sumeragi) fn retain_recovered_decision_apply_source(
+        mut self,
+        verified: &VerifiedHeightContext,
+        fetch: &mut AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> Result<Self, &'static str> {
+        let ProductionLifecycleAdapterStartupStateV1::Recovered {
+            adapter,
+            effects,
+            pending_kura_apply: None,
+            local_proposal_attempt: None,
+            leader_wire_launch_prepared: false,
+        } = &mut self.state
+        else {
+            return Err("recovered Decision Apply source requires pristine adapter startup");
+        };
+        if !effects.is_empty()
+            || adapter.pending_live_decision_apply.is_some()
+            || &adapter.wire_context != verified.context()
+            || adapter.proofs_of_possession.as_slice() != verified.proofs_of_possession()
+        {
+            return Err("recovered Decision Apply source disagrees with adapter startup");
+        }
+        let decision = adapter
+            .reducer
+            .durable_state()
+            .decision()
+            .ok_or("recovered Decision Apply source has no durable Decision")?;
+        let certificate = adapter
+            .registry
+            .qc_to_wire(decision, adapter.aggregator.as_ref())
+            .map_err(|_| "recovered Decision Apply source lost its complete certificate")?;
+        if !adapter
+            .wal
+            .recovered_records()
+            .last()
+            .is_some_and(|record| fetch.exactly_matches_recovered_wal_record(record))
+        {
+            return Err("recovered Decision Apply source belongs to another WAL frame");
+        }
+        let source = fetch
+            .take_pending_apply_source(verified, adapter.current_tag(), &certificate)
+            .ok_or("recovered Decision Apply source changed its exact WAL authority")?;
+        adapter.pending_live_decision_apply = Some(source);
+        Ok(self)
     }
     /// Replay the exact terminal ordinary certified-body prefix retained by
     /// LedgerV1 before any Store or Validate successor is exposed as Ready.
@@ -3054,6 +3102,8 @@ pub(super) enum ExactLiveWalPersistedContinuationCause {
         wal_identity: LiveWalFrameIdentity,
         /// Exact converted `Apply` proved against the retained Decision record.
         effect: AdapterEffect,
+        /// Canonical Decision-WAL owner retained for a standalone released Apply.
+        pending: PendingRuntimeEffectBinding,
     },
 }
 /// One-shot adapter/runtime handoff for an initial local Proposal Sign.
@@ -3883,6 +3933,8 @@ pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedStorageV1 {
     apply_effect: AdapterEffect,
     apply_pending: PendingRuntimeEffectBinding,
     validated_receipt: ValidatedBodyReceipt,
+    retained_body:
+        Option<Box<super::v2_lifecycle_coordinator::AuthenticatedRetainedBodyApplyLineageV1>>,
 }
 /// Heap-retained handoff from recovered Decision replay to durable owner open.
 ///
@@ -3913,6 +3965,8 @@ enum RecoveredDecisionApplyLedgerSourceV1 {
     FullChain,
     /// An older successful Validate is an immutable no-successor tombstone.
     ReleasedTerminal(AuthenticatedRecoveredReleasedValidateNoSuccessorV1),
+    /// A complete original body owner already advanced into this current Apply.
+    RetainedBody(Box<super::v2_lifecycle_coordinator::AuthenticatedRetainedBodyApplyLineageV1>),
 }
 /// Exact lifecycle Apply completion projected by the installed registry carrier.
 /// Finality remains bound to the exact lineage, Apply tag, and dispatch key.
@@ -5978,6 +6032,7 @@ impl RecoveredDecisionApplyStagedAdapterV1 {
             apply_effect,
             apply_pending,
             validated_receipt: validated_receipt.clone(),
+            retained_body: None,
         }))
     }
 }
@@ -5995,12 +6050,69 @@ impl RecoveredDecisionApplyStagedStorageV1 {
             && self
                 .apply_pending
                 .exactly_binds_adapter_effect(&self.apply_effect)
+            && self.retained_body_lineage().is_none_or(|retained| {
+                retained.matches_apply_binding(&self.apply_effect, &self.apply_pending)
+            })
             && matches!(
                 &self.apply_effect,
                 AdapterEffect::Apply { certificate, .. }
                     if certificate.execution_commitment
                         == self.validated_receipt.execution_commitment()
             )
+    }
+    /// Authenticate an existing original body-owner Apply before any startup
+    /// classification. Its move-only pending enters this projection exactly once.
+    pub(in crate::sumeragi) fn bind_retained_body_lineage(
+        &mut self,
+        verified: &VerifiedHeightContext,
+        ledger: &LifecycleLedgerV1,
+    ) -> Result<(), &'static str> {
+        if self.retained_body.is_some() || !self.validates(verified) {
+            return Err("retained body Apply projection was already rebound or changed");
+        }
+        let Some(mut retained) = ledger
+            .authenticate_retained_body_apply(
+                verified,
+                &self.lineage,
+                &self.validated_receipt,
+                &self.apply_effect,
+                &self.apply_pending,
+            )
+            .map_err(|_| "retained body Apply lost its authenticated original owner")?
+        else {
+            return Ok(());
+        };
+        let pending = retained
+            .rebind_apply_pending(verified, &self.apply_effect, &self.apply_pending)
+            .ok_or("retained body Apply could not transfer its exact pending owner")?;
+        self.apply_pending = pending;
+        self.retained_body = Some(Box::new(retained));
+        Ok(())
+    }
+    /// Borrow only the authenticated immutable original-owner comparison proof.
+    pub(in crate::sumeragi) fn retained_body_lineage(
+        &self,
+    ) -> Option<&super::v2_lifecycle_coordinator::AuthenticatedRetainedBodyApplyLineageV1> {
+        self.retained_body.as_deref()
+    }
+    /// Compare the sole installed Apply in the complete cold candidate census.
+    pub(in crate::sumeragi) fn owns_spliced_apply_candidate(
+        &self,
+        candidates: &std::collections::BTreeMap<
+            super::v2_lifecycle_coordinator::LifecycleKey,
+            CandidateAdmission,
+        >,
+    ) -> bool {
+        match self.retained_body_lineage() {
+            Some(retained) => retained.matches_apply_candidate_census(
+                &self.apply_effect,
+                &self.apply_pending,
+                candidates,
+            ),
+            None => candidates
+                .values()
+                .any(|candidate| self.lineage.exactly_matches_apply_candidate(candidate)),
+        }
     }
     /// Borrow the opaque logical lineage for fixed ledger and registry oracles.
     pub(in crate::sumeragi) const fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
@@ -6043,6 +6155,7 @@ impl RecoveredDecisionApplyStagedStorageV1 {
             apply_effect,
             apply_pending,
             validated_receipt,
+            retained_body,
         } = *self;
         let mut context = [0_u8; 32];
         context.copy_from_slice(verified.context().id().0.as_ref());
@@ -6058,7 +6171,10 @@ impl RecoveredDecisionApplyStagedStorageV1 {
                 apply_effect,
                 apply_pending,
                 validated_receipt,
-                source: RecoveredDecisionApplyLedgerSourceV1::FullChain,
+                source: retained_body.map_or(
+                    RecoveredDecisionApplyLedgerSourceV1::FullChain,
+                    RecoveredDecisionApplyLedgerSourceV1::RetainedBody,
+                ),
             },
         )))
     }
@@ -6092,6 +6208,7 @@ impl RecoveredDecisionApplyStagedStorageV1 {
             LifecycleContext::new(LifecycleDigest::new(context), verified.context().height);
         if !self.validates(verified)
             || !effects.is_empty()
+            || self.retained_body.is_some()
             || !released.exactly_matches_validated_receipt(context, &self.validated_receipt)
         {
             return Err((self, effects, released));
@@ -6103,6 +6220,7 @@ impl RecoveredDecisionApplyStagedStorageV1 {
             apply_effect,
             apply_pending,
             validated_receipt,
+            retained_body: _,
         } = *self;
         Ok(Box::new((
             ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
@@ -6125,6 +6243,12 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             && self
                 .apply_pending
                 .exactly_binds_adapter_effect(&self.apply_effect)
+            && match &self.source {
+                RecoveredDecisionApplyLedgerSourceV1::RetainedBody(retained) => {
+                    retained.matches_apply_binding(&self.apply_effect, &self.apply_pending)
+                }
+                _ => true,
+            }
             && matches!(
                 &self.apply_effect,
                 AdapterEffect::Apply { certificate, .. }
@@ -6141,7 +6265,8 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
             && self.fetch.owns_apply_lineage(verified, &self.lineage)
             && self.exact_body_binding()
             && match &self.source {
-                RecoveredDecisionApplyLedgerSourceV1::FullChain => true,
+                RecoveredDecisionApplyLedgerSourceV1::FullChain
+                | RecoveredDecisionApplyLedgerSourceV1::RetainedBody(_) => true,
                 RecoveredDecisionApplyLedgerSourceV1::ReleasedTerminal(released) => released
                     .exactly_matches_validated_receipt(self.context, &self.validated_receipt),
             }
@@ -6156,6 +6281,10 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
     ) -> bool {
         self.validates(verified)
             && match &self.source {
+                RecoveredDecisionApplyLedgerSourceV1::RetainedBody(retained) => {
+                    retained.apply_ordinal() == installed_apply_ordinal
+                        && retained.matches_ledger(ledger)
+                }
                 RecoveredDecisionApplyLedgerSourceV1::FullChain => ledger
                     .exactly_matches_recovered_decision_apply_carrier(
                         &self.fetch,
@@ -6179,6 +6308,9 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
     ) -> bool {
         match &self.source {
             RecoveredDecisionApplyLedgerSourceV1::FullChain => true,
+            RecoveredDecisionApplyLedgerSourceV1::RetainedBody(retained) => {
+                retained.matches_coordinator(coordinator)
+            }
             RecoveredDecisionApplyLedgerSourceV1::ReleasedTerminal(released) => {
                 released.matches_current_terminal_record(self.context, coordinator)
             }
@@ -6193,6 +6325,11 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         installed_apply_ordinal: u128,
     ) -> Option<u128> {
         self.exact_body_binding().then_some(())?;
+        if let RecoveredDecisionApplyLedgerSourceV1::RetainedBody(retained) = &self.source {
+            return (retained.apply_ordinal() == installed_apply_ordinal
+                && retained.matches_ledger(ledger))
+            .then(|| retained.validate_ordinal());
+        }
         ledger.recovered_decision_apply_validate_predecessor_ordinal(
             &self.fetch,
             &self.lineage,
@@ -6217,7 +6354,13 @@ impl RecoveredDecisionApplyRegistryCarrierV1 {
         &self,
         candidate: &CandidateAdmission,
     ) -> bool {
-        self.exact_body_binding() && self.lineage.exactly_matches_apply_candidate(candidate)
+        self.exact_body_binding()
+            && match &self.source {
+                RecoveredDecisionApplyLedgerSourceV1::RetainedBody(retained) => {
+                    retained.matches_apply_candidate(candidate)
+                }
+                _ => self.lineage.exactly_matches_apply_candidate(candidate),
+            }
     }
 
     /// Project a registry identity and exact Apply material into the worker task.
@@ -9702,6 +9845,7 @@ impl SumeragiV2Adapter {
     /// Return whether the exact live Decision WAL source still awaits its
     /// Validate-to-Apply body-frame join. This borrows the affine seal only;
     /// lifecycle publication remains its sole consuming path.
+    #[cfg(test)]
     pub(crate) fn has_exact_pending_live_decision_apply(
         &self,
         tag: reducer::EventTag,
@@ -11213,6 +11357,26 @@ impl SumeragiV2Adapter {
                 })
             })
             .transpose()
+    }
+    /// Return the full current-view Prepare observed durably before validation
+    /// can promote it to the voting lock. Historical highs cannot use this path.
+    pub(crate) fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, AdapterError> {
+        let durable = self.reducer.durable_state();
+        if durable.decision().is_some() {
+            return Ok(None);
+        }
+        let Some(certificate) = durable
+            .highest_prepare()
+            .filter(|certificate| certificate.round().view() == durable.current_view())
+        else {
+            return Ok(None);
+        };
+        let mut registry = self.registry.clone();
+        registry
+            .qc_to_wire(certificate, self.aggregator.as_ref())
+            .map(Some)
     }
     /// Return the strongest complete body certificate retained by durable reducer state.
     ///
@@ -18459,17 +18623,30 @@ impl SumeragiV2Adapter {
                         if direct_apply_count == 0 {
                             // The body is not yet validated, so its source-only
                             // Decision-WAL seal must wait for the exact Ready
-                            // Validate completion to bind the durable frame and
-                            // predecessor-derived Apply owner. When this same
+                            // Validate result to bind the durable frame. Linked
+                            // publication inherits that Validate owner; released
+                            // publication retains the canonical Decision owner.
+                            // When this same
                             // persisted continuation emits the exact Apply,
                             // its authenticated Decision owner is already the
                             // complete direct handoff and no deferred seal may
                             // remain stranded in the adapter.
+                            let Some(pending) =
+                                PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+                                    &wal_identity,
+                                    &apply,
+                                    &self.wire_context,
+                                )
+                            else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
                             let Some(sealed) =
                                 SealedLiveWalPersistedEffectV1::from_exact_live_append(
                                     ExactLiveWalPersistedContinuationCause::Apply {
                                         wal_identity,
                                         effect: apply,
+                                        pending,
                                     },
                                 )
                             else {

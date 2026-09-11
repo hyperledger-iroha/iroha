@@ -28,12 +28,12 @@ pub fn enforce_json_size(
     } else {
         default
     };
-    if value.as_ref().len() > limit {
+    if value.get().len() > limit {
         return Err(Error::InvalidParameter(
             InvalidParameterError::SmartContract(format!(
                 "Payload too large for {}: {} > {} bytes",
                 param_name,
-                value.as_ref().len(),
+                value.get().len(),
                 limit
             )),
         ));

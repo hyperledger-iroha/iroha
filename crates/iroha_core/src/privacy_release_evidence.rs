@@ -1144,11 +1144,13 @@ pub const fn privacy_release_proof_artifact_count_v1(
         1
     }
 }
-/// Return the sole canonical decoder ceiling for one ordered proof artifact.
+/// Return the sole protocol bound for one ordered proof artifact.
 ///
 /// `None` means that the ordinal is not part of the typed protocol/case stage.
-/// The mapping deliberately repeats the production verifier's protocol-local
-/// cap at the release boundary so a receipt cannot substitute a broader cap.
+/// For supported shapes, this repeats the production verifier's protocol-local
+/// cap so a receipt cannot substitute a broader cap. An unavailable shape may
+/// retain a projected wire bound above the global consensus cap; the artifact
+/// validator rejects that shape regardless of the supplied artifact's size.
 #[must_use]
 pub fn privacy_release_proof_artifact_ceiling_v1(
     protocol_id: PrivacyProtocolIdV1,

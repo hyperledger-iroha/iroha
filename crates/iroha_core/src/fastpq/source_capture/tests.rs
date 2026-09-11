@@ -203,7 +203,6 @@ fn derived_preparation_and_tree_limit_overflows_reject_without_changing_input() 
 fn statement_bytes(
     entries: &[FastpqSourceExecutionEntryV1],
     entry_index: usize,
-    transcript_index: usize,
     transcripts: &BTreeMap<Hash, Vec<TransferTranscript>>,
 ) -> Vec<u8> {
     let entry = entries[entry_index];
@@ -217,7 +216,7 @@ fn statement_bytes(
     .with_tx_set_hash(transaction_wire_hash());
     let produced = quantity_statement_from_finalized_transcripts(
         inputs,
-        std::slice::from_ref(&transcripts[&entry.entry_hash][transcript_index]),
+        &transcripts[&entry.entry_hash],
         PublicTransferLimits::default(),
         TransferSmtBuildLimits::for_update_limit(6).unwrap(),
     )
@@ -249,25 +248,21 @@ fn derives_complete_ordered_archive_and_exact_canonical_statement_digests() {
     )
     .unwrap();
     assert_eq!(manifest.executed_entry_count, 3);
-    assert_eq!(manifest.statement_count, 3);
+    assert_eq!(manifest.statement_count, 2);
     let expected = entries
         .iter()
         .enumerate()
-        .flat_map(|(entry_index, entry)| {
+        .filter_map(|(entry_index, entry)| {
             transcripts
                 .get(&entry.entry_hash)
-                .into_iter()
-                .flat_map(move |bundle| {
-                    (0..bundle.len())
-                        .map(move |transcript_index| (entry_index, transcript_index, bundle.len()))
-                })
+                .map(|bundle| (entry_index, bundle.len()))
         })
         .collect::<Vec<_>>();
     for (statement_index, leaf) in leaves.iter().enumerate() {
         assert_eq!(leaf.statement_index, statement_index as u32);
-        let (entry_index, transcript_index, transcript_count) = expected[statement_index];
+        let (entry_index, transcript_count) = expected[statement_index];
         assert_eq!(leaf.entry_index, entry_index as u32);
-        assert_eq!(leaf.transcript_index, transcript_index as u32);
+        assert_eq!(leaves.len(), expected.len());
         assert_eq!(leaf.entry_transcript_count, transcript_count as u32);
         assert_eq!(leaf.entry_hash, entries[entry_index].entry_hash);
         assert_eq!(leaf.route, entries[entry_index].route);
@@ -277,7 +272,6 @@ fn derives_complete_ordered_archive_and_exact_canonical_statement_digests() {
             <[u8; 32]>::from(Hash::new(statement_bytes(
                 &entries,
                 entry_index,
-                transcript_index,
                 &transcripts
             )))
         );
@@ -371,7 +365,6 @@ fn captured_native_and_call_routes_flow_into_derived_bounded_openings() {
                     <[u8; 32]>::from(Hash::new(statement_bytes(
                         &original_entries,
                         leaf.entry_index as usize,
-                        leaf.transcript_index as usize,
                         &transcripts
                     )))
                 );
@@ -447,7 +440,7 @@ fn empty_manifests_include_nontransfer_entries_without_statement_budget() {
 }
 
 #[test]
-fn one_entry_opens_every_occurrence_with_independent_statement_limit() {
+fn one_entry_opens_its_whole_bundle_with_independent_statement_limit() {
     let (source, entries, mut transcripts) = fixture();
     let entry = entries[1];
     let entries = [entry];
@@ -467,7 +460,7 @@ fn one_entry_opens_every_occurrence_with_independent_statement_limit() {
     .unwrap();
     assert_eq!(
         (manifest.executed_entry_count, manifest.statement_count),
-        (1, 2)
+        (1, 1)
     );
     let witness = iroha_data_model::block::consensus::ExecWitness {
         writes: vec![iroha_data_model::block::consensus::ExecKv {
@@ -479,7 +472,7 @@ fn one_entry_opens_every_occurrence_with_independent_statement_limit() {
         max_ordinary_writes: 1,
         max_ordinary_write_bytes: 4096,
         max_executed_entries: 1,
-        max_statements: 2,
+        max_statements: 1,
         manifest_decode: norito::DecodeLimits::new(1024, 32 * 1024, 64 * 1024, 512 * 1024, 32),
     };
     for (index, leaf) in leaves.iter().enumerate() {
@@ -494,17 +487,17 @@ fn one_entry_opens_every_occurrence_with_independent_statement_limit() {
         .unwrap();
         assert!(
             iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_opening_v1(
-                &opening, leaf, root, 1, 2,
+                &opening, leaf, root, 1, 1,
             )
         );
         assert!(
             !iroha_data_model::fastpq::verify_fastpq_ordinary_source_statement_opening_v1(
-                &opening, leaf, root, 1, 1,
+                &opening, leaf, root, 1, 0,
             )
         );
         for changed in [
             crate::fastpq::FastpqSourceOpeningBuildLimits {
-                max_statements: 1,
+                max_statements: 0,
                 ..bounds
             },
             crate::fastpq::FastpqSourceOpeningBuildLimits {
@@ -550,7 +543,7 @@ fn atomic_multi_delta_occurrences_remain_whole_and_reject_internal_discontinuity
     assert_eq!(leaves[0].entry_transcript_count, 1);
     assert_eq!(
         leaves[0].statement_digest,
-        <[u8; 32]>::from(Hash::new(statement_bytes(&entries, 1, 0, &transcripts)))
+        <[u8; 32]>::from(Hash::new(statement_bytes(&entries, 1, &transcripts)))
     );
     assert_eq!(norito::encode_canonical(&transcripts).unwrap(), before);
     let delta = &mut transcripts.get_mut(&entries[1].entry_hash).unwrap()[0].deltas[1];
@@ -625,9 +618,8 @@ fn rejects_omissions_duplicate_execution_calls_and_inconsistent_bundles() {
 fn accepts_exact_cumulative_limits_and_rejects_each_one_below() {
     let (source, entries, transcripts) = fixture();
     let frames = [
-        statement_bytes(&entries, 1, 0, &transcripts),
-        statement_bytes(&entries, 1, 1, &transcripts),
-        statement_bytes(&entries, 2, 0, &transcripts),
+        statement_bytes(&entries, 1, &transcripts),
+        statement_bytes(&entries, 2, &transcripts),
     ];
     let exact = FastpqSourceStatementBuildLimits {
         max_input_transcript_bytes: transcripts
@@ -1129,6 +1121,137 @@ fn empty_statement_archive_commits_complete_nontransfer_inventory() {
         assert_ne!(
             manifest.source_entries_digest, original.source_entries_digest,
             "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn whole_entry_binds_cross_transcript_scales_and_independent_assets() {
+    let (source, entries, mut transcripts) = fixture();
+    let entry = entries[1];
+    transcripts.retain(|hash, _| *hash == entry.entry_hash);
+    let bundle = transcripts.get_mut(&entry.entry_hash).unwrap();
+    let second = &mut bundle[1];
+    second.deltas[0].amount = "0.25".parse().unwrap();
+    second.deltas[0].from_balance_before = Quantity::from(90_u32);
+    second.deltas[0].from_balance_after = "89.75".parse().unwrap();
+    second.deltas[0].to_balance_before = Quantity::from(10_u32);
+    second.deltas[0].to_balance_after = "10.25".parse().unwrap();
+    second.poseidon_preimage_digest = Some(crate::fastpq::poseidon_preimage_digest(
+        &second.deltas[0],
+        &entry.entry_hash,
+    ));
+    let mut independent = bundle[0].clone();
+    independent.deltas[0].asset_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "tulip".parse().unwrap(),
+    );
+    independent.poseidon_preimage_digest = Some(crate::fastpq::poseidon_preimage_digest(
+        &independent.deltas[0],
+        &entry.entry_hash,
+    ));
+    bundle.push(independent);
+    let expected_transcripts = bundle
+        .iter()
+        .map(iroha_data_model::fastpq::FastpqPublicTransferTranscriptV1::from)
+        .collect::<Vec<_>>();
+    let before = norito::encode_canonical(&transcripts).unwrap();
+    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+        source,
+        &[entry],
+        123,
+        [9; 32],
+        transaction_wire_hash(),
+        &transcripts,
+        limits(),
+    )
+    .unwrap();
+    assert_eq!(
+        (manifest.executed_entry_count, manifest.statement_count),
+        (1, 1)
+    );
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].entry_transcript_count, 3);
+    let bytes = statement_bytes(&[entry], 0, &transcripts);
+    let statement = norito::decode_canonical::<
+        iroha_data_model::fastpq::FastpqPublicTransferStatementV1,
+    >(&bytes)
+    .unwrap();
+    assert_eq!(statement.transcripts, expected_transcripts);
+    assert_eq!(statement.transitions.len(), 6);
+    assert_eq!(
+        leaves[0].statement_digest,
+        <[u8; 32]>::from(Hash::new(&bytes))
+    );
+    assert_eq!(norito::encode_canonical(&transcripts).unwrap(), before);
+    let mut changed = transcripts.clone();
+    changed.get_mut(&entry.entry_hash).unwrap().swap(1, 2);
+    let reordered = derive_fastpq_ordinary_source_manifest_v1(
+        source,
+        &[entry],
+        123,
+        [9; 32],
+        transaction_wire_hash(),
+        &changed,
+        limits(),
+    )
+    .unwrap();
+    // Independent-asset reordering is arithmetically valid but retains a distinct full statement.
+    assert_ne!(reordered.1[0].statement_digest, leaves[0].statement_digest);
+    assert_ne!(reordered.0.statement_root, manifest.statement_root);
+}
+
+#[test]
+fn valid_whole_entry_occurrence_tampering_changes_committed_statement() {
+    let (source, entries, transcripts) = fixture();
+    let baseline = derive_fastpq_ordinary_source_manifest_v1(
+        source,
+        &entries,
+        123,
+        [9; 32],
+        transaction_wire_hash(),
+        &transcripts,
+        limits(),
+    )
+    .unwrap();
+    for mutation in 0..4 {
+        let mut changed = transcripts.clone();
+        let bundle = changed.get_mut(&entries[1].entry_hash).unwrap();
+        match mutation {
+            0 => bundle[1].authority_digest = Hash::new(b"different authority fact"),
+            1 => {
+                bundle.pop();
+            }
+            2 => {
+                bundle.remove(0);
+            }
+            _ => {
+                let second = bundle.pop().unwrap();
+                bundle[0].deltas.extend(second.deltas);
+                bundle[0].poseidon_preimage_digest = None;
+            }
+        }
+        let actual = derive_fastpq_ordinary_source_manifest_v1(
+            source,
+            &entries,
+            123,
+            [9; 32],
+            transaction_wire_hash(),
+            &changed,
+            limits(),
+        )
+        .unwrap();
+        assert_ne!(
+            actual.1[0].statement_digest, baseline.1[0].statement_digest,
+            "mutation {mutation}"
+        );
+        assert_ne!(
+            actual.0.statement_root, baseline.0.statement_root,
+            "mutation {mutation}"
+        );
+        assert_eq!(
+            actual.0.source_entries_digest,
+            baseline.0.source_entries_digest
         );
     }
 }

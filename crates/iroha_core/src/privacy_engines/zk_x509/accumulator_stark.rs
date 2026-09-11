@@ -1,6 +1,6 @@
 //! Proof-facing adapter for compact trust-anchor membership.
 //!
-//! The adapter registers one log-seven trace. Thirteen rows own the exact shared SHA calls for one
+//! The adapter registers one log-thirteen trace. Thirteen rows own the exact shared SHA calls for one
 //! occupied leaf and twelve internal nodes, and 91 rows serialize the root SPKI with one reusable
 //! byte decomposition. Four independently challenged running products bind those bytes
 //! simultaneously to the leaf SHA input and strict-DER output consumer. Two SHA factors are
@@ -69,7 +69,7 @@ use rand::TryCryptoRng;
 use rand::rngs::OsRng;
 use thiserror::Error;
 /// Native trace logarithm for 104 non-padding rows.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1: u8 = 7;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_LOG2_V1: u8 = 13;
 /// SHA call products plus serialized SHA-source and RFC-output products.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1: usize = 128;
 /// Verifier-preprocessed row selectors, source constants, and I/O schedule.
@@ -99,40 +99,41 @@ pub(crate) const ZK_X509_CA_ACCUMULATOR_AUX_CHUNKS_V1: usize =
 /// Total physical commitment chunks.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_CHUNKS_V1: usize =
     ZK_X509_CA_ACCUMULATOR_BASE_CHUNKS_V1 + ZK_X509_CA_ACCUMULATOR_AUX_CHUNKS_V1;
-/// Minimum LDE-to-FRI-degree ratio admitted by the release.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1: usize = 32;
+/// Numerator of the exact FRI degree-cap-to-LDE-size ratio.
+pub(crate) const ZK_X509_CA_ACCUMULATOR_FRI_RATE_NUMERATOR_V1: usize = 9;
+/// Denominator of the exact FRI degree-cap-to-LDE-size ratio.
+pub(crate) const ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1: usize = 64;
 /// Authenticated scratch rows per independently decrypted block.
 ///
-/// One native trace per block bounds a simultaneous current/next base, aux,
+/// A fixed 128-row block bounds a simultaneous current/next base, aux,
 /// and fixed working set below two MiB.  A prover must not silently substitute
 /// the common full-profile domain or a larger scratch block.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_SCRATCH_CHUNK_ROWS_V1: usize =
-    ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_SCRATCH_CHUNK_ROWS_V1: usize = 128;
 /// The first release uses one Fp4 composition lane.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_COMPOSITION_EXTENSION_LANES_V1: usize = 1;
 /// Number of base-field components in the release Fp4 lane.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_EXTENSION_COMPONENTS_V1: usize = 4;
 const FIELD_BYTES_V1: usize = core::mem::size_of::<F>();
-const COMPOSITION_DEGREE_CHUNKS_V1: usize = 3;
+const COMPOSITION_DEGREE_CHUNKS_V1: usize = ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1 as usize;
 const SCRATCH_TAG_BYTES_V1: usize = 16;
 /// Governed ceiling for challenge-independent native material.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_NATIVE_MATERIAL_BYTES_V1: usize = 1 << 20;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_NATIVE_MATERIAL_BYTES_V1: usize = 64 << 20;
 /// Governed ceiling for all local base, aux, and fixed LDE field payloads.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LOCAL_LDE_BYTES_V1: usize = 256 << 20;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LOCAL_LDE_BYTES_V1: usize = 512 << 20;
 /// Governed ceiling for authenticated local trace scratch.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LOCAL_SCRATCH_BYTES_V1: usize = 256 << 20;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LOCAL_SCRATCH_BYTES_V1: usize = 512 << 20;
 /// Governed ceiling for the CA adapter's peak resident field payload.
 ///
 /// The first-release producer materializes the complete local LDE.  This
 /// ceiling therefore includes that LDE instead of claiming the lower resident
 /// bound of a future streaming implementation.  It excludes only the generic
 /// Merkle/FRI engine, whose independent ceiling is enforced by the local subproof prover.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_ADAPTER_RESIDENT_BYTES_V1: usize = 128 << 20;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_ADAPTER_RESIDENT_BYTES_V1: usize = 640 << 20;
 /// Governed ceiling for native-to-local-LDE radix-2 butterflies.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LDE_BUTTERFLIES_V1: usize = 250_000_000;
+pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_LDE_BUTTERFLIES_V1: usize = 600_000_000;
 /// Governed ceiling for base-field component constraint evaluations.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_MAX_COMPOSITION_COMPONENT_EVALUATIONS_V1: usize =
-    200_000_000;
+    400_000_000;
 const SOURCE_WORDS_V1: usize = 48;
 const DIGEST_WORDS_V1: usize = 8;
 const SOURCE_PAIR_STEPS_V1: usize = SOURCE_WORDS_V1 / 2;
@@ -191,7 +192,7 @@ const _: () = {
     assert!(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_COUNT_V1 == 1_379);
     assert!(ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1 == 3);
     assert!(ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1 == 2);
-    assert!(COMPOSITION_DEGREE_CHUNKS_V1 == ZK_X509_CA_ACCUMULATOR_CONSTRAINT_DEGREE_V1 as usize);
+    assert!(COMPOSITION_DEGREE_CHUNKS_V1 == 4);
     assert!(ZK_X509_CA_ACCUMULATOR_BASE_CHUNKS_V1 == 11);
     assert!(ZK_X509_CA_ACCUMULATOR_AUX_CHUNKS_V1 == 2);
     assert!(ZK_X509_CA_ACCUMULATOR_CHUNKS_V1 == 13);
@@ -201,7 +202,7 @@ const _: () = {
     assert!(LEAF_DYNAMIC_WORD_END_V1 == 38);
 };
 /// Stable proof-facing compact accumulator identity.
-pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max984216:inner-deep52768:subproof-max1038294:single-log7-trace128:dedicated-lde-log14:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask306-coefficients:min-fri-rate1over32:fri58-distinct-post-grinding20:binary-fri5-rounds-terminal512-degree15:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree1425:composition-degree-chunks3:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding24:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=28+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-six-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-fixed64-reservoir-health-check-zeroize-poison-error-or-unwind:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
+pub(crate) const ZK_X509_ACCUMULATOR_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-ca-accumulator-stark-v1:dedicated-local-subproof-only:wire-envelope-X5C1+inner-X5C2:strict-version-adapter-claim-addresses-length-and-no-trailing-bytes:claim-envelope108-records*12+header14=1310bytes:inner-predeep-max2642112:inner-deep52800:subproof-max2696222:single-log13-trace8192:dedicated-lde-log16:compiled-max-air-degree3:haboeck-al-kindi-reduced-air-degree2:protocol3-trace-mask:haboeck-al-kindi-h-min=2*2*(4*n-deep+n-fri)+n-fri:trace-mask696-coefficients:max-fri-rate9over64:fri136-distinct-post-grinding20:binary-fri6-rounds-terminal1024-degree143:independent-fp4-fri-mask-root-before-deep-batching:one-shared-deep-point-current+next:fp4-composition-lanes1:fixed-selector-aware-maximum-quotient-degree34851:composition-degree-chunks4:scratch-chunk-rows128:common-domain-lifting-forbidden:first-release-materializes-complete-local-lde:checked-native-lde-scratch-resident-and-work-ceilings:hash-rows13:serialized-root-spki-rows91:nonpadding104:zero-padding8088:base695-11chunks:aux128-2chunks:fixed80:constraints1379:degree3:private-index12-and-siblings12:leaf-call16:nodes-calls17through28:source48words+digest8words:four-independent-sha-call-lanes:two-affine-factors-per-hash-row:leaf-dynamic-source-words16through38-serialized:reusable-eight-bit-byte-range:big-endian-word-accumulator:root-spki-channel=28+2*public-disclosures:endpoint-role-ca-accumulator4:governed-trust-anchor-role8:rfc-output-tuple-tag80:four-independent-rfc-output-lanes:dual-running-products-sha-source-and-rfc-consumer:all-four-terminal-families-algebraically-bound:typed-outer-binding=public-root+channel+ordered-sha13+rfc91:shared-X5S1-pre-aux-after-six-main-plus-one-ca-base-roots:public-governed-root-and-root-spki-channel:rand0.9-trycrypto-fixed64-reservoir-health-check-zeroize-poison-error-or-unwind:deterministic-preflight-before-entropy:producer-self-verifies:no-crl-accumulator";
 const CA_PROOF_MAGIC_V1: [u8; 4] = *b"X5C1";
 const CA_INNER_PROOF_MAGIC_V1: [u8; 4] = *b"X5C2";
 const CA_ADAPTER_ID_V1: u16 = 5;
@@ -320,17 +321,17 @@ const CA_AGGREGATE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         query_seed: CA_QUERY_SEED_DOMAIN_V1,
     };
 const _: () = {
-    assert!(CA_QUERY_COUNT_V1 == 58);
-    assert!(CA_BLOWUP_LOG2_V1 == 7);
-    assert!(CA_TERMINAL_LOG2_V1 == 9);
+    assert!(CA_QUERY_COUNT_V1 == 136);
+    assert!(CA_BLOWUP_LOG2_V1 == 3);
+    assert!(CA_TERMINAL_LOG2_V1 == 10);
     assert!(ZK_X509_CA_FRI_ROUNDS_V1 == ZK_X509_CA_FRI_LDE_LOG2_V1 - CA_TERMINAL_LOG2_V1);
-    assert!(CA_COMPOSITION_DEGREE_CHUNKS_V1 == 3);
-    assert!(CA_MASK_DEGREE_V1 == 305);
-    assert!(CA_DEEP_BYTES_V1 == 52_768);
+    assert!(CA_COMPOSITION_DEGREE_CHUNKS_V1 == 4);
+    assert!(CA_MASK_DEGREE_V1 == 695);
+    assert!(CA_DEEP_BYTES_V1 == 52_800);
     assert!(CA_CLAIM_FIELDS_V1 == 108);
     assert!(CA_PROOF_ENVELOPE_BYTES_V1 == 1_310);
-    assert!(CA_INNER_MAXIMUM_PROOF_BYTES_V1 == 1_036_984);
-    assert!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 == 1_038_294);
+    assert!(CA_INNER_MAXIMUM_PROOF_BYTES_V1 == 2_694_912);
+    assert!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 == 2_696_222);
     assert!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 < ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 };
 /// Exact caller-supplied resource shape admitted by the first release.
@@ -348,7 +349,9 @@ pub(crate) struct ZkX509CaAccumulatorResourceRequestV1 {
     pub(crate) fri_query_count: usize,
     /// Degree of the trace zero-knowledge mask.
     pub(crate) mask_degree: usize,
-    /// Required LDE-to-FRI-degree ratio.
+    /// Numerator of the exact FRI degree-cap-to-LDE-size ratio.
+    pub(crate) fri_rate_numerator: usize,
+    /// Denominator of the exact FRI degree-cap-to-LDE-size ratio.
     pub(crate) fri_rate_denominator: usize,
     /// Exact base width.
     pub(crate) base_width: usize,
@@ -646,6 +649,7 @@ pub(crate) fn ca_accumulator_resource_request_v1(
         .and_then(|coefficients| {
             coefficients.checked_mul(ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1)
         })
+        .map(|scaled| scaled.div_ceil(ZK_X509_CA_ACCUMULATOR_FRI_RATE_NUMERATOR_V1))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let lde_rows = minimum_safe_lde_rows
         .checked_next_power_of_two()
@@ -659,6 +663,7 @@ pub(crate) fn ca_accumulator_resource_request_v1(
         deep_query_count,
         fri_query_count,
         mask_degree,
+        fri_rate_numerator: ZK_X509_CA_ACCUMULATOR_FRI_RATE_NUMERATOR_V1,
         fri_rate_denominator: ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1,
         base_width: ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1,
         aux_width: ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1,
@@ -683,6 +688,7 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
         || request.scratch_chunk_rows != ZK_X509_CA_ACCUMULATOR_SCRATCH_CHUNK_ROWS_V1
         || request.composition_extension_lanes
             != ZK_X509_CA_ACCUMULATOR_COMPOSITION_EXTENSION_LANES_V1
+        || request.fri_rate_numerator != ZK_X509_CA_ACCUMULATOR_FRI_RATE_NUMERATOR_V1
         || request.fri_rate_denominator != ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1
         || request.reduced_air_degree != ZK_X509_CA_ACCUMULATOR_REDUCED_AIR_DEGREE_V1
         || request.scratch_chunk_rows == 0
@@ -718,12 +724,14 @@ pub(crate) fn checked_ca_accumulator_resource_envelope_v1(
     let minimum_safe_lde_rows = maximum_masked_trace_degree
         .checked_add(1)
         .and_then(|coefficients| coefficients.checked_mul(request.fri_rate_denominator))
+        .map(|scaled| scaled.div_ceil(request.fri_rate_numerator))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let exact_safe_lde_rows = minimum_safe_lde_rows
         .checked_next_power_of_two()
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     let fri_degree_cap = lde_rows
-        .checked_div(request.fri_rate_denominator)
+        .checked_mul(request.fri_rate_numerator)
+        .and_then(|scaled| scaled.checked_div(request.fri_rate_denominator))
         .and_then(|capacity| capacity.checked_sub(1))
         .ok_or(ZkX509AccumulatorStarkErrorV1::Resource)?;
     // The two dynamic SHA source factors are affine in masked trace values,
@@ -3430,7 +3438,7 @@ mod tests {
                 .iter()
                 .chain(&material.aux_columns)
                 .chain(&material.fixed_columns)
-                .all(|column| column.len() == 128)
+                .all(|column| column.len() == ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1)
         );
         assert_eq!(material.terminals.len(), 13);
         assert_eq!(material.terminals[0].call, 16);
@@ -3503,11 +3511,14 @@ mod tests {
             assert_eq!(envelope.maximum_masked_trace_degree, expected_masked_degree);
             assert_eq!(
                 envelope.minimum_safe_lde_rows,
-                (expected_masked_degree + 1) * ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1
+                ((expected_masked_degree + 1) * ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1)
+                    .div_ceil(ZK_X509_CA_ACCUMULATOR_FRI_RATE_NUMERATOR_V1)
             );
             assert_eq!(
                 envelope.fri_degree_cap,
-                lde_rows / ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1 - 1
+                lde_rows * ZK_X509_CA_ACCUMULATOR_FRI_RATE_NUMERATOR_V1
+                    / ZK_X509_CA_ACCUMULATOR_FRI_RATE_DENOMINATOR_V1
+                    - 1
             );
             assert_eq!(
                 envelope.maximum_quotient_degree,
@@ -3519,8 +3530,8 @@ mod tests {
                 envelope.maximum_quotient_degree
                     < (envelope.fri_degree_cap + 1) * COMPOSITION_DEGREE_CHUNKS_V1
             );
-            assert_eq!(envelope.native_material_field_cells, 115_584);
-            assert_eq!(envelope.native_material_bytes, 924_672);
+            assert_eq!(envelope.native_material_field_cells, 7_397_376);
+            assert_eq!(envelope.native_material_bytes, 59_179_008);
             assert_eq!(
                 envelope.committed_lde_field_evaluations,
                 (ZK_X509_CA_ACCUMULATOR_BASE_WIDTH_V1 + ZK_X509_CA_ACCUMULATOR_AUX_WIDTH_V1)
@@ -3538,44 +3549,44 @@ mod tests {
             );
         }
         let oversized_query_request =
-            ca_accumulator_resource_request_v1(2, 1, 108).expect("arithmetic high-query request");
-        assert_eq!(oversized_query_request.mask_degree + 1, 556);
-        assert_eq!(oversized_query_request.lde_log2, 15);
+            ca_accumulator_resource_request_v1(2, 1, 1700).expect("arithmetic high-query request");
+        assert_eq!(oversized_query_request.mask_degree + 1, 8516);
+        assert_eq!(oversized_query_request.lde_log2, 17);
         assert_eq!(
             checked_ca_accumulator_resource_envelope_v1(oversized_query_request),
             Err(ZkX509AccumulatorStarkErrorV1::Resource),
-            "the materialized log15 LDE must not bypass the 128 MiB adapter cap"
+            "the materialized log17 LDE must not bypass the 512 MiB local LDE cap"
         );
         // The compiled AIR is cubic, hence Haböck--Al Kindi uses d=d_AIR-1=2.
         // The outer theorem still chooses the exact DEEP and FRI counts.
         let request = ca_accumulator_resource_request_v1(2, 1, CA_QUERY_COUNT_V1)
             .expect("release resource census");
-        assert_eq!(request.lde_log2, 14);
+        assert_eq!(request.lde_log2, 16);
         let envelope =
             checked_ca_accumulator_resource_envelope_v1(request).expect("release resource census");
         assert_eq!(request.reduced_air_degree, 2);
         assert_eq!(request.fri_query_count, CA_QUERY_COUNT_V1);
-        assert_eq!(envelope.mask_coefficients, 306);
-        assert_eq!(envelope.maximum_masked_trace_degree, 433);
-        assert_eq!(envelope.fri_degree_cap, 511);
-        assert_eq!(envelope.maximum_quotient_degree, 1_425);
-        assert_eq!(envelope.minimum_safe_lde_rows, 13_888);
-        assert_eq!(envelope.total_local_lde_bytes, 118_358_016);
-        assert_eq!(envelope.encrypted_scratch_bytes, 120_207_360);
+        assert_eq!(envelope.mask_coefficients, 696);
+        assert_eq!(envelope.maximum_masked_trace_degree, 8_887);
+        assert_eq!(envelope.fri_degree_cap, 9_215);
+        assert_eq!(envelope.maximum_quotient_degree, 34_851);
+        assert_eq!(envelope.minimum_safe_lde_rows, 63_204);
+        assert_eq!(envelope.total_local_lde_bytes, 473_432_064);
+        assert_eq!(envelope.encrypted_scratch_bytes, 480_829_440);
         assert_eq!(envelope.current_next_block_bytes, 1_849_344);
-        assert_eq!(envelope.streamed_column_bytes, 132_096);
-        assert_eq!(envelope.trace_mask_bytes, 2_014_704);
-        assert_eq!(envelope.composition_residue_evaluations, 22_593_536);
-        assert_eq!(envelope.composition_component_evaluations, 90_374_144);
-        assert_eq!(envelope.lde_butterflies, 103_967_808);
-        assert_eq!(envelope.adapter_resident_payload_bytes, 124_862_728);
+        assert_eq!(envelope.streamed_column_bytes, 589_824);
+        assert_eq!(envelope.trace_mask_bytes, 4_582_464);
+        assert_eq!(envelope.composition_residue_evaluations, 90_374_144);
+        assert_eq!(envelope.composition_component_evaluations, 361_496_576);
+        assert_eq!(envelope.lde_butterflies, 521_515_008);
+        assert_eq!(envelope.adapter_resident_payload_bytes, 548_032_344);
         assert!(
             envelope.adapter_resident_payload_bytes >= envelope.total_local_lde_bytes,
             "the materialized first-release LDE must be counted as resident"
         );
         assert_eq!(
             ZK_X509_CA_ACCUMULATOR_MAX_ADAPTER_RESIDENT_BYTES_V1,
-            128 << 20
+            640 << 20
         );
         assert_eq!(
             ca_accumulator_resource_request_v1(0, 0, 60),
@@ -3631,6 +3642,10 @@ mod tests {
             },
             ZkX509CaAccumulatorResourceRequestV1 {
                 mask_degree: request.mask_degree - 1,
+                ..request
+            },
+            ZkX509CaAccumulatorResourceRequestV1 {
+                fri_rate_numerator: 8,
                 ..request
             },
             ZkX509CaAccumulatorResourceRequestV1 {
@@ -4056,22 +4071,22 @@ mod tests {
     #[test]
     fn dedicated_proof_parameters_and_resource_gate_are_exact() {
         let layout = ca_aggregate_layout_v1().expect("dedicated layout");
-        assert_eq!(layout.common_lde_log2(), 14);
+        assert_eq!(layout.common_lde_log2(), 16);
         assert_eq!(
             layout
                 .fri_rounds(CA_AGGREGATE_PARAMETERS_V1)
                 .expect("FRI rounds"),
-            5
+            6
         );
         assert_eq!(
             layout
                 .fri_degree_cap(CA_AGGREGATE_PARAMETERS_V1)
                 .expect("FRI degree cap"),
-            512
+            9_216
         );
-        assert_eq!(CA_MASK_DEGREE_V1 + 1, 306);
-        assert_eq!(CA_QUERY_COUNT_V1, 58);
-        assert_eq!(CA_DEEP_BYTES_V1, 52_768);
+        assert_eq!(CA_MASK_DEGREE_V1 + 1, 696);
+        assert_eq!(CA_QUERY_COUNT_V1, 136);
+        assert_eq!(CA_DEEP_BYTES_V1, 52_800);
         assert_eq!(CA_CLAIM_FIELDS_V1, 108);
         assert!(
             aggregate::maximum_encoded_proof_with_deep_bytes_v1(
@@ -4081,14 +4096,15 @@ mod tests {
             .expect("maximum proof")
                 <= CA_INNER_MAXIMUM_PROOF_BYTES_V1
         );
-        let request = ca_accumulator_resource_request_v1(2, 1, 58).expect("exact request");
-        assert_eq!(request.lde_log2, 14);
-        assert_eq!(request.mask_degree, 305);
+        let request =
+            ca_accumulator_resource_request_v1(2, 1, CA_QUERY_COUNT_V1).expect("exact request");
+        assert_eq!(request.lde_log2, 16);
+        assert_eq!(request.mask_degree, 695);
         assert_eq!(
             checked_ca_accumulator_resource_envelope_v1(request)
                 .expect("exact envelope")
                 .mask_coefficients,
-            306
+            696
         );
     }
     #[test]
@@ -4285,14 +4301,16 @@ mod tests {
     fn dedicated_proof_rejects_public_claim_root_deep_fri_query_and_frontier_mutations() {
         let (public, schedule, proof) = canonical_proof_fixture();
         let inner_start = CA_PROOF_ENVELOPE_BYTES_V1;
-        let deep_start = inner_start + 8 + 4 * 32;
+        let root_bytes = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
+        let deep_start = inner_start + 8 + 4 * root_bytes;
         let fri_start = deep_start + CA_DEEP_BYTES_V1;
         let hostile_offsets = [
             10 + 4,
             inner_start,
             inner_start + 8,
-            inner_start + 40,
-            inner_start + 72,
+            inner_start + 8 + root_bytes,
+            inner_start + 8 + 2 * root_bytes,
+            inner_start + 8 + 3 * root_bytes,
             deep_start,
             fri_start,
             proof.len() / 2,
@@ -4318,10 +4336,19 @@ mod tests {
             + (CA_COMPOSITION_DEGREE_CHUNKS_V1 + 1 + 2 * usize::from(ZK_X509_CA_FRI_ROUNDS_V1))
                 * core::mem::size_of::<[u64; 4]>();
         let query_start = fri_start
-            + (usize::from(ZK_X509_CA_FRI_ROUNDS_V1) + 1) * 32
+            + (usize::from(ZK_X509_CA_FRI_ROUNDS_V1) + 1) * root_bytes
             + (1 << CA_TERMINAL_LOG2_V1) * core::mem::size_of::<[u64; 4]>()
             + core::mem::size_of::<u64>();
-        assert_eq!(query_bytes_v1, 13_620);
+        assert_eq!(query_bytes_v1, 13_716);
+        let (_, inner) = decode_ca_proof_envelope_v1(proof).expect("canonical CA envelope");
+        let layout = ca_aggregate_layout_v1().expect("canonical CA layout");
+        let (decoded, _) =
+            aggregate::decode_proof_with_deep_v1(inner, CA_AGGREGATE_PARAMETERS_V1, &layout)
+                .expect("canonical CA inner proof");
+        for (position, query) in decoded.queries.iter().enumerate() {
+            let offset = query_start + position * query_bytes_v1;
+            assert_eq!(&proof[offset..offset + 4], query.index.to_be_bytes());
+        }
         let mut duplicate_query = proof.clone();
         let first_index = duplicate_query[query_start..query_start + 4].to_vec();
         duplicate_query[query_start + query_bytes_v1..query_start + query_bytes_v1 + 4]

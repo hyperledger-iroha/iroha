@@ -3,9 +3,8 @@
 use super::work_registry::{ConcreteLifecycleWork, RegistryPublicationError};
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
-    LifecycleCoordinator, LifecycleDigest, LifecyclePhase, LifecycleStageKind, LifecycleState,
-    LifecycleWorkClass, PredecessorScope, ProductionLifecycleOwnerV1, TurnLease, TurnOutcome,
-    WaitSource, WaitToken,
+    LifecycleCoordinator, LifecycleDigest, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
+    PredecessorScope, ProductionLifecycleOwnerV1, TurnLease, TurnOutcome, WaitSource, WaitToken,
     body_pipeline_transition::durable_validate_payload_is_exact,
     projection::AdapterEffectAdmissionError,
     schema::AttestedReadyValidateDemand,
@@ -742,7 +741,7 @@ impl LifecycleCoordinator {
             || self.active_lease.is_some()
             || record.ordinal != ordinal
             || record.work_class != LifecycleWorkClass::Validate
-            || record.key.phase() != LifecyclePhase::Validate
+            || !record.key.phase().is_validate()
             || record.stage.kind() != LifecycleStageKind::ValidateBody
             || record.stage.predecessor_scope() != PredecessorScope::Independent
             || record.physical_slots.len() != 1
@@ -1707,7 +1706,7 @@ fn waiting_durable_validate_record_is_exact(
         && record.owner == authority.owner()
         && record.key == authority.lifecycle_key()
         && record.work_class == LifecycleWorkClass::Validate
-        && record.key.phase() == LifecyclePhase::Validate
+        && record.key.phase().is_validate()
         && record.stage == authority.lifecycle_stage()
         && record.stage.kind() == LifecycleStageKind::ValidateBody
         && record.stage.predecessor_scope() == PredecessorScope::Independent
@@ -1837,7 +1836,7 @@ fn claimed_durable_validate_record_is_exact(
         && record.key == lease.key()
         && record.work_class == LifecycleWorkClass::Validate
         && record.work_class == lease.work_class()
-        && record.key.phase() == LifecyclePhase::Validate
+        && record.key.phase().is_validate()
         && record.stage == lease.stage()
         && record.stage.kind() == LifecycleStageKind::ValidateBody
         && record.stage.predecessor_scope() == PredecessorScope::Independent

@@ -2701,6 +2701,7 @@ impl From<AppealFinanceCheckpointExternalError> for AppealFinanceTransactionForw
 }
 #[cfg(test)]
 mod tests {
+    include!("appeal_finance_transaction_forwarder/schema_identity_tests.rs");
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::numeric::Quantity;

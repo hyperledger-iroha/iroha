@@ -600,6 +600,7 @@ mod stream_token_mutation_tests {
                 &original.session,
                 &original.binding,
                 original.metadata_digest,
+                BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1).expect("read session deadline"),
             )
         });
         let mut peer = accept_read_session(&fixture);

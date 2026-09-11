@@ -774,10 +774,13 @@ mod tests {
                 field: "statement_digest"
             })
         ));
-        let zeroing_mutations: [(&str, fn(&mut TranscriptBindingV1<'_>)); 8] = [
-            ("genesis_hash", |binding: &mut TranscriptBindingV1<'_>| {
-                binding.genesis_hash = [0; 32]
-            }),
+        let mut zero_genesis = binding();
+        zero_genesis.genesis_hash = [0; 32];
+        assert_eq!(
+            zero_genesis.validate(),
+            Err(P256EngineError::NetworkGenesisMismatch)
+        );
+        let zeroing_mutations: [(&str, fn(&mut TranscriptBindingV1<'_>)); 7] = [
             ("statement_digest", |binding| {
                 binding.statement_digest = [0; 32]
             }),

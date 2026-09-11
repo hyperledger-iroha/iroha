@@ -91,7 +91,7 @@ impl DurableValidateDispatch {
             && self.request.lifecycle_key.context().as_bytes()
                 == self.request.round.context_id.0.as_ref()
             && self.request.lifecycle_key.round().height() == self.request.round.height
-            && self.request.lifecycle_key.phase() == super::LifecyclePhase::Validate
+            && self.request.lifecycle_key.phase().is_validate()
             && self.request.lifecycle_stage.kind() == super::LifecycleStageKind::ValidateBody
     }
     /// Execute the exact request after its claimed lifecycle row became an

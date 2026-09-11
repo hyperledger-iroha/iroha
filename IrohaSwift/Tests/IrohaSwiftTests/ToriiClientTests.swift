@@ -5292,15 +5292,21 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(try string(vector, "key_id"), try string(bootstrap, "key_id"))
             let refreshRounds = try int(vector, "refresh_rounds")
             XCTAssertGreaterThan(refreshRounds, 0)
-            XCTAssertLessThanOrEqual(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
             guard let plaintextSlots = vector["input_plaintext_slots"] as? [Int] else {
                 throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "input_plaintext_slots must be an integer array"])
             }
             XCTAssertFalse(plaintextSlots.isEmpty)
             XCTAssertTrue(plaintextSlots.allSatisfy { $0 >= 0 })
             XCTAssertGreaterThan(try int(vector, "expected_input_ciphertext_bytes"), 0)
-            XCTAssertGreaterThan(try int(vector, "expected_output_ciphertext_bytes"), 0)
             assertBfvUpperSha256("bootstrap refresh vector \(name) input", try string(vector, "expected_input_ciphertext_sha256"))
+            if let expectedError = vector["expected_error"] as? String {
+                XCTAssertGreaterThan(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
+                XCTAssertEqual(expectedError, "invalid BFV parameters: BFV bootstrap refresh rounds 2 exceeds bootstrap key max_refresh_rounds 1")
+                XCTAssertNil(vector["expected_output_ciphertext_sha256"])
+                continue
+            }
+            XCTAssertLessThanOrEqual(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
+            XCTAssertGreaterThan(try int(vector, "expected_output_ciphertext_bytes"), 0)
             assertBfvUpperSha256("bootstrap refresh vector \(name) output", try string(vector, "expected_output_ciphertext_sha256"))
             assertBfvUpperSha256("bootstrap refresh vector \(name) plaintext", try string(vector, "expected_plaintext_sha256"))
             let components = try object(vector, "output_components")

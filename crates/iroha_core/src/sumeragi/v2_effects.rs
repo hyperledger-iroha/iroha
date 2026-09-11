@@ -2044,17 +2044,6 @@ pub(crate) trait EffectRuntime {
         ))
     }
 
-    /// Return whether the exact source-only Decision WAL Apply seal remains
-    /// available for a lifecycle Validate-to-Apply join. Synthetic runtimes
-    /// cannot mint this affine authority and retain the closed default.
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        _tag: EventTag,
-        _decision: DurableDecision,
-    ) -> bool {
-        false
-    }
-
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -2242,6 +2231,13 @@ pub(crate) trait EffectRuntime {
     /// lifecycle replay row never treats an opaque runtime statement as
     /// independently durable authority.
     fn durable_body_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        Ok(None)
+    }
+    /// Return the full durable current Prepare before its body is validated.
+    /// This authority permits body work, and grants no vote or voting lock.
+    fn current_prepare_authority_certificate(
         &self,
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         Ok(None)
@@ -2438,16 +2434,6 @@ impl EffectRuntime for SerializedV2Runtime {
             Ok(prepared) => Ok(prepared.commit()),
             Err((marker, error)) => Err((marker, error.to_string())),
         }
-    }
-
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision: DurableDecision,
-    ) -> bool {
-        SerializedV2Runtime::has_exact_pending_live_decision_apply(
-            self, tag, decision.0, decision.1, decision.2, decision.3,
-        )
     }
 
     fn can_admit_network_message_with_ingress_ownership(
@@ -2661,6 +2647,12 @@ impl EffectRuntime for SerializedV2Runtime {
         &self,
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         self.replayed_body_authority_certificate()
+            .map_err(|error| error.to_string())
+    }
+    fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        SerializedV2Runtime::current_prepare_authority_certificate(self)
             .map_err(|error| error.to_string())
     }
     fn reserve_body_available(
@@ -4139,7 +4131,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 || !(validate_retry_authority_is_exact
                     || (live_apply_owner_already_exact && validate_retry_authority_is_absent))
                 || runtime_decision != Some(decision)
-                || self.protected_decision != Some(decision)
+                // A cold Ready Validate can finish before the first Runtime
+                // turn. Its exact durable Decision is authenticated above;
+                // the cleanup below must establish protection on that first
+                // publication as well as preserve an existing exact owner.
+                || self
+                    .protected_decision
+                    .is_some_and(|protected| protected != decision)
                 || (self.live_lifecycle_decision_apply.is_some() && !live_apply_owner_already_exact)
             {
                 Err(EffectExecutorError::Contract(
@@ -4644,11 +4642,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Rebuild an ownerless cold Apply executor's Decision protection from its
     /// real reopened runtime without selecting a new Runtime turn.
     ///
-    /// Production has already crossed this reconciliation before a synchronous
-    /// Ready Validate-to-Apply publication. Focused reopen tests use this seam
-    /// instead of manufacturing a later periodic Apply with a different
-    /// pending-effect identity, and name whether their exact cut already owns
-    /// the preliminary queued-successor fence.
+    /// Focused tests of an already-reconciled cut use this seam instead of
+    /// manufacturing a periodic Apply with a different pending-effect
+    /// identity. Cold Ready Validate may publish before any Runtime turn;
+    /// that path establishes protection in live Apply reconciliation itself.
+    /// Callers name whether their exact cut already owns the preliminary
+    /// queued-successor fence.
     #[cfg(test)]
     pub(in crate::sumeragi) fn reconcile_reopened_decision_for_lifecycle_apply_lineage_test<
         S: V2EffectServices,
@@ -7386,7 +7385,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             {
                 // A resolved row has no active physical stage. Reject overlap
                 // before adoption so a stronger incumbent cannot change the
-                // incoming authority used to qualify resolved readmission.
+                // incoming authority used to qualify resolved replay.
                 return Err(EffectExecutorError::Contract(
                     "resolved Validate retained an active body-stage lineage".to_owned(),
                 ));
@@ -7516,9 +7515,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Store retry lost its durable receipt".to_owned(),
                     )
                 })?;
-                marker
-                    .project_store_retry(receipt, effect, evidence)
-                    .map_err(EffectExecutorError::Contract)?;
+                let replay_resolved_store = marker.resolved_outcome.is_some()
+                    && current_protected_body_occurrence(effect, evidence, frontier)
+                        .map_err(EffectExecutorError::Contract)?;
+                if replay_resolved_store {
+                    marker
+                        .project_resolved_store_retry(receipt, effect, evidence)
+                        .map_err(EffectExecutorError::Contract)?;
+                } else {
+                    marker
+                        .project_store_retry(receipt, effect, evidence)
+                        .map_err(EffectExecutorError::Contract)?;
+                }
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "published lifecycle Store retry omitted its candidate identity".to_owned(),
@@ -7562,7 +7570,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Store retry failed candidate refinement".to_owned(),
                     )
                 })?;
-                retain_effect.push(false);
+                // No new Store task is created: dispatch reuses the exact
+                // durable receipt and queues this incarnation's BodyStored.
+                retain_effect.push(replay_resolved_store);
                 continue;
             }
             if let AdapterEffect::ValidateBody {
@@ -7575,17 +7585,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .cloned()
             {
                 // The direct lifecycle Validate remains the sole physical
-                // operation while its row is live or a same/stale retry merely
-                // rediscovers its terminal marker. One closed exception exists:
-                // an ordinal-free older marker plus the exact cached successful
-                // receipt may redispatch an exact Commit authority refinement so
-                // normal lifecycle admission can mint the missing Apply child.
+                // operation. A resolved terminal result can replay under the
+                // exact current protected certificate to select its next child;
+                // the original Validate row and outcome remain immutable.
                 let projected = marker
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;
                 let key = (*round, *subject);
-                let readmit_protected_decision = marker.resolved_outcome.is_some()
-                    && current_protected_validate_occurrence(effect, evidence, frontier)
+                let readmit_protected_body = marker.resolved_outcome.is_some()
+                    && current_protected_body_occurrence(effect, evidence, frontier)
                         .map_err(EffectExecutorError::Contract)?;
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
@@ -7632,7 +7640,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
                 retained_published_validate_retry_markers.insert(key, projected);
-                retain_effect.push(readmit_protected_decision);
+                retain_effect.push(readmit_protected_body);
                 continue;
             }
             if let AdapterEffect::ValidateBody { round, subject, .. } = effect
@@ -7650,7 +7658,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
                 retain_effect.push(
-                    current_protected_validate_occurrence(effect, evidence, frontier)
+                    current_protected_body_occurrence(effect, evidence, frontier)
                         .map_err(EffectExecutorError::Contract)?,
                 );
                 continue;

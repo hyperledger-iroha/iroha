@@ -59,6 +59,11 @@ impl ResolvedLifecycleValidateOutcomeV1 {
     pub(in crate::sumeragi) fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
         self.outcome.validated_receipt()
     }
+    /// Borrow only the actual deterministic rejection retained by this terminal.
+    pub(super) fn rejected_body_outcome(&self) -> Option<&DurableBodyValidationOutcome> {
+        (self.outcome.rejection_identity() == Some(&BodyValidationRejectionIdentity::Rejected))
+            .then_some(&self.outcome)
+    }
     /// Return the exact durable body identity retained by this result.
     pub(in crate::sumeragi) fn key(&self) -> (wire::ConsensusRound, wire::BlockSubject) {
         (self.durable().round(), self.durable().subject())
@@ -125,7 +130,7 @@ impl ResolvedLifecycleValidateOutcomeV1 {
     /// Compare the canonical original encoded terminal record. Cold authority
     /// uses the actual checksummed row claim; live authority uses its exact
     /// pre-fsync record and replay metadata snapshot.
-    pub(in crate::sumeragi) fn matches_ledger_record(
+    pub(super) fn matches_ledger_record(
         &self,
         context: super::LifecycleContext,
         record: &super::ledger::LifecycleLedgerRecordV1,
@@ -326,7 +331,8 @@ impl PendingResolvedValidateReplayV1 {
         {
             return Err(publication);
         }
-        publication.seal_invalid_body_report_replay(
+        publication.seal_resolved_invalid_body_report_replay(
+            Arc::clone(&self.terminal),
             DurableValidateReplayEvidenceV1::local_body(self.current.replay_evidence.clone()),
             &self.current.effect,
             &self.current.pending,

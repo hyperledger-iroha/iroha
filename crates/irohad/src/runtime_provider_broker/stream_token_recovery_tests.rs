@@ -751,3 +751,5 @@ fn stream_token_decoded_receipt_signatures_are_scrubbed_on_success_and_every_rej
 }
 
 include!("stream_token_window_tests.rs");
+
+include!("stream_token_blocking_worker_tests.rs");

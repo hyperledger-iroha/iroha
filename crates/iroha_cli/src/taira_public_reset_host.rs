@@ -3623,6 +3623,7 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
     require_no_live_target_references(admitted)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
     // procfs appends this suffix to an unlinked referenced pathname. Strip it
     // before component matching, including an open descriptor of the root itself.
@@ -11249,6 +11250,70 @@ fn require_success(output: ProcessOutput, label: &str) -> Result<Vec<u8>> {
     Err(eyre!("{label} failed with {}: {stderr}", output.status))
 }
 
+/// A child report is authoritative only after the producing process exits successfully.
+/// Error messages can contain runtime inputs or server response bodies, so retain only
+/// the fixed CLI error kind and process metadata when reporting a failed child.
+fn parse_prepared_child_report(output: ProcessOutput, label: &str) -> Result<norito::json::Value> {
+    if !output.status.success() {
+        return Err(prepared_child_process_error(
+            &output,
+            label,
+            prepared_child_error_kind(&output),
+        ));
+    }
+    if output.stdout.len() > MAX_PROCESS_OUTPUT {
+        return Err(prepared_child_process_error(&output, label, "protocol"));
+    }
+    // Do not attach the JSON parser error: its text may quote untrusted output.
+    json::from_slice(&output.stdout)
+        .map_err(|_| prepared_child_process_error(&output, label, "protocol"))
+}
+
+fn prepared_child_error_kind(output: &ProcessOutput) -> &'static str {
+    let classify = || -> Option<&'static str> {
+        if output.stderr.len() > MAX_PROCESS_OUTPUT {
+            return None;
+        }
+        let value: norito::json::Value = json::from_slice(&output.stderr).ok()?;
+        let root = value.as_object()?;
+        let error = root.get("error")?.as_object()?;
+        if root.len() != 1 || error.len() != 3 || error.get("message")?.as_str().is_none() {
+            return None;
+        }
+        let (kind, expected_exit) = match error.get("kind")?.as_str()? {
+            "config" => ("config", 3),
+            "input" => ("input", 4),
+            "command" => ("command", 1),
+            "internal" => ("internal", 7),
+            _ => return None,
+        };
+        (error.get("exit_code")?.as_i64()? == i64::from(expected_exit)
+            && output.status.code() == Some(expected_exit))
+        .then_some(kind)
+    };
+    classify().unwrap_or("unclassified")
+}
+
+fn prepared_child_process_error(output: &ProcessOutput, label: &str, kind: &str) -> eyre::Report {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt as _;
+        output.status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let exit_code = output
+        .status
+        .code()
+        .map_or_else(|| "none".to_owned(), |code| code.to_string());
+    let signal = signal.map_or_else(|| "none".to_owned(), |signal| signal.to_string());
+    eyre!(
+        "{label} failed: kind={kind} exit_code={exit_code} signal={signal} stdout_bytes={} stderr_bytes={}",
+        output.stdout.len(),
+        output.stderr.len()
+    )
+}
+
 fn require_doctor_success(output: ProcessOutput, public_root: &str) -> Result<Vec<u8>> {
     if !output.status.success()
         && let Ok(value) = json::from_slice::<norito::json::Value>(&output.stdout)
@@ -11306,8 +11371,9 @@ fn run_restart_with_validator_http_readiness(
 }
 
 /// A running systemd process can still be initializing storage and Torii.
-/// Wait only for HTTP availability here; the signed convergence and public
-/// doctor checks remain responsible for identity and protocol validation.
+/// Wait for the node's admission readiness, including completed Queue startup
+/// reconciliation. The signed convergence and public doctor checks retain
+/// responsibility for identity and protocol validation; idle height may be unchanged.
 fn wait_for_validator_http_readiness(
     origins: &[String],
     deadline: Instant,
@@ -11321,7 +11387,7 @@ fn wait_for_validator_http_readiness(
         .wrap_err("failed to build validator readiness HTTP client")?;
     let urls = origins
         .iter()
-        .map(|origin| Url::parse(origin)?.join("status"))
+        .map(|origin| Url::parse(origin)?.join("readyz"))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     if urls.len() != 4 {
         return Err(eyre!(
@@ -11792,8 +11858,6 @@ impl RuntimeCustody {
             ));
         }
         validate_fee_args(&inputs.fee_args)?;
-        let validator_operator_key =
-            pin_validator_operator_key(&inputs.validator_operator_key, &admitted.inventory)?;
         let client_config =
             pin_owner_private_file(&inputs.client_config, "Taira runtime client config")?;
         let onboarding_token =
@@ -11810,6 +11874,22 @@ impl RuntimeCustody {
         let token_hash = hash_pinned_input(&onboarding_token, "Taira onboarding token", None)?;
         let validator_hash = validator_config_closure_sha256(&validator_client_configs, None)?;
         validate_validator_client_semantics(&validator_client_configs, admitted)?;
+        let runtime_config = load_client_config_for_inventory(
+            &client_config,
+            "Taira runtime client config",
+            &admitted.inventory,
+        )?;
+        let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
+        if runtime_config.torii_api_url.as_str() != expected_public_root
+            || runtime_config.account.to_string()
+                != admitted.inventory.canary_onboarding_request.account_id
+        {
+            return Err(eyre!(
+                "runtime canary config does not target the exact signed public Taira canary"
+            ));
+        }
+        let validator_operator_key =
+            pin_validator_operator_key(&inputs.validator_operator_key, &admitted.inventory)?;
         let (stage_hash, stage_bytes, stage_files, fixed) =
             pin_stage_tree(&inputs.inrou_stage_dir, None)?;
         let claims = &admitted.authorization.claims;
@@ -11861,17 +11941,6 @@ impl RuntimeCustody {
             if fixed.get(path) != Some(expected) {
                 return Err(eyre!("retained Inrou stage fixed-file hash mismatch"));
             }
-        }
-        let runtime_config =
-            load_client_config_from_pinned(&client_config, "Taira runtime client config")?;
-        let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
-        if runtime_config.torii_api_url.as_str() != expected_public_root
-            || runtime_config.account.to_string()
-                != admitted.inventory.canary_onboarding_request.account_id
-        {
-            return Err(eyre!(
-                "runtime canary config does not target the exact signed public Taira canary"
-            ));
         }
         let retained_stage_dir =
             snapshot_stage_tree(journal_dir, &admitted.authorization_sha256, &stage_files)?;
@@ -12013,13 +12082,6 @@ impl RuntimeCustody {
                 "recovery requires either zero or exactly four validator client configs"
             ));
         }
-        let validator_operator_key = if validator_config_paths.len() == 4 {
-            let path = validator_operator_key_path
-                .ok_or_else(|| eyre!("RestartProof recovery requires --validator-operator-key"))?;
-            Some(pin_validator_operator_key(&path, &admitted.inventory)?)
-        } else {
-            None
-        };
         let client_config =
             pin_owner_private_file(&client_config_path, "Taira recovery client config")?;
         let client_hash = hash_pinned_input(&client_config, "Taira recovery client config", None)?;
@@ -12028,8 +12090,11 @@ impl RuntimeCustody {
                 "recovery client config is not bound by the signed authorization"
             ));
         }
-        let runtime_config =
-            load_client_config_from_pinned(&client_config, "Taira recovery client config")?;
+        let runtime_config = load_client_config_for_inventory(
+            &client_config,
+            "Taira recovery client config",
+            &admitted.inventory,
+        )?;
         let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
         if runtime_config.torii_api_url.as_str() != expected_public_root
             || runtime_config.account.to_string()
@@ -12063,6 +12128,13 @@ impl RuntimeCustody {
             }
             validate_validator_client_semantics(&validator_client_configs, admitted)?;
         }
+        let validator_operator_key = if validator_config_paths.len() == 4 {
+            let path = validator_operator_key_path
+                .ok_or_else(|| eyre!("RestartProof recovery requires --validator-operator-key"))?;
+            Some(pin_validator_operator_key(&path, &admitted.inventory)?)
+        } else {
+            None
+        };
         let inrou_stage_dir = journal_dir
             .join("runtime-stage-v1")
             .join(&admitted.authorization_sha256);
@@ -12184,7 +12256,7 @@ pub(super) fn validate_validator_client_inputs(
     }
     for (input, expected) in inputs.iter().zip(&inventory.validator_clients) {
         revalidate_pinned(input, "validator client config")?;
-        let config = load_client_config_from_pinned(input, "validator client config")?;
+        let config = load_client_config_for_inventory(input, "validator client config", inventory)?;
         let expected_account =
             iroha::data_model::account::AccountId::parse_encoded(&expected.account_id)
                 .wrap_err("signed validator client account is invalid")?;
@@ -12197,6 +12269,34 @@ pub(super) fn validate_validator_client_inputs(
         }
     }
     Ok(())
+}
+
+/// Bind a runtime signer to the exact signed public testnet generation before use.
+fn validate_client_network_identity(config: &ClientConfig, inventory: &InventoryV1) -> Result<()> {
+    super::validate_canonical_iroha_hash("client network genesis", &inventory.next_genesis_hash)?;
+    let genesis = hex::decode(&inventory.next_genesis_hash)
+        .map_err(|_| eyre!("signed inventory client network identity is invalid"))?;
+    if inventory.chain_id != super::CHAIN_ID
+        || inventory.chain_discriminant != super::CHAIN_DISCRIMINANT
+        || config.chain.to_string() != inventory.chain_id
+        || config.account_chain_discriminant != inventory.chain_discriminant
+        || config.network_id.as_bytes().as_slice() != genesis.as_slice()
+    {
+        return Err(eyre!(
+            "client config chain, network identity or account discriminant differs from the signed inventory"
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn load_client_config_for_inventory(
+    input: &super::PinnedInput,
+    label: &str,
+    inventory: &InventoryV1,
+) -> Result<ClientConfig> {
+    let config = load_client_config_from_pinned(input, label)?;
+    validate_client_network_identity(&config, inventory)?;
+    Ok(config)
 }
 
 pub(super) fn load_client_config_from_pinned(
@@ -12272,11 +12372,7 @@ fn inherited_client_config_args(
     input: &super::PinnedInput,
     label: &str,
 ) -> Result<(Vec<OsString>, File)> {
-    revalidate_pinned(input, label)?;
-    let file = input
-        .file
-        .try_clone()
-        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
+    let file = inherited_input_file(input, label)?;
     Ok((
         vec![
             "--config-fd".into(),
@@ -12356,6 +12452,8 @@ fn inherited_candidate_operator_status_args(
     inventory: &InventoryV1,
     origin: &str,
 ) -> Result<(Vec<OsString>, Vec<File>, tempfile::NamedTempFile)> {
+    let _config =
+        load_client_config_for_inventory(client_config, "validator client config", inventory)?;
     let operator_key = operator_key
         .ok_or_else(|| eyre!("validator convergence requires its retained operator key"))?;
     validate_pinned_validator_operator_key(operator_key, inventory)?;
@@ -12500,13 +12598,13 @@ impl ParentHeldSshInputs {
     }
 }
 
-fn inherited_input_path(input: &super::PinnedInput, label: &str) -> Result<(PathBuf, File)> {
+/// Retain an input for FD-only child arguments without creating a procfs path.
+fn inherited_input_file(input: &super::PinnedInput, label: &str) -> Result<File> {
     revalidate_pinned(input, label)?;
-    let file = input
+    input
         .file
         .try_clone()
-        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))?;
-    Ok((inherited_file_path(&file)?, file))
+        .wrap_err_with(|| format!("failed to duplicate retained {label} descriptor"))
 }
 
 #[cfg(target_os = "linux")]
@@ -12701,13 +12799,156 @@ struct RetainedPreparedMutation {
     transaction_hash: String,
 }
 
-enum PreparedMutationOutcome {
+impl RetainedPreparedMutation {
+    fn requires_onboarding_proof(&self, kind: &str) -> Result<bool> {
+        if !self.transaction_hash.is_empty() {
+            return Ok(false);
+        }
+        if kind != "onboarding"
+            || self.bytes.is_empty()
+            || sha256_hex(&self.bytes) != self.sha256
+            || !prepared_envelope_transaction_hash(&self.bytes)?.is_empty()
+        {
+            return Err(eyre!(
+                "transaction-free prepared mutation is not exact onboarding proof"
+            ));
+        }
+        prepared_onboarding_proof_required_result(&self.bytes)?;
+        Ok(true)
+    }
+
+    fn write_recovery_requires_observation(&self, kind: &str) -> Result<bool> {
+        if self.state == "absent" {
+            return Ok(false);
+        }
+        // ProofRequired has no submission marker: its prepared envelope owns
+        // a fresh read proof, including after that observation was interrupted.
+        let proof_required = self.requires_onboarding_proof(kind)?;
+        Ok(self.state != "prepared" || proof_required)
+    }
+}
+
+pub(super) enum PreparedMutationOutcome {
     Applied {
         value: norito::json::Value,
         evidence: Vec<u8>,
     },
     Pending,
     Rejected(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoreWriteRejectionReason {
+    Rejected,
+    Expired,
+}
+
+impl CoreWriteRejectionReason {
+    fn parse(evidence: &str) -> Result<Self> {
+        match evidence {
+            "Rejected" => Ok(Self::Rejected),
+            "Expired" => Ok(Self::Expired),
+            _ => Err(eyre!("unsupported core write rejection evidence")),
+        }
+    }
+
+    const fn recovery_class(self) -> &'static str {
+        match self {
+            Self::Rejected => "transaction_rejected",
+            Self::Expired => "transaction_expired",
+        }
+    }
+}
+
+fn core_prepared_write_outcome(
+    value: norito::json::Value,
+    prepared: &RetainedPreparedMutation,
+) -> Result<PreparedMutationOutcome> {
+    let outcome = value
+        .as_object()
+        .and_then(|object| object.get("recovery_outcome"))
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("prepared write child report omits recovery_outcome"))?;
+    let outcome = match outcome {
+        "Applied" => {
+            let evidence = canonical_json_report_bytes(&value)?;
+            PreparedMutationOutcome::Applied { value, evidence }
+        }
+        "Pending" => PreparedMutationOutcome::Pending,
+        "Rejected" => PreparedMutationOutcome::Rejected(
+            CoreWriteRejectionReason::parse(required_report_evidence(
+                &value,
+                "prepared write child",
+            )?)?
+            .recovery_class()
+            .to_owned(),
+        ),
+        _ => return Err(eyre!("prepared write child report has an invalid outcome")),
+    };
+    Ok(retain_applied_mutation_outcome(prepared, outcome))
+}
+
+#[derive(Clone, Copy)]
+enum PreparedChildProtocol {
+    WriteCanary,
+    Inrou,
+}
+
+fn retain_applied_mutation_outcome(
+    prepared: &RetainedPreparedMutation,
+    outcome: PreparedMutationOutcome,
+) -> PreparedMutationOutcome {
+    if prepared.state == "applied" && !matches!(outcome, PreparedMutationOutcome::Applied { .. }) {
+        // A lost or contradictory observation cannot revoke the retained
+        // Applied identity in either forward execution or read-only recovery.
+        PreparedMutationOutcome::Pending
+    } else {
+        outcome
+    }
+}
+
+/// Once submission is durable, only an authenticated terminal outcome can
+/// resolve it. Transport, report, and receipt failures retain the same intent
+/// for read-only recovery instead of authorizing rollback.
+pub(super) fn run_journaled_submitted_mutation(
+    progress: &mut dyn RecoveryProgress,
+    mutation_index: usize,
+    execute: impl FnOnce() -> Result<PreparedMutationOutcome>,
+) -> Result<()> {
+    progress.mark_submitted(mutation_index)?;
+    let pending = || LocalMutationRecoveryPending {
+        action: "submitted_prepared_child",
+    };
+    match execute().map_err(|error| error.wrap_err(pending()))? {
+        PreparedMutationOutcome::Applied { .. } => progress
+            .mark_applied(mutation_index)
+            .map_err(|error| error.wrap_err(pending())),
+        PreparedMutationOutcome::Pending => Err(pending().into()),
+        PreparedMutationOutcome::Rejected(class) => {
+            Err(eyre!("prepared child was definitively rejected: {class}"))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCanaryChildAction {
+    Prepare,
+    Submit,
+    Recover,
+}
+
+impl WriteCanaryChildAction {
+    fn append_envelope_args(self, args: &mut Vec<OsString>, fd: i32) {
+        match self {
+            Self::Prepare => args.extend([
+                OsString::from("--prepare-envelope"),
+                OsString::from("--prepared-output-fd"),
+            ]),
+            Self::Submit => args.push(OsString::from("--submit-prepared-envelope-fd")),
+            Self::Recover => args.push(OsString::from("--recover-prepared-envelope-fd")),
+        }
+        args.push(fd.to_string().into());
+    }
 }
 
 /// Minimal read-only transport for reconciling a durably submitted local
@@ -13569,7 +13810,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
 
     fn run_local_cli_process_until(
         &mut self,
-        args: Vec<OsString>,
+        mut args: Vec<OsString>,
         mut inherited_files: Vec<File>,
         deadline: Instant,
         recovery_only: bool,
@@ -13592,6 +13833,9 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .stream_file(&self.admitted.inventory.validators[0].slug, "iroha_cli")?;
         let cli = inherited_file_path(&cli_file)?;
         inherited_files.push(cli_file);
+        // All owned CLI calls use explicit config custody or the config-free doctor.
+        // Machine mode removes the startup banner from structured stderr diagnostics.
+        args.insert(0, OsString::from("--machine"));
         self.runner.run(&ProcessSpec {
             program: cli,
             args,
@@ -13641,72 +13885,84 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
     ) -> Result<()> {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(timeout_secs))
-            .ok_or_else(|| eyre!("journaled write child deadline overflow"))?;
-        let prepared =
-            self.prepare_write_canary_child_until(deadline, timeout_secs, phase, kind)?;
-        if prepared.state == "applied" {
-            let outcome =
-                self.run_write_canary_prepared_until(deadline, phase, kind, &prepared, true)?;
-            let PreparedMutationOutcome::Applied { value, .. } = outcome else {
-                return Err(LocalMutationRecoveryPending {
-                    action: "preapplied_write_canary_child",
-                }
-                .into());
-            };
-            progress.mark_submitted(mutation_index)?;
-            self.publish_local_receipt(
-                &format!("{}-{phase}.json", kind.replace('_', "-")),
-                &value,
-            )?;
-            return progress.mark_applied(mutation_index);
-        }
-        progress.mark_submitted(mutation_index)?;
-        let proof_required = prepared.transaction_hash.is_empty();
-        let prepared = if proof_required {
-            prepared
-        } else {
-            self.coordinate_shared_prepared_mutation(
-                "submitted",
-                kind,
-                phase,
-                &child_mutation_idempotency_key(
-                    &self.admitted.inventory.authorization_nonce,
-                    phase,
-                    kind,
-                ),
-                None,
-                "",
-                "",
-                None,
-                false,
-                remaining_seconds(deadline)?,
-            )?
-        };
-        match self.run_write_canary_prepared_until(
-            deadline,
+        self.run_journaled_prepared_child(
+            progress,
+            mutation_index,
+            timeout_secs,
             phase,
             kind,
-            &prepared,
-            proof_required,
-        )? {
-            PreparedMutationOutcome::Applied { value, evidence } => {
-                self.mark_shared_prepared_applied(phase, kind, &prepared, &evidence, deadline)?;
+            PreparedChildProtocol::WriteCanary,
+        )
+    }
+
+    fn run_journaled_prepared_child(
+        &mut self,
+        progress: &mut dyn RecoveryProgress,
+        mutation_index: usize,
+        timeout_secs: u64,
+        phase: &str,
+        kind: &str,
+        protocol: PreparedChildProtocol,
+    ) -> Result<()> {
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(timeout_secs))
+            .ok_or_else(|| eyre!("journaled prepared child deadline overflow"))?;
+        let prepared = match protocol {
+            PreparedChildProtocol::WriteCanary => {
+                self.prepare_write_canary_child_until(deadline, timeout_secs, phase, kind)?
+            }
+            PreparedChildProtocol::Inrou => {
+                self.prepare_inrou_child_until(deadline, timeout_secs, phase, kind)?
+            }
+        };
+        run_journaled_submitted_mutation(progress, mutation_index, || {
+            let already_applied = prepared.state == "applied";
+            let proof_required = matches!(protocol, PreparedChildProtocol::WriteCanary)
+                && prepared.requires_onboarding_proof(kind)?;
+            let prepared = if already_applied || proof_required {
+                prepared
+            } else {
+                self.coordinate_shared_prepared_mutation(
+                    "submitted",
+                    kind,
+                    phase,
+                    &child_mutation_idempotency_key(
+                        &self.admitted.inventory.authorization_nonce,
+                        phase,
+                        kind,
+                    ),
+                    None,
+                    "",
+                    "",
+                    None,
+                    false,
+                    remaining_seconds(deadline)?,
+                )?
+            };
+            let recover_only = already_applied || proof_required;
+            let outcome = match protocol {
+                PreparedChildProtocol::WriteCanary => self.run_write_canary_prepared_until(
+                    deadline,
+                    phase,
+                    kind,
+                    &prepared,
+                    recover_only,
+                )?,
+                PreparedChildProtocol::Inrou => {
+                    self.run_inrou_prepared_until(deadline, phase, kind, &prepared, recover_only)?
+                }
+            };
+            if let PreparedMutationOutcome::Applied { value, evidence } = &outcome {
+                if !already_applied {
+                    self.mark_shared_prepared_applied(phase, kind, &prepared, evidence, deadline)?;
+                }
                 self.publish_local_receipt(
                     &format!("{}-{phase}.json", kind.replace('_', "-")),
-                    &value,
+                    value,
                 )?;
-                progress.mark_applied(mutation_index)
             }
-            PreparedMutationOutcome::Pending => Err(LocalMutationRecoveryPending {
-                action: "write_canary_child",
-            }
-            .into()),
-            PreparedMutationOutcome::Rejected(class) => {
-                Err(eyre!("prepared write child was rejected: {class}"))
-            }
-        }
+            Ok(outcome)
+        })
     }
 
     fn prepare_write_canary_child_until(
@@ -13869,11 +14125,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .open(&scratch)?;
         let mut output_reader = output_file.try_clone()?;
         let output_path = inherited_file_path(&output_file)?;
-        let (mut args, mut inherited_files) =
-            self.write_canary_base_args(phase, kind, idempotency_key, timeout_secs, true)?;
-        args.push(OsString::from("--prepare-envelope"));
-        args.push(OsString::from("--prepared-output-fd"));
-        args.push(output_file.as_raw_fd().to_string().into());
+        let (mut args, mut inherited_files) = self.write_canary_base_args(
+            phase,
+            kind,
+            idempotency_key,
+            timeout_secs,
+            WriteCanaryChildAction::Prepare,
+        )?;
+        WriteCanaryChildAction::Prepare.append_envelope_args(&mut args, output_file.as_raw_fd());
         debug_assert_eq!(
             output_path,
             PathBuf::from(format!("/proc/self/fd/{}", output_file.as_raw_fd()))
@@ -13948,23 +14207,23 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             kind,
         );
         let file = self.open_retained_prepared_envelope(prepared)?;
+        let action = if recover_only {
+            WriteCanaryChildAction::Recover
+        } else {
+            WriteCanaryChildAction::Submit
+        };
         let (mut args, mut inherited_files) = self.write_canary_base_args(
             phase,
             kind,
             &idempotency_key,
             remaining_seconds(deadline)?,
-            !recover_only,
+            action,
         )?;
-        args.push(if recover_only {
-            OsString::from("--recover-prepared-envelope-fd")
-        } else {
-            OsString::from("--submit-prepared-envelope-fd")
-        });
-        args.push(file.as_raw_fd().to_string().into());
+        action.append_envelope_args(&mut args, file.as_raw_fd());
         inherited_files.push(file);
         let process =
             self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
-        let value = parse_json_report(&process.stdout, "exact prepared write child")?;
+        let value = parse_prepared_child_report(process, "exact prepared write child")?;
         let outcome = value
             .as_object()
             .and_then(|object| object.get("recovery_outcome"))
@@ -13979,17 +14238,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             outcome,
             Some(prepared),
         )?;
-        match outcome {
-            "Applied" => {
-                let evidence = canonical_json_report_bytes(&value)?;
-                Ok(PreparedMutationOutcome::Applied { value, evidence })
-            }
-            "Pending" => Ok(PreparedMutationOutcome::Pending),
-            "Rejected" => Ok(PreparedMutationOutcome::Rejected(
-                required_report_evidence(&value, "prepared write child")?.to_owned(),
-            )),
-            _ => Err(eyre!("prepared write child report has an invalid outcome")),
-        }
+        core_prepared_write_outcome(value, prepared)
     }
 
     fn write_canary_base_args(
@@ -13998,7 +14247,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         kind: &str,
         idempotency_key: &str,
         timeout_secs: u64,
-        include_submission_secret: bool,
+        action: WriteCanaryChildAction,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
         let (mut args, config_file) = inherited_client_config_args(
             &self.runtime.client_config,
@@ -14047,8 +14296,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
             ]);
         }
-        if kind == "onboarding" && include_submission_secret {
-            let (_token_path, token_file) = inherited_input_path(
+        if kind == "write_canary" && action == WriteCanaryChildAction::Prepare {
+            args.extend([
+                OsString::from("--predecessor-faucet-authority"),
+                OsString::from(&self.admitted.inventory.faucet_policy.authority),
+                OsString::from("--predecessor-faucet-asset-id"),
+                OsString::from(&self.admitted.inventory.faucet_policy.asset_definition_id),
+                OsString::from("--predecessor-faucet-amount"),
+                OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
+            ]);
+        }
+        if kind == "onboarding" && action != WriteCanaryChildAction::Recover {
+            let token_file = inherited_input_file(
                 self.runtime
                     .onboarding_token
                     .as_ref()
@@ -14099,7 +14358,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             true,
             remaining_seconds(deadline)?,
         )?;
-        if matches!(prepared.state.as_str(), "absent" | "prepared") {
+        if !prepared.write_recovery_requires_observation(&mutation.kind)? {
             return Ok(PreparedMutationOutcome::Rejected(
                 "prepared_child_not_submitted".to_owned(),
             ));
@@ -14173,59 +14432,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
     ) -> Result<()> {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(timeout_secs))
-            .ok_or_else(|| eyre!("journaled Inrou child deadline overflow"))?;
-        let prepared = self.prepare_inrou_child_until(deadline, timeout_secs, phase, kind)?;
-        if prepared.state == "applied" {
-            let outcome = self.run_inrou_prepared_until(deadline, phase, kind, &prepared, true)?;
-            let PreparedMutationOutcome::Applied { value, .. } = outcome else {
-                return Err(LocalMutationRecoveryPending {
-                    action: "preapplied_inrou_child",
-                }
-                .into());
-            };
-            progress.mark_submitted(mutation_index)?;
-            self.publish_local_receipt(
-                &format!("{}-{phase}.json", kind.replace('_', "-")),
-                &value,
-            )?;
-            return progress.mark_applied(mutation_index);
-        }
-        progress.mark_submitted(mutation_index)?;
-        let prepared = self.coordinate_shared_prepared_mutation(
-            "submitted",
-            kind,
+        self.run_journaled_prepared_child(
+            progress,
+            mutation_index,
+            timeout_secs,
             phase,
-            &child_mutation_idempotency_key(
-                &self.admitted.inventory.authorization_nonce,
-                phase,
-                kind,
-            ),
-            None,
-            "",
-            "",
-            None,
-            false,
-            remaining_seconds(deadline)?,
-        )?;
-        match self.run_inrou_prepared_until(deadline, phase, kind, &prepared, false)? {
-            PreparedMutationOutcome::Applied { value, evidence } => {
-                self.mark_shared_prepared_applied(phase, kind, &prepared, &evidence, deadline)?;
-                self.publish_local_receipt(
-                    &format!("{}-{phase}.json", kind.replace('_', "-")),
-                    &value,
-                )?;
-                progress.mark_applied(mutation_index)
-            }
-            PreparedMutationOutcome::Pending => Err(LocalMutationRecoveryPending {
-                action: "inrou_prepared_child",
-            }
-            .into()),
-            PreparedMutationOutcome::Rejected(class) => {
-                Err(eyre!("prepared Inrou child was rejected: {class}"))
-            }
-        }
+            kind,
+            PreparedChildProtocol::Inrou,
+        )
     }
 
     fn prepare_inrou_child_until(
@@ -14401,7 +14615,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         inherited_files.push(file);
         let process =
             self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
-        let value = parse_json_report(&process.stdout, "exact prepared Inrou child")?;
+        let value = parse_prepared_child_report(process, "exact prepared Inrou child")?;
         let outcome = value
             .as_object()
             .and_then(|object| object.get("recovery_outcome"))
@@ -14416,17 +14630,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             outcome,
             Some(prepared),
         )?;
-        match outcome {
+        let outcome = match outcome {
             "Applied" => {
                 let evidence = canonical_json_report_bytes(&value)?;
-                Ok(PreparedMutationOutcome::Applied { value, evidence })
+                PreparedMutationOutcome::Applied { value, evidence }
             }
-            "Pending" => Ok(PreparedMutationOutcome::Pending),
-            "Rejected" => Ok(PreparedMutationOutcome::Rejected(
+            "Pending" => PreparedMutationOutcome::Pending,
+            "Rejected" => PreparedMutationOutcome::Rejected(
                 required_report_evidence(&value, "prepared Inrou child")?.to_owned(),
-            )),
-            _ => Err(eyre!("prepared Inrou child report has an invalid outcome")),
-        }
+            ),
+            _ => return Err(eyre!("prepared Inrou child report has an invalid outcome")),
+        };
+        Ok(retain_applied_mutation_outcome(prepared, outcome))
     }
 
     fn inrou_prepared_base_args(
@@ -15232,7 +15447,7 @@ fn require_forward_lease_budget(admitted: &AdmittedReset, action_secs: u64) -> R
     Ok(())
 }
 
-fn recovery_intent_identity_matches(
+pub(super) fn recovery_intent_identity_matches(
     actual: &RecoveryIntentV1,
     expected: &RecoveryIntentV1,
 ) -> bool {
@@ -15254,18 +15469,12 @@ fn recovery_intent_identity_matches(
 fn build_recovery_intent(inventory: &InventoryV1, step: ExecutionStep) -> Option<RecoveryIntentV1> {
     let nonce = &inventory.authorization_nonce;
     let mutations = match step {
-        ExecutionStep::Canary => [
-            "onboarding",
-            "faucet",
-            "write_canary",
-            "inrou_bundle_pin",
-            "inrou_guest_pin",
-            "inrou_discovery_pin",
-            "inrou_canary",
-        ]
-        .into_iter()
-        .map(|kind| recovery_child_mutation(nonce, "pre_edge", kind, None))
-        .collect(),
+        ExecutionStep::Canary => inventory
+            .qualification_scope
+            .canary_kinds()
+            .iter()
+            .map(|kind| recovery_child_mutation(nonce, "pre_edge", kind, None))
+            .collect(),
         ExecutionStep::RestartProof => (1..=4)
             .flat_map(|wave| {
                 let phase = format!("restart-wave-{wave}");
@@ -15329,6 +15538,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         intent: &RecoveryIntentV1,
         progress: &mut dyn RecoveryProgress,
     ) -> Result<RecoveryOutcome> {
+        super::validate_recovery_intent(intent, step)?;
         let expected = self
             .recovery_intent(inventory, step)?
             .ok_or_else(|| eyre!("step has no read-only recovery identity"))?;
@@ -15354,7 +15564,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         if next < intent.mutations.len() {
             let mutation = &intent.mutations[next];
             if mutation.state != RecoveryMutationStateV1::Submitted {
-                return Ok(RecoveryOutcome::Rejected("not_attempted".to_owned()));
+                return Ok(RecoveryOutcome::ReadyToContinue);
             }
             let outcome = match mutation.kind.as_str() {
                 "host_restart" => {
@@ -15412,29 +15622,41 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 }
             }
             if next + 1 < intent.mutations.len() {
-                return Ok(RecoveryOutcome::Rejected("not_attempted".to_owned()));
+                return Ok(RecoveryOutcome::ReadyToContinue);
             }
         }
         match step {
             ExecutionStep::Canary => {}
             ExecutionStep::RestartProof => {
                 let result = (|| {
-                    self.read_inrou_restart_baselines_with_mode(true)?;
+                    if inventory.qualification_scope.includes_inrou() {
+                        self.read_inrou_restart_baselines_with_mode(true)?;
+                    }
                     for wave in 1..=4 {
                         self.convergence(inventory.timeouts.convergence_secs, wave, true)?;
-                        self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
+                        if inventory.qualification_scope.includes_inrou() {
+                            self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
+                        }
                     }
-                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, true)
+                    if inventory.qualification_scope.includes_inrou() {
+                        self.require_final_inrou_restart_sweep(
+                            inventory.timeouts.canary_secs,
+                            true,
+                        )?;
+                    }
+                    Ok(())
                 })();
                 return classify_inrou_restart_recovery_outcome(result);
             }
             ExecutionStep::EdgeVerify => {
                 self.doctor_with_mode(inventory.timeouts.canary_secs, true)?;
-                self.require_fresh_inrou_check(
-                    "inrou-post-edge.json",
-                    inventory.timeouts.canary_secs,
-                    true,
-                )?;
+                if inventory.qualification_scope.includes_inrou() {
+                    self.require_fresh_inrou_check(
+                        "inrou-post-edge.json",
+                        inventory.timeouts.canary_secs,
+                        true,
+                    )?;
+                }
             }
             _ => {
                 return Ok(RecoveryOutcome::Rejected("recovery_step_kind".to_owned()));
@@ -15454,44 +15676,45 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         let expected = self
             .recovery_intent(inventory, step)?
             .ok_or_else(|| eyre!("step has no recoverable mutation identity"))?;
-        if intent != &expected {
+        if !super::recovery_ready_to_continue(intent, step)
+            || !recovery_intent_identity_matches(intent, &expected)
+        {
             return Err(eyre!("prepared mutation intent is not exact"));
         }
+        let next_mutation = usize::from(intent.next_mutation);
         match step {
             ExecutionStep::Canary => {
-                for (index, kind) in ["onboarding", "faucet", "write_canary"]
-                    .into_iter()
+                for (index, kind) in inventory
+                    .qualification_scope
+                    .canary_kinds()
+                    .iter()
                     .enumerate()
+                    .skip(next_mutation)
                 {
-                    self.run_journaled_write_canary_child(
-                        progress,
-                        index,
-                        inventory.timeouts.canary_secs,
-                        "pre_edge",
-                        kind,
-                    )?;
-                }
-                for (offset, kind) in [
-                    "inrou_bundle_pin",
-                    "inrou_guest_pin",
-                    "inrou_discovery_pin",
-                    "inrou_canary",
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    self.run_journaled_inrou_prepared_child(
-                        progress,
-                        offset + 3,
-                        inventory.timeouts.canary_secs,
-                        "pre_edge",
-                        kind,
-                    )?;
+                    match *kind {
+                        "onboarding" | "faucet" | "write_canary" => self
+                            .run_journaled_write_canary_child(
+                                progress,
+                                index,
+                                inventory.timeouts.canary_secs,
+                                "pre_edge",
+                                kind,
+                            )?,
+                        _ => self.run_journaled_inrou_prepared_child(
+                            progress,
+                            index,
+                            inventory.timeouts.canary_secs,
+                            "pre_edge",
+                            kind,
+                        )?,
+                    }
                 }
                 Ok(())
             }
             ExecutionStep::RestartProof => {
-                self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
+                if inventory.qualification_scope.includes_inrou() {
+                    self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
+                }
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
                     let restart_index = index * 4;
@@ -15501,25 +15724,30 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         .map(|client| client.probe_origin.clone())
                         .collect::<Vec<_>>();
                     let admitted = self.admitted;
-                    run_restart_with_validator_http_readiness(
-                        &origins,
-                        Duration::from_secs(inventory.timeouts.restart_secs),
-                        || ensure_authorization_current(admitted),
-                        |deadline| {
-                            progress.mark_submitted(restart_index)?;
-                            self.bootstrap_and_dispatch_validator(
-                                validator,
-                                HostAction::Restart,
-                                remaining_seconds(deadline)?,
-                            )?;
-                            progress.mark_applied(restart_index)
-                        },
-                    )?;
+                    if restart_index >= next_mutation {
+                        run_restart_with_validator_http_readiness(
+                            &origins,
+                            Duration::from_secs(inventory.timeouts.restart_secs),
+                            || ensure_authorization_current(admitted),
+                            |deadline| {
+                                progress.mark_submitted(restart_index)?;
+                                self.bootstrap_and_dispatch_validator(
+                                    validator,
+                                    HostAction::Restart,
+                                    remaining_seconds(deadline)?,
+                                )?;
+                                progress.mark_applied(restart_index)
+                            },
+                        )?;
+                    }
                     let phase = format!("restart-wave-{wave}");
                     for (offset, kind) in ["onboarding", "faucet", "write_canary"]
                         .into_iter()
                         .enumerate()
                     {
+                        if restart_index + offset + 1 < next_mutation {
+                            continue;
+                        }
                         self.run_journaled_write_canary_child(
                             progress,
                             restart_index + offset + 1,
@@ -15529,9 +15757,14 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         )?;
                     }
                     self.convergence(inventory.timeouts.convergence_secs, wave, false)?;
-                    self.inrou_check(inventory.timeouts.canary_secs, wave)?;
+                    if inventory.qualification_scope.includes_inrou() {
+                        self.inrou_check(inventory.timeouts.canary_secs, wave)?;
+                    }
                 }
-                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)
+                if inventory.qualification_scope.includes_inrou() {
+                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
+                }
+                Ok(())
             }
             ExecutionStep::EdgeVerify => {
                 self.bootstrap_and_dispatch_edge(
@@ -15543,6 +15776,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 for (index, kind) in ["onboarding", "faucet", "write_canary"]
                     .into_iter()
                     .enumerate()
+                    .skip(next_mutation)
                 {
                     self.run_journaled_write_canary_child(
                         progress,
@@ -15552,11 +15786,13 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         kind,
                     )?;
                 }
-                self.require_fresh_inrou_check(
-                    "inrou-post-edge.json",
-                    inventory.timeouts.canary_secs,
-                    false,
-                )?;
+                if inventory.qualification_scope.includes_inrou() {
+                    self.require_fresh_inrou_check(
+                        "inrou-post-edge.json",
+                        inventory.timeouts.canary_secs,
+                        false,
+                    )?;
+                }
                 Ok(())
             }
             _ => Err(eyre!("step is not recovery-sensitive")),
@@ -16092,19 +16328,6 @@ fn validate_prepared_write_report(
     expected_outcome: &str,
     retained: Option<&RetainedPreparedMutation>,
 ) -> Result<()> {
-    const PENDING_EVIDENCE: &[&str] = &[
-        "Absent",
-        "AcceptedNotVisible",
-        "OnboardingAliasConflict",
-        "OnboardingStateAbsent",
-        "Queued",
-        "Approved",
-        "Committed",
-        "Applied",
-        "Rejected",
-        "Expired",
-    ];
-    const REJECTED_EVIDENCE: &[&str] = &["Rejected", "Expired"];
     validate_common_report(
         value,
         "taira_write_canary",
@@ -16205,16 +16428,16 @@ fn validate_prepared_write_report(
             evidence.ok_or_else(|| eyre!("Applied write report omits committed evidence"))?,
             "prepared write committed evidence",
         )?,
-        "Pending" if applied_height.is_none() => validate_report_evidence_token(
-            evidence.ok_or_else(|| eyre!("Pending write report omits its evidence class"))?,
-            PENDING_EVIDENCE,
-            "prepared write Pending evidence",
-        )?,
-        "Rejected" if applied_height.is_none() => validate_report_evidence_token(
-            evidence.ok_or_else(|| eyre!("Rejected write report omits its evidence class"))?,
-            REJECTED_EVIDENCE,
-            "prepared write Rejected evidence",
-        )?,
+        "Pending" if applied_height.is_none() => {
+            crate::taira::PreparedWritePendingReason::parse(
+                evidence.ok_or_else(|| eyre!("Pending write report omits its evidence class"))?,
+            )?;
+        }
+        "Rejected" if applied_height.is_none() => {
+            CoreWriteRejectionReason::parse(
+                evidence.ok_or_else(|| eyre!("Rejected write report omits its evidence class"))?,
+            )?;
+        }
         _ => {
             return Err(eyre!(
                 "prepared write report height/evidence does not match its outcome"
@@ -17896,6 +18119,8 @@ fn verify_remote_reservation_receipt(
 mod tests {
     use super::*;
 
+    include!("taira_public_reset_host_canary_args_tests.rs");
+
     fn readiness_http_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<usize>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("readiness listener");
         listener
@@ -17934,7 +18159,7 @@ mod tests {
                     assert!(count > 0 && request.len() < 8192);
                     request.extend_from_slice(&buffer[..count]);
                 }
-                assert!(request.starts_with(b"GET /status HTTP/1.1\r\n"));
+                assert!(request.starts_with(b"GET /readyz HTTP/1.1\r\n"));
                 stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).expect("readiness response");
             }
             count
@@ -17956,7 +18181,7 @@ mod tests {
         // Give the worker time to accept an empty socket before sending the request.
         std::thread::sleep(Duration::from_millis(50));
         client
-            .write_all(b"GET /status HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .expect("send delayed request");
         let mut response = String::new();
         client
@@ -18138,6 +18363,276 @@ mod tests {
             .to_string();
         assert!(error.contains("status: HTTP 502"));
         assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn submitted_child_process_failures_require_read_only_recovery() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        #[derive(Default)]
+        struct Progress {
+            submitted: bool,
+            applied: bool,
+            fail_applied: bool,
+        }
+        impl RecoveryProgress for Progress {
+            fn mark_submitted(&mut self, index: usize) -> Result<()> {
+                assert_eq!(index, 2);
+                assert!(!self.submitted);
+                self.submitted = true;
+                Ok(())
+            }
+            fn mark_applied(&mut self, index: usize) -> Result<()> {
+                assert_eq!(index, 2);
+                assert!(self.submitted);
+                if self.fail_applied {
+                    return Err(eyre!("failed to publish Applied journal transition"));
+                }
+                self.applied = true;
+                Ok(())
+            }
+        }
+        for case in 0..4 {
+            let mut progress = Progress {
+                fail_applied: case == 3,
+                ..Progress::default()
+            };
+            let error = run_journaled_submitted_mutation(&mut progress, 2, || {
+                if case == 3 {
+                    return Ok(PreparedMutationOutcome::Applied {
+                        value: norito::json::Value::Null,
+                        evidence: Vec::new(),
+                    });
+                }
+                let output = match case {
+                    0 => run_bounded_process(&ProcessSpec {
+                        program: PathBuf::from("/bin/sh"),
+                        args: vec!["-c".into(), "/bin/sleep 2".into()],
+                        stdin_prefix: Vec::new(),
+                        stdin_file: None,
+                        stdin_files: Vec::new(),
+                        inherited_files: Vec::new(),
+                        deadline: Instant::now() + Duration::from_millis(50),
+                    })?,
+                    1 => ProcessOutput {
+                        status: ExitStatus::from_raw(1 << 8),
+                        stdout: br#"{"status":"ok","recovery_outcome":"Applied"}"#.to_vec(),
+                        stderr: b"fixture-secret-must-not-escape".to_vec(),
+                    },
+                    2 => ProcessOutput {
+                        status: ExitStatus::from_raw(0),
+                        stdout: br#"{"status":"ok","recovery_outcome":"#.to_vec(),
+                        stderr: Vec::new(),
+                    },
+                    _ => unreachable!(),
+                };
+                parse_prepared_child_report(output, "exact prepared write child")?;
+                panic!("no failed fixture may authorize an outcome")
+            })
+            .expect_err("unknown outcome after Submitted must remain pending");
+            assert!(is_local_mutation_recovery_pending(&error), "case {case}");
+            assert!(progress.submitted);
+            assert!(!progress.applied);
+            assert!(!format!("{error:#}").contains("fixture-secret-must-not-escape"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_rejects_failed_exit_even_with_authenticated_applied_report() {
+        use std::os::unix::process::ExitStatusExt as _;
+        // The retained signed proof uses SORA account literals, as do its other consumers.
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let (host_admission, prepared, bytes, _, _) =
+            authenticated_proof_required_fixture("https://taira.sora.org");
+        let stdout = proof_required_evidence(&host_admission, &prepared);
+        let report = json::from_slice(&stdout).expect("Applied report JSON");
+        let mut admitted = admitted_reset_fixture();
+        admitted.inventory = host_admission.inventory;
+        admitted.inventory_sha256 = host_admission.inventory_sha256;
+        admitted.authorization = host_admission.authorization;
+        admitted.authorization_sha256 = host_admission.authorization_sha256;
+        let retained = RetainedPreparedMutation {
+            state: "submitted".to_owned(),
+            bytes,
+            sha256: prepared.prepared_sha256,
+            transaction_hash: String::new(),
+        };
+        validate_prepared_write_report(
+            &report,
+            &admitted,
+            &prepared.phase,
+            "onboarding",
+            &prepared.idempotency_key,
+            "Applied",
+            Some(&retained),
+        )
+        .expect("the report would otherwise be accepted as exact Applied evidence");
+        for (raw_status, expected_status) in [
+            (1 << 8, "exit_code=1 signal=none"),
+            (9, "exit_code=none signal=9"),
+        ] {
+            for label in ["exact prepared write child", "exact prepared Inrou child"] {
+                let error = parse_prepared_child_report(
+                    ProcessOutput {
+                        status: ExitStatus::from_raw(raw_status),
+                        stdout: stdout.clone(),
+                        stderr: b"child-secret-must-not-escape".to_vec(),
+                    },
+                    label,
+                )
+                .expect_err("a failed producer cannot authorize its Applied report")
+                .to_string();
+                assert!(error.contains(expected_status));
+                assert!(error.contains(&format!("stdout_bytes={}", stdout.len())));
+                assert!(!error.contains("child-secret-must-not-escape"));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_failure_reports_matching_fixed_cli_kind_without_message() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let private_message = "runtime-secret-and-server-response-must-not-escape";
+        for (context, kind, exit_code) in [
+            (crate::MainError::Config, "config", 3),
+            (
+                crate::MainError::CliArgs(private_message.to_owned()),
+                "input",
+                4,
+            ),
+            (
+                crate::MainError::Command(private_message.to_owned()),
+                "command",
+                1,
+            ),
+            (crate::MainError::SerializeConfig, "internal", 7),
+        ] {
+            let rendered = crate::render_cli_error(
+                &error_stack::Report::new(context),
+                crate::CliOutputFormat::Json,
+            );
+            assert_eq!(rendered.kind.exit_code(), exit_code);
+            let stderr = rendered.output.into_bytes();
+            let stderr_len = stderr.len();
+            let error = parse_prepared_child_report(
+                ProcessOutput {
+                    status: ExitStatus::from_raw(exit_code << 8),
+                    stdout: Vec::new(),
+                    stderr,
+                },
+                "exact prepared write child",
+            )
+            .expect_err("stderr-only CLI error")
+            .to_string();
+            assert!(error.contains(&format!("kind={kind} exit_code={exit_code} signal=none")));
+            assert!(error.contains(&format!("stdout_bytes=0 stderr_bytes={stderr_len}")));
+            assert!(!error.contains("runtime-secret") && !error.contains("server-response"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_failure_does_not_trust_unknown_or_mismatched_error_kind() {
+        use std::os::unix::process::ExitStatusExt as _;
+        for stderr in [
+            br#"{"error":{"kind":"runtime-secret","exit_code":1,"message":"private"}}"#.as_slice(),
+            br#"{"error":{"kind":"config","exit_code":3,"message":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":4,"message":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private","extra":"private"}}"#,
+            br#"{"error":{"kind":"command","exit_code":1,"message":"private"},"extra":"private"}"#,
+            b"startup banner\nprivate malformed error",
+        ] {
+            let error = parse_prepared_child_report(
+                ProcessOutput {
+                    status: ExitStatus::from_raw(1 << 8),
+                    stdout: Vec::new(),
+                    stderr: stderr.to_vec(),
+                },
+                "exact prepared Inrou child",
+            )
+            .expect_err("untrusted stderr is not an error classification")
+            .to_string();
+            assert!(error.contains("kind=unclassified exit_code=1 signal=none"));
+            assert!(!error.contains("runtime-secret") && !error.contains("private"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_zero_exit_protocol_failure_never_echoes_output() {
+        use std::os::unix::process::ExitStatusExt as _;
+        for stdout in [
+            Vec::new(),
+            br#"{"runtime-secret":"private""#.to_vec(),
+            b"private non-JSON output".to_vec(),
+            vec![b'x'; MAX_PROCESS_OUTPUT + 1],
+        ] {
+            let stdout_len = stdout.len();
+            let error = parse_prepared_child_report(
+                ProcessOutput {
+                    status: ExitStatus::from_raw(0),
+                    stdout,
+                    stderr: b"private stderr".to_vec(),
+                },
+                "exact prepared write child",
+            )
+            .expect_err("empty, malformed or oversized output is a protocol failure")
+            .to_string();
+            assert!(error.contains("kind=protocol exit_code=0 signal=none"));
+            assert!(error.contains(&format!("stdout_bytes={stdout_len}")));
+            assert!(!error.contains("runtime-secret") && !error.contains("private"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_child_zero_exit_preserves_typed_write_and_inrou_outcomes() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let admitted = admitted_reset_fixture();
+        for outcome in ["Applied", "Pending", "Rejected"] {
+            for (label, mut report) in [
+                (
+                    "exact prepared write child",
+                    prepared_write_report_fixture(&admitted, "onboarding", &"3".repeat(64)),
+                ),
+                (
+                    "exact prepared Inrou child",
+                    prepared_inrou_report_fixture(&admitted, &"3".repeat(64)),
+                ),
+            ] {
+                let object = report.as_object_mut().expect("prepared report object");
+                object.insert("recovery_outcome".to_owned(), outcome.into());
+                object.insert(
+                    "evidence".to_owned(),
+                    match outcome {
+                        "Applied" => "4".repeat(64).into(),
+                        "Pending" => "Queued".into(),
+                        "Rejected" => "Rejected".into(),
+                        _ => unreachable!(),
+                    },
+                );
+                if outcome == "Applied" {
+                    object.insert("applied_block_height".to_owned(), 7_u64.into());
+                }
+                let parsed = parse_prepared_child_report(
+                    ProcessOutput {
+                        status: ExitStatus::from_raw(0),
+                        stdout: json::to_vec(&report).expect("typed prepared report"),
+                        stderr: Vec::new(),
+                    },
+                    label,
+                )
+                .expect("typed outcomes remain available to exact envelope validation");
+                assert_eq!(parsed, report);
+                assert_eq!(
+                    parsed.get("recovery_outcome").and_then(json::Value::as_str),
+                    Some(outcome)
+                );
+            }
+        }
     }
 
     #[derive(Debug, clap::Parser)]
@@ -19655,6 +20150,7 @@ mod tests {
         let inventory_sha256 = sha256_hex(&inventory_bytes);
         let claims = super::super::AuthorizationClaimsV1 {
             action: "reset_and_deploy".to_owned(),
+            qualification_scope: inventory.qualification_scope,
             deployment_id: inventory.deployment_id.clone(),
             inventory_sha256: inventory_sha256.clone(),
             artifact_closure_sha256: inventory.artifact_closure_sha256.clone(),
@@ -20783,6 +21279,94 @@ time.sleep(30)
         }
     }
 
+    fn client_config_bytes_for_inventory(inventory: &InventoryV1) -> Vec<u8> {
+        let mut table: toml::Table = toml::from_str(include_str!("../../../defaults/client.toml"))
+            .expect("public client fixture TOML");
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            inventory
+                .next_genesis_hash
+                .parse::<Hash>()
+                .expect("fixture genesis hash"),
+        ));
+        table.insert(
+            "chain".to_owned(),
+            toml::Value::String(inventory.chain_id.clone()),
+        );
+        table.insert(
+            "network_id".to_owned(),
+            toml::Value::String(network.to_string()),
+        );
+        table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("fixture account")
+            .insert(
+                "chain_discriminant".to_owned(),
+                toml::Value::Integer(i64::from(inventory.chain_discriminant)),
+            );
+        toml::to_string(&table)
+            .expect("public fixture encoding")
+            .into_bytes()
+    }
+
+    #[test]
+    fn client_network_identity_rejects_wrong_chain_genesis_and_discriminant() {
+        let inventory = super::super::sample_inventory_fixture();
+        let (config, _) = ClientConfig::load_bytes_with_musubi_publication(
+            Path::new("client-network-fixture.toml"),
+            &client_config_bytes_for_inventory(&inventory),
+        )
+        .expect("strict canonical fixture config");
+        validate_client_network_identity(&config, &inventory)
+            .expect("exact signed client generation");
+        let mut wrong = config.clone();
+        wrong.chain = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("fixture chain");
+        assert!(validate_client_network_identity(&wrong, &inventory).is_err());
+        wrong = config.clone();
+        wrong.account_chain_discriminant = inventory.chain_discriminant + 1;
+        assert!(validate_client_network_identity(&wrong, &inventory).is_err());
+        wrong = config.clone();
+        wrong.network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"wrong client network fixture",
+            )));
+        assert!(validate_client_network_identity(&wrong, &inventory).is_err());
+        let mut malformed = inventory.clone();
+        malformed.next_genesis_hash = "0".repeat(64);
+        assert!(validate_client_network_identity(&config, &malformed).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pinned_client_inventory_loader_rejects_wrong_generation_without_child_custody() {
+        let directory = super::super::private_custody_test_dir("taira-client-network-");
+        let path = directory.path().join("client.toml");
+        let inventory = super::super::sample_inventory_fixture();
+        fs::write(&path, client_config_bytes_for_inventory(&inventory))
+            .expect("write public fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private fixture mode");
+        let input = pin_owner_private_file(&path, "client fixture").expect("pinned fixture");
+        load_client_config_for_inventory(&input, "client fixture", &inventory)
+            .expect("exact generation");
+        let mut next = inventory.clone();
+        next.next_genesis_hash = Hash::new(b"successor network fixture").to_string();
+        let error = load_client_config_for_inventory(&input, "client fixture", &next)
+            .expect_err("old-generation client must fail before child creation");
+        assert_eq!(
+            error.to_string(),
+            "client config chain, network identity or account discriminant differs from the signed inventory"
+        );
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("fixture directory")
+                .count(),
+            1
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn retained_client_config_semantics_and_child_fd_share_exact_source() {
@@ -20938,11 +21522,8 @@ time.sleep(30)
         let (key_path, expected_operator) =
             validator_operator_key_fixture(directory.path(), &mut inventory);
         let config_path = directory.path().join("client.toml");
-        fs::write(
-            &config_path,
-            include_bytes!("../../../defaults/client.toml"),
-        )
-        .expect("public account config fixture");
+        fs::write(&config_path, client_config_bytes_for_inventory(&inventory))
+            .expect("public account config fixture");
         fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
             .expect("private account config");
         let config = pin_owner_private_file(&config_path, "account fixture").expect("pin account");
@@ -21011,11 +21592,8 @@ time.sleep(30)
         let mut inventory = super::super::sample_inventory_fixture();
         let (key_path, _) = validator_operator_key_fixture(directory.path(), &mut inventory);
         let config_path = directory.path().join("client.toml");
-        fs::write(
-            &config_path,
-            include_bytes!("../../../defaults/client.toml"),
-        )
-        .expect("public config fixture");
+        fs::write(&config_path, client_config_bytes_for_inventory(&inventory))
+            .expect("public config fixture");
         fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
             .expect("private config fixture");
         let config = pin_owner_private_file(&config_path, "account fixture").expect("pin config");
@@ -21108,6 +21686,173 @@ time.sleep(30)
             mutation_probe_root(&admitted.inventory, "post_edge").unwrap(),
             admitted.inventory.inrou_canary.public_root
         );
+    }
+
+    fn core_report_consumer_fixture(
+        report: &norito::json::Value,
+        bytes: Vec<u8>,
+    ) -> (AdmittedReset, RetainedPreparedMutation, String) {
+        let object = report.as_object().unwrap();
+        let mut admitted = admitted_reset_fixture();
+        let root = object
+            .get("public_root")
+            .and_then(norito::json::Value::as_str)
+            .unwrap();
+        admitted.inventory.validator_clients[0].probe_origin = format!("{root}/");
+        admitted.authorization_sha256 = object
+            .get("authorization_sha256")
+            .and_then(norito::json::Value::as_str)
+            .unwrap()
+            .to_owned();
+        admitted.inventory.authorization_nonce = object
+            .get("authorization_nonce")
+            .and_then(norito::json::Value::as_str)
+            .unwrap()
+            .to_owned();
+        admitted.authorization.claims.execution_expires_at_unix_ms = object
+            .get("execution_expires_at_unix_ms")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap();
+        let key = object
+            .get("idempotency_key")
+            .and_then(norito::json::Value::as_str)
+            .unwrap();
+        let retained = RetainedPreparedMutation {
+            state: "submitted".to_owned(),
+            sha256: sha256_hex(&bytes),
+            transaction_hash: prepared_envelope_transaction_hash(&bytes).unwrap(),
+            bytes,
+        };
+        (admitted, retained, key.to_owned())
+    }
+
+    #[test]
+    fn every_core_pending_report_variant_reaches_the_exact_host_consumer() {
+        for reason in crate::taira::PreparedWritePendingReason::ALL
+            .iter()
+            .copied()
+        {
+            let cases = crate::taira::core_pending_report_cases_for_test(reason).unwrap();
+            assert_eq!(
+                cases.len(),
+                4,
+                "three operations including both onboarding forms"
+            );
+            for (kind, bytes, report) in cases {
+                let (admitted, retained, key) = core_report_consumer_fixture(&report, bytes);
+                validate_prepared_write_report(
+                    &report,
+                    &admitted,
+                    "pre_edge",
+                    &kind,
+                    &key,
+                    "Pending",
+                    Some(&retained),
+                )
+                .unwrap_or_else(|error| panic!("{kind}/{reason:?}: {error:#}"));
+                for unknown in [
+                    norito::json::Value::from("queued"),
+                    norito::json::Value::from("ObservationDeadlineReached"),
+                    norito::json::Value::from("SubmissionOutcomeUnknown"),
+                    norito::json::Value::from("Unknown"),
+                    norito::json::Value::from("Queued "),
+                    norito::json::Value::from(1_u64),
+                    norito::json::Value::Null,
+                    norito::json!([]),
+                    norito::json!({}),
+                ] {
+                    let mut changed = report.clone();
+                    changed
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("evidence".to_owned(), unknown.clone());
+                    assert!(
+                        validate_prepared_write_report(
+                            &changed,
+                            &admitted,
+                            "pre_edge",
+                            &kind,
+                            &key,
+                            "Pending",
+                            Some(&retained),
+                        )
+                        .is_err(),
+                        "wrong typed evidence {unknown:?} for {kind}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn core_terminal_reports_map_to_exact_executor_recovery_classes() {
+        for (evidence, expected_class) in [
+            ("Rejected", "transaction_rejected"),
+            ("Expired", "transaction_expired"),
+        ] {
+            let mut operations = BTreeSet::new();
+            for (kind, bytes, report) in
+                crate::taira::core_rejected_report_cases_for_test(evidence).unwrap()
+            {
+                let (admitted, retained, key) = core_report_consumer_fixture(&report, bytes);
+                if retained.transaction_hash.is_empty() {
+                    continue; // A current-state proof has no transaction to reject or expire.
+                }
+                operations.insert(kind.clone());
+                validate_prepared_write_report(
+                    &report,
+                    &admitted,
+                    "pre_edge",
+                    &kind,
+                    &key,
+                    "Rejected",
+                    Some(&retained),
+                )
+                .unwrap();
+                let PreparedMutationOutcome::Rejected(class) =
+                    core_prepared_write_outcome(report.clone(), &retained).unwrap()
+                else {
+                    panic!("authenticated terminal report must remain terminal");
+                };
+                assert_eq!(class, expected_class);
+                super::super::executor_model::tests::assert_core_recovery_rejection_for_test(
+                    &class,
+                );
+                for invalid in [
+                    "rejected",
+                    "expired",
+                    "transaction_rejected",
+                    "transaction_expired",
+                    "Rejected ",
+                ] {
+                    let mut changed = report.clone();
+                    changed
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("evidence".to_owned(), invalid.into());
+                    assert!(
+                        validate_prepared_write_report(
+                            &changed,
+                            &admitted,
+                            "pre_edge",
+                            &kind,
+                            &key,
+                            "Rejected",
+                            Some(&retained),
+                        )
+                        .is_err(),
+                        "only exact authenticated report labels may map into recovery"
+                    );
+                }
+            }
+            assert_eq!(
+                operations,
+                ["onboarding", "faucet", "write_canary"]
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+            );
+        }
     }
 
     fn prepared_write_report_fixture(
@@ -22093,6 +22838,75 @@ time.sleep(30)
         assert_eq!(operation, prepared.operation);
     }
 
+    #[test]
+    fn interrupted_onboarding_proof_recovers_from_its_authenticated_prepared_envelope() {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let (_, prepared, bytes, _, _) =
+            authenticated_proof_required_fixture("http://127.0.0.1:8080");
+        let mut retained = RetainedPreparedMutation {
+            state: "prepared".to_owned(),
+            bytes,
+            sha256: prepared.prepared_sha256,
+            transaction_hash: prepared.transaction_hash,
+        };
+        assert!(
+            retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap(),
+            "an interrupted atomic state proof has no Submitted transaction marker"
+        );
+        assert!(
+            retained
+                .write_recovery_requires_observation("faucet")
+                .is_err()
+        );
+        assert!(
+            retained
+                .write_recovery_requires_observation("write_canary")
+                .is_err()
+        );
+        retained.bytes.push(b' ');
+        assert!(
+            retained
+                .write_recovery_requires_observation("onboarding")
+                .is_err()
+        );
+        retained.bytes.pop();
+
+        for state in ["prepared", "submitted", "applied"] {
+            retained.state = state.to_owned();
+            let outcome = retain_applied_mutation_outcome(
+                &retained,
+                PreparedMutationOutcome::Rejected("Rejected".to_owned()),
+            );
+            assert_eq!(
+                matches!(outcome, PreparedMutationOutcome::Pending),
+                state == "applied",
+                "a contradictory observation cannot revoke retained Applied custody"
+            );
+        }
+        retained.state = "prepared".to_owned();
+        retained.transaction_hash = "11".repeat(32);
+        assert!(
+            !retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap(),
+            "a real transaction still requires its exact Submitted marker"
+        );
+        retained.state = "submitted".to_owned();
+        assert!(
+            retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap()
+        );
+        retained.state = "absent".to_owned();
+        assert!(
+            !retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap()
+        );
+    }
+
     fn proof_required_evidence(admitted: &HostAdmission, prepared: &PreparedMutationV1) -> Vec<u8> {
         let envelope = BASE64
             .decode(&prepared.prepared_base64)
@@ -22142,7 +22956,12 @@ time.sleep(30)
             sha256: prepared.prepared_sha256.clone(),
             transaction_hash: String::new(),
         };
-        for evidence in ["OnboardingAliasConflict", "OnboardingStateAbsent"] {
+        for evidence in [
+            "OnboardingAliasConflict",
+            "OnboardingStateAbsent",
+            "AppliedEvidencePending",
+            "ObservationUnavailable",
+        ] {
             let report = norito::json!({
                 "command": "taira_write_canary",
                 "status": "ok",
@@ -22591,6 +23410,66 @@ time.sleep(30)
         let edge = build_recovery_intent(&inventory, ExecutionStep::EdgeVerify)
             .expect("edge recovery intent");
         assert_eq!(edge.mutations.len(), 3);
+    }
+
+    #[test]
+    fn core_testnet_scope_preserves_baseline_recovery_and_host_plan() {
+        let mut admitted = progress_admission();
+        let full_plan = host_forward_plan(&admitted);
+        let full_canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
+            .expect("full qualification intent");
+        admitted.inventory.qualification_scope = super::super::QualificationScopeV1::CoreTestnet;
+        assert_eq!(
+            host_forward_plan(&admitted),
+            full_plan,
+            "artifact custody, stage, restarts, seal and rollback host plan remain fixed"
+        );
+        assert!(!admitted.inventory.qualification_scope.includes_inrou());
+        let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
+            .expect("core qualification intent");
+        assert_eq!(
+            canary
+                .mutations
+                .iter()
+                .map(|mutation| mutation.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["onboarding", "faucet", "write_canary"]
+        );
+        assert!(!recovery_intent_identity_matches(&canary, &full_canary));
+        assert!(!recovery_intent_identity_matches(&full_canary, &canary));
+        let restart = build_recovery_intent(&admitted.inventory, ExecutionStep::RestartProof)
+            .expect("core restart intent");
+        assert_eq!(restart.mutations.len(), 16);
+        for wave in 0..4 {
+            assert_eq!(restart.mutations[wave * 4].kind, "host_restart");
+            assert_eq!(
+                restart.mutations[wave * 4 + 1..wave * 4 + 4]
+                    .iter()
+                    .map(|mutation| mutation.kind.as_str())
+                    .collect::<Vec<_>>(),
+                ["onboarding", "faucet", "write_canary"]
+            );
+        }
+        let edge = build_recovery_intent(&admitted.inventory, ExecutionStep::EdgeVerify)
+            .expect("core post-edge intent");
+        assert_eq!(
+            edge.mutations
+                .iter()
+                .map(|mutation| mutation.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["onboarding", "faucet", "write_canary"]
+        );
+        let writes = canary
+            .mutations
+            .iter()
+            .chain(&restart.mutations)
+            .chain(&edge.mutations)
+            .filter(|mutation| mutation.kind != "host_restart")
+            .count();
+        assert_eq!(
+            writes, 18,
+            "all baseline mutations retain immutable recovery evidence"
+        );
     }
 
     #[test]

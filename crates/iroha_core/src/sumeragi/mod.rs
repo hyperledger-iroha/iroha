@@ -535,9 +535,10 @@ pub(crate) mod v2_lifecycle_recovery;
 pub(crate) mod v2_npos;
 pub(crate) mod v2_recovery;
 pub use v2_recovery::{
-    AuthenticatedV2SnapshotStartup, V2StartupReplayError, V2StartupReplayPlan,
-    authenticate_v2_snapshot_replay_boundary, authenticate_v2_snapshot_startup,
-    authenticated_v2_snapshot_startup_mode, plan_v2_startup_replay,
+    AuthenticatedV2SnapshotStartup, V2SnapshotStartupPolicy, V2StartupReplayError,
+    V2StartupReplayPlan, authenticate_v2_snapshot_replay_boundary,
+    authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
+    plan_v2_startup_replay,
 };
 pub(crate) mod v2_runner;
 pub(crate) mod v2_runtime;
@@ -6762,6 +6763,15 @@ impl SumeragiHandle {
     }
     fn wake(&self) {
         let _ = self.wake.try_send(());
+    }
+    /// Observe whether the current consensus owner accepts ordinary ingress.
+    /// Startup replay, lifecycle activation and restart-required faults keep it closed.
+    /// This readiness observation does not replace admission-time ownership checks.
+    #[must_use]
+    pub fn admission_ready(&self) -> bool {
+        !self.emergency_fast_disabled
+            && self.ingress_ready.load(Ordering::Acquire)
+            && !self.restart_required()
     }
     /// Wake the serialized v2 owner after a QueuePlan admission certificate
     /// has been durably published in Kura.

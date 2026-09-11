@@ -1,13 +1,25 @@
 // Canonical fanout admission tests live here to keep the snapshot module's
 // production implementation within its source-size ratchet.
-use iroha_data_model::QueryOutputBatchBox;
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::dsl::CompoundPredicate;
+fn canonical_reader_world(mut world: World) -> World {
+    let permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::query::CanReadAllLedgerData.into();
+    world
+        .account_permissions
+        .insert(ALICE_ID.clone(), [permission].into_iter().collect());
+    world
+}
+fn assert_opaque_canonical_start_rejected(error: SnapshotQueryError) {
+    assert!(matches!(error, SnapshotQueryError::Execution(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+    ) if message == "canonical fanout rejects opaque canonical starts before nested payload, predicate, or selector decoding"));
+}
 fn canonical_test_limits(max_items: u64) -> QueryLimits {
     use crate::smartcontracts::isi::query::{
         CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES, CanonicalQueryOutputLimits,
     };
-    QueryLimits::new(16).with_canonical_output_limits(CanonicalQueryOutputLimits::new(
+    QueryLimits::from_defaults().with_canonical_output_limits(CanonicalQueryOutputLimits::new(
         max_items,
         CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES,
         1024 * 1024,
@@ -61,7 +73,7 @@ fn canonical_role_ids_rejects_large_filter_before_source_execution() {
     );
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
-        world,
+        canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
         ChainId::from("canonical-filter-rejection"),
@@ -79,13 +91,11 @@ fn canonical_role_ids_rejects_large_filter_before_source_execution() {
         QueryExecutionBudget::from_weighted_limit(1024 * 1024, 1, 1),
     )
     .expect_err("filtered role IDs must reject before source execution");
-    assert!(matches!(error, SnapshotQueryError::Execution(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-        ) if message.contains("filtered") && message.contains("before source execution")));
+    assert_opaque_canonical_start_rejected(error);
 }
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
-fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
+fn budgeted_arc_snapshot_canonical_mode_rejects_an_opaque_start_with_bounded_pagination() {
     let domain = Domain::new(DomainId::try_new("canonical", "universal").expect("domain id"))
         .build(&ALICE_ID);
     let roles = ["canonical-z", "canonical-a", "canonical-m"]
@@ -93,7 +103,7 @@ fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
     let world = World::with_assets_and_roles([domain], [alice_account()], [], [], [], roles);
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
-        world,
+        canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
         ChainId::from("canonical-snapshot"),
@@ -102,7 +112,7 @@ fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
         pagination: Pagination::new(Some(nonzero_ext::nonzero!(2_u64)), 1),
         ..QueryParams::default()
     };
-    let response = run_on_snapshot_ephemeral_with_budget_arc(
+    let error = run_on_snapshot_ephemeral_with_budget_arc(
         &state,
         &store,
         &ALICE_ID,
@@ -110,18 +120,8 @@ fn budgeted_arc_snapshot_canonical_mode_is_ephemeral_and_offset_bounded() {
         canonical_test_limits(3),
         QueryExecutionBudget::from_weighted_limit(16 * 1024 * 1024, 1, 1),
     )
-    .expect("budgeted canonical snapshot query");
-    let QueryResponse::Iterable(output) = response else {
-        panic!("expected iterable response")
-    };
-    assert_eq!(output.batch.len(), 2);
-    assert!(output.continue_cursor.is_none());
-    let QueryOutputBatchBox::RoleId(role_ids) =
-        output.batch.into_columns().pop().expect("one column")
-    else {
-        panic!("canonical role-id query changed output variant")
-    };
-    assert_eq!(role_ids.len(), 2);
+    .expect_err("bounded pagination cannot authorize opaque canonical source decoding");
+    assert_opaque_canonical_start_rejected(error);
 }
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
@@ -132,7 +132,7 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
     let world = World::with([domain], [alice_account()], []);
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
-        world,
+        canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
         ChainId::from("canonical-source-rejection"),
@@ -146,14 +146,7 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_unbounded_domain_source() {
         QueryExecutionBudget::from_weighted_limit(16 * 1024 * 1024, 1, 1),
     )
     .expect_err("unbounded domain rows must be rejected before query execution");
-    let SnapshotQueryError::Execution(
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-    ) = error
-    else {
-        panic!("unexpected canonical source rejection: {error:?}")
-    };
-    assert!(message.contains("FindDomains"));
-    assert!(message.contains("before source execution"));
+    assert_opaque_canonical_start_rejected(error);
 }
 #[cfg(all(not(feature = "fast_dsl"), feature = "ids_projection"))]
 #[test]
@@ -171,7 +164,7 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution
     );
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
-        world,
+        canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
         ChainId::from("canonical-selector-rejection"),
@@ -185,9 +178,7 @@ fn budgeted_arc_snapshot_canonical_mode_rejects_selector_before_source_execution
         QueryExecutionBudget::from_weighted_limit(1024 * 1024, 1, 1),
     )
     .expect_err("selector must be rejected before source execution");
-    assert!(matches!(error, SnapshotQueryError::Execution(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-        ) if message.contains("before source execution")));
+    assert_opaque_canonical_start_rejected(error);
 }
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
@@ -222,7 +213,7 @@ fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
     let world = World::with([], [alice_account()], []);
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
-        world,
+        canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
         ChainId::from("canonical-multisig-rejection"),
@@ -236,10 +227,7 @@ fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
         QueryExecutionBudget::from_weighted_limit(1024 * 1024, 1, 1),
     )
     .expect_err("parameterized multisig query must reject before payload decode");
-    assert!(matches!(error, SnapshotQueryError::Execution(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-        ) if message.contains("FindRolesByAccountId")
-            && message.contains("before source execution")));
+    assert_opaque_canonical_start_rejected(error);
 }
 #[cfg(feature = "fast_dsl")]
 #[test]
@@ -247,7 +235,7 @@ fn canonical_fast_dsl_start_rejects_before_nested_component_decode() {
     let world = World::with([], [alice_account()], []);
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(
-        world,
+        canonical_reader_world(world),
         Kura::blank_kura_for_testing(),
         store.clone(),
         ChainId::from("canonical-fast-dsl-rejection"),
@@ -261,7 +249,5 @@ fn canonical_fast_dsl_start_rejects_before_nested_component_decode() {
         QueryExecutionBudget::from_weighted_limit(1024 * 1024, 1, 1),
     )
     .expect_err("opaque fast-DSL canonical start must fail closed");
-    assert!(matches!(error, SnapshotQueryError::Execution(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
-        ) if message.contains("before nested payload")));
+    assert_opaque_canonical_start_rejected(error);
 }

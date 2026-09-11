@@ -65,6 +65,34 @@ minutes. Each successful manifest, range, or event request consumes the active
 grant and returns a replacement in the sensitive
 `X-SoraFS-Evidence-Grant` response header.
 
+Each actual grant issuance uses a fresh nonzero 32-byte cryptographic nonce in
+its canonical claims. The active session checkpoint retains that exact nonce;
+current-grant verification preserves it and replacement issuance creates a new
+one. Providers must bind the nonce and make distinct nonce-bearing credentials
+independently revocable, including when the other claims and timestamps match.
+This is the sole first-release claims/checkpoint schema, with no old-field default
+or alternate decoding path.
+
+One explicit publication owner retains each returned credential before
+post-issuance qualification and runs cleanup after service locks are released.
+Definite unpublished failure attempts one exact-issued retirement on the same
+captured provider, even if its qualification changed after issuance; this narrow
+retirement cannot authorize another issuance, verification or arbitrary target.
+Failure remains unresolved and bounded by provider expiry, never reported as a
+successful revoke. No provider I/O runs in a destructor. Panic/crash before
+explicit settlement and a provider that issues without returning its token still
+require the provider's authenticated expiry bound.
+
+Checkpoint persistence distinguishes unpublished, authoritative committed and
+uncertain publication. A committed grant is preserved even when writing the
+local cache fails. A definitively rejected CAS followed by a verified different direct
+successor proves this candidate unpublished independently of local cache health. Only a definitive rejected CAS plus exact
+predecessor readback proves no commit; an ambiguous or unavailable CAS can still
+complete later and fences output without revoking its possibly installed grant.
+Existing exact signed authority/readback identities support reconciliation;
+there is no new retry worker or secret checkpoint. Request-time expiry behavior
+is unchanged by this grant-cleanup rule.
+
 Challenge values, grants, WebAuthn assertions, credential identifiers, signing
 keys, custody-provider credentials, and evidence bytes never enter the
 checkpoint or logs.

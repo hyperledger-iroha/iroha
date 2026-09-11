@@ -2445,7 +2445,7 @@ mod tests {
         events::{EventBox, data::prelude as data_pre},
         isi::{
             Burn, SetAssetTransferAvailability, Transfer, Unregister,
-            account_recovery::ReplaceAccountController,
+            account_recovery::ReplaceAccountController, error::InstructionExecutionError,
         },
         permission::Permissions,
     };
@@ -2563,12 +2563,13 @@ mod tests {
                 let EventBox::Data(data_event) = event else {
                     return None;
                 };
-                let data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(scoped)) =
-                    data_event.as_ref()
-                else {
-                    return None;
+                let asset_event = match data_event.as_ref() {
+                    data_pre::DataEvent::Asset(event) => event,
+                    data_pre::DataEvent::Domain(data_pre::DomainEvent::Asset(scoped)) => {
+                        &scoped.event
+                    }
+                    _ => return None,
                 };
-                let asset_event = &scoped.event;
                 match asset_event {
                     data_pre::AssetEvent::Removed(changed) => {
                         Some(("removed", changed.asset().clone(), changed.amount().clone()))
@@ -2914,8 +2915,12 @@ mod tests {
         .execute(&seller, &mut tx)
         .expect_err("outbound transfer controls must apply to escrow opening");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
@@ -3062,11 +3067,12 @@ mod tests {
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("lock-definition-home");
         let home_dataspace = iroha_model_base::topology::DataSpaceId::new(7);
+        let home_domain = DomainId::try_new("aitai", "paynet").expect("home domain");
         let asset_definition_entry = AssetDefinition::numeric(
             asset_definition.clone(),
             "XOR".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-            Some(fixture_asset_definition_domain()),
+            Some(home_domain.clone()),
         )
         .build(&source);
         let source_asset_id = AssetId::with_scope(
@@ -3076,7 +3082,7 @@ mod tests {
         );
         let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(100_u32));
         let mut world = crate::state::World::with_assets(
-            [Domain::new(fixture_asset_definition_domain()).build(&source)],
+            [Domain::new(home_domain).build(&source)],
             [
                 Account::new(source.clone()).build(&source),
                 Account::new(destination.clone()).build(&destination),
@@ -3642,8 +3648,12 @@ mod tests {
                 .execute(&destination, &mut tx)
                 .expect_err("disabled custody outbound must block drawdown");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         let cancel_custody = escrow_record(&tx, &cancel_id).custody;
@@ -3652,8 +3662,12 @@ mod tests {
             .execute(&source, &mut tx)
             .expect_err("disabled custody outbound must block cancellation refund");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         let expire_custody = escrow_record(&tx, &expire_id).custody;
@@ -3662,8 +3676,12 @@ mod tests {
             .execute(&observer, &mut tx)
             .expect_err("disabled custody outbound must block expiry refund");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         assert_eq!(
@@ -4136,8 +4154,12 @@ mod tests {
             .execute(&seller, &mut tx)
             .expect_err("disabled custody outbound must block release");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         let record = escrow_record(&tx, &escrow_id);
@@ -4216,8 +4238,12 @@ mod tests {
             .execute(&seller, &mut tx)
             .expect_err("disabled custody outbound must block cancellation");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         let record = escrow_record(&tx, &escrow_id);
@@ -4309,7 +4335,7 @@ mod tests {
         );
     }
     #[test]
-    fn escrow_resolution_records_split_transfer_batch() {
+    fn escrow_resolution_records_each_ordered_transfer_leg() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
         let court = fixture_account("court");
@@ -4361,21 +4387,27 @@ mod tests {
         let entry = transcripts
             .get(&call_hash)
             .expect("escrow transfer transcripts");
-        assert_eq!(entry.len(), 2);
-        let resolution = entry
-            .iter()
-            .find(|transcript| transcript.deltas.len() == 2)
-            .expect("resolution transfer batch");
-        assert!(resolution.poseidon_preimage_digest.is_none());
+        assert_eq!(entry.len(), 3);
+        let resolution = &entry[1..];
+        for transcript in resolution {
+            assert_eq!(transcript.deltas.len(), 1);
+            assert_eq!(
+                transcript.poseidon_preimage_digest,
+                Some(crate::fastpq::poseidon_preimage_digest(
+                    &transcript.deltas[0],
+                    &transcript.batch_hash,
+                ))
+            );
+        }
         assert_transfer_delta(
-            &resolution.deltas[0],
+            &resolution[0].deltas[0],
             &custody,
             &buyer,
             &asset_definition,
             &buyer_amount,
         );
         assert_transfer_delta(
-            &resolution.deltas[1],
+            &resolution[1].deltas[0],
             &custody,
             &seller,
             &asset_definition,
@@ -4429,8 +4461,12 @@ mod tests {
         .execute(&court, &mut tx)
         .expect_err("disabled custody outbound must block resolution");
         assert!(
-            err.to_string()
-                .contains("Outgoing asset movement is disabled"),
+            matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    iroha_data_model::isi::error::AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ),
             "unexpected error: {err}"
         );
         let record = escrow_record(&tx, &escrow_id);

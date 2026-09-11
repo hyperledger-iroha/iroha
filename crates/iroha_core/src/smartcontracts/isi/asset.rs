@@ -9006,7 +9006,7 @@ pub mod query {
         #[test]
         fn transfer_restricted_asset_uses_definition_home_dataspace_from_universal_route() {
             let home_dataspace = DataSpaceId::new(7);
-            let domain_id = wonderland_domain_id();
+            let domain_id = DomainId::try_new("wonderland", "paynet").expect("home domain");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);

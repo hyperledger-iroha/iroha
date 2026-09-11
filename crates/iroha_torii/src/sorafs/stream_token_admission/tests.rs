@@ -164,6 +164,7 @@ struct DurableProviderState {
     active_leases: Vec<(String, [u8; 32], u64)>,
     released_leases: Vec<[u8; 32]>,
     pending_script: VecDeque<Option<StreamTokenGatewayAdmissionReadbackV1>>,
+    admission_unavailable: bool,
 }
 #[derive(Debug)]
 struct DurableProvider {
@@ -211,6 +212,9 @@ impl StreamTokenGatewayAdmissionProviderV1 for DurableProvider {
             .state
             .lock()
             .map_err(|_| StreamTokenGatewayAdmissionErrorV1::Unavailable)?;
+        if state.admission_unavailable {
+            return Err(StreamTokenGatewayAdmissionErrorV1::Unavailable);
+        }
         if let Some((stored_request, record)) = state
             .requests
             .iter()
@@ -642,6 +646,8 @@ fn lease_deadline_is_exact_and_rejects_early_late_expired_and_overflow_values() 
         Err(StreamTokenGatewayAdmissionErrorV1::InvalidRequest)
     );
 }
+
+include!("serving_test_support.rs");
 
 #[test]
 fn stream_token_provider_frames_preserve_admission_acknowledgement_and_replay() {

@@ -1197,6 +1197,19 @@ impl Kura {
             &namespace, data_path, index_path, kind,
         )
     }
+    /// A terminal rewrite can retire every indexed slot. Its empty image is
+    /// complete only with the full canonical V1 header and an empty data file;
+    /// a zero-byte or truncated index is never a rewrite commit marker.
+    fn bound_sidecar_rewrite_image_is_complete(
+        snapshot: &BoundSidecarIndexSnapshot,
+        data_len: u64,
+    ) -> bool {
+        let canonical_empty = data_len == 0
+            && snapshot.layout.entries_offset == INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+            && snapshot.layout.aligned_len == INDEXED_SIDECAR_BASE_HEADER_SIZE_U64;
+        (snapshot.layout.entry_count > 0 || canonical_empty) && snapshot.indexed_end == data_len
+    }
+
     fn recover_bound_progress_sidecar_artifacts_in_namespace(
         &self,
         namespace: &BoundProgressNamespace,
@@ -1379,7 +1392,7 @@ impl Kura {
             "rewrite temp",
         );
         let temp_is_complete = temp_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
+            Self::bound_sidecar_rewrite_image_is_complete(snapshot, data_len)
         });
         if !temp_is_complete {
             if temp_data_was_present {
@@ -1592,7 +1605,7 @@ impl Kura {
                     "recovery classification rewrite temp",
                 )
                 .map(|snapshot| {
-                    snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
+                    Self::bound_sidecar_rewrite_image_is_complete(&snapshot, data_len)
                 })?;
                 if temp_data.is_none() && !complete {
                     return Err(BoundProgressRecoveryFailure::InvalidData);

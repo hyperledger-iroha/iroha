@@ -663,7 +663,12 @@ fn recovered_decision_validate_cold_projection_installs_with_body_census() {
         store,
         validate,
     ));
+    drop(registry);
+    continue_canonical_decision_validate_cold_fixture(
+        &safety, &storage, body_store, &verified, 0xDA,
+    );
 }
+include!("v2_adapter_canonical_decision_validate_completion_cases.rs");
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     recovered_wal_first_release_source_is_closed_and_store_ordered
 );

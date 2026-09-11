@@ -1,5 +1,25 @@
 use super::*;
 
+#[test]
+fn validator_pin_fee_asset_must_match_the_typed_faucet_funding_asset() {
+    let inventory = sample_inventory_fixture();
+    let faucet = inventory.faucet_policy.asset_definition_id.parse().unwrap();
+    validate_validator_pin_fee_asset(&faucet, &inventory.faucet_policy.asset_definition_id)
+        .expect("faucet funds the exact validator pin-fee asset");
+    let other = iroha::data_model::asset::AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("feetest", "universal").unwrap(),
+        "other".parse().unwrap(),
+    );
+    assert_ne!(faucet, other);
+    assert!(
+        validate_validator_pin_fee_asset(&other, &inventory.faucet_policy.asset_definition_id)
+            .is_err()
+    );
+    let error =
+        validate_validator_pin_fee_asset(&faucet, "fixture-secret-not-runtime").unwrap_err();
+    assert!(!format!("{error:#}").contains("fixture-secret"));
+}
+
 fn owner() -> (KeyPair, TrustedKeyV1) {
     let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("test owner");
     let trusted = TrustedKeyV1 {

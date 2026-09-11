@@ -256,6 +256,14 @@ impl StreamTokenIssuer {
             remaining_quota,
         })
     }
+    /// Fresh signer custody authorization for this serving request, after static token checks.
+    /// Returns the trusted final admission time; no qualification is cached for later requests.
+    pub(crate) fn before_admission(
+        &self,
+        body: &StreamTokenBodyV1,
+    ) -> Result<u64, StreamTokenIssuerError> {
+        self.hardware.before_admission(body)
+    }
     /// Return the Ed25519 verifying key bytes.
     pub fn verifying_key_bytes(&self) -> [u8; 32] {
         self.verifying_key.to_bytes()
@@ -591,3 +599,7 @@ mod hardware_wire_tests;
 #[cfg(test)]
 #[path = "token/hardware_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "token/hardware_admission_tests.rs"]
+mod hardware_admission_tests;

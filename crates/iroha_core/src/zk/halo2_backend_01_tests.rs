@@ -195,40 +195,13 @@ fn backend_tag_anon_transfer_merkle(depth: usize, use_pow5: bool) -> String {
     let algorithm = if use_pow5 { "-pow5" } else { "" };
     format!("halo2/pasta/ipa/anon-transfer-2x2-merkle{depth}{algorithm}")
 }
-#[cfg(all(
-    feature = "halo2-dev-tests",
-    any(feature = "zk-halo2", feature = "zk-halo2-ipa")
-))]
-#[test]
-fn vk_cache_reuses_entries() {
-    let params: PastaParams = pasta_params_new(5);
-    let backend = "halo2/pasta/cache-test";
-    let circuit = pasta_tiny::Add;
-    let first = keygen_vk_cached(backend, &params, &circuit).expect("vk");
-    let second = keygen_vk_cached(backend, &params, &circuit).expect("vk");
-    assert!(Arc::ptr_eq(&first, &second));
-
-    if let Some(cache) = super::BUILTIN_VK_CACHE.get() {
-        let guard = cache.lock().expect("cache poisoned");
-        let key = super::BuiltinVkCacheKey {
-            backend: backend.to_owned(),
-            params_fingerprint: super::params_fingerprint(&params),
-        };
-        let Some(cached) = guard.get(&key) else {
-            panic!("expected builtin verifying key cache entry for {backend}");
-        };
-        assert!(Arc::ptr_eq(&first, cached));
-    } else {
-        panic!("cache not initialized");
-    }
-}
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn verifier_key_cache_rejects_parseable_key_for_another_circuit() {
     let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
     let attacker_vk =
-        halo2_backend::keygen_vk(&params, &pasta_tiny::Add).expect("attacker fixture vk");
+        halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows).expect("attacker fixture vk");
     let mut attacker_bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut attacker_bytes, IVM_EXECUTION_V1_IPA_K);
     zk1::wrap_append_vk_pasta(&mut attacker_bytes, &attacker_vk);

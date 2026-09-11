@@ -167,7 +167,7 @@ fn authenticated_terminal_startup_idles_without_constructing_a_successor() {
 }
 
 #[test]
-fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
+fn lane_evidence_repair_fence_accepts_an_empty_quarantined_replay() {
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Queue::from_config(
         iroha_config::parameters::actual::Queue::default(),
@@ -194,9 +194,9 @@ fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
             .expect("capture empty runner Queue replay")
             .is_empty()
     );
-    assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
     let fence = LaneApplicationEvidenceRepairQueueFence::capture(&queue)
-        .expect("empty unquarantined Queue replay is a valid startup cut");
+        .expect("empty quarantined Queue replay is a valid startup cut");
     fence
         .revalidate(&queue)
         .expect("unchanged empty Queue replay remains valid through evidence repair");

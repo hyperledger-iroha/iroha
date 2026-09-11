@@ -435,15 +435,23 @@ fn check_supply_changes_between_transfers() {
             max_statement_bytes: 1_000_000,
             max_total_statement_bytes: 1_000_000,
         };
-        // Each original transfer operation gets a source leaf. This commits the
-        // recorded operations without claiming that intervening supply changes
-        // satisfy the contiguous transfer-only relation.
-        let (manifest, leaves) = inventory
+        // TODO: the final complete execution relation must cover intervening supply
+        // changes. The transfer-only whole-entry manifest cannot hide this gap by
+        // splitting the original operations into separately valid source leaves.
+        let calls = crate::fastpq::quantity_materializer_invocations_for_testing();
+        let manifest_error = inventory
             .derive_manifest(7, [0; 32], &transcripts, limits)
-            .unwrap();
-        assert_eq!(manifest.executed_entry_count, 1);
-        assert_eq!(manifest.statement_count, 2);
-        assert_eq!(leaves.len(), 2);
+            .unwrap_err();
+        assert!(
+            manifest_error.contains("public repeated-key balances do not chain"),
+            "{manifest_error}"
+        );
+        assert_eq!(
+            crate::fastpq::quantity_materializer_invocations_for_testing(),
+            calls
+        );
+        assert_eq!(inventory.entries().len(), 1);
+        assert_eq!(bundle.len(), 2);
         let inputs = crate::fastpq::FastpqPublicInputsTemplate {
             dsid: crate::fastpq::dataspace_id_bytes(DataSpaceId::UNIVERSAL),
             slot: 7,
@@ -468,12 +476,10 @@ fn check_supply_changes_between_transfers() {
                 .contains("public repeated-key balances do not chain"),
             "{error}"
         );
-        for (index, leaf) in leaves.iter().enumerate() {
-            assert_eq!(leaf.statement_index, index as u32);
-            assert_eq!(leaf.entry_index, 0);
-            assert_eq!(leaf.transcript_index, index as u32);
-            assert_eq!(leaf.entry_transcript_count, 2);
-            assert_eq!(leaf.entry_hash, call);
+        // Each individual operation remains mathematically valid, but these are
+        // independent arithmetic controls, never a manifest fallback producer.
+        for (index, transcript) in bundle.iter().enumerate() {
+            assert_eq!(transcript.batch_hash, call);
             let produced = crate::fastpq::quantity_statement_from_finalized_transcripts(
                 inputs.clone(),
                 std::slice::from_ref(&bundle[index]),
@@ -489,12 +495,12 @@ fn check_supply_changes_between_transfers() {
                     )
                 ]
             );
-            assert_eq!(
-                leaf.statement_digest,
-                <[u8; 32]>::from(Hash::new(
-                    norito::encode_canonical(produced.statement()).unwrap()
-                ))
-            );
+            let bytes = norito::encode_canonical(produced.statement()).unwrap();
+            let decoded = norito::decode_canonical::<
+                iroha_data_model::fastpq::FastpqPublicTransferStatementV1,
+            >(&bytes)
+            .unwrap();
+            assert_eq!(&decoded, produced.statement());
         }
         assert_eq!(norito::encode_canonical(bundle).unwrap(), original);
         assert_eq!(block.fastpq_source_inventory().unwrap(), Some(&inventory));

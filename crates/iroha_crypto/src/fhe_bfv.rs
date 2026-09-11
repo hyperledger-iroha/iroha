@@ -23994,6 +23994,72 @@ fn validate_bfv_full_bootstrap_execution_claim_statement_digest_aliases_v1(
         ],
     )
 }
+/// Execute an artifact-bound BFV arithmetic diagnostic and propagate its bounds.
+///
+/// This evaluates the deterministic relation used by witness reconstruction. Its trace and
+/// bounds carry no production qualification or release-audit authority; production execution
+/// still requires [`require_ram_lfe_bfv_production_qualification_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameters, governed artifacts, Galois keys, ciphertext,
+/// or declared input bound are invalid.
+#[allow(clippy::too_many_arguments)]
+pub fn bfv_full_bootstrap_diagnostic_execution_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
+    input_bound: u128,
+) -> Result<
+    (
+        BfvFullBootstrapExecutionPrefixTraceV1,
+        BfvFullBootstrapExecutionPrefixTraceBoundsV1,
+    ),
+    BfvError,
+> {
+    let result = match bound_mode {
+        BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
+            let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+                params,
+                bootstrap_key,
+                artifacts,
+                galois_keys,
+                ciphertext,
+            )?;
+            let trace_bounds =
+                bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+                    params,
+                    bootstrap_key,
+                    artifacts,
+                    galois_keys,
+                    input_bound,
+                )?;
+            (trace, trace_bounds)
+        }
+        BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => {
+            let trace =
+                apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                    params,
+                    bootstrap_key,
+                    artifacts,
+                    galois_keys,
+                    ciphertext,
+                )?;
+            let trace_bounds =
+                bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+                    params,
+                    bootstrap_key,
+                    artifacts,
+                    galois_keys,
+                    input_bound,
+                )?;
+            (trace, trace_bounds)
+        }
+    };
+    Ok(result)
+}
 /// Build typed deterministic witness material for a full-bootstrap claim.
 ///
 /// The material is derived by executing the governed full-bootstrap prefix through the exact or
@@ -24033,45 +24099,15 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
         "BFV full-bootstrap execution witness output ciphertext",
         &claim.output_ciphertext,
     )?;
-    let (trace, trace_bounds) = match claim.bound_mode {
-        BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
-            let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
-                params,
-                bootstrap_key,
-                artifacts,
-                galois_keys,
-                &claim.input_ciphertext,
-            )?;
-            let trace_bounds =
-                bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    galois_keys,
-                    claim.input_bound,
-                )?;
-            (trace, trace_bounds)
-        }
-        BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => {
-            let trace =
-                apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    galois_keys,
-                    &claim.input_ciphertext,
-                )?;
-            let trace_bounds =
-                bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    galois_keys,
-                    claim.input_bound,
-                )?;
-            (trace, trace_bounds)
-        }
-    };
+    let (trace, trace_bounds) = bfv_full_bootstrap_diagnostic_execution_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        &claim.input_ciphertext,
+        claim.bound_mode,
+        claim.input_bound,
+    )?;
     invalid_guards! {
         trace.slot_to_coefficient_output != claim.output_ciphertext => (
             "BFV full-bootstrap execution witness output ciphertext does not match deterministic governed trace"
