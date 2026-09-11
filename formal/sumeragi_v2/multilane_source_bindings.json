@@ -9927,12 +9927,12 @@
             ".settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?",
             "attest_ready_live_decision_apply_runtime_predecessor(",
             "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }",
-            "&& executor.lifecycle_decision_apply_dispatch_available(Some(&attestation))?",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }",
             "(None, true)",
             "executor.lifecycle_decision_apply_runtime_predecessor_drain_available(",
             "(Some(attestation), false)",
             "if executor.has_pending_lifecycle_output_admissions()",
-            "AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted"
+            "AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor"
           ]
         },
         {

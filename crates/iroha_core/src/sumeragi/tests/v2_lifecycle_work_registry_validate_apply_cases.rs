@@ -2596,10 +2596,14 @@ fn recovered_decision_apply_validate_retry_retirement_fixture() {
         Some(Some(TerminalOutcome::Advanced))
     );
     assert!(executor.durable_finality().is_some());
+    assert!(
+        executor.recovered_durable_validate_retry_keys_for_test().is_empty(),
+        "the published Apply successor consumes its recovered Validate retry owner"
+    );
     assert_eq!(
-        executor.recovered_durable_validate_retry_keys_for_test(),
-        vec![retry_key],
-        "the recovered retry owner remains only as the decided-body inert tombstone"
+        executor.validate_retry_lifecycle_ordinal_for_test(retry_key),
+        None,
+        "a Validate with an Apply successor must not become a NoSuccessor tombstone"
     );
     assert!(
         !executor
