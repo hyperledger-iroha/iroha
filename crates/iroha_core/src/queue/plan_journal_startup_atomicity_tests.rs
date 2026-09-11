@@ -243,7 +243,12 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
         .expect("bind replay receipt including retained QueuePlan claim")
         .expect("retained claim is unchanged");
     let failure = restarted
-        .push_with_lane_with_state_and_routing_plan_strict_durable(tx.clone(), &state, plan.clone())
+        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+            tx.clone(),
+            &state,
+            plan.clone(),
+            &retained_claim.admission_context,
+        )
         .expect_err("retained durable-claim retry must wait for startup completion");
     assert!(
         matches!(failure.err, Error::PlanJournalDurabilityRejected { ref reason }
@@ -272,11 +277,21 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
     restarted
         .complete_lane_reservation_startup_reconciliation(receipt)
         .expect("complete retained-claim startup");
-    let expected_route = plan.coordinator_route();
     let retry = restarted
-        .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
+        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+            tx,
+            &state,
+            plan.clone(),
+            &retained_claim.admission_context,
+        )
         .expect("retained durable claim becomes retryable after startup completion");
-    assert_eq!(retry, expected_route);
+    assert_eq!(retry.routing_plan, plan);
+    assert_eq!(retry.context, retained_claim.admission_context);
+    assert_eq!(retry.journal_record_digest, retained_claim.journal_record_digest);
+    assert_eq!(retry.enqueue_timestamp_ms, retained_claim.enqueue_timestamp_ms);
+    assert_eq!(retry.entrypoint_hash, retained_claim.entrypoint_hash);
+    assert_eq!(retry.signed_transaction_hash, retained_claim.signed_transaction_hash);
+    assert_eq!(retry.global_admission_identity, retained_claim.global_admission_identity);
     assert_eq!(
         restarted
             .durable_plan_claims

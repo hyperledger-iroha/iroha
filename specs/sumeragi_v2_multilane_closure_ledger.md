@@ -1661,10 +1661,13 @@ after the sweep. Invariant `MLLocalProducerRecoveryRequiresQueueOwner`
 requires a nonterminal retained attempt produced by the local validator to
 carry its exact current Queue reservation group before Crash/Recover, while
 an observer may recover from exact local Kura custody with an empty local
-Queue. The network-ingress startup fence remains independent of Queue's
-observed owner-quarantine bit, which may be false for that empty observer
-snapshot; `ML-MUT-AUT-15` drops the local producer's Queue group immediately
-before recovery.
+Queue. Both empty and nonempty journal replays keep Queue's startup
+publication gate closed until exact State/Kura-aware reconciliation completes.
+The lane-evidence repair fence captures that closed gate and the exact owner
+snapshot, then rejects ownership changes or gate publication during repair.
+The network-ingress startup fence remains independent;
+`ML-MUT-AUT-15` drops the local producer's Queue group immediately before
+recovery.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, and `G-12P`.
 

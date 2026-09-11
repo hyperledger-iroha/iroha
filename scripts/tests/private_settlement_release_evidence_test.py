@@ -187,9 +187,9 @@ def fixture_formal_transcript() -> bytes:
         status = MODULE._FORMAL_TLC_STATUS_BY_OUTCOME[outcome]
         if outcome == "pass":
             result_body = (
+                "Model checking completed. No error has been found.\n"
                 "1 states generated, 1 distinct states found, 0 states left on queue.\n"
                 "The depth of the complete state graph search is 1.\n"
-                "Model checking completed. No error has been found.\n"
             )
         elif outcome == "safety_violation":
             result_body = (
@@ -221,6 +221,42 @@ def fixture_formal_transcript() -> bytes:
 
 class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
     """Exercise exact qualification, audit, inventory, and digest gates."""
+
+    def test_fixture_formal_transcript_matches_strict_result_order(self) -> None:
+        """Replay every synthetic TLC outcome without constructing a bundle."""
+
+        arguments = {
+            "commit": RELEASE_COMMIT,
+            "model_sha256": FIXTURE_FORMAL_PACKAGE_SHA256,
+            "evidence_code_sha256": FIXTURE_FORMAL_EVIDENCE_CODE_SHA256,
+            "java_runtime": FIXTURE_JAVA_RUNTIME,
+            "configurations": [
+                {
+                    "name": name,
+                    "model": model,
+                    "expected_outcome": outcome,
+                    "observed_outcome": outcome,
+                    "generated_states": 1,
+                    "distinct_states": 1,
+                    "depth": 1,
+                }
+                for name, outcome, model in MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS
+            ],
+        }
+        payload = fixture_formal_transcript()
+        MODULE._validate_formal_tlc_transcript(payload, **arguments)
+        success = b"Model checking completed. No error has been found.\n"
+        statistics = (
+            b"1 states generated, 1 distinct states found, 0 states left on queue.\n"
+            b"The depth of the complete state graph search is 1.\n"
+        )
+        self.assertEqual(
+            payload.count(success + statistics),
+            sum(outcome == "pass" for _, outcome, _ in MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS),
+        )
+        old_order = payload.replace(success + statistics, statistics + success, 1)
+        with self.assertRaisesRegex(MODULE.EvidenceError, "passing TLC result markers are out of order"):
+            MODULE._validate_formal_tlc_transcript(old_order, **arguments)
 
     def make_bundle(self, root: Path) -> Path:
         """Copy complete fixture bytes into an independent mutable directory.
