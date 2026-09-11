@@ -1695,7 +1695,7 @@ impl RuntimeApiRouterFixture {
         let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
         let torii = Torii::new_with_handle(
             ChainId::from(chain_id),
-            signed_query_test_network_id(),
+            *state.network_id_ref(),
             kiso,
             cfg.torii.clone(),
             queue,

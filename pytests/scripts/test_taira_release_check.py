@@ -72,6 +72,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for test in (
             "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
             "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+            "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
+            "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
             "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
             "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
             "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
@@ -124,9 +126,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             },
             "torii-unit": {
                 "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
-                "openapi::tests::account_capabilities_document_exact_public_bootstrap_policy",
-                "openapi::tests::openapi_route_auth_metadata_matches_enabled_catalog_projection",
-                "openapi::tests::openapi_standard_security_matches_enabled_catalog_authentication",
+                "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
                 "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
             },
         }

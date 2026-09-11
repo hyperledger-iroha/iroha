@@ -545,9 +545,7 @@ TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation"
 )),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
     "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
-    "openapi::tests::account_capabilities_document_exact_public_bootstrap_policy",
-    "openapi::tests::openapi_route_auth_metadata_matches_enabled_catalog_projection",
-    "openapi::tests::openapi_standard_security_matches_enabled_catalog_authentication",
+    "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
     "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
 )), ("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
@@ -623,6 +621,8 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "queue::tests::empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion",
     "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
     "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+    "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
+    "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
 )), ("fee sponsor activation and prospective account bootstrap", (
     "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
