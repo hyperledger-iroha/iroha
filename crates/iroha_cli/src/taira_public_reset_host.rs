@@ -11371,8 +11371,9 @@ fn run_restart_with_validator_http_readiness(
 }
 
 /// A running systemd process can still be initializing storage and Torii.
-/// Wait only for HTTP availability here; the signed convergence and public
-/// doctor checks remain responsible for identity and protocol validation.
+/// Wait for the node's admission readiness, including completed Queue startup
+/// reconciliation. The signed convergence and public doctor checks retain
+/// responsibility for identity and protocol validation; idle height may be unchanged.
 fn wait_for_validator_http_readiness(
     origins: &[String],
     deadline: Instant,
@@ -11386,7 +11387,7 @@ fn wait_for_validator_http_readiness(
         .wrap_err("failed to build validator readiness HTTP client")?;
     let urls = origins
         .iter()
-        .map(|origin| Url::parse(origin)?.join("status"))
+        .map(|origin| Url::parse(origin)?.join("readyz"))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     if urls.len() != 4 {
         return Err(eyre!(
@@ -18158,7 +18159,7 @@ mod tests {
                     assert!(count > 0 && request.len() < 8192);
                     request.extend_from_slice(&buffer[..count]);
                 }
-                assert!(request.starts_with(b"GET /status HTTP/1.1\r\n"));
+                assert!(request.starts_with(b"GET /readyz HTTP/1.1\r\n"));
                 stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).expect("readiness response");
             }
             count
@@ -18180,7 +18181,7 @@ mod tests {
         // Give the worker time to accept an empty socket before sending the request.
         std::thread::sleep(Duration::from_millis(50));
         client
-            .write_all(b"GET /status HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .expect("send delayed request");
         let mut response = String::new();
         client

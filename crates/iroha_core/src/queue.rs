@@ -4173,8 +4173,10 @@ pub struct Queue {
     /// Sticky process-lifetime fault when accepted work exposes internally inconsistent immutable
     /// routing or fee-admission identity. Expected catalog retirement evicts affected work instead.
     accepted_work_validation_fault: AtomicBool,
-    /// Startup publication gate retained until V2 has classified every
-    /// replayed reservation owner against one State/Kura evidence snapshot.
+    /// Startup publication gate retained from journal installation until V2
+    /// has reconciled the exact QueuePlan/reservation replay with State/Kura.
+    /// An empty replay still requires that publication boundary; emptiness
+    /// does not authorize ordinary admission to change its replay identity.
     ///
     /// QueuePlan replay may materialize quarantined payload bytes while this
     /// bit is set, but ordinary admission, gossip, and global/lane selection
@@ -6035,13 +6037,11 @@ impl Queue {
         self.apply_durable_fifo_order_reconciliation_locked(fifo_plan);
         self.remove_hashes_from_fifo_locked(&hashes);
         *store = candidate_store;
-        self.lane_reservation_reconciliation_pending.store(
-            !store.live_by_entrypoint.is_empty()
-                || !store.commit_barriers.is_empty()
-                || !store.release_barriers.is_empty()
-                || !store.completed_releases.is_empty(),
-            Ordering::Release,
-        );
+        // Even an empty owner replay must remain closed until the exact
+        // QueuePlan replay and State/Kura lifecycle cut are reconciled. Opening
+        // here would let ingress change live claims beneath the startup receipt.
+        self.lane_reservation_reconciliation_pending
+            .store(true, Ordering::Release);
         self.missing_reservation_payload_count
             .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
         *self.lane_reservation_snapshot_replay_receipt.lock() = Some(replay_receipt);
@@ -10523,14 +10523,12 @@ impl Queue {
         {
             return Ok(None);
         }
-        let expected_pending = !expected_snapshot.is_empty();
-        if self
+        if !self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
-            != expected_pending
         {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "lane reservation reconciliation publication gate disagrees with replay ownership"
+                "lane reservation reconciliation publication gate opened before exact startup completion"
                     .to_owned(),
             ));
         }
@@ -11047,6 +11045,7 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
         if self.lane_reservation_startup_completion.lock().is_some()
+            || !self.lane_reservation_startup_reconciliation_pending()
             || receipt.initial_snapshot != *expected_snapshot
             || receipt.replay_receipt != self.lane_reservation_snapshot_replay_receipt()?
             || receipt.plan_replay_receipt != self.queue_plan_startup_replay_receipt()?
@@ -11069,6 +11068,7 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
         if self.lane_reservation_startup_completion.lock().is_some()
+            || !self.lane_reservation_startup_reconciliation_pending()
             || receipt.initial_snapshot != *expected_snapshot
             || self
                 .lane_reservation_snapshot_replay_receipt
@@ -11144,10 +11144,12 @@ impl Queue {
             .as_ref()
             == Some(observation))
     }
-    /// Return whether replayed reservation ownership is still quarantined
-    /// behind the State/Kura-aware startup publication gate.
+    /// Return whether journal startup is still quarantined behind the exact
+    /// State/Kura-aware publication gate, including an empty owner replay.
+    /// Readiness and ingress consumers must remain closed while this is true;
+    /// only successful exact startup reconciliation opens the installed Queue.
     #[must_use]
-    pub(crate) fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
+    pub fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
         self.lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
     }
@@ -11194,9 +11196,7 @@ impl Queue {
         let reconciliation_pending = self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire);
-        if self.lane_reservation_startup_completion.lock().is_some()
-            || (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)
-        {
+        if self.lane_reservation_startup_completion.lock().is_some() || !reconciliation_pending {
             return Err(LaneQueueReservationError::InvalidIdentity(
                 "startup reconciliation receipt is stale at the final publication gate".to_owned(),
             ));
@@ -16023,6 +16023,15 @@ impl Queue {
             Ok(())
         }
     }
+    fn check_startup_admission(&self) -> Result<(), Error> {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return Err(Error::PlanJournalDurabilityRejected {
+                reason: "queue journal startup is awaiting exact State/Kura reconciliation"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    }
     /// Push transaction into queue.
     ///
     /// # Errors
@@ -16034,6 +16043,10 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        self.check_startup_admission().map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         self.sync_nexus_routing_with_view(state_view);
         let routing_plan = match self
             .router
@@ -16152,6 +16165,10 @@ impl Queue {
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<QueuePushOutcome, Failure> {
+        self.check_startup_admission().map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
@@ -16287,6 +16304,12 @@ impl Queue {
             };
             loop {
                 let queue_guard = self.push_remove_lock.lock();
+                // The retry path can replace a durable claim before reaching
+                // prepared admission. It must retain the same startup fence.
+                self.check_startup_admission().map_err(|err| Failure {
+                    tx: tx.clone().into(),
+                    err,
+                })?;
                 if self.durability_transition_active(&tx_hash) {
                     drop(queue_guard);
                     self.wait_for_durability_transitions(&[tx_hash]);
@@ -22663,6 +22686,31 @@ pub mod tests {
             queue.plan_journal.lock().is_some(),
             "globally certified reservation fixtures require a queue-plan journal"
         );
+        if queue.lane_reservation_startup_reconciliation_pending() {
+            // This fixture starts with empty journals. Exercise their real startup boundary
+            // before seeding ordinary certified work, just as the production runner does.
+            let snapshot = queue
+                .lane_reservation_reconciliation_snapshot()
+                .expect("capture empty fixture startup ownership");
+            assert!(
+                snapshot.is_empty(),
+                "fixture startup must not own reservations"
+            );
+            let replay = queue
+                .replay_plan_journal(state)
+                .expect("replay fixture QueuePlan journal before admission");
+            assert_eq!(
+                replay.records, 0,
+                "fixture startup must have no retained plans"
+            );
+            let receipt = queue
+                .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+                .expect("bind exact empty fixture startup receipt")
+                .expect("fixture ownership remains unchanged during startup");
+            queue
+                .complete_lane_reservation_startup_reconciliation(receipt)
+                .expect("complete empty fixture startup before admitting work");
+        }
         let authority = transaction.authority().clone();
         if state.view().world().accounts().get(&authority).is_none() {
             let mut world = state.world.block();

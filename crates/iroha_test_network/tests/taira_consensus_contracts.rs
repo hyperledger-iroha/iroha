@@ -24,6 +24,33 @@ use tokio::time::{Instant, sleep, timeout_at};
 #[path = "support/multiroute.rs"]
 mod multiroute;
 
+// This fixture uses a fixed loopback HTTP listener, so a bounded status-line
+// probe needs no additional HTTP client dependency or runtime signing context.
+async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> bool {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    let probe_deadline = (Instant::now() + Duration::from_secs(2)).min(deadline);
+    let result = timeout_at(probe_deadline, async {
+        let address = peer.api_address().to_string();
+        let mut stream = tokio::net::TcpStream::connect(&address).await?;
+        stream
+            .write_all(
+                format!("GET /readyz HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await?;
+        let mut line = String::new();
+        BufReader::new(stream.take(256))
+            .read_line(&mut line)
+            .await?;
+        Ok::<bool, std::io::Error>(
+            line.ends_with("\r\n")
+                && (line.starts_with("HTTP/1.1 200 ") || line.starts_with("HTTP/1.0 200 ")),
+        )
+    })
+    .await;
+    matches!(result, Ok(Ok(true)))
+}
+
 fn snapshot_log_contains_height(peer: &NetworkPeer, message: &str, height: u64) -> Result<bool> {
     for path in [peer.latest_stdout_log_path(), peer.latest_stderr_log_path()]
         .into_iter()
@@ -129,11 +156,12 @@ async fn restart_validator_from_applied_snapshot(
             let mut builder = peer.client().client().to_builder();
             builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
             let client = builder.build()?;
-            if let Ok(status) = client.status().get().await
+            if validator_admission_ready(peer, restart_deadline).await
+                && let Ok(status) = client.status().get().await
                 && status.blocks >= snapshot_height
                 && snapshot_log_contains_height(peer, "Successfully loaded the state from a snapshot", snapshot_height)?
             {
-                // An idle chain creates no empty blocks. The preserved committed tip is ready;
+                // An idle chain creates no empty blocks. Readiness permits admission at the preserved committed tip;
                 // the next exact public transaction proves renewed execution on all four peers.
                 eprintln!("Taira validator restored its signed snapshot and Torii state: snapshot_height={snapshot_height}, committed_height={}", status.blocks);
                 return Ok::<(), eyre::Report>(());

@@ -48,6 +48,7 @@ class TairaPrepareTests(unittest.TestCase):
             tool.chmod(0o755)
         self.args = argparse.Namespace(
             repo_root=SCRIPT.parent.parent, target_dir=self.target,
+            native_check_scope="basic",
             output_dir=self.out, expected_commit="a" * 40, expected_signer="A" * 40, zig=self.zig,
             zig_sha256=hashlib.sha256(self.zig.read_bytes()).hexdigest(),
             cargo_zigbuild=self.zigbuild,
@@ -97,8 +98,9 @@ class TairaPrepareTests(unittest.TestCase):
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []
         def check(_root, *, environment, source_commit, lock_fds,
-                  completed_independent_checks, update_independent_checks):
+                  completed_independent_checks, update_independent_checks, qualification_scope):
             events.append("gate")
+            self.assertEqual(qualification_scope, "basic")
             self.assertIsNone(completed_independent_checks)
             self.assertTrue(callable(update_independent_checks))
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
@@ -381,8 +383,9 @@ class TairaPrepareTests(unittest.TestCase):
                 self.out = self.root / ("prepared-incremental-" + preference)
                 self.args.output_dir = self.out
                 def check(_root, *, environment, source_commit, lock_fds,
-                          completed_independent_checks, update_independent_checks):
+                          completed_independent_checks, update_independent_checks, qualification_scope):
                     self.assertEqual(environment["CARGO_INCREMENTAL"], preference)
+                    self.assertEqual(qualification_scope, "basic")
                     self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
                     self.assertEqual(source_commit, self.args.expected_commit)
                 def build(_root, command, environment, log):
@@ -411,6 +414,21 @@ class TairaPrepareTests(unittest.TestCase):
                 with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1" if preference == "0" else "0"}):
                     with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
                         self.prepare()
+
+    def test_native_scope_is_bound_to_gate_result_and_resume(self):
+        self.args.native_check_scope = "basic"
+        result, gate, _ = self.prepare()
+        self.assertEqual(result["native_check_scope"], "basic")
+        self.assertEqual(gate.call_args.kwargs["qualification_scope"], "basic")
+        self.assertEqual(release.read_record(self.out / "request.json")["native_check_scope"], "basic")
+        self.args.native_check_scope = "full"
+        with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+            self.prepare()
+        self.out = self.root / "prepared-full"
+        self.args.output_dir = self.out
+        result, gate, _ = self.prepare()
+        self.assertEqual(result["native_check_scope"], "full")
+        self.assertEqual(gate.call_args.kwargs["qualification_scope"], "full")
 
     def test_build_command_uses_four_fixed_binaries_six_jobs_and_warm_lane(self):
         command = release.build_command(Path("/frozen"), self.target, "/fixed/cargo")
@@ -824,8 +842,9 @@ class TairaPrepareTests(unittest.TestCase):
         repo, routine = self.development_paths()
         target_mode = stat.S_IMODE(routine.stat().st_mode)
         descriptors = []
-        def run(root, *, environment, lock_fds):
+        def run(root, *, environment, lock_fds, qualification_scope):
             self.assertEqual(root, repo)
+            self.assertEqual(qualification_scope, "basic")
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
             self.assertNotIn("PRIVATE_KEY", environment)
             self.assertEqual(environment["CARGO_INCREMENTAL"], "0")

@@ -1,11 +1,29 @@
 # Taira release checks
 
-Run either `python3 scripts/taira_release.py check` or
-`python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile focused configuration, crypto, P2P, CLI, daemon, Core, proof, Torii and consensus
-harnesses plus native network binaries with six Cargo jobs
-and report build, stage and test durations. Python 3.11+, the repository Rust
-toolchain, and previously fetched dependencies are required; Cargo runs offline.
+Run `python3 scripts/taira_release.py check` or
+`python3 scripts/taira_release_check.py` for basic Taira qualification. The default
+`--native-check-scope basic` runs **299 native regressions on macOS**: startup
+admission, configuration, deployment and secret custody, cryptography, public
+onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
+transactions and a signed-snapshot restart. It does not claim complete consensus
+fault or advanced product qualification.
+
+Use `--native-check-scope full` to execute the full **481-case** native census,
+including advanced Core history, compaction and fault matrices and proof
+production. Linux adds one OpenSSH descriptor-custody case to each scope.
+`prepare` accepts the same explicit scope and binds it into its request/result;
+changing scope cannot reuse another preparation's success. Both scopes retain
+all runtime security enforcement, CLI custody tests, crypto verification tests
+and proof-size limits. These are test selections, not runtime feature toggles.
+
+Both scopes compile the identical configuration, crypto, P2P, CLI, daemon, Core,
+proof, Torii and consensus harness graph plus native shipping binaries with six
+Cargo jobs. This preserves the warm target and dependency feature union. Deferred
+harnesses have compile coverage only; their cases never appear as test passes.
+The basic scope defers 636 seconds of advanced test execution measured in
+preparation56. The new total runtime has not yet been measured. Build, stage and
+test durations remain explicit. Python 3.11+, the repository Rust toolchain and
+previously fetched dependencies are required; Cargo runs offline.
 
 The Torii harness executes the shipping routes through plan, prepare and submit,
 checks SDK receipt verification, and applies queued fixture transactions. It
@@ -47,24 +65,37 @@ bin target kind and test profile distinguish it from the Rust SDK's `iroha`
 library harness and the production CLI. Each completed test copy is released
 through its existing owner. Any collected test failure stops before production
 compilation or network execution; production snapshots remain retained. Configuration
-and proof checks retain their selected cases. Adding the CLI changes the combined test feature union,
+and proof-bound checks retain their selected cases in both scopes. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
 
-After configuration and CLI checks, the short Core snapshot-owner and daemon
-startup-policy groups execute before proof, transport and long consensus tests.
-Both startup groups report their failures before stopping expensive work. On
-success, the remaining groups execute each other selection once; the original
-complete census and exact-artifact checkpoint remain authoritative. Core and daemon
+After configuration and CLI checks, both scopes execute empty-journal Queue
+admission, HTTP readiness and daemon startup-policy regressions before other
+runtime checks. The full scope also executes Core snapshot-owner and cold
+certified-history groups at this early boundary. Every installed replay remains quarantined until exact State/Kura
+reconciliation completion, even when it contains no reservation owners. Full-scope cold storage cases restore multiple completed slots, recover only the current
+partial publication, recover independently pruned pairs using an authenticated
+retention frontier, and reject corrupt or missing retained history. Discarded local
+certificate history cannot be resurrected after replica application advances. All startup
+groups report their failures before stopping expensive work. On
+success, the remaining groups execute each selected test once. The checkpoint
+binds the explicit scope, exact selected census and artifact identity. Core and daemon
 copies stay retained until their final selected stage. A failed startup preflight
-never publishes independent-check success.
+never publishes independent-check success. Strict storage construction and both
+snapshot geometry restoration paths share one recovery sequence: rebuild budgets,
+finish publication recovery, then compact terminal history and rebuild route indexes.
+The source contract rejects bypassing this sequence or moving compaction before
+publication repair. Cold fixtures establish signed bootstrap and live lifecycle custody
+before publishing payload history, so their negative controls reach the intended
+corruption boundary. Startup inventory retains authenticated append-preimage bundle
+rows through source validation; it does not reread an unfinished pair as a live one.
 
 CLI client admission binds the configured chain, genesis NetworkId and account
 address discriminant to the signed inventory during assembly, apply and recovery.
 The same check runs before convergence child custody; stale runtime or validator
 clients fail before operator-key admission or stage snapshots.
 
-Core checks cover the complete Soracloud and SoraFS instruction inventories at
+The full Core scope covers the complete Soracloud and SoraFS instruction inventories at
 the Initial executor boundary. Dispatch and admission come from the same typed
 registry; unavailable mailbox and direct provider-owner operations remain
 explicitly closed. Citizen-bond operations have no production instruction API,
@@ -109,14 +140,14 @@ dial/retry ownership. Dial plus preauth bounds outbound authentication and stand
 takeover independently of established-session idle. Dev/test profiles optimize
 Argon2 and Blake2 arithmetic while retaining the production puzzle policy.
 
-The Core gate then exercises bounded worker backpressure, durable-sidecar retry
+The full Core gate exercises bounded worker backpressure, durable-sidecar retry
 ownership, QueuePlan handoff across view changes and inventory changes, and
 participant predecessor recovery with the exact reservation retained. It also
 exercises the real candidate provider with multiple routable lanes.
 Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
 transactions require their autonomous reservations, and actual reservation
-conflicts still defer ordinary work. A regression in any of these paths stops
-preparation before the Linux release build.
+conflicts still defer ordinary work. A selected regression failure stops preparation before the Linux release build.
+Basic deployment defers these advanced cases; their production checks stay enforced.
 
 QueuePlan admission authenticates immutable certificate bytes before opening a
 State view or acquiring the publication fence. Fresh history, committee, route,
@@ -138,7 +169,7 @@ older output owns an actor ticket, a parked route or an unfinished writer flush.
 The partial handoff preserves unresolved lane evidence, exact surviving FIFO
 ownership and sidecar receipts; it does not fabricate network delivery.
 
-The proof gate produces and verifies fully witnessed eight- and sixteen-row
+The full proof-production gate produces and verifies fully witnessed eight- and sixteen-row
 transfers with the default resource limits, checks the maximum admitted proof
 shape against its canonical frame, and rejects proofs beyond explicit limits.
 Payload accounting and framed persistence use separate ceilings derived from
@@ -156,7 +187,7 @@ required by public Torii admission, and requires state-resolved Applied
 in both local and global status on every validator at each transaction's committed height.
 Between the second and third transactions it waits for a signed snapshot, stops
 and restarts one validator with the same storage, and requires the new process to
-load that snapshot and serve status. An unchanged idle height is valid; the third
+load that snapshot, serve `/readyz`, and retain the snapshot height. An unchanged idle height is valid; the third
 transaction must then reach Applied on all four validators.
 The CLI gate also checks that prepared Inrou pin operations preserve sponsored
 fees and the public QueuePlanSynced intent through signing and replay validation.
@@ -258,8 +289,10 @@ pending jobs, malformed evidence and read-only recovery after a deadline.
 Start and restart also wait for the signed Python launcher to execute the exact
 daemon within the original deadline, without submitting another manager job.
 Changed launcher commands remain immediate failures.
-The active journaled restart path also waits for four actual Torii backends before
-onboarding, using the deadline captured before its one restart submission.
+The active journaled restart path waits for all four Torii `/readyz` responses
+before onboarding, using the deadline captured before its one restart submission.
+The endpoint rejects pending Queue reconciliation and restart-required admission;
+a responsive `/status` alone does not establish write readiness.
 Signed convergence uses its own bounded phase and requires an opened successor
 context above a positive committed frontier, without requiring an empty block.
 A CommitQC or an `Applied` body at the same height
@@ -286,12 +319,11 @@ foreign references or changed rules keep the barrier in place. Cleanup removes
 each admitted rule explicitly and never flushes a chain.
 Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
-descriptor cleanup and replacement of the original paths. Every selected test
-must exist and execute exactly once. Missing,
-ignored, failed or empty selections fail the command. After the mandatory startup
+descriptor cleanup and replacement of the original paths. Every test selected by the explicit scope must exist and execute exactly once.
+Missing, ignored or failed selected tests fail the command; deferred cases are
+omitted from the success census and independent-check evidence. After the mandatory startup
 preflight passes, remaining independent cases report their combined failures.
-The short startup groups instead stop expensive work after collecting both groups'
-failures. Missing selected tests, artifact custody
+The short startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
 failures and infrastructure errors still stop immediately. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 

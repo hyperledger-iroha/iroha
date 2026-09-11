@@ -96,6 +96,40 @@ fn query_conversion_message(err: &Error) -> Option<&str> {
 pub fn mk_app_state_for_tests() -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
 }
+#[tokio::test]
+async fn readiness_rejects_closed_consensus_ingress() {
+    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
+        .unwrap_or_else(|_| panic!("unique readiness app"));
+    app.sumeragi = Some(iroha_core::sumeragi::SumeragiHandle::emergency_fast_disabled());
+    assert_eq!(
+        handler_readyz(State(Arc::new(app))).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "completed Queue startup alone cannot open consensus ingress"
+    );
+}
+
+#[tokio::test]
+async fn readiness_rejects_empty_queue_startup_reconciliation() {
+    let app = mk_app_state_for_tests();
+    assert_eq!(
+        handler_readyz(State(Arc::clone(&app))).await.status(),
+        StatusCode::OK
+    );
+    let directory = tempfile::tempdir().expect("readiness journal root");
+    app.queue
+        .install_lane_reservation_journal(
+            &directory.path().join("reservations.norito"),
+            1024 * 1024,
+        )
+        .expect("install actual empty startup journal");
+    assert!(app.queue.lane_reservation_startup_reconciliation_pending());
+    assert_eq!(
+        handler_readyz(State(app)).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "an HTTP listener and empty queue do not establish write readiness"
+    );
+}
+
 fn mk_app_state_for_tests_with_chain_id(chain_id: ChainId) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_chain_id(
         World::default(),

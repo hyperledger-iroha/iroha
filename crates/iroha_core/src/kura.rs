@@ -3439,11 +3439,7 @@ impl Kura {
                 if let Some(intent) = prune_intent.as_ref() {
                     kura.complete_recovered_prune_intent(intent)?;
                 }
-                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-                kura.repair_lane_merge_application_frontiers_on_startup()?;
-                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-                kura.repair_autonomous_lane_merge_bundles_on_startup()?;
+                kura.recover_lane_histories_on_startup()?;
                 kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
                 kura.refresh_v2_startup_replay_auxiliary_binding()?;
             } else {
@@ -5889,11 +5885,7 @@ impl Kura {
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
-        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-        self.repair_lane_merge_application_frontiers_on_startup()?;
-        self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-        self.repair_autonomous_lane_merge_bundles_on_startup()?;
+        self.recover_lane_histories_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         Ok(())
@@ -5974,11 +5966,7 @@ impl Kura {
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
-        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
-        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
-        self.repair_lane_merge_application_frontiers_on_startup()?;
-        self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
-        self.repair_autonomous_lane_merge_bundles_on_startup()?;
+        self.recover_lane_histories_on_startup()?;
         self.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?;
         Ok(())
@@ -26428,6 +26416,8 @@ impl Kura {
     /// The boolean reports whether the ordinary indexed slot is absent or is
     /// an authority-permitted stale value that must be repaired from the
     /// frontier after every startup item has passed read-only preflight.
+    /// A singleton below the authenticated terminal retention window remains
+    /// the live monotonic anchor but is not repair work, so it returns `None`.
     pub(crate) fn preflight_latest_certified_lane_block_frontier_with_authority(
         &self,
         lane_id: LaneId,
@@ -26444,8 +26434,20 @@ impl Kura {
                 "latest certified lane block frontier storage is ambiguous until restart",
             ));
         }
+        let expected_entry = {
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            self.lane_storage_entry(lane_id)?
+        };
+        let retention =
+            self.authenticated_lane_history_retention_under_prune_guard(&expected_entry)?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
+        if entry != expected_entry {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "lane geometry changed during certified frontier repair preflight",
+            ));
+        }
         let (data_path, index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
@@ -26551,6 +26553,12 @@ impl Kura {
             &entry,
             &frontier_read.snapshot,
         )?;
+        if retention
+            .as_ref()
+            .is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
+        {
+            return Ok(None);
+        }
         Ok(Some((artifact.clone(), pair_repair_required)))
     }
     /// Read one exact active certified lane slot without writer recovery or

@@ -213,6 +213,12 @@ STABLE_BINDING_IDENTITIES = {
         "method",
         "Kura::preflight_certified_bundle_inventory_locked",
     ),
+    "certified_bundle_startup_authenticated_preimage_validation": (
+        "MLCertifiedFrontierCapacityReconstructable",
+        "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "method",
+        "Kura::validate_startup_persisted_autonomous_bundle_under_prune_guard",
+    ),
     "certified_bundle_aggregate_capacity_gate": (
         "MLCertifiedFrontierCapacityReconstructable",
         "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
@@ -290,6 +296,18 @@ STABLE_BINDING_IDENTITIES = {
         "crates/iroha_core/src/kura.rs",
         "method",
         "Kura::finish_restored_lane_segments_with_geometry",
+    ),
+    "lane_restore_combined_capacity_publish": (
+        "MLDebugAppendReservationAndRestartAccounting",
+        "crates/iroha_core/src/kura.rs",
+        "method",
+        "Kura::restore_lane_segments",
+    ),
+    "lane_history_recovery_phase_order": (
+        "MLStartupRepairAfterCarrierEnvelopes",
+        "crates/iroha_core/src/kura/lane_history_compaction.rs",
+        "method",
+        "Kura::recover_lane_histories_on_startup",
     ),
     "entrypoint_claim_set_peak_projection": (
         "MLMutationPeaksAdmittedBeforeFirstWrite",
@@ -471,7 +489,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         'receipt.proposal.descriptor.proposal_height == identity.1',
         'latest_execution_entry',
         'latest_height != identity.0',
-        'execution_entries_for_bounded_identities(&historical_execution_identities)',
+        'execution_entries_for_bounded_identities( &historical_execution_identities, )',
         'merge_carrier_for_entry_under_prune_and_canonical_guards',
         'authenticated_carriers.push((entry_hash, carrier))',
         'ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked',
@@ -587,6 +605,15 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "self.validate_autonomous_lane_merge_bundle_pair_layout_locked",
         "if bundle.certified != *artifact",
         "non-frontier autonomous certificate lacks its durable bundle",
+        "Result<Vec<AutonomousLaneMergeBundleV1>>",
+        "Ok(bundles.into_values().collect())",
+    ),
+    "certified_bundle_startup_authenticated_preimage_validation": (
+        "persisted: &AutonomousLaneMergeBundleV1",
+        "self.durable_autonomous_lane_merge_source_under_prune_guard",
+        "Some(&persisted.certified), false",
+        "source.bundle != *persisted",
+        "source.source_bundle != persisted.encode_framed()?",
     ),
     "certified_bundle_aggregate_capacity_gate": (
         "another certified/bundle capacity identity is still outstanding for this route",
@@ -635,6 +662,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         ".checked_add(pending_block_bytes)",
         "Self::canonical_prune_intent_maintenance_headroom_bytes()",
         "*self.certified_bundle_capacity_reservations.lock() = rebuilt",
+        "self.validate_startup_persisted_autonomous_bundle_under_prune_guard",
     ),
     "lane_history_compaction_recovery_before_capacity": (
         'self.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards',
@@ -692,10 +720,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     ),
     "startup_carrier_envelope_reconstruction_order": (
         "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
-        "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
-        "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
-        "kura.repair_lane_merge_application_frontiers_on_startup()?",
-        "kura.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "kura.recover_lane_histories_on_startup()?",
         "kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(",
         "!provisional_open",
         "Kura emergency Fast mode skipped the full disk-usage inventory",
@@ -703,12 +728,22 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     ),
     "geometry_restore_combined_capacity_publish": (
         "if self.emergency_fast_startup_enabled()",
-        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
-        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
-        "self.repair_lane_merge_application_frontiers_on_startup()?",
-        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.recover_lane_histories_on_startup()?",
         "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
         "Ok(())",
+    ),
+    "lane_restore_combined_capacity_publish": (
+        "if self.emergency_fast_startup_enabled()",
+        "self.recover_lane_histories_on_startup()?",
+        "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
+        "Ok(())",
+    ),
+    "lane_history_recovery_phase_order": (
+        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
+        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
+        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.repair_lane_merge_application_frontiers_on_startup()?",
+        "self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()",
     ),
     "entrypoint_claim_set_peak_projection": (
         "self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?",
@@ -720,7 +755,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
     "entrypoint_claim_set_preflight_before_mutation": (
         "self.preflight_autonomous_lane_entrypoint_claims_locked(",
         "pending_canonical_bytes, payload, max_files,",
-        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "let mut accounting_mutation = self .begin_total_disk_usage_mutation() .with_resource_children(payload.entrypoint_hashes.len())",
         "for entrypoint_hash in &payload.entrypoint_hashes",
         ".create_new(true)",
         "temp.write_all(&bytes).and_then(|()| temp.sync_all())",
@@ -1401,6 +1436,9 @@ fn validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_lock
                 "kura.validate_and_publish_configured_kura_capacity_after_startup_recovery("
             ),
             "geometry_restore_combined_capacity_publish": (
+                "self.validate_and_publish_configured_kura_capacity_after_startup_recovery("
+            ),
+            "lane_restore_combined_capacity_publish": (
                 "self.validate_and_publish_configured_kura_capacity_after_startup_recovery("
             ),
         }.get(binding_id)

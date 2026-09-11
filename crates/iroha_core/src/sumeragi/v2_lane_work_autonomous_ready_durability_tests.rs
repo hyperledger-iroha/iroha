@@ -103,6 +103,18 @@ fn install_autonomous_test_queue(
     queue
         .replay_plan_journal(adapter.state.as_ref())
         .expect("replay autonomous queue plan journal");
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture autonomous fixture startup ownership");
+    if snapshot.is_empty() {
+        let receipt = queue
+            .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+            .expect("bind exact empty autonomous fixture startup receipt")
+            .expect("empty autonomous fixture replay remains unchanged");
+        queue
+            .complete_lane_reservation_startup_reconciliation(receipt)
+            .expect("complete empty autonomous fixture startup before admission");
+    }
     adapter
         .install_lane_drain_queue(Arc::clone(&queue))
         .expect("install autonomous production queue");
