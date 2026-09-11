@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 481
+EXPECTED_REGRESSION_COUNT = 483
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -53,7 +53,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 299)
+        self.assertEqual(gate.selected_regression_count(), 301)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -63,6 +63,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 names = [test for _, tests in basic[name] for test in tests]
                 self.assertEqual(len(names), len(set(names)))
         self.assertEqual(basic["core"], gate.CORE_ADMISSION_STARTUP_STAGES)
+        for test in (
+            "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
+            "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+        ):
+            self.assertIn(test, [test for _, tests in basic["core"] for test in tests])
         self.assertEqual(basic["proof-flows"], ())
         self.assertTrue(full["proof-flows"])
         self.assertEqual(basic["network"], gate.NETWORK_STAGES)

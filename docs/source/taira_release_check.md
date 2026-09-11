@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **299 native regressions on macOS**: startup
+`--native-check-scope basic` runs **301 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **481-case** native census,
+Use `--native-check-scope full` to execute the full **483-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -21,9 +21,18 @@ proof, Torii and consensus harness graph plus native shipping binaries with six
 Cargo jobs. This preserves the warm target and dependency feature union. Deferred
 harnesses have compile coverage only; their cases never appear as test passes.
 The basic scope defers 636 seconds of advanced test execution measured in
-preparation56. The new total runtime has not yet been measured. Build, stage and
-test durations remain explicit. Python 3.11+, the repository Rust toolchain and
-previously fetched dependencies are required; Cargo runs offline.
+preparation56. A complete successful basic run has not yet been measured. Build,
+stage and test durations remain explicit. Python 3.11+, the repository Rust
+toolchain and previously fetched dependencies are required; Cargo runs offline.
+
+Preparation58 passed all 298 then-selected independent native cases, but the
+four-validator check failed after 19.3 seconds before genesis. Its runner fence
+still inferred startup quarantine from whether the replay contained owners.
+The early startup group now also selects the runner's empty-quarantined-replay
+regression and lifecycle startup-order contract. The latter checks that successful
+pending-Kura startup reconciliation clears its pending flag before handing off to
+the successor. These cover the directly changed startup paths in both scopes;
+basic still defers advanced fault matrices and requires actual network success.
 
 The Torii harness executes the shipping routes through plan, prepare and submit,
 checks SDK receipt verification, and applies queued fixture transactions. It

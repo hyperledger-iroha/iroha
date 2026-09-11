@@ -580,6 +580,8 @@ CORE_STAGES += (("authenticated admission and coherent State publication", (
 
 CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "queue::tests::empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion",
+    "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
+    "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
 )),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (

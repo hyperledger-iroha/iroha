@@ -1221,8 +1221,8 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
 /// Reconcile every local lifecycle bootstrap and cursor before live lane activation.
 ///
 /// The caller must already have recovered canonical State/Kura and installed both Queue journals,
-/// while network lane-work ingress remains closed. A non-empty Queue snapshot must still be
-/// quarantined; an empty replay legitimately has no Queue owner-quarantine bit to hold.
+/// while network lane-work ingress remains closed. Every installed Queue replay remains
+/// quarantined, including an empty one, until its exact completion receipt is consumed.
 pub(crate) fn reconcile_autonomous_lifecycle_startup(
     state: &State,
     queue: &Queue,
