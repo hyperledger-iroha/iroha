@@ -131,6 +131,169 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
         frontier,
     }
 }
+
+#[test]
+fn lane_history_retention_authenticates_exact_finality_without_reverse_index() {
+    let fixture = merge_receipt_compaction_fixture();
+    let kura = &fixture.kura;
+    let frontier = fixture.frontier;
+    let height = NonZeroUsize::new(
+        usize::try_from(frontier.application_block_height).expect("carrier height fits usize"),
+    )
+    .expect("nonzero carrier height");
+    let carrier = kura
+        .get_block_without_merge_sidecar(height)
+        .expect("retain exact canonical carrier body");
+    let entry = kura
+        .merge_log
+        .lock()
+        .entry_by_hash(frontier.merge_entry_hash)
+        .expect("read full committed merge log")
+        .expect("retain exact full merge entry");
+    let expected_receipt = |candidate: &LaneMergeApplicationFrontierV1| {
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_guard = kura.canonical_chain_lock.lock();
+        kura.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+            candidate,
+        )
+    };
+    let original = expected_receipt(&frontier).expect("original authenticated retention receipt");
+    kura.remove_merge_carrier_record_for_testing(&carrier, &entry)
+        .expect("remove only the derived reverse index");
+    let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+    assert_eq!(expected_receipt(&frontier), Some(original.clone()));
+    assert!(
+        kura.merge_carrier_for_entry(frontier.merge_entry_hash)
+            .expect("read absent reverse index")
+            .is_none(),
+        "retention preflight must not publish reverse-index repair"
+    );
+    for damage in 0..3 {
+        let mut substituted = frontier;
+        match damage {
+            0 => {
+                substituted.application_block_hash =
+                    HashOf::from_untyped_unchecked(Hash::new(b"substituted carrier"));
+            }
+            1 => {
+                substituted.merge_entry_hash =
+                    HashOf::from_untyped_unchecked(Hash::new(b"substituted merge entry"));
+            }
+            2 => substituted.application_block_height += 1,
+            _ => unreachable!(),
+        }
+        assert!(
+            expected_receipt(&substituted).is_none(),
+            "an absent index must not authorize substituted carrier coordinates"
+        );
+    }
+    assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+
+    let carrier_path = kura.merge_carrier_path(frontier.application_block_height);
+    let mut conflicting = Kura::carrier_record_for_block_entry(&carrier, &entry)
+        .expect("derive original carrier record");
+    conflicting.block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"conflicting retained carrier"));
+    for bytes in [
+        norito::encode_canonical(&conflicting).expect("encode conflicting carrier record"),
+        b"malformed retained reverse index".to_vec(),
+    ] {
+        fs::write(&carrier_path, bytes).expect("install occupied reverse-index conflict");
+        let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+        assert!(expected_receipt(&frontier).is_none());
+        assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+        fs::remove_file(&carrier_path).expect("restore absent reverse-index fixture");
+    }
+
+    let finality_path = kura.v2_finality_artifact_path(frontier.application_block_height);
+    let finality = fs::read(&finality_path).expect("retain exact signed finality");
+    fs::write(&finality_path, b"malformed finality").expect("corrupt only retained finality");
+    let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+    assert!(expected_receipt(&frontier).is_none());
+    assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+    fs::remove_file(&finality_path).expect("remove finality authority");
+    let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+    assert!(expected_receipt(&frontier).is_none());
+    assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+    fs::write(&finality_path, finality).expect("restore exact signed finality");
+    assert_eq!(expected_receipt(&frontier), Some(original));
+
+    kura.block_data.lock()[height.get() - 1].1 = None;
+    {
+        let mut store = kura.block_store.lock();
+        let index = store
+            .read_block_index(frontier.application_block_height - 1)
+            .expect("read inline carrier index");
+        assert!(!index.is_evicted());
+        store
+            .write_block_data(index.start, &[0xFF])
+            .expect("corrupt inline carrier frame");
+    }
+    let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+    assert!(
+        expected_receipt(&frontier).is_none(),
+        "an unreadable inline carrier is not an absent remote body"
+    );
+    assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+}
+
+#[test]
+fn lane_history_retention_authenticates_remote_only_carrier_without_reverse_index() {
+    let mut fixture = merge_receipt_compaction_fixture();
+    Arc::get_mut(&mut fixture.kura)
+        .expect("exclusive Kura fixture")
+        .blocks_in_memory = NonZeroUsize::MIN;
+    let kura = &fixture.kura;
+    let frontier = fixture.frontier;
+    let height = NonZeroUsize::new(
+        usize::try_from(frontier.application_block_height).expect("carrier height fits usize"),
+    )
+    .expect("nonzero carrier height");
+    let carrier = kura
+        .get_block_without_merge_sidecar(height)
+        .expect("original canonical carrier body");
+    let entry = kura
+        .merge_log
+        .lock()
+        .entry_by_hash(frontier.merge_entry_hash)
+        .expect("read full committed merge log")
+        .expect("retain exact full merge entry");
+    let mut tail: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+        .chain(0, Some(carrier.as_ref()))
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+        .unpack(|_| {})
+        .into();
+    attach_ok_results_to_block(&mut tail);
+    kura.store_block(Arc::new(tail))
+        .expect("append body retention tail");
+    let (_, payload_len) = advertise_required_replicas(kura, height);
+    assert!(
+        kura.evict_block_bodies(payload_len)
+            .expect("evict finalized carrier body")
+            >= payload_len
+    );
+    kura.remove_evicted_block_sidecar_for_testing(height)
+        .expect("make exact carrier remote-only");
+    kura.remove_merge_carrier_record_for_testing(&carrier, &entry)
+        .expect("remove only the derived reverse index");
+    assert!(kura.get_block_without_merge_sidecar(height).is_none());
+    let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+    {
+        let _prune_guard = kura.prune_lock.lock();
+        let _canonical_guard = kura.canonical_chain_lock.lock();
+        assert!(
+            kura.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards(
+                &frontier,
+            )
+            .is_some(),
+            "exact retained finality authenticates a remote-only carrier"
+        );
+    }
+    assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+}
+
 fn compact_fixture_lane_histories(
     kura: &Kura,
     lane_entry: &LaneConfigEntry,

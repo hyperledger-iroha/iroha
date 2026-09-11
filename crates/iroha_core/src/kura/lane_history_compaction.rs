@@ -37,6 +37,9 @@ impl Kura {
     }
 
     /// Authenticate a retention floor without performing compaction or source repair.
+    /// The cursor's exact carrier coordinates require canonical finality and its
+    /// full merge entry; a missing derived reverse index remains startup repair
+    /// work, while a conflicting retained index rejects the floor.
     /// The caller holds `prune_lock`, but no geometry or sidecar lock.
     fn authenticated_lane_history_retention_under_prune_guard(
         &self,

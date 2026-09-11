@@ -1791,6 +1791,9 @@ fn reserve_transaction_for_lane_test_with_identity(
     crate::queue::LaneQueueReservationKeyV1,
     TransactionEntrypoint,
 ) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(state);
+    }
     // These fixtures exercise the strict global QueuePlan corridor, so their transaction must
     // carry the same signature-bound intent and network domain as a production submission. The
     // Apply fixture body itself is a genesis-domain Ordinary transaction and cannot be reused
@@ -2003,6 +2006,9 @@ fn reserve_autonomous_crash_batch(
     queue: &Arc<Queue>,
     producer: &KeyPair,
 ) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(fixture.state.as_ref());
+    }
     assert_eq!(
         &fixture.context.network_id,
         fixture.state.network_id_ref(),

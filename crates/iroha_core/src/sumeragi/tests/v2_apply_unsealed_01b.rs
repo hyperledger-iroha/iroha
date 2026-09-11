@@ -312,10 +312,9 @@ v2_apply_test!(
                     "{boundary}: replay must not make lane-owned work selectable"
                 );
             }
-            assert_eq!(
+            assert!(
                 replayed_queue.lane_reservation_startup_reconciliation_pending(),
-                boundary != "queue_completion_forgotten",
-                "{boundary}: replay quarantine must cover every durable release owner"
+                "{boundary}: every replay remains quarantined until exact startup completion"
             );
             assert_eq!(
                 reconcile_lane_reservation_ownership(

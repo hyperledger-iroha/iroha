@@ -8,7 +8,6 @@
 use super::v2_apply::{
     LaneReservationSnapshotPlannerEvidence, recover_autonomous_lane_replica_with_queue_disposition,
     recover_pending_autonomous_lifecycle_terminal_outcome,
-    retire_autonomous_lane_replica_with_queue_disposition,
 };
 use super::v2_core::{
     IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA, IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH,
@@ -792,10 +791,9 @@ pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(
     let initial_snapshot = queue
         .lane_reservation_reconciliation_snapshot()
         .map_err(|error| lifecycle_error("terminal-outcome Queue snapshot failed", error))?;
-    if !initial_snapshot.is_empty() && !initial_queue_quarantine {
+    if !initial_queue_quarantine {
         return Err(
-            "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep"
-                .to_owned(),
+            "Queue startup snapshot was published before terminal-outcome pre-sweep".to_owned(),
         );
     }
     let active_routes = active_lifecycle_routes(state, context)?
@@ -1221,8 +1219,8 @@ pub(crate) fn complete_deferred_autonomous_lifecycle_terminal_outcomes_after_que
 /// Reconcile every local lifecycle bootstrap and cursor before live lane activation.
 ///
 /// The caller must already have recovered canonical State/Kura and installed both Queue journals,
-/// while network lane-work ingress remains closed. A non-empty Queue snapshot must still be
-/// quarantined; an empty replay legitimately has no Queue owner-quarantine bit to hold.
+/// while network lane-work ingress remains closed. Every Queue replay must still be
+/// quarantined, including an empty replay, until the returned receipt is consumed.
 pub(crate) fn reconcile_autonomous_lifecycle_startup(
     state: &State,
     queue: &Queue,
@@ -1238,9 +1236,9 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
     let snapshot = queue
         .lane_reservation_reconciliation_snapshot()
         .map_err(|error| lifecycle_error("Queue snapshot failed", error))?;
-    if !snapshot.is_empty() && !initial_queue_quarantine {
+    if !initial_queue_quarantine {
         return Err(
-            "autonomous lifecycle startup found unquarantined durable Queue owners".to_owned(),
+            "autonomous lifecycle startup found an already published Queue gate".to_owned(),
         );
     }
     let receipt = queue
@@ -1651,28 +1649,16 @@ pub(crate) fn reconcile_autonomous_lifecycle_startup(
                         .map_err(|error| {
                             lifecycle_error("retired replica cursor reacquisition failed", error)
                         })?;
-                    if initial_queue_quarantine {
-                        recover_autonomous_lane_replica_with_queue_disposition(
-                            kura,
-                            queue,
-                            &retired_attempt.retirement,
-                            cursor_read,
-                            &receipt,
-                            &snapshot,
-                            payload.network_id,
-                            payload.epoch,
-                        )
-                    } else {
-                        retire_autonomous_lane_replica_with_queue_disposition(
-                            kura,
-                            queue,
-                            &retired_attempt.retirement,
-                            cursor_read,
-                            payload.network_id,
-                            payload.epoch,
-                        )
-                        .map(|_| ())
-                    }
+                    recover_autonomous_lane_replica_with_queue_disposition(
+                        kura,
+                        queue,
+                        &retired_attempt.retirement,
+                        cursor_read,
+                        &receipt,
+                        &snapshot,
+                        payload.network_id,
+                        payload.epoch,
+                    )
                     .map_err(|error| {
                         lifecycle_error("retired replica release completion failed", error)
                     })?;

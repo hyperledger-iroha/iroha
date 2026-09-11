@@ -11153,6 +11153,44 @@ impl Queue {
         self.lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
     }
+    /// Complete the exact empty journal startup used before seeding fixture work.
+    ///
+    /// Recovery fixtures with retained plans or reservation owners must use the
+    /// State/Kura reconciliation coordinator instead.
+    #[cfg(test)]
+    pub(crate) fn complete_empty_startup_for_test(&self, state: &State) {
+        assert!(self.lane_reservation_startup_reconciliation_pending());
+        let snapshot = self
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture empty fixture startup ownership");
+        assert!(
+            snapshot.is_empty(),
+            "fixture startup must not own reservations"
+        );
+        let plan_replay_receipt = self.plan_journal_startup_replay_receipt.lock().clone();
+        if let Some(receipt) = plan_replay_receipt {
+            assert!(
+                receipt
+                    .binds_live_claims(std::iter::empty())
+                    .expect("validate empty fixture QueuePlan replay receipt"),
+                "fixture startup must have no retained plans"
+            );
+        } else {
+            let replay = self
+                .replay_plan_journal(state)
+                .expect("replay empty fixture QueuePlan journal before admission");
+            assert_eq!(
+                replay.records, 0,
+                "fixture startup must have no retained plans"
+            );
+        }
+        let receipt = self
+            .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+            .expect("bind exact empty fixture startup receipt")
+            .expect("fixture ownership remains unchanged during startup");
+        self.complete_lane_reservation_startup_reconciliation(receipt)
+            .expect("complete empty fixture startup before admitting work");
+    }
     /// Publish successful State/Kura-aware reservation reconciliation.
     ///
     /// Commit and release crash barriers must already be fully consumed, and
@@ -22567,6 +22605,12 @@ pub mod tests {
         globally_bound_guard_fixture_at_height(0)
     }
     fn globally_bound_guard_fixture_at_height(authority_height: u64) -> GloballyBoundGuardFixture {
+        globally_bound_guard_fixture_with_journals(authority_height, false)
+    }
+    fn globally_bound_guard_fixture_with_journals(
+        authority_height: u64,
+        reservations: bool,
+    ) -> GloballyBoundGuardFixture {
         let dir = tempdir().expect("global guard fixture directory");
         let journal_path = dir.path().join("global_guard_queue_plan.norito");
         let mut state = State::new(
@@ -22592,6 +22636,10 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install global guard fixture journal");
+        if reservations {
+            install_test_reservation_journal(&queue, &dir);
+            queue.complete_empty_startup_for_test(&state);
+        }
         let transaction = accepted_queue_plan_tx_by_someone(&time_source);
         let follower_transaction = accepted_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
@@ -22687,29 +22735,7 @@ pub mod tests {
             "globally certified reservation fixtures require a queue-plan journal"
         );
         if queue.lane_reservation_startup_reconciliation_pending() {
-            // This fixture starts with empty journals. Exercise their real startup boundary
-            // before seeding ordinary certified work, just as the production runner does.
-            let snapshot = queue
-                .lane_reservation_reconciliation_snapshot()
-                .expect("capture empty fixture startup ownership");
-            assert!(
-                snapshot.is_empty(),
-                "fixture startup must not own reservations"
-            );
-            let replay = queue
-                .replay_plan_journal(state)
-                .expect("replay fixture QueuePlan journal before admission");
-            assert_eq!(
-                replay.records, 0,
-                "fixture startup must have no retained plans"
-            );
-            let receipt = queue
-                .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
-                .expect("bind exact empty fixture startup receipt")
-                .expect("fixture ownership remains unchanged during startup");
-            queue
-                .complete_lane_reservation_startup_reconciliation(receipt)
-                .expect("complete empty fixture startup before admitting work");
+            queue.complete_empty_startup_for_test(state);
         }
         let authority = transaction.authority().clone();
         if state.view().world().accounts().get(&authority).is_none() {

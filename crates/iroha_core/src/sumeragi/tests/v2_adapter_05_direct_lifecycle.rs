@@ -2468,12 +2468,36 @@ fn stale_failed_validation_rebinds_only_the_exact_durable_body() {
     let core_round = reducer::Round::new(manifest.round.height, manifest.round.view);
     let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
 
-    let DirectValidationFailedPreparation::NoEffect(preview) = adapter
+    // EnterView protects this exact durable body with the TimeoutCertificate's
+    // PrepareQC. Its late rejection must retain that certified-body report.
+    let reference = reducer::CertificateRef::new(
+        adapter.reducer.context().id(),
+        core_round,
+        reducer::Phase::Prepare,
+        core_subject,
+    );
+    let prepare = adapter
+        .registry
+        .certificates
+        .get(&reference)
+        .expect("the next view retains the exact protecting PrepareQC")
+        .clone();
+    let DirectValidationFailedPreparation::Report(preview) = adapter
         .prepare_direct_validation_failed(stale_tag, manifest.round, manifest.subject, &durable)
         .expect("rebind the exact stale deterministic rejection")
     else {
-        panic!("an uncertified stale rejection must settle without a child effect")
+        panic!("a stale certified rejection must report its exact protecting PrepareQC")
     };
+    assert!(matches!(
+        preview.report_effect(),
+        AdapterEffect::ReportInvalidCertifiedBody { subject, certificate }
+            if *subject == manifest.subject && certificate == &prepare
+    ));
+    assert!(matches!(
+        &preview.core_effect,
+        reducer::Effect::ReportInvalidCertifiedBody { subject, certificate }
+            if *subject == core_subject && certificate.reference() == reference
+    ));
     assert!(matches!(
         &preview.event,
         reducer::Event::ValidationCompleted {

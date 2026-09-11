@@ -829,7 +829,8 @@ fn reservation_validation_failure_does_not_poison_durability() {
     let state = lane_reservation_test_state();
     let queue = Queue::test(config_factory(), &time_source);
     let dir = tempdir().expect("tempdir");
-    install_test_reservation_journal(&queue, &dir);
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    queue.complete_empty_startup_for_test(&state);
     let mut malformed = lane_reservation_scope(&state, b"owner", b"proposal");
     malformed.lane_block_height = 0;
     let error = match queue.reserve_transactions_for_lane(&state, malformed, nonzero!(1_usize)) {
@@ -1319,7 +1320,7 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
     assert!(matches!(
         failure.err,
         Error::PlanJournalDurabilityRejected { ref reason }
-            if reason.contains("startup reconciliation")
+            if reason == "queue journal startup is awaiting exact State/Kura reconciliation"
     ));
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);
@@ -1418,7 +1419,7 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
     assert!(matches!(
         failure.err,
         Error::PlanJournalDurabilityRejected { ref reason }
-            if reason.contains("startup reconciliation")
+            if reason == "queue journal startup is awaiting exact State/Kura reconciliation"
     ));
     assert_eq!(queue.active_len(), 1);
     assert_eq!(queue.retained_bytes(), TX_RETAINED_OVERHEAD_BYTES);

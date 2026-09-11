@@ -33843,23 +33843,28 @@ impl State {
             let mut guard = self.lane_relays.write();
             guard.insert(envelope.clone())?
         };
-        drop(lifecycle_guard);
         if matches!(
             inserted,
             LaneRelayInsert::Inserted | LaneRelayInsert::Replaced
         ) {
-            #[cfg(feature = "telemetry")]
-            {
-                let head_height = u64::try_from(self.block_hashes.view().len()).unwrap_or(0);
-                self.telemetry.record_lane_relay_finality(
-                    envelope.lane_id,
-                    envelope.dataspace_id,
-                    relay_proposal_height,
-                    head_height,
-                    envelope.rbc_bytes_total,
-                );
-            }
+            // Retirement prunes both caches under this fence. Publishing status
+            // after unlocking could resurrect an already retired incarnation.
             crate::sumeragi::status::push_lane_relay_envelope(envelope.clone());
+        }
+        drop(lifecycle_guard);
+        #[cfg(feature = "telemetry")]
+        if matches!(
+            inserted,
+            LaneRelayInsert::Inserted | LaneRelayInsert::Replaced
+        ) {
+            let head_height = u64::try_from(self.block_hashes.view().len()).unwrap_or(0);
+            self.telemetry.record_lane_relay_finality(
+                envelope.lane_id,
+                envelope.dataspace_id,
+                relay_proposal_height,
+                head_height,
+                envelope.rbc_bytes_total,
+            );
         }
         Ok(inserted)
     }
