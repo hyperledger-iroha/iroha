@@ -3015,11 +3015,16 @@ fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
     let (handle, receiver, _relay_receiver) = test_sumeragi_handle(1);
     let sender = authenticated_peer_for_test();
     handle.ingress_ready.store(false, Ordering::Release);
+    assert!(!handle.admission_ready());
     assert!(!handle.try_incoming_block_message_from(sender.clone(), v2_message()));
     assert!(receiver.try_recv().is_none());
     handle.ingress_ready.store(true, Ordering::Release);
+    assert!(handle.admission_ready());
     assert!(handle.try_incoming_block_message_from(sender, v2_message()));
     assert!(receiver.try_recv().is_some());
+    handle.output_guard.activate_restart_required();
+    assert!(!handle.admission_ready());
+    assert!(!SumeragiHandle::emergency_fast_disabled().admission_ready());
 }
 #[test]
 fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {

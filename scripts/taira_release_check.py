@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Catch Taira application, consensus and proof regressions before cross-compilation.
+"""Qualify basic Taira connectivity, or the full regression census, before a build.
 
 Requires Python 3.11+ and the repository Rust toolchain. Compile focused native
 harnesses and run a four-peer network with isolated Cargo and fixture-only inputs.
@@ -11,6 +11,10 @@ explicitly selected. This preference never changes Linux release compilation.
 Private test-executable copies are released after their last subprocess exits,
 including failed checks; their observations and test logs remain available.
 Native node/client snapshots remain retained for network and CLI capture consumers.
+The default basic scope keeps deployment custody, authentication, application and
+startup admission checks plus real four-validator Applied transactions and restart.
+Full additionally executes advanced Core recovery and proof-production matrices.
+Both scopes compile the same native graph; no runtime security policy is relaxed.
 
 Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
@@ -500,7 +504,11 @@ DAEMON_STARTUP_STAGES = (("frozen startup policy before snapshot authentication 
 )),)
 DAEMON_STAGES += DAEMON_STARTUP_STAGES
 
-TORII_UNIT_STAGES = (("public contract retained payload and certified ingress", (
+TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation", (
+    "tests_runtime_handlers::readiness_rejects_empty_queue_startup_reconciliation",
+    "tests_runtime_handlers::readiness_rejects_closed_consensus_ingress",
+)),)
+TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
     "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
     "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",
@@ -570,7 +578,11 @@ CORE_STAGES += (("authenticated admission and coherent State publication", (
     "state::tests::queue_plan_carrier_validation_uses_one_generation_coherent_state_view",
 )),)
 
-CORE_STARTUP_STAGES = (("authenticated snapshot owner policy and startup custody", (
+CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
+    "queue::tests::empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion",
+    "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
+)),)
+CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
     "state::tests::snapshot_owner_policy_requires_complete_canonical_fields",
@@ -741,13 +753,33 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
         raise CheckError("shipping native coverage audit failed: " + str(error)) from error
 
 
-def selected_regression_count() -> int:
-    """Return the complete native census shared by execution and result capture."""
-    return sum(len(names)
-               for stages in (STAGES, CONFIG_STAGES, CRYPTO_STAGES, P2P_STAGES, CORE_STAGES,
-                              TEST_NETWORK_STAGES, NETWORK_STAGES, PROOF_STAGES,
-                              PROOF_FLOW_STAGES, TORII_STAGES, CLIENT_STAGES, TORII_UNIT_STAGES,
-                              DAEMON_STAGES, KAGAMI_STAGES)
+QUALIFICATION_SCOPES = ("basic", "full")
+
+
+def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]:
+    """Select honest test coverage without changing shipping features or artifacts."""
+    if qualification_scope not in QUALIFICATION_SCOPES:
+        raise CheckError("native qualification scope must be basic or full")
+    selected = {
+        "config": CONFIG_STAGES, "kagami": KAGAMI_STAGES,
+        "proof": PROOF_STAGES, "proof-flows": PROOF_FLOW_STAGES,
+        "crypto": CRYPTO_STAGES, "p2p": P2P_STAGES, "core": CORE_STAGES,
+        "test-network": TEST_NETWORK_STAGES, "client": CLIENT_STAGES,
+        "torii-unit": TORII_UNIT_STAGES, "torii": TORII_STAGES,
+        "daemon": DAEMON_STAGES, "network": NETWORK_STAGES, "cli": STAGES,
+    }
+    if qualification_scope == "basic":
+        # These affected startup regressions and the unchanged real network
+        # exercise admission/restart. Advanced storage/fault matrices remain
+        # selectable with full. Crypto, proof bounds and custody stay mandatory.
+        selected["core"] = CORE_ADMISSION_STARTUP_STAGES
+        selected["proof-flows"] = ()
+    return selected
+
+
+def selected_regression_count(qualification_scope: str = "basic") -> int:
+    """Return this scope's selected native census, including the real network."""
+    return sum(len(names) for stages in qualification_stages(qualification_scope).values()
                for _, names in stages)
 
 
@@ -1278,14 +1310,17 @@ def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int,
           f"in {time.monotonic() - started:.1f}s", flush=True)
 
 
-def independent_check_evidence(harnesses: NativeArtifactCopies, stages) -> dict[str, object]:
+def independent_check_evidence(harnesses: NativeArtifactCopies, stages, *,
+                               qualification_scope: str = "basic") -> dict[str, object]:
     """Bind a complete independent pass to its exact census and copied Cargo artifacts."""
+    qualification_stages(qualification_scope)
     artifacts = {row["selection"]: row for row in harnesses.observations}
     selections = [name for name, _ in stages]
     if len(artifacts) != len(harnesses.observations) or any(name not in artifacts for name in selections):
         raise CheckError("independent check artifact observations are incomplete or duplicated")
     return {
         "passed": True,
+        "qualification_scope": qualification_scope,
         "selected_tests": [
             {"selection": name, "stages": [
                 {"label": label, "tests": list(tests)} for label, tests in selected_stages
@@ -1300,7 +1335,8 @@ def independent_check_evidence(harnesses: NativeArtifactCopies, stages) -> dict[
     }
 
 
-def run_checks(root: Path, *, environment: dict[str, str] | None = None,
+def run_checks(root: Path, *, qualification_scope: str = "basic",
+               environment: dict[str, str] | None = None,
                source_commit: str | None = None, lock_fds: tuple[int, ...] = (),
                completed_independent_checks: dict[str, object] | None = None,
                update_independent_checks=None) -> None:
@@ -1308,8 +1344,9 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
 
     The callback receives None before rerunning independent tests, then complete
     evidence after every selected independent test passed. A network failure
-    never publishes full-gate success. The CLI exposes no skip option.
+    never publishes scope success. Neither scope permits skipping a selected test.
     """
+    scoped_stages = qualification_stages(qualification_scope)
     if sys.platform not in {"darwin", "linux"}:
         raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
     started = time.monotonic()
@@ -1323,6 +1360,8 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     env["VERGEN_GIT_SHA"] = head
     env["IROHA_GIT_COMMIT_HASH"] = head
     print(f"[taira-check] source {head}; {root}", flush=True)
+    print(f"[taira-check] qualification scope {qualification_scope}; "
+          f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
     if NETWORK_STAGES:
         require_network_fixture_capacity(fixture_root)
@@ -1345,22 +1384,24 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     # the shipping binary graph or four-peer fixture. Aggregate test failures;
     # missing tests, artifact custody failures and other infrastructure errors
     # still stop immediately. Production binaries use a separate graph below.
-    early_stages = tuple((name, stages) for name, stages in (
-        ("kagami", KAGAMI_STAGES if "kagami" in shipping else ()),
-        ("proof", PROOF_STAGES), ("proof-flows", PROOF_FLOW_STAGES),
-        ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
-        ("test-network", TEST_NETWORK_STAGES),
-        ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES),
-        ("torii", TORII_STAGES), ("daemon", DAEMON_STAGES)) if stages)
-    selections = (("config",) if CONFIG_STAGES else ()) + tuple(name for name, _ in early_stages)
+    # Keep the full compile graph and its warm Cargo feature union in both
+    # scopes. Deferred cases have compile coverage, never fabricated test passes.
+    full_stages = qualification_stages("full")
+    full_early = tuple((name, stages) for name, stages in full_stages.items()
+                       if name not in {"config", "network", "cli"}
+                       and (name != "kagami" or name in shipping) and stages)
+    early_stages = tuple((name, scoped_stages[name]) for name, _ in full_early
+                         if scoped_stages[name])
+    selections = (("config",) if CONFIG_STAGES else ()) + tuple(name for name, _ in full_early)
     if NETWORK_STAGES:
         selections += ("network",)
     if STAGES:
         selections += ("cli",)
-    # Compile every shipped entry point in this one native graph. Targets with
-    # no selected regression have compile evidence only, never invented passes.
-    compile_only = tuple(name for name in shipping if name not in selections)
-    selections += compile_only
+    selected_names = {name for name, _ in early_stages} | {"config", "network", "cli"}
+    compile_only = tuple(name for name in selections if name not in selected_names)
+    shipping_only = tuple(name for name in shipping if name not in selections)
+    selections += shipping_only
+    compile_only += shipping_only
     if selections:
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
@@ -1372,7 +1413,8 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
             failures = []
             independent_stages = ((("cli", STAGES),) if STAGES else ()) + early_stages
             checkpoint_enabled = update_independent_checks is not None
-            evidence = independent_check_evidence(harnesses, independent_stages) if checkpoint_enabled else None
+            evidence = independent_check_evidence(harnesses, independent_stages,
+                                                  qualification_scope=qualification_scope) if checkpoint_enabled else None
             reuse_independent = checkpoint_enabled and completed_independent_checks == evidence
             if reuse_independent:
                 print("[taira-check] reused exact independent test census and artifact pass", flush=True)
@@ -1383,7 +1425,7 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
             # Startup fixtures are part of the same canonical census/checkpoint, but
             # execute before long consensus/proof groups. Retain each immutable copy
             # until its remaining stages finish; no test runs twice or gains a skip flag.
-            startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES}
+            startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
             preflight = tuple((name, tuple(stage for stage in stages if stage in startup.get(name, ())))
                               for name, stages in early_stages)
             if STAGES:
@@ -1423,7 +1465,8 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
-    print(f"[taira-check] PASS: {selected_regression_count()} regressions in {time.monotonic() - started:.1f}s", flush=True)
+    print(f"[taira-check] PASS: {selected_regression_count(qualification_scope)} {qualification_scope} regressions "
+          f"in {time.monotonic() - started:.1f}s", flush=True)
 
 
 def main() -> int:
@@ -1431,11 +1474,14 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="repository root (default: this maintained script's parent repository)")
     parser.add_argument("--target-dir", type=Path, help="existing development Cargo lane (default: sibling routine lane)")
+    parser.add_argument("--native-check-scope", choices=QUALIFICATION_SCOPES, default="basic",
+                        help="basic application/startup checks (default), or full advanced regressions")
     args = parser.parse_args()
     # Lazy import keeps the low-level gate loadable from an authenticated source capture.
     import taira_release as release
     try:
-        release.development_check(args.repo_root, args.target_dir, dict(os.environ))
+        release.development_check(args.repo_root, args.target_dir, dict(os.environ),
+                                  native_check_scope=args.native_check_scope)
     except (CheckError, release.PrepareError, release.ReleaseArtifactError,
             release.gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-check] FAIL: {error}", file=sys.stderr, flush=True)

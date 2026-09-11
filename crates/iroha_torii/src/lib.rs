@@ -14045,12 +14045,31 @@ async fn handler_health(
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// KAGEMUSHA wallet UI capability is universal and never participates in this
-/// probe. Future ordinary chain-readiness checks belong here.
+/// probe. Admission remains unavailable until Queue startup reconciliation finishes.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Emergency Fast mode is live but intentionally not production-ready",
+        )
+            .into_response();
+    }
+    if app.queue.lane_reservation_startup_reconciliation_pending() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Queue startup reconciliation is still pending",
+        )
+            .into_response();
+    }
+    if app.queue.transaction_selection_durability_faulted()
+        || app
+            .sumeragi
+            .as_ref()
+            .is_some_and(|sumeragi| !sumeragi.admission_ready())
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Consensus admission is unavailable",
         )
             .into_response();
     }

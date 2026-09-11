@@ -137,6 +137,84 @@ def test_queue_locked_body_current_tokens_and_order_match_actual_owner():
     assert errors == []
 
 
+@pytest.fixture(scope="module")
+def actual_queue_startup_items():
+    """Cache actual Rust owners used by the complete startup contract."""
+    rows = (
+        queue_contract.QUEUE_PLAN_STARTUP_REPLAY_BINDINGS
+        + queue_contract.QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS
+        + queue_contract.QUEUE_PLAN_STARTUP_REPLAY_FORBIDDEN_SOURCE_CHECKS
+        + tuple((path, "fn", symbol, tokens) for path, symbol, tokens in
+                queue_contract.QUEUE_PLAN_STARTUP_REPLAY_TEST_BINDINGS)
+    )
+    items = {}
+    for path, kind, symbol, _tokens in rows:
+        key = (path, kind, symbol)
+        if key not in items:
+            errors = []
+            items[key] = actual_item(ROOT, *key, "actual Queue startup owner", errors)
+            assert errors == [] and items[key] is not None
+    return items
+
+
+def test_empty_queue_startup_publication_actual_source_contract(
+    monkeypatch, actual_queue_startup_items
+):
+    monkeypatch.setattr(checker, "_rust_binding_item", lambda root, path, kind,
+                        symbol, label, errors: actual_queue_startup_items[path, kind, symbol])
+    errors = []
+    checker._validate_queue_plan_startup_replay_contract(ROOT, models(), errors)
+    assert errors == []
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("Queue::install_lane_reservation_journal",
+     ".store(true, Ordering::Release);", ".store(false, Ordering::Release);"),
+    ("Queue::install_lane_reservation_journal",
+     ".store(true, Ordering::Release);",
+     ".store(!store.live_by_entrypoint.is_empty(), Ordering::Release);"),
+    ("Queue::bind_lane_reservation_startup_reconciliation_receipt",
+     "if !self\n            .lane_reservation_reconciliation_pending\n            .load(Ordering::Acquire)",
+     "if !expected_snapshot.is_empty() && !self.lane_reservation_startup_reconciliation_pending()"),
+    ("Queue::revalidate_lane_reservation_startup_reconciliation_receipt",
+     "|| !self.lane_reservation_startup_reconciliation_pending()", "|| false"),
+    ("Queue::revalidate_lane_reservation_startup_reconciliation_receipt_locked",
+     "|| !self.lane_reservation_startup_reconciliation_pending()", "|| false"),
+    ("Queue::complete_lane_reservation_startup_reconciliation",
+     "|| !reconciliation_pending", "|| (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)"),
+    ("Queue::complete_lane_reservation_startup_reconciliation",
+     "*self.lane_reservation_startup_completion.lock() =",
+     "self.lane_reservation_reconciliation_pending.store(false, Ordering::Release);\n        "
+     "*self.lane_reservation_startup_completion.lock() ="),
+])
+def test_empty_queue_startup_publication_rejects_early_open(
+    tmp_path, monkeypatch, actual_queue_startup_items, symbol, old, new
+):
+    key = ("crates/iroha_core/src/queue.rs", "method", symbol)
+    item = actual_queue_startup_items[key]
+    assert item.count(old) == 1
+    mutated = item.replace(old, new, 1)
+    # Move the opening store, rather than duplicating a harmless later store.
+    if new.startswith("self.lane_reservation_reconciliation_pending.store(false"):
+        later_store = ("        self.lane_reservation_reconciliation_pending\n"
+                       "            .store(false, Ordering::Release);\n")
+        assert mutated.count(later_store) == 1
+        mutated = mutated.replace(later_store, "", 1)
+    binding = (queue_contract.QUEUE_PLAN_STARTUP_REPLAY_MODULE, *key, (), ())
+    changed_provider(tmp_path, binding, item, mutated)
+
+    def provider(root, path, kind, requested, label, errors):
+        if (path, kind, requested) == key:
+            return actual_item(tmp_path, path, kind, requested, label, errors)
+        return actual_queue_startup_items[path, kind, requested]
+
+    monkeypatch.setattr(checker, "_rust_binding_item", provider)
+    errors = []
+    checker._validate_queue_plan_startup_replay_contract(ROOT, models(), errors)
+    assert any(f"ordered QueuePlan startup replay item {symbol}" in error
+               for error in errors)
+
+
 @pytest.mark.parametrize("bad", [None, {}, "models"])
 def test_malformed_model_container_cannot_skip_contract(bad):
     errors = []

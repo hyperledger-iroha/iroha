@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 477
+EXPECTED_REGRESSION_COUNT = 481
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -48,6 +48,118 @@ class FixtureCopies(dict):
         return False
     def release(self, selection):
         pass
+
+
+class BasicReleaseQualificationTests(unittest.TestCase):
+    def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
+        basic, full = gate.qualification_stages(), gate.qualification_stages("full")
+        self.assertEqual(gate.selected_regression_count(), 299)
+        self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
+        self.assertEqual(set(basic), set(full))
+        for name in basic:
+            with self.subTest(selection=name):
+                if name not in {"core", "proof-flows"}:
+                    self.assertEqual(basic[name], full[name])
+                names = [test for _, tests in basic[name] for test in tests]
+                self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(basic["core"], gate.CORE_ADMISSION_STARTUP_STAGES)
+        self.assertEqual(basic["proof-flows"], ())
+        self.assertTrue(full["proof-flows"])
+        self.assertEqual(basic["network"], gate.NETWORK_STAGES)
+        for stage in gate.TORII_STARTUP_STAGES:
+            self.assertIn(stage, basic["torii-unit"])
+        for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
+            self.assertIn(stage, full["core"])
+
+    def test_unknown_scope_fails_before_any_source_or_build_action(self):
+        for scope in ("", "skip", "core_testnet", None):
+            with self.subTest(scope=scope), patch.object(gate, "shipping_harnesses") as shipping, \
+                 patch.object(gate, "run_pure_fsm_checks") as fsm:
+                with self.assertRaisesRegex(gate.CheckError, "scope must be basic or full"):
+                    gate.run_checks(Path("/unread"), qualification_scope=scope)
+                shipping.assert_not_called()
+                fsm.assert_not_called()
+
+    @staticmethod
+    def copies():
+        copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+        copies.observations = [{"selection": name, "sha256": str(index) * 64, "size": 20,
+                                "cargo_artifact": {"name": name}}
+                               for index, name in enumerate(gate.HARNESS_TARGETS)]
+        return copies
+
+    def test_both_scopes_keep_identical_compile_graph_and_execute_exact_recorded_census(self):
+        builds = []
+        for scope in gate.QUALIFICATION_SCOPES:
+            executed, output, checkpoint = [], io.StringIO(), MagicMock()
+            copies = self.copies()
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
+                 patch.object(gate, "require_network_fixture_capacity"), \
+                 patch.object(gate, "run_pure_fsm_checks"), \
+                 patch.object(gate, "run_lifecycle_source_checks"), \
+                 patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
+                 patch.object(copies, "release") as release, \
+                 patch.object(gate, "run_stages", side_effect=lambda harness, root, env, stages, locks:
+                              executed.extend((harness, test) for _, tests in stages for test in tests)), \
+                 patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
+                              executed.extend(("network", test) for _, tests in gate.NETWORK_STAGES for test in tests)), \
+                 contextlib.redirect_stdout(output):
+                gate.run_checks(Path("/frozen"), qualification_scope=scope,
+                                environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
+                                source_commit="a" * 40, update_independent_checks=checkpoint)
+            builds.append(compile.call_args.kwargs["harnesses"])
+            selected = gate.qualification_stages(scope)
+            expected = [(name, test) for name, stages in selected.items()
+                        for _, tests in stages for test in tests]
+            self.assertCountEqual(executed, expected)
+            self.assertEqual(len(executed), gate.selected_regression_count(scope))
+            self.assertEqual(checkpoint.call_args_list[0].args, (None,))
+            evidence = checkpoint.call_args_list[1].args[0]
+            self.assertEqual(evidence["qualification_scope"], scope)
+            recorded = [(row["selection"], test) for row in evidence["selected_tests"]
+                        for stage in row["stages"] for test in stage["tests"]]
+            self.assertCountEqual(recorded, [row for row in executed if row[0] not in {"config", "network"}])
+            self.assertIn(f"PASS: {len(expected)} {scope} regressions", output.getvalue())
+            if scope == "basic":
+                self.assertIn("proof-flows", builds[-1])
+                self.assertNotIn("proof-flows", {row["selection"] for row in evidence["artifacts"]})
+                self.assertIn(unittest.mock.call("proof-flows"), release.call_args_list)
+        self.assertEqual(builds[0], builds[1])
+
+    def test_independent_evidence_cannot_cross_scope_even_with_identical_artifacts_and_cases(self):
+        stages = (("cli", gate.STAGES),)
+        basic = gate.independent_check_evidence(self.copies(), stages, qualification_scope="basic")
+        full = gate.independent_check_evidence(self.copies(), stages, qualification_scope="full")
+        self.assertNotEqual(basic, full)
+        self.assertEqual(basic | {"qualification_scope": "full"}, full)
+
+    def test_basic_startup_failure_prevents_network_and_success_checkpoint(self):
+        def fail_startup(harness, root, env, stages, locks):
+            if stages == gate.CORE_ADMISSION_STARTUP_STAGES:
+                raise gate.SelectedRegressionFailures(["empty Queue startup admission failed"])
+        checkpoint, output = MagicMock(), io.StringIO()
+        with patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
+             patch.object(gate, "require_network_fixture_capacity"), \
+             patch.object(gate, "run_pure_fsm_checks"), \
+             patch.object(gate, "run_lifecycle_source_checks"), \
+             patch.object(gate, "compile_test_harnesses", return_value=self.copies()), \
+             patch.object(gate, "run_stages", side_effect=fail_startup), \
+             patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(gate.SelectedRegressionFailures, "empty Queue startup admission failed"):
+                gate.run_checks(Path("/frozen"), environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
+                                source_commit="a" * 40, update_independent_checks=checkpoint)
+        checkpoint.assert_called_once_with(None)
+        network.assert_not_called()
+        self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_standalone_cli_selects_basic_by_default_and_forwards_explicit_full(self):
+        import taira_release as release
+        for arguments, scope in (([], "basic"), (["--native-check-scope", "full"], "full")):
+            with self.subTest(scope=scope), patch.object(sys, "argv", [str(SCRIPT), *arguments]), \
+                 patch.object(release, "development_check") as check:
+                self.assertEqual(gate.main(), 0)
+                self.assertEqual(check.call_args.kwargs, {"native_check_scope": scope})
 
 
 class EarlyReleaseCheckTests(unittest.TestCase):
@@ -192,13 +304,13 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.require_tests("\n".join(f"{name}: test" for name in names[1:]), stages)
 
     def test_complete_regression_census_tracks_every_native_stage_group(self):
-        self.assertEqual(gate.selected_regression_count(), EXPECTED_REGRESSION_COUNT)
+        self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         for group in ("STAGES", "CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
                       "PROOF_FLOW_STAGES", "TORII_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES", "KAGAMI_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
             with self.subTest(group=group), patch.object(gate, group, (("fixture", ("one", "two")),)):
-                self.assertEqual(gate.selected_regression_count(), EXPECTED_REGRESSION_COUNT - original_count + 2)
+                self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT - original_count + 2)
 
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,
@@ -245,7 +357,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "PROOF_STAGES", ()), \
              patch.object(gate, "PROOF_FLOW_STAGES", ()), \
              patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
-            gate.run_checks(Path("/frozen"), environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
+            gate.run_checks(Path("/frozen"), qualification_scope="full", environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
         self.assertNotIn("frozen", compile.call_args.kwargs)
         self.assertEqual(compile.call_args.args[1]["VERGEN_GIT_SHA"], "a" * 40)
@@ -270,7 +382,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "PROOF_STAGES", ()), \
              patch.object(gate, "PROOF_FLOW_STAGES", ()), \
              patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
-            gate.run_checks(Path("/mutable"), environment=env, lock_fds=(77,))
+            gate.run_checks(Path("/mutable"), qualification_scope="full", environment=env, lock_fds=(77,))
         self.assertEqual(git.call_count, 2)
         self.assertTrue(all(call.kwargs["env"]["CARGO_HOME"] == "/isolated" for call in git.call_args_list))
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "cli")})
@@ -303,7 +415,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "route.*exit 101"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "torii", "cli")})
         self.assertTrue(all(call.kwargs["cwd"] == Path("/warm") and call.kwargs["pass_fds"] == (77,)
@@ -321,7 +433,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "run_stages", side_effect=gate.CheckError("public transaction stalled")) as run, \
              contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(gate.CheckError, "public transaction stalled"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")})
@@ -338,22 +450,22 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/torii")) as compile, \
              patch.object(gate, "run_stages") as stages, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "consensus stalled"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         network.assert_called_once_with(Path("/frozen"), Path("/warm"),
             env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,), harness="/warm/network")
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli", "core", "daemon") + names[1:-2]])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli", "core", "torii-unit", "daemon") + names[1:-2]])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.STAGES, gate.CORE_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, tuple(stage for stage in gate.CORE_STAGES if stage not in gate.CORE_STARTUP_STAGES), gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, tuple(stage for stage in gate.DAEMON_STAGES if stage not in gate.DAEMON_STARTUP_STAGES)])
+                         [gate.STAGES, gate.CORE_STARTUP_STAGES, gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, tuple(stage for stage in gate.CORE_STAGES if stage not in gate.CORE_STARTUP_STAGES), gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, tuple(stage for stage in gate.TORII_UNIT_STAGES if stage not in gate.TORII_STARTUP_STAGES), gate.TORII_STAGES, tuple(stage for stage in gate.DAEMON_STAGES if stage not in gate.DAEMON_STARTUP_STAGES)])
 
     def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
-        for failed, expected in (("crypto", ["cli", "core", "daemon", "proof", "proof-flows", "crypto"]),
-                                 ("p2p", ["cli", "core", "daemon", "proof", "proof-flows", "crypto", "p2p"]),
-                                 ("fixture", ["cli", "core", "daemon", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
+        for failed, expected in (("crypto", ["cli", "core", "torii-unit", "daemon", "proof", "proof-flows", "crypto"]),
+                                 ("p2p", ["cli", "core", "torii-unit", "daemon", "proof", "proof-flows", "crypto", "p2p"]),
+                                 ("fixture", ["cli", "core", "torii-unit", "daemon", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
             outcomes = [None] * (len(expected) - 1) + [gate.CheckError(failed + " failed")]
             output = io.StringIO()
             with self.subTest(failed=failed), \
@@ -362,7 +474,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                  patch.object(gate, "run_stages", side_effect=outcomes) as run, \
                  patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(output):
                 with self.assertRaisesRegex(gate.CheckError, failed + " failed"):
-                    gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                    gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
             self.assertEqual(compile.call_count, 1)
             self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
             self.assertEqual(compile.call_args.args[0], Path("/frozen"))
@@ -388,14 +500,14 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                  patch.object(gate, "run_network_checks") as network, \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(gate.CheckError, failed + " failed"):
-                    gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40)
+                    gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40)
             other.assert_not_called()
             network.assert_not_called()
 
     def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
         with patch.object(gate.subprocess, "check_output") as git, patch.object(gate, "compile_harness") as compile:
             with self.assertRaisesRegex(gate.CheckError, "isolated Cargo environment"):
-                gate.run_checks(Path("/mutable"), environment={})
+                gate.run_checks(Path("/mutable"), qualification_scope="full", environment={})
         git.assert_not_called()
         compile.assert_not_called()
 
@@ -498,12 +610,12 @@ class EarlyConfigurationGateTests(unittest.TestCase):
              patch.object(gate.subprocess, "check_output", side_effect=AssertionError("captured source requires no Git lookup")), \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "stop after ordering check"):
-                gate.run_checks(Path("/frozen"), environment=self.env,
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=self.env,
                                 source_commit="a" * 40, lock_fds=(77,))
         separate.assert_not_called()
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(events, ["fsm", "source", "library-build", "config-pass",
-                                  *["/warm/" + name for name in ("cli", "core", "daemon") + libraries[1:-2]]])
+                                  *["/warm/" + name for name in ("cli", "core", "torii-unit", "daemon") + libraries[1:-2]]])
 
     def test_batch_or_configuration_failure_stops_all_later_execution_and_passes(self):
         for phase in ("build", "schema"):
@@ -520,7 +632,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                  contextlib.redirect_stdout(output):
                 checkpoint = MagicMock()
                 with self.assertRaisesRegex(gate.CheckError, "config " + phase + " failed"):
-                    gate.run_checks(Path("/frozen"), environment=self.env,
+                    gate.run_checks(Path("/frozen"), qualification_scope="full", environment=self.env,
                                     source_commit="a" * 40, lock_fds=(77, 88),
                                     update_independent_checks=checkpoint)
             compile.assert_not_called()
@@ -545,7 +657,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                 copies.observations = [{"selection": name, "sha256": str(index) * 64, "size": 20,
                                         "cargo_artifact": {"name": name}}
                                        for index, name in enumerate(copies, 1)]
-                evidence = gate.independent_check_evidence(copies, (("cli", gate.STAGES),))
+                evidence = gate.independent_check_evidence(copies, (("cli", gate.STAGES),), qualification_scope="full")
                 for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, name))
                 batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
@@ -561,12 +673,12 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                                  update_independent_checks=checkpoint)
                 if config_fails:
                     with self.assertRaisesRegex(gate.SelectedRegressionFailures, "config failed"):
-                        gate.run_checks(Path("/frozen"), **arguments)
+                        gate.run_checks(Path("/frozen"), qualification_scope="full", **arguments)
                     network.assert_not_called()
                     self.assertNotIn("reused exact", output.getvalue())
                     self.assertNotIn("[taira-check] PASS:", output.getvalue())
                 else:
-                    gate.run_checks(Path("/frozen"), **arguments)
+                    gate.run_checks(Path("/frozen"), qualification_scope="full", **arguments)
                     network.assert_called_once()
                     self.assertIn("reused exact", output.getvalue())
                     self.assertEqual([call.args[0] for call in released.call_args_list], ["config", "cli", "network"])
@@ -575,7 +687,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                 self.assertEqual(batch.call_args.kwargs["harnesses"], ("config", "network", "cli"))
                 checkpoint.assert_not_called()
                 separate.assert_not_called()
-        self.assertEqual(gate.selected_regression_count(), EXPECTED_REGRESSION_COUNT)
+        self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
 
 
 class NetworkFixtureCapacityTests(unittest.TestCase):
@@ -600,7 +712,7 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
              patch.object(gate, "compile_harness") as compile, \
              patch.object(gate, "run_pure_fsm_checks") as fsm, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40)
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40)
         compile.assert_not_called()
         fsm.assert_not_called()
 
@@ -724,7 +836,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
              patch.object(gate, "run_stages") as run, patch.object(gate, "run_network_checks") as network, \
              patch.object(gate, "compile_harness") as other, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "batch failed"):
-                gate.run_checks(Path("/frozen"), environment=self.env, source_commit="a" * 40)
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=self.env, source_commit="a" * 40)
         run.assert_not_called()
         network.assert_not_called()
         other.assert_not_called()
@@ -1061,7 +1173,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                     stack.enter_context(patch.object(gate, "run_stages", side_effect=failed_stage))
                     stack.enter_context(contextlib.redirect_stderr(errors))
                     with self.assertRaisesRegex(gate.CheckError, "early CLI fixture failed"):
-                        gate.run_checks(self.source, environment=self.env | {"CARGO_HOME": "/isolated"},
+                        gate.run_checks(self.source, qualification_scope="full", environment=self.env | {"CARGO_HOME": "/isolated"},
                                         source_commit="a" * 40)
                 if replaced:
                     self.assertEqual(copied.read_bytes(), b"foreign replacement")
@@ -1223,7 +1335,7 @@ class PureFsmGateTests(unittest.TestCase):
              patch.object(gate, "run_network_checks") as network, \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as error:
             with self.assertRaisesRegex(gate.CheckError, "source-asset grammar and inventory audit failed"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.kwargs["pass_fds"], (77,))
         self.assertEqual(run.call_args.kwargs["timeout"], 120)
@@ -1232,7 +1344,7 @@ class PureFsmGateTests(unittest.TestCase):
         config.assert_not_called()
         libraries.assert_not_called()
         network.assert_not_called()
-        self.assertEqual(gate.selected_regression_count(), EXPECTED_REGRESSION_COUNT)
+        self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
 
     def test_lifecycle_failure_stops_before_any_cargo_or_network_work(self):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
@@ -1243,7 +1355,7 @@ class PureFsmGateTests(unittest.TestCase):
              patch.object(gate, "run_network_checks") as network, \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "source contract failed"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         fsm.assert_called_once()
         source.assert_called_once_with(Path("/frozen"),
             env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,))
@@ -1277,7 +1389,7 @@ class PureFsmGateTests(unittest.TestCase):
              patch.object(gate, "run_network_checks") as network, patch.object(gate, "compile_harness") as compile, \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "FSM failed"):
-                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         fsm.assert_called_once()
         self.assertEqual(fsm.call_args.args[2], (77,))
         network.assert_not_called(); compile.assert_not_called()
