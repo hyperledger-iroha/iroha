@@ -3301,7 +3301,16 @@ pub enum PendingQueuePlanAdmissionDisposition {
     ///
     /// Callers must retain the bounded durable certificate and reclassify it after State catch-up
     /// or carrier advancement. This disposition never authorizes inclusion in an earlier carrier.
-    Future,
+    Future {
+        /// Authority height carried by the authenticated certificate.
+        authority_height: u64,
+        /// Proposal height carried by the authenticated certificate.
+        proposal_height: u64,
+        /// Committed height of the same coherent State view used for classification.
+        state_height: u64,
+        /// Caller-supplied carrier height used for this classification.
+        carrier_height: u64,
+    },
     /// The requested carrier is already committed in this coherent State view.
     ///
     /// The caller must advance its carrier and reclassify; an obsolete consensus worker
@@ -35737,7 +35746,20 @@ impl State {
                             &admission.certificate.binding.admission_context,
                         ) {
                             Ok(crate::queue::QueuePlanAdmissionContextDisposition::Future) => {
-                                PendingQueuePlanAdmissionDisposition::Future
+                                PendingQueuePlanAdmissionDisposition::Future {
+                                    authority_height: admission
+                                        .certificate
+                                        .binding
+                                        .admission_context
+                                        .authority_height,
+                                    proposal_height: admission
+                                        .certificate
+                                        .binding
+                                        .admission_context
+                                        .proposal_height,
+                                    state_height: committed_height,
+                                    carrier_height,
+                                }
                             }
                             Ok(_) | Err(_) => PendingQueuePlanAdmissionDisposition::Stale,
                         }
@@ -35777,7 +35799,20 @@ impl State {
                                 .proposal_height
                                 > carrier_height
                             {
-                                PendingQueuePlanAdmissionDisposition::Future
+                                PendingQueuePlanAdmissionDisposition::Future {
+                                    authority_height: admission
+                                        .certificate
+                                        .binding
+                                        .admission_context
+                                        .authority_height,
+                                    proposal_height: admission
+                                        .certificate
+                                        .binding
+                                        .admission_context
+                                        .proposal_height,
+                                    state_height: committed_height,
+                                    carrier_height,
+                                }
                             } else {
                                 PendingQueuePlanAdmissionDisposition::EligibleAbsent
                             }
@@ -35892,7 +35927,7 @@ impl State {
                 }
                 PendingQueuePlanAdmissionDisposition::ExactPending
                 | PendingQueuePlanAdmissionDisposition::EligibleAbsent
-                | PendingQueuePlanAdmissionDisposition::Future
+                | PendingQueuePlanAdmissionDisposition::Future { .. }
                 | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
             }
 

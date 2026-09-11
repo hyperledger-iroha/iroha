@@ -3338,7 +3338,12 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
             .classify_pending_queue_plan_admission(&certificate, future_proposal_height)
             .expect("future authenticated certificate is retained, not rejected")
             .1,
-        PendingQueuePlanAdmissionDisposition::Future
+        PendingQueuePlanAdmissionDisposition::Future {
+            authority_height: future_authority_height,
+            proposal_height: future_proposal_height,
+            state_height: parent.header().height().get(),
+            carrier_height: future_proposal_height,
+        }
     );
     state
         .kura

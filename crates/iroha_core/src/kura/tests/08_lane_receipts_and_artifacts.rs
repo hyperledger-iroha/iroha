@@ -65,7 +65,7 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
 #[test]
 fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismatched_bytes() {
     let (
-        (temp_dir, _config, _lane_config),
+        (_temp_dir, _config, _lane_config),
         (lane_id, lane_entry, lane_block_height),
         (block, _ownership, proposal),
         kura,
@@ -77,7 +77,7 @@ fn terminal_receipt_pair_revalidation_fails_closed_on_missing_corrupt_and_mismat
         .read_lane_block_application_receipt(lane_id, lane_block_height)
         .expect("read exact application receipt");
     let (data_path, index_path) =
-        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, temp_dir.path());
+        Kura::lane_block_application_receipt_paths_for_entry(&lane_entry, &kura.store_root());
     let original_data = fs::read(&data_path).expect("read receipt data bytes");
     let original_index = fs::read(&index_path).expect("read receipt index bytes");
     assert!(original_data.len() > 1);

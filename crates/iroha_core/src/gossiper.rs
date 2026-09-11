@@ -144,7 +144,7 @@ fn validate_queue_plan_gossip_certificate(
         PendingQueuePlanAdmissionDisposition::Applied => {
             QueuePlanGossipCertificateDisposition::Applied
         }
-        PendingQueuePlanAdmissionDisposition::Future
+        PendingQueuePlanAdmissionDisposition::Future { .. }
         | PendingQueuePlanAdmissionDisposition::DeferredCarrier
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
         | PendingQueuePlanAdmissionDisposition::Stale => {
@@ -2031,7 +2031,7 @@ impl TransactionGossiper {
                     }
                     Ok(validated) => Some(validated),
                     Err(error) => {
-                        iroha_logger::warn!(%entrypoint_hash, %error, "dropping unauthenticated QueuePlan transaction gossip");
+                        iroha_logger::warn!(%entrypoint_hash, %error, "rejecting QueuePlan transaction gossip");
                         continue;
                     }
                 },
@@ -2602,7 +2602,7 @@ impl TransactionGossiper {
                         iroha_logger::warn!(
                             %entrypoint_hash,
                             %error,
-                            "dropping unauthenticated QueuePlan transaction gossip"
+                            "rejecting QueuePlan transaction gossip"
                         );
                         continue;
                     }
