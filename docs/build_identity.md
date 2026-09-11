@@ -67,6 +67,12 @@ working-space reserve. Cloning avoids allocating a second full set of native
 test binaries while preserving the same source and destination checks. Warm
 Cargo targets and completed attempt receipts remain retained.
 
+Basic and full Taira checks compile the same native graph and consensus harness.
+Basic runs the universal default-route transaction sequence; full also runs the
+separate-dataspace sequence. Both retain four validators, the three-dataspace
+fixture, mandatory NPoS/DA, actual local/global Applied state and a signed-snapshot
+restart. Scope selection changes executed tests, not daemon features or artifacts.
+
 For PK2 release verification, the authenticated source/artifact corridor must
 supply its already validated source commit to both build-time variables. Run in
 that corridor's captured source checkout through its controlled Cargo invocation,

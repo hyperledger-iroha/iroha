@@ -691,7 +691,10 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
 )),)
 
-NETWORK_STAGES = (("four-validator multi-route commit and signed snapshot restart", (
+BASIC_NETWORK_STAGES = (("four-validator universal-route commit and signed snapshot restart", (
+    "four_peer_universal_public_transaction_sequence_reaches_applied",
+)),)
+NETWORK_STAGES = BASIC_NETWORK_STAGES + (("four-validator multi-route commit and signed snapshot restart", (
     "four_peer_multiroute_public_transaction_sequence_reaches_applied",
 )),)
 
@@ -813,11 +816,12 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "daemon": DAEMON_STAGES, "network": NETWORK_STAGES, "cli": STAGES,
     }
     if qualification_scope == "basic":
-        # These affected startup regressions and the unchanged real network
+        # These affected startup regressions and the real universal-route network
         # exercise admission/restart. Advanced storage/fault matrices remain
         # selectable with full. Crypto, proof bounds and custody stay mandatory.
         selected["core"] = CORE_ADMISSION_STARTUP_STAGES
         selected["proof-flows"] = ()
+        selected["network"] = BASIC_NETWORK_STAGES
     return selected
 
 
@@ -1314,7 +1318,7 @@ def run_config_checks(harnesses: NativeArtifactCopies, fixture_root: Path, env: 
 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
-                       *, harness: str) -> None:
+                       *, harness: str, stages: tuple) -> None:
     binaries = compile_network_binaries(root, env, lock_fds)
     require_network_fixture_capacity(fixture_root)
     # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
@@ -1331,7 +1335,7 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
         "IROHA_TEST_SERIALIZE_NETWORKS": "1",
     }
     print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
-    run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
+    run_stages(harness, fixture_root, network_env, stages, lock_fds)
 
 
 def require_network_fixture_capacity(directory: Path) -> None:
@@ -1473,7 +1477,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     print(f"[taira-check] qualification scope {qualification_scope}; "
           f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
-    if NETWORK_STAGES:
+    if scoped_stages["network"]:
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
@@ -1503,7 +1507,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     early_stages = tuple((name, scoped_stages[name]) for name, _ in full_early
                          if scoped_stages[name])
     selections = (("config",) if CONFIG_STAGES else ()) + tuple(name for name, _ in full_early)
-    if NETWORK_STAGES:
+    if full_stages["network"]:
         selections += ("network",)
     if STAGES:
         selections += ("cli",)
@@ -1569,8 +1573,9 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 raise SelectedRegressionFailures(failures)
             if not reuse_independent and update_independent_checks is not None:
                 update_independent_checks(evidence)
-            if NETWORK_STAGES:
-                run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
+            if scoped_stages["network"]:
+                run_network_checks(root, fixture_root, env, lock_fds,
+                                   harness=harnesses["network"], stages=scoped_stages["network"])
                 harnesses.release("network")
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:

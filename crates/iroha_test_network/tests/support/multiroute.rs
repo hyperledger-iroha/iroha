@@ -37,11 +37,15 @@ fn route_lane_validator_account(index: usize) -> AccountId {
     AccountId::new(key_pair.public_key().clone())
 }
 fn route_bootstrap_gas_account_id() -> AccountId {
-    let key_pair = checked_localnet_smoke_keypair(
+    let key_pair = universal_route_key_pair();
+    AccountId::new(key_pair.public_key().clone())
+}
+// This funded genesis account has no account-route override and uses lane 0.
+pub(super) fn universal_route_key_pair() -> KeyPair {
+    checked_localnet_smoke_keypair(
         b"integration_tests::sumeragi_localnet_smoke::route-bootstrap-gas".to_vec(),
         Algorithm::Ed25519,
-    );
-    AccountId::new(key_pair.public_key().clone())
+    )
 }
 fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")

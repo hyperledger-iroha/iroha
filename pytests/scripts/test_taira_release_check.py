@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 512
+EXPECTED_REGRESSION_COUNT = 513
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertEqual(set(basic), set(full))
         for name in basic:
             with self.subTest(selection=name):
-                if name not in {"core", "proof-flows"}:
+                if name not in {"core", "proof-flows", "network"}:
                     self.assertEqual(basic[name], full[name])
                 names = [test for _, tests in basic[name] for test in tests]
                 self.assertEqual(len(names), len(set(names)))
@@ -87,7 +87,12 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         )
         self.assertEqual(basic["proof-flows"], ())
         self.assertTrue(full["proof-flows"])
-        self.assertEqual(basic["network"], gate.NETWORK_STAGES)
+        self.assertEqual(basic["network"], gate.BASIC_NETWORK_STAGES)
+        self.assertEqual([test for _, tests in basic["network"] for test in tests],
+                         ["four_peer_universal_public_transaction_sequence_reaches_applied"])
+        self.assertEqual([test for _, tests in full["network"] for test in tests],
+                         ["four_peer_universal_public_transaction_sequence_reaches_applied",
+                          "four_peer_multiroute_public_transaction_sequence_reaches_applied"])
         for stage in gate.TORII_STARTUP_STAGES:
             self.assertIn(stage, basic["torii-unit"])
         for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
@@ -125,7 +130,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  patch.object(gate, "run_stages", side_effect=lambda harness, root, env, stages, locks:
                               executed.extend((harness, test) for _, tests in stages for test in tests)), \
                  patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
-                              executed.extend(("network", test) for _, tests in gate.NETWORK_STAGES for test in tests)), \
+                              executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests)), \
                  contextlib.redirect_stdout(output):
                 gate.run_checks(Path("/frozen"), qualification_scope=scope,
                                 environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
@@ -474,7 +479,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.CheckError, "consensus stalled"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         network.assert_called_once_with(Path("/frozen"), Path("/warm"),
-            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,), harness="/warm/network")
+            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,),
+            harness="/warm/network", stages=gate.NETWORK_STAGES)
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
@@ -562,14 +568,15 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
              patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
-            gate.run_network_checks(Path("/frozen"), Path("/warm"), env, (77, 88), harness="/warm/network")
+            gate.run_network_checks(Path("/frozen"), Path("/warm"), env, (77, 88),
+                                    harness="/warm/network", stages=gate.BASIC_NETWORK_STAGES)
         selected = run.call_args.args[2]
         for key in ("IROHA_TEST_SKIP_BUILD", "IROHA_FAIL_ON_SANDBOX_SKIP", "IROHA_TEST_REQUIRE_NETWORK", "IROHA_TEST_SERIALIZE_NETWORKS", "IROHA_TEST_NETWORK_KEEP_DIRS"):
             self.assertEqual(selected[key], "1")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHA"], "/warm/client")
         self.assertEqual(selected["TEST_NETWORK_TMP_DIR"], "/warm/private-fixture")
-        self.assertEqual(run.call_args.args[3:], (gate.NETWORK_STAGES, (77, 88)))
+        self.assertEqual(run.call_args.args[3:], (gate.BASIC_NETWORK_STAGES, (77, 88)))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
 
 
@@ -744,7 +751,8 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
              patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
              patch.object(gate, "run_stages") as run, patch.object(gate.tempfile, "mkdtemp") as fixture:
             with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
-                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (), harness="/harness")
+                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (),
+                                        harness="/harness", stages=gate.NETWORK_STAGES)
         run.assert_not_called()
         fixture.assert_not_called()
 

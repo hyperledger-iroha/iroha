@@ -5,6 +5,7 @@ use futures::future::try_join_all;
 use iroha::client::{AccountTransactionDraft, FeeQuoteRequest};
 use iroha_data_model::{
     Level,
+    account::AccountId,
     isi::{InstructionBox, Log},
     metadata::Metadata,
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
@@ -223,6 +224,15 @@ async fn restart_validator_from_applied_snapshot(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> Result<()> {
+    public_transaction_sequence_reaches_applied(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_peer_universal_public_transaction_sequence_reaches_applied() -> Result<()> {
+    public_transaction_sequence_reaches_applied(true).await
+}
+
+async fn public_transaction_sequence_reaches_applied(universal_route: bool) -> Result<()> {
     init_instruction_registry();
     for variable in ["TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA"] {
         let binary = std::env::var_os(variable)
@@ -235,7 +245,7 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
     let startup_deadline = Instant::now() + Duration::from_secs(180);
     let network = timeout_at(
         startup_deadline,
-        tokio::task::spawn_blocking(|| {
+        tokio::task::spawn_blocking(move || {
             multiroute::network_builder()
                 .with_config_layer(|layer| {
                     layer
@@ -251,9 +261,11 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
                         .write(["logger", "format"], "json")
                         .write(["logger", "level"], "INFO");
                 })
-                .with_base_seed_if_unset(stringify!(
-                    four_peer_multiroute_public_transaction_sequence_reaches_applied
-                ))
+                .with_base_seed_if_unset(if universal_route {
+                    "four_peer_universal_public_transaction_sequence_reaches_applied"
+                } else {
+                    "four_peer_multiroute_public_transaction_sequence_reaches_applied"
+                })
                 .build()
         }),
     )
@@ -279,7 +291,20 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
         }))).await.wrap_err("four-peer startup observation exceeded its deadline")??;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
         verify_basic_public_doctor(&network.peers()[0]).await?;
-        let mut builder = network.client().client().to_builder();
+        // Both scopes retain the same four-validator, three-dataspace topology.
+        // Basic BPNG traffic uses the funded universal default-route account;
+        // the full scope also exercises ALICE's explicit lane-1/dataspace-1 route.
+        let fixture_client = if universal_route {
+            let key_pair = multiroute::universal_route_key_pair();
+            let account_id = AccountId::new(key_pair.public_key().clone());
+            ensure!(account_id != *iroha_test_samples::ALICE_ID
+                && account_id != *iroha_test_samples::BOB_ID,
+                "universal fixture account must not match an explicit account route");
+            network.peers()[0].client_for(&account_id, key_pair.private_key().clone())
+        } else {
+            network.client()
+        };
+        let mut builder = fixture_client.client().to_builder();
         builder.transaction_status_timeout = Duration::from_secs(75);
         // Public QueuePlan certification uses the SDK's routed request budget.
         builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;

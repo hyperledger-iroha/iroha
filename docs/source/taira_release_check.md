@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **301 native regressions on macOS**: startup
+`--native-check-scope basic` runs **330 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **483-case** native census,
+Use `--native-check-scope full` to execute the full **513-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -190,8 +190,12 @@ shorter configured request timeouts, malformed responses and other lookup
 failures remain errors. Confirmation never resubmits the transaction.
 
 The next gate launches four validators from the freshly emitted native
-`iroha3d` binary using the same three-route fixture as the consensus integration
-suite. It submits three consecutive signature-bound `QueuePlanSynced` public transactions, as
+`iroha3d` binary using the same three-dataspace topology and mandatory NPoS/DA
+policies in both scopes. Basic uses the already funded genesis account on the
+universal default route, matching basic BPNG traffic. Full additionally runs the
+original ALICE account route through lane 1/dataspace 1. Neither scope changes
+the network topology, fee policy or confirmation deadlines. Each test submits
+three consecutive signature-bound `QueuePlanSynced` public transactions, as
 required by public Torii admission, and requires state-resolved Applied
 in both local and global status on every validator at each transaction's committed height.
 Between the second and third transactions it waits for a signed snapshot, stops
