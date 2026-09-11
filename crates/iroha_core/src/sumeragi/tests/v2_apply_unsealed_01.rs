@@ -1220,6 +1220,30 @@ fn install_replayed_carrier_lifecycle_for_test(
     )
 }
 
+/// Restore a crashed fixture's durable Queue ownership behind the startup gate.
+fn replay_fixture_queue_for_startup(state: &State, journal_dir: &tempfile::TempDir) -> Arc<Queue> {
+    let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+    let queue = fixture_queue(state, events_sender);
+    queue
+        .install_lane_reservation_journal(
+            journal_dir.path().join("lane-reservations.norito"),
+            1024 * 1024,
+        )
+        .expect("replay crashed fixture reservation journal");
+    queue
+        .install_plan_journal(
+            journal_dir.path().join("queue-plans.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("reopen crashed fixture QueuePlan journal");
+    queue
+        .replay_plan_journal(state)
+        .expect("restore exact crashed fixture QueuePlan payloads");
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
+    queue
+}
+
 v2_apply_test!(
     startup_reconciliation_completes_before_retirement_and_replays_terminal_journal,
     {
@@ -1301,6 +1325,8 @@ v2_apply_test!(
             "both crash owners must belong to original incarnation A"
         );
         drop(stale_first_queue);
+        drop(first_queue);
+        let first_queue = replay_fixture_queue_for_startup(fixture.state.as_ref(), &journal_dir);
         let (parent, entry) =
             merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
         let group = install_replayed_carrier_lifecycle_for_test(&fixture, &entry);
@@ -1825,6 +1851,8 @@ v2_apply_test!(
             Hash::new(b"startup malformed suffix owner"),
             Hash::new(b"startup malformed suffix proposal"),
         );
+        drop(queue);
+        let queue = replay_fixture_queue_for_startup(fixture.state.as_ref(), &journal_dir);
         let (parent, first_entry) =
             merge_entry_with_reservation(&fixture.context, first_entrypoint, first);
         let first_carrier = body_with_exact_merge_execution_header(&first_entry);
@@ -1853,11 +1881,11 @@ v2_apply_test!(
             &verified_active_context,
         )
         .expect_err("missing later merge binding must fail before consuming the valid prefix");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::MissingCommittedBinding { entrypoint_hash }
-                if entrypoint_hash == second.entrypoint_hash
-        ));
+        assert!(
+            matches!(error, V2ReservationLifecycleError::MissingCommittedBinding { entrypoint_hash }
+                if entrypoint_hash == second.entrypoint_hash),
+            "the malformed suffix must fail its exact committed binding: {error:?}"
+        );
         assert_eq!(
             queue
                 .lane_reservation_reconciliation_snapshot()
@@ -2175,6 +2203,8 @@ v2_apply_test!(
             queue.lane_reservation_commit_barriers(),
             vec![first_keys[0]]
         );
+        drop(queue);
+        let queue = replay_fixture_queue_for_startup(fixture.state.as_ref(), &journal_dir);
         let (parent, entry) = merge_entry_with_reservations(&fixture.context, first_transactions);
         let carrier = body_with_exact_merge_execution_header(&entry);
         fixture
@@ -2206,11 +2236,11 @@ v2_apply_test!(
             &verified_active_context,
         )
         .expect_err("malformed later group must stop before consuming mixed first group");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::MissingCommittedBinding { entrypoint_hash }
-                if entrypoint_hash == later_key.entrypoint_hash
-        ));
+        assert!(
+            matches!(error, V2ReservationLifecycleError::MissingCommittedBinding { entrypoint_hash }
+                if entrypoint_hash == later_key.entrypoint_hash),
+            "the malformed later group must fail its exact committed binding: {error:?}"
+        );
         assert_eq!(
             queue
                 .lane_reservation_reconciliation_snapshot()
@@ -2584,6 +2614,8 @@ v2_apply_test!(
             .expect("install partial-state reservation journal");
         let (payload, _) = reserve_autonomous_crash_batch(&fixture, &queue, &producer);
         let keys = payload.reservation_keys.clone();
+        drop(queue);
+        let queue = replay_fixture_queue_for_startup(fixture.state.as_ref(), &journal_dir);
         fixture.state.record_committed_entrypoints_for_tests(
             [keys[0].entrypoint_hash],
             NonZeroUsize::new(1).expect("partial committed height"),
@@ -2598,13 +2630,13 @@ v2_apply_test!(
             &verified_context_for_fixture(&fixture, &fixture.context),
         )
         .expect_err("partial atomic reservation group must fail closed");
-        assert!(matches!(
-            error,
-            V2ReservationLifecycleError::PartialCommittedGroup {
+        assert!(
+            matches!(error, V2ReservationLifecycleError::PartialCommittedGroup {
                 lane_id: LaneId::SINGLE,
                 proposal_height: 1,
-            }
-        ));
+            }),
+            "partial State membership must fail whole-group preflight: {error:?}"
+        );
         assert_eq!(
             queue
                 .lane_reservation_reconciliation_snapshot()
@@ -2939,7 +2971,7 @@ v2_apply_test!(
                 .expect("capture empty startup snapshot")
                 .is_empty(),
         );
-        assert!(!queue.lane_reservation_startup_reconciliation_pending());
+        assert!(queue.lane_reservation_startup_reconciliation_pending());
         let planning = plan_lane_reservation_ownership(
             fixture.state.as_ref(),
             queue.as_ref(),

@@ -5,6 +5,116 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## Follow-up from the 57-failure Core run
+
+The next reported full Core run passed 14,770 tests and failed 57. This repair
+addresses the current startup, execution and certificate contracts:
+
+- Empty journal replay keeps admission closed until exact State/Kura
+  reconciliation completes. The runner's lane-evidence repair fence now accepts
+  that closed empty replay and rejects an already-open gate. Fresh workload
+  fixtures complete their empty journal receipts before admission; recovery
+  fixtures retain their replay quarantine and exact FIFO assertions.
+- Predecessor fixtures stage their ordinary execution frontier before applying
+  verified finality. The Native AMX receipt binds the actual first coordinator
+  slot and its exact ownership proposal. Finality alone still cannot create an
+  unexecuted frontier.
+- Lane-history retention authenticates exact canonical carrier coordinates
+  against signed finality and the complete merge entry. It can therefore
+  preflight a missing reverse-index repair without requiring that index first.
+  Conflicting retained records and missing or malformed finality still reject
+  the frontier, and authentication performs no repair writes. Regression tests
+  cover both an evicted carrier body and corrupt retained inline bytes.
+- A late validation failure protected by the timeout certificate's Prepare QC
+  retains the exact certified-body report. Applied ordinary lane completion
+  checks historical predecessor evidence and the current applied frontier.
+- Relay status publication stays under the lane lifecycle fence so retirement
+  cannot prune the cache before a delayed publisher reintroduces the envelope.
+  The identity-drift test observes the process-global cache in an isolated
+  subprocess, preserving its state and status assertions under parallel tests.
+
+The reviewed harness rebuilt without warnings in 6 minutes 52 seconds using
+`cargo test --locked -p iroha_core --lib --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run`.
+Its focused selection passed 1,477 tests in 712.26 seconds, including every one
+of the 57 reported failures, all 55 consensus source contracts, the relay
+publication race regression and both new retention regressions. The remaining
+Kura modules passed 261 tests in 127.59 seconds. These disjoint selections cover
+1,738 passing tests, including all 1,208 Kura tests, with no failures or ignored
+tests. The 24 changed Core inputs and copied executable remained byte-identical
+throughout this validation.
+
+An earlier diagnostic build completed a broader block, Queue and consensus
+selection with 1,571 passes and ten failures. All ten were among the reported
+57 and pass on the reviewed build; that earlier run found no additional failing
+cases. Its high-volume Queue barrier case also passed.
+
+Workspace formatting, diff checks, codec-retirement checks, six source-asset
+tests and historical-archive verification pass. The focused Python mutation
+test rejects both empty-replay quarantine bypasses. The optional positive
+autonomous-terminal source-contract check remains blocked by an existing Kura
+include inventory omission (`tests/14_pipeline_and_lane_frame_owners.rs`);
+the starting revision and repaired source have the same 105 include paths.
+Full Core/workspace execution and four-validator qualification were not rerun.
+
+## Follow-up from the 23-failure Core run
+
+The subsequent full Core run reported 14,764 passes and 23 failures. Its retained
+executable predates the source correction that binds each validation fixture's
+service peer and private signer to the same selected validator. That correction
+keeps the signer identity assertion intact and covers ten reported failures.
+
+The remaining repairs address these causes:
+
+- FASTPQ lane startup changes the process-wide digest acceleration state. Every
+  lane test now holds the shared acceleration guard through worker completion,
+  matching the digest tests' exclusion and restoring state on exit. The stale
+  pending-input assertions still require CPU fallback without a GPU fault.
+- Kura's intentional prune panics poison the process-wide consensus transition
+  gate. Clearing poison after catching a panic leaves a race with unrelated
+  tests. All five crash fixtures now run in separate exact-test subprocesses;
+  recovery assertions and production fail-stop behavior remain intact. The
+  duplicate wrapper around the same crash matrix is removed.
+- DER and RFC 5280 descriptor pins still hashed the previous geometry after the
+  descriptor strings were updated. Their SHA-256 pins now bind the current
+  masking, composition and compact-CA geometry. Terminal and capacity assertions
+  remain unchanged; this does not activate ZK-X509.
+- A delayed output belonging to a protected Ready Apply retains Completion
+  priority even when Apply dispatch is blocked. Draining Runtime still requires
+  the exact predecessor proof. The outer ingress regression also checks that
+  Producer work cannot take that priority.
+- Lifecycle recovery tests distinguish a missing inherited Validate owner from
+  a fresh standalone Prepare owner, and require an applied successor to consume
+  its authenticated Validate retry seal. They no longer demand a NoSuccessor
+  tombstone when a real Apply successor exists.
+
+The fresh harness built with the shared feature command below. An exact-name
+rerun of all 23 reported failures passed with 16 test workers in 93.49 seconds.
+The broader selection passed 1,755 tests with no failures in 253.87 seconds;
+one existing retained-ledger diagnostic requires an external incident file and
+remains ignored. The two runs cover 1,757 distinct passing tests. The changed
+Rust sources and copied executable remained unchanged throughout validation.
+
+Using the copied harness as `CORE_TEST_BIN`, the broader command was:
+
+```sh
+RAYON_NUM_THREADS=2 "$CORE_TEST_BIN" \
+  fastpq:: kura:: \
+  sumeragi::v2_effects::tests::certified_body_fence_supersession:: \
+  sumeragi::v2_lifecycle_coordinator::ledger::tests:: \
+  sumeragi::v2_lifecycle_coordinator::work_registry::tests:: \
+  sumeragi::v2_runner:: --test-threads=16
+```
+
+This includes all 184 FASTPQ and 1,197 Kura tests. Workspace formatting,
+diff checks, codec-retirement guards and historical-archive verification pass.
+Full workspace execution and hardware qualification were not rerun.
+
+The optional `python3 scripts/formal/check_sumeragi_v2_multilane_models.py` check
+still reports 233 existing source-binding errors in Kura, QueuePlan, lane
+planning and two test anchors. The affected items were compared with the
+starting revision; none of these errors was introduced by this patch. The
+changed runner binding is current. This is not a full formal qualification.
+
 ## Changes
 
 - Fixtures use registered universal authorities, exact four-validator

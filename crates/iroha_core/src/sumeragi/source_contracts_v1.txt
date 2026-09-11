@@ -4955,6 +4955,7 @@ region|direct_transition|refinement|at|== refinement_tag_value!(IN_FLIGHT_FIRST_
 region|released_transition|refinement|at|== refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_ADVANCE_RELEASED)|before|IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE
 region|formal_direct|formal_first_release|at|ReleaseReservationDirect ==|before|After `Recover` clears one local crash marker
 region|formal_released|formal_first_release|at|AdvanceReleasedPrefix ==|before|CompleteReservationRelease ==
+region|startup_gate|lifecycle_recovery|at|pub(crate) fn reconcile_autonomous_lifecycle_startup(|before|let planner_covered_groups = planner_evidence
 region|startup|lifecycle_recovery|at|let mut recovered_attempts = 0_usize;|before|if !queue\n        .revalidate_lane_reservation_startup_reconciliation_receipt
 region|replay_enum|v2_core|at|pub(crate) enum ProductionInFlightFirstReleaseReplayStepV1 {|before|fn append_first_release_identity_v1(
 region|replay_reducer|v2_core|at|pub(crate) fn check_production_in_flight_first_release_replay_step_v1(|before|pub(crate) fn check_production_in_flight_first_release_transition(
@@ -5026,15 +5027,18 @@ required|formal_direct|decision.releaseOwner \\in (Validators \\ {Producer})|TLA
 required|formal_direct|release.pendingPrefix = queue.selectedCount|TLA direct release omitted the complete pending prefix
 required|formal_released|queue.reservation = "DirectReleased"|TLA Released prefix omitted the FIFO-only replica state
 required|formal_released|release.fifoRestored|TLA Released prefix omitted FIFO restoration
+order|startup_gate|3|let initial_queue_quarantine = queue.lane_reservation_startup_reconciliation_pending();|if !initial_queue_quarantine {|bind_lane_reservation_startup_reconciliation_receipt(&snapshot)|startup replica recovery must require quarantine even for empty replay before binding its receipt
+forbidden|startup_gate|!snapshot.is_empty()|startup replica recovery must not bypass quarantine for an empty replay
 required|startup|local_actor != binding.producer_actor_projection()|startup replica seam admitted the producer
 required|startup|read_autonomous_lane_retired_attempt(|startup replica seam stopped requiring a durable retirement
 required|startup|retired_attempt.artifact.executable_payload != *payload|startup replica seam stopped matching the exact payload
 required|startup|retired_attempt.retirement != expected_retirement|startup replica seam stopped matching the derived retirement
-required|startup|if initial_queue_quarantine {|startup replica seam stopped preserving the Queue-quarantine recovery split
 required|startup|recover_autonomous_lane_replica_with_queue_disposition(|startup replica seam stopped using the quarantined replica recovery corridor
-required|startup|retire_autonomous_lane_replica_with_queue_disposition(|startup replica seam stopped using the live replica retirement corridor
+required|startup|&receipt,|startup replica recovery stopped retaining the exact startup receipt
+required|startup|&snapshot,|startup replica recovery stopped retaining the exact replay snapshot
+forbidden|startup|retire_autonomous_lane_replica_with_queue_disposition(|startup replica recovery must not use the live retirement corridor
 required|startup|continue;|startup replica seam fell through into producer recovery
-order|startup|8|local_actor != binding.producer_actor_projection()|read_autonomous_lane_retired_attempt(|retired_attempt.artifact.executable_payload != *payload|retired_attempt.retirement != expected_retirement|if initial_queue_quarantine {|recover_autonomous_lane_replica_with_queue_disposition(|retire_autonomous_lane_replica_with_queue_disposition(|continue;|startup replica recovery lost exact retirement-check, quarantine selection, release, and skip ordering
+order|startup|6|local_actor != binding.producer_actor_projection()|read_autonomous_lane_retired_attempt(|retired_attempt.artifact.executable_payload != *payload|retired_attempt.retirement != expected_retirement|recover_autonomous_lane_replica_with_queue_disposition(|continue;|startup replica recovery lost exact retirement-check, receipt-bound release, and skip ordering
 required|replay_enum|ComposedNext|production replay classification lost the ordinary state-changing class
 required|replay_enum|ReleaseReservationDirectProofStutter|production replay classification lost the resumed replica FIFO-proof stutter
 required|replay_enum|RecoverReservationSnapshotStutter|production replay classification lost snapshot stutter

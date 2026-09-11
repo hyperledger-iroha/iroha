@@ -277,7 +277,7 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
     restarted
         .complete_lane_reservation_startup_reconciliation(receipt)
         .expect("complete retained-claim startup");
-    restarted
+    let retry = restarted
         .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
             tx,
             &state,
@@ -285,6 +285,10 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
             &retained_claim.admission_context,
         )
         .expect("retained durable claim becomes retryable after startup completion");
+    assert_eq!(
+        retry.journal_record_digest,
+        retained_claim.journal_record_digest
+    );
     assert_eq!(
         restarted
             .durable_plan_claims

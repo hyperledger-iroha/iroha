@@ -556,6 +556,7 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     let dir = tempdir().expect("tempdir");
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
+    queue.complete_empty_startup_for_test(&state);
     let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     register_accepted_tx_authority_for_queue_test(

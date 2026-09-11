@@ -197,6 +197,10 @@ fn lane_evidence_repair_fence_accepts_an_empty_quarantined_replay() {
         iroha_config::parameters::actual::Queue::default(),
         events_sender,
     );
+    assert!(
+        LaneApplicationEvidenceRepairQueueFence::capture(&queue).is_err(),
+        "an empty Queue without a startup quarantine is not a checked replay"
+    );
     let journal_dir = tempfile::tempdir().expect("empty runner Queue journal directory");
     queue
         .install_plan_journal(
@@ -224,28 +228,19 @@ fn lane_evidence_repair_fence_accepts_an_empty_quarantined_replay() {
     fence
         .revalidate(&queue)
         .expect("unchanged empty Queue replay remains valid through evidence repair");
-    let state = crate::state::State::new(
+    let state = State::new(
         crate::state::World::default(),
-        crate::kura::Kura::blank_kura_for_testing(),
+        Kura::blank_kura_for_testing(),
         crate::query::store::LiveQueryStore::start_test(),
     );
-    queue
-        .replay_plan_journal(&state)
-        .expect("replay the empty journal before completing startup");
-    let receipt = queue
-        .bind_lane_reservation_startup_reconciliation_receipt(&fence.snapshot)
-        .expect("bind exact empty Queue startup")
-        .expect("empty replay ownership remains unchanged");
-    queue
-        .complete_lane_reservation_startup_reconciliation(receipt)
-        .expect("complete empty Queue startup");
+    queue.complete_empty_startup_for_test(&state);
     assert!(
         fence.revalidate(&queue).is_err(),
-        "a retained repair fence cannot span the opening of ordinary ingress"
+        "publishing the Queue gate invalidates the evidence-repair fence"
     );
     assert!(
         LaneApplicationEvidenceRepairQueueFence::capture(&queue).is_err(),
-        "startup repair cannot begin after ordinary ingress opens"
+        "completed empty startup cannot reacquire startup mutation authority"
     );
 }
 #[test]
@@ -266,7 +261,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(",
         "let initial_queue_quarantine = queue.lane_reservation_startup_reconciliation_pending();",
         "let initial_snapshot = queue",
-        "if !initial_snapshot.is_empty() && !initial_queue_quarantine",
+        "if !initial_queue_quarantine",
         "let active_routes = active_lifecycle_routes(state, context)?",
         "let network_id = context.network_id;",
         "pending_autonomous_lifecycle_terminal_outcome_inventory()",

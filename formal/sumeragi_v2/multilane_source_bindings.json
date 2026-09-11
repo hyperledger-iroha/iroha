@@ -9927,12 +9927,12 @@
             ".settle_pending_lifecycle_output_admissions(lifecycle_owner, services)?",
             "attest_ready_live_decision_apply_runtime_predecessor(",
             "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }",
-            "&& executor.lifecycle_decision_apply_dispatch_available(Some(&attestation))?",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }",
             "(None, true)",
             "executor.lifecycle_decision_apply_runtime_predecessor_drain_available(",
             "(Some(attestation), false)",
             "if executor.has_pending_lifecycle_output_admissions()",
-            "AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted"
+            "AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor"
           ]
         },
         {
@@ -11070,7 +11070,8 @@
           "required_tokens": [
             "let initial_queue_quarantine = queue.lane_reservation_startup_reconciliation_pending();",
             "let initial_snapshot = queue",
-            "non-empty Queue startup snapshot was published before terminal-outcome pre-sweep",
+            "if !initial_queue_quarantine",
+            "Queue startup snapshot was published before terminal-outcome pre-sweep",
             "active_lifecycle_routes(state, context)",
             "pending_autonomous_lifecycle_terminal_outcome_inventory",
             "pending_terminal_recovery_observations(&recovery, network_id, &active_routes)?",
@@ -11140,7 +11141,7 @@
           "required_tokens": [
             "let initial_queue_quarantine",
             "let snapshot = queue",
-            "if !snapshot.is_empty() && !initial_queue_quarantine",
+            "if !initial_queue_quarantine",
             "bind_lane_reservation_startup_reconciliation_receipt(&snapshot)",
             "let mut seen_pending_identities = BTreeSet::new();",
             "for unit in &deferred_terminal_recovery.units",

@@ -24818,6 +24818,81 @@ fn sample_verified_lane_relay_record_for_merge_candidate_test()
 macro_rules! lane_relay_state_test {
     ($name:ident $($body:tt)*) => { state_test! { sync $name $($body)* } };
 }
+lane_relay_state_test! { lane_relay_publication_retains_lifecycle_fence_through_status
+    const CHILD_CASE: &str = "IROHA_CORE_LANE_RELAY_PUBLICATION_ISOLATED_CHILD";
+    if std::env::var_os(CHILD_CASE).is_none() {
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("resolve core test executable"),
+        )
+        .args([
+            "--exact",
+            "state::tests::lane_relay_publication_retains_lifecycle_fence_through_status",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD_CASE, "1")
+        .output()
+        .expect("run isolated relay publication regression");
+        assert!(
+            output.status.success(),
+            "isolated relay publication regression failed: {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let _status_guard = crate::sumeragi::status::lane_relay_test_guard();
+    crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+    let (state, _, validator_keypairs) = lane_relay_manifest_test_state();
+    configure_commit_topology_preserving_world_peers(&state, 1);
+    let envelope = sample_lane_relay_envelope_for_state(
+        &state, 1, LaneId::SINGLE, &validator_keypairs,
+    );
+    state
+        .validate_or_record_lane_relay(&envelope, false)
+        .expect("authenticate the relay before pausing its final publication");
+    std::thread::scope(|scope| {
+        let publication_guard =
+            crate::sumeragi::status::lane_relay_publication_guard_for_tests();
+        let publisher = scope.spawn(|| {
+            state.publish_prevalidated_lane_relay(
+                &envelope, envelope.block_header.height().get(),
+            )
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut inserted = false;
+        while std::time::Instant::now() < deadline {
+            if state.lane_relay_snapshot() == vec![envelope.clone()] {
+                inserted = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        // The publisher has updated State but cannot yet update status. A
+        // lifecycle reset must remain excluded across this publication cut.
+        let held = inserted
+            && state
+                .lane_lifecycle_lock
+                .try_lock_for(Duration::from_secs(1))
+                .is_none();
+        drop(publication_guard);
+        let result = publisher.join().expect("relay publisher completed");
+        assert!(inserted, "publisher must reach the State cache before status");
+        assert!(held, "lifecycle reset must wait for relay status publication");
+        assert_eq!(result.expect("publish both relay caches"), LaneRelayInsert::Inserted);
+    });
+    assert_eq!(
+        crate::sumeragi::status::lane_relay_envelopes_snapshot(),
+        vec![envelope],
+    );
+    {
+        let _lifecycle_guard = state.lane_lifecycle_lock.lock();
+        state.reset_lane_scoped_runtime_state(&BTreeSet::from([LaneId::SINGLE]), true);
+    }
+    assert!(state.lane_relay_snapshot().is_empty());
+    assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
+}
 lane_relay_state_test! { record_lane_relay_persists_and_deduplicates let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state(); configure_commit_topology_preserving_world_peers(&state, 1); let_row! { envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs) }; let_row! { first = state .record_lane_relay(&envelope) .expect("first relay stored") }; assert_eq!(first, LaneRelayInsert::Inserted); let_row! { second = state .record_lane_relay(&envelope) .expect("duplicate relay returns status") }; assert_eq!(second, LaneRelayInsert::Duplicate); let snapshot = state.lane_relay_snapshot(); assert_eq!(snapshot.len(), 1); assert_eq!(snapshot[0].block_height, 1); assert_eq!(snapshot[0].lane_id, LaneId::new(0)); }
 lane_relay_state_test! { transaction_relay_registration_authenticates_valid_committee_qc let state = blank_test_state(); let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4); seed_consensus_keys_with_pops(&state, &validator_keypairs); install_lane_manifest_registry( &state, &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)], ); configure_commit_topology_preserving_world_peers(&state, 1); let_row! { envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs) }; let valid_block = ValidBlock::new_dummy(checked_keypair().private_key()); let mut state_block = state.block(valid_block.as_ref().header().clone()); let state_transaction = state_block.transaction(); state_transaction .finalized_lane_relay_execution_commitment(&envelope) .expect("contract registration must accept the same authenticated QC as relay ingress"); }
 lane_relay_state_test! { record_lane_relay_uses_signed_state_only let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state(); configure_commit_topology_preserving_world_peers(&state, 1); let_row! { envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs) }; let_row! { inserted = state .record_lane_relay(&envelope) .expect("stale process status must not change lane QC validation") }; assert_eq!(inserted, LaneRelayInsert::Inserted); }
@@ -24837,7 +24912,34 @@ lane_relay_state_test! { record_lane_relay_stores_pending_without_fastpq_proof l
 lane_relay_state_test! { lane_relay_store_upgrades_existing_pending_after_newer_height let (_, validator_keypair) = bls_account_in("validators"); let signers = [&validator_keypair]; let signers_bitmap = vec![0b0000_0001]; let_row! { mut pending_h1 = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap.clone()) }; pending_h1.fastpq_proof = None; let newer_h2 = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap.clone()); let verified_h1 = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap); let mut store = LaneRelayStore::default(); assert_eq!( store .insert(pending_h1.clone()) .expect("pending height 1 stored"), LaneRelayInsert::Inserted ); assert_eq!( store .insert(newer_h2) .expect("newer height stored after pending"), LaneRelayInsert::Inserted ); assert_eq!( store .insert(verified_h1.clone()) .expect("existing pending height can be upgraded"), LaneRelayInsert::Replaced ); assert_eq!( store.get( LaneId::new(0), DataSpaceId::UNIVERSAL, verified_h1.lane_incarnation, 1, ), Some(&verified_h1) ); }
 lane_relay_state_test! { lane_relay_store_rejects_identity_drift_during_pending_upgrade let (_, validator_keypair) = bls_account_in("validators"); let signers = [&validator_keypair]; let signers_bitmap = vec![0b0000_0001]; let descriptor_a = Hash::new(b"lane-relay-store-descriptor-a"); let descriptor_b = Hash::new(b"lane-relay-store-descriptor-b"); let_row! { mut pending = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap.clone()) .with_lane_block_descriptor_hash(Some(descriptor_a)) }; pending.fastpq_proof = None; let_row! { verified_drift = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap) .with_lane_block_descriptor_hash(Some(descriptor_b)) }; let mut store = LaneRelayStore::default(); assert_eq!( store.insert(pending.clone()).expect("pending relay stored"), LaneRelayInsert::Inserted ); let_row! { err = store .insert(verified_drift) .expect_err("descriptor drift must not upgrade a pending relay") }; assert!(matches!( err, LaneRelayError::ConflictingRelay { lane, height } if lane == LaneId::new(0) && height == 1 )); assert_eq!( store.get( LaneId::new(0), DataSpaceId::UNIVERSAL, pending.lane_incarnation, 1, ), Some(&pending), "conflicting verified drift must not overwrite the pending relay" ); }
 lane_relay_state_test! { lane_relay_store_namespaces_reused_heights_by_incarnation let (_, validator_keypair) = bls_account_in("validators"); let signers = [&validator_keypair]; let_row! { retired = sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation( 1, LaneId::SINGLE, DataSpaceId::UNIVERSAL, &super::DEFAULT_TEST_NETWORK_ID, 0, Hash::new(b"retired-relay-incarnation"), &signers, vec![0b0000_0001], ) }; let_row! { fresh = sample_lane_relay_envelope_with_network_dataspace_view_and_incarnation( 1, LaneId::SINGLE, DataSpaceId::UNIVERSAL, &super::DEFAULT_TEST_NETWORK_ID, 0, Hash::new(b"fresh-relay-incarnation"), &signers, vec![0b0000_0001], ) }; let mut store = LaneRelayStore::default(); assert_eq!( store.insert(retired.clone()).expect("retired relay stored"), LaneRelayInsert::Inserted ); assert_eq!( store.insert(fresh.clone()).expect("fresh relay stored"), LaneRelayInsert::Inserted, "a fresh incarnation must be able to restart at lane-local height 1" ); assert_eq!(store.snapshot().len(), 2); assert_eq!( store.get( LaneId::SINGLE, DataSpaceId::UNIVERSAL, retired.lane_incarnation, 1, ), Some(&retired) ); assert_eq!( store.get( LaneId::SINGLE, DataSpaceId::UNIVERSAL, fresh.lane_incarnation, 1, ), Some(&fresh) ); }
-lane_relay_state_test! { record_lane_relay_rejects_identity_drift_during_pending_upgrade let _status_guard = crate::sumeragi::status::lane_relay_test_guard(); crate::sumeragi::status::set_lane_relay_envelopes(Vec::new()); let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state(); configure_commit_topology_preserving_world_peers(&state, 1); ensure_merge_carrier_parent_for_test(&state); let descriptor_a = Hash::new(b"record-lane-relay-descriptor-a"); let descriptor_b = Hash::new(b"record-lane-relay-descriptor-b"); let_row! { mut pending = sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs) .with_lane_block_descriptor_hash(Some(descriptor_a)) }; pending.fastpq_proof = None; resign_lane_relay_for_state_test(&state, &mut pending, &validator_keypairs); let_row! { mut verified_drift = sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs) .with_lane_block_descriptor_hash(Some(descriptor_b)) }; resign_lane_relay_for_state_test(&state, &mut verified_drift, &validator_keypairs); finalize_lane_relay_batch_for_state_test(&state, &mut [&mut pending, &mut verified_drift], &validator_keypairs); assert_eq!( state .record_lane_relay(&pending) .expect("pending relay stored"), LaneRelayInsert::Inserted ); let_row! { err = state .record_lane_relay(&verified_drift) .expect_err("descriptor drift must not verify over a pending relay") }; assert!(matches!( err, LaneRelayError::ConflictingRelay { lane, height } if lane == LaneId::new(0) && height == 2 )); assert_eq!( state.lane_relay_snapshot(), vec![pending.clone()], "conflicting verified drift must not overwrite state relay cache" ); let status_relays = crate::sumeragi::status::lane_relay_envelopes_snapshot(); assert!( status_relays.contains(&pending), "conflicting verified drift must not remove the pending relay from the shared status cache" ); assert!( !status_relays.contains(&verified_drift), "conflicting verified drift must not overwrite the pending relay in the shared status cache" ); crate::sumeragi::status::set_lane_relay_envelopes(Vec::new()); }
+lane_relay_state_test! { record_lane_relay_rejects_identity_drift_during_pending_upgrade
+const CHILD_CASE: &str = "IROHA_CORE_LANE_RELAY_IDENTITY_ISOLATED_CHILD";
+if std::env::var_os(CHILD_CASE).is_none() {
+    // Lifecycle retirement and relay publication in unrelated State tests
+    // mutate the same process-global status cache without holding this
+    // fixture's relay lock. Observe cache preservation in its own process.
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("resolve core test executable"),
+    )
+    .args([
+        "--exact",
+        "state::tests::record_lane_relay_rejects_identity_drift_during_pending_upgrade",
+        "--nocapture",
+        "--test-threads=1",
+    ])
+    .env(CHILD_CASE, "1")
+    .output()
+    .expect("run isolated lane relay identity regression");
+    assert!(
+        output.status.success(),
+        "isolated lane relay identity regression failed: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    return;
+}
+let _status_guard = crate::sumeragi::status::lane_relay_test_guard(); crate::sumeragi::status::set_lane_relay_envelopes(Vec::new()); let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state(); configure_commit_topology_preserving_world_peers(&state, 1); ensure_merge_carrier_parent_for_test(&state); let descriptor_a = Hash::new(b"record-lane-relay-descriptor-a"); let descriptor_b = Hash::new(b"record-lane-relay-descriptor-b"); let_row! { mut pending = sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs) .with_lane_block_descriptor_hash(Some(descriptor_a)) }; pending.fastpq_proof = None; resign_lane_relay_for_state_test(&state, &mut pending, &validator_keypairs); let_row! { mut verified_drift = sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs) .with_lane_block_descriptor_hash(Some(descriptor_b)) }; resign_lane_relay_for_state_test(&state, &mut verified_drift, &validator_keypairs); finalize_lane_relay_batch_for_state_test(&state, &mut [&mut pending, &mut verified_drift], &validator_keypairs); assert_eq!( state .record_lane_relay(&pending) .expect("pending relay stored"), LaneRelayInsert::Inserted ); let_row! { err = state .record_lane_relay(&verified_drift) .expect_err("descriptor drift must not verify over a pending relay") }; assert!(matches!( err, LaneRelayError::ConflictingRelay { lane, height } if lane == LaneId::new(0) && height == 2 )); assert_eq!( state.lane_relay_snapshot(), vec![pending.clone()], "conflicting verified drift must not overwrite state relay cache" ); let status_relays = crate::sumeragi::status::lane_relay_envelopes_snapshot(); assert!( status_relays.contains(&pending), "conflicting verified drift must not remove the pending relay from the shared status cache" ); assert!( !status_relays.contains(&verified_drift), "conflicting verified drift must not overwrite the pending relay in the shared status cache" ); crate::sumeragi::status::set_lane_relay_envelopes(Vec::new()); }
 lane_relay_state_test! { record_lane_relay_rejects_invalid_fastpq_proof let (state, _validator_ids, validator_keypairs) = lane_relay_manifest_test_state(); configure_commit_topology_preserving_world_peers(&state, 1); let_row! { mut envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs) }; envelope.fastpq_proof = Some(LaneFastpqProofMaterial { proof_digest: Hash::prehashed([0u8; Hash::LENGTH]), verified_at_height: 1, }); let_row! { err = state .record_lane_relay(&envelope) .expect_err("invalid FastPQ proof must be rejected") }; assert!(matches!(err, LaneRelayError::InvalidFastpqProof)); }
 lane_relay_state_test! { record_lane_relay_lane_relay_burn_requires_verified_fastpq_record let state = blank_test_state(); { let mut nexus = state.nexus.write(); nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn; } let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4); seed_consensus_keys_with_pops(&state, &validator_keypairs); install_lane_manifest_registry( &state, &[( LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids.clone(), )], ); configure_commit_topology_preserving_world_peers(&state, 1); ensure_merge_carrier_parent_for_test(&state); let_row! { envelope = sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let_row! { err = state .record_lane_relay(&envelope) .expect_err("digest-only relay must be rejected in lane-relay-burn mode") }; assert!(matches!(err, LaneRelayError::InvalidFastpqProof)); assert!(state.lane_relay_snapshot().is_empty()); seed_committed_height_for_state_test(&state, envelope.block_header.height().get()); seed_verified_lane_relay_record(&state, &envelope); let_row! { inserted = state .record_lane_relay(&envelope) .expect("verified relay record should admit relay") }; assert_eq!(inserted, LaneRelayInsert::Inserted); }
 lane_relay_state_test! { record_lane_relay_lane_relay_burn_rejects_malformed_verified_state let (state, validator_keypairs) = setup_lane_relay_burn_state(); ensure_merge_carrier_parent_for_test(&state); let_row! { envelope = sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs) .with_manifest_root(Some([0x44; 32])) }; let key = State::verified_lane_relay_state_key(&envelope).expect("state key"); insert_smart_contract_state_payload(&state, key, vec![0xFF, 0x00, 0xFE]); let_row! { err = state .record_lane_relay(&envelope) .expect_err("malformed canonical verified state must reject burn relay") }; assert!(matches!(err, LaneRelayError::InvalidFastpqProof)); assert!(state.lane_relay_snapshot().is_empty()); }

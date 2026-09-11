@@ -618,6 +618,9 @@ fn pending_v2_prune_intents_are_rejected_before_mutation() {
 }
 #[test]
 fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     let temp_dir = TempDir::new().expect("empty current-tip prune temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
@@ -687,6 +690,9 @@ fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
 }
 #[test]
 fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     let temp_dir = TempDir::new().expect("current-tip prune-capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =

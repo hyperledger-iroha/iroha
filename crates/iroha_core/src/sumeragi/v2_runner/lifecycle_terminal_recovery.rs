@@ -1,5 +1,7 @@
 /// Immutable Queue boundary spanning Kura-only lane-evidence startup repair.
 ///
+/// The runner's one-shot reconciliation flag is independent of Queue's
+/// durable publication gate.
 /// Every installed replay remains quarantined until exact startup completion,
 /// including an empty replay. Revalidation prevents evidence repair from racing
 /// or masking Queue ownership/gate drift before reservation planning.

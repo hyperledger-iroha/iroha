@@ -288,6 +288,9 @@ fn reserve_canonical_autonomous_batch_with_installed_authority(
     sort_by_signed_transaction_hash: bool,
     native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
 ) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(fixture.state.as_ref());
+    }
     assert_eq!(
         &context.network_id,
         fixture.state.network_id_ref(),
