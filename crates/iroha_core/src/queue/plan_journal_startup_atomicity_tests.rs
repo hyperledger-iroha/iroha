@@ -243,7 +243,12 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
         .expect("bind replay receipt including retained QueuePlan claim")
         .expect("retained claim is unchanged");
     let failure = restarted
-        .push_with_lane_with_state_and_routing_plan_strict_durable(tx.clone(), &state, plan.clone())
+        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+            tx.clone(),
+            &state,
+            plan.clone(),
+            &retained_claim.admission_context,
+        )
         .expect_err("retained durable-claim retry must wait for startup completion");
     assert!(
         matches!(failure.err, Error::PlanJournalDurabilityRejected { ref reason }
@@ -273,7 +278,12 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
         .complete_lane_reservation_startup_reconciliation(receipt)
         .expect("complete retained-claim startup");
     restarted
-        .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
+        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+            tx,
+            &state,
+            plan,
+            &retained_claim.admission_context,
+        )
         .expect("retained durable claim becomes retryable after startup completion");
     assert_eq!(
         restarted
