@@ -11388,8 +11388,9 @@ fn require_doctor_success(
         && let Some(checks) = value.get("checks").and_then(norito::json::Value::as_array)
         && checks.len() <= 32
     {
-        // Report only fixed check names and numeric status codes. Never forward
-        // arbitrary response bodies, details, or failure text into reset logs.
+        // This config-free doctor reads public routes. Preserve its bounded
+        // single-line check diagnostic so HTTP 200 semantic failures remain
+        // actionable; never forward whole responses or arbitrary failure arrays.
         let failures = checks
             .iter()
             .filter_map(|check| {
@@ -11400,7 +11401,22 @@ fn require_doctor_success(
                     && crate::taira::doctor_expected_checks(scope)
                         .iter()
                         .any(|(expected, _, _)| *expected == name))
-                .then(|| format!("{name}: HTTP {status}"))
+                .then(|| {
+                    let detail = check
+                        .get("detail")
+                        .and_then(norito::json::Value::as_str)
+                        .filter(|detail| {
+                            !detail.is_empty()
+                                && detail.len() <= 512
+                                && detail
+                                    .bytes()
+                                    .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+                        });
+                    match detail {
+                        Some(detail) => format!("{name}: HTTP {status}: {detail}"),
+                        None => format!("{name}: HTTP {status}"),
+                    }
+                })
             })
             .collect::<Vec<_>>();
         if !failures.is_empty() {
@@ -18449,11 +18465,11 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn doctor_failure_reports_only_fixed_checks_and_status_codes() {
+    fn doctor_failure_reports_bounded_public_check_diagnostics() {
         use std::os::unix::process::ExitStatusExt as _;
         let output = ProcessOutput {
             status: ExitStatus::from_raw(1 << 8),
-            stdout: br#"{"command":"taira_doctor","public_root":"https://taira.sora.org","checks":[{"name":"status","http_status":502,"ok":false,"detail":"do-not-forward-response-body"},{"name":"untrusted-label","http_status":200,"ok":false}],"failures":["do-not-forward-failure-text"]}"#.to_vec(),
+            stdout: br#"{"command":"taira_doctor","public_root":"https://taira.sora.org","checks":[{"name":"status","http_status":502,"ok":false,"detail":"response too large"},{"name":"untrusted-label","http_status":200,"ok":false},{"name":"mcp_tools_list","http_status":200,"ok":false,"detail":"unsafe\nmultiline"}],"failures":["do-not-forward-failure-text"]}"#.to_vec(),
             stderr: b"generic CLI failure".to_vec(),
         };
         let error = require_doctor_success(
@@ -18463,7 +18479,9 @@ mod tests {
         )
         .expect_err("doctor failure")
         .to_string();
-        assert!(error.contains("status: HTTP 502"));
+        assert!(error.contains("status: HTTP 502: response too large"));
+        assert!(error.contains("mcp_tools_list: HTTP 200"));
+        assert!(!error.contains("unsafe") && !error.contains("multiline"));
         assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
     }
 

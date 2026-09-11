@@ -76,6 +76,7 @@ STAGES = (
     ("public doctor producer and deployment contract", (
         "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
         "taira::tests::doctor_tools_list_consumes_pages_and_rejects_invalid_cursors",
+        "taira::tests::doctor_reports_bounded_mcp_application_error_codes",
         "taira::tests::doctor_mock_healthy_flow_reports_ok",
         "taira::tests::time_snapshot_requires_network_time_and_every_health_axis",
         "taira::tests::doctor_rejects_unknown_namespaces_or_malformed_mcp_tools",
@@ -188,7 +189,7 @@ STAGES = (
         "taira_public_reset::host::tests::validator_http_readiness_retries_cold_backends_before_strict_checks",
         "taira_public_reset::host::tests::validator_http_readiness_rejects_permanent_http_errors",
         "taira_public_reset::host::tests::validator_http_readiness_keeps_deadline_and_authorization",
-        "taira_public_reset::host::tests::doctor_failure_reports_only_fixed_checks_and_status_codes",
+        "taira_public_reset::host::tests::doctor_failure_reports_bounded_public_check_diagnostics",
         "taira_public_reset::host::tests::manager_evidence_stays_pending_until_exact_terminal_job",
         "taira_public_reset::host::tests::manager_recovery_uses_immutable_mutation_deadline_but_observes_terminal_state",
         "taira_public_reset::host::tests::manager_evidence_rejects_wrong_or_duplicate_exec_identity",
@@ -518,6 +519,9 @@ DAEMON_STAGES += DAEMON_STARTUP_STAGES
 TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation", (
     "tests_runtime_handlers::readiness_rejects_empty_queue_startup_reconciliation",
     "tests_runtime_handlers::readiness_rejects_closed_consensus_ingress",
+)), ("actual public MCP catalogue and response bounds", (
+    "mcp::tests::tools_list_writer_catalog_roundtrips_through_modern_http_byte_limit",
+    "mcp::tests::tools_list_byte_budget_includes_envelope_and_rejects_oversized_single_tool",
 )),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",

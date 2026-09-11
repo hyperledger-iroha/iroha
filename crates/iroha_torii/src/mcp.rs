@@ -71,7 +71,8 @@ pub(crate) use response::{
     jsonrpc_response_too_large,
 };
 use response::{
-    error_envelope_value, http_status_error_code, jsonrpc_error_response, jsonrpc_result_response,
+    bounded_json_value_len, error_envelope_value, http_status_error_code, jsonrpc_error_response,
+    jsonrpc_result_response,
 };
 const JSONRPC_VERSION: &str = "2.0";
 const MCP_PROTOCOL_VERSION: &str = protocol::LEGACY_PROTOCOL_VERSION;
@@ -1806,7 +1807,12 @@ pub(crate) async fn handle_jsonrpc_request(
         "ping" => {
             JsonRpcRequestOutcome::Response(jsonrpc_result_response(id, Value::Object(Map::new())))
         }
-        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(id, &app, &params)),
+        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(
+            id,
+            &app,
+            &params,
+            ProtocolEra::Legacy,
+        )),
         "tools/call_batch" | "tools/call" => {
             let registration = match register_authenticated_inflight_request(
                 &app,
@@ -1886,7 +1892,13 @@ pub(crate) async fn handle_validated_jsonrpc_request(
                 ))
             }
         }
-        "tools/list" | "tools/call" | "tools/call_batch" => {
+        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(
+            id,
+            &app,
+            validated_modern_request_params(&request),
+            validated.era,
+        )),
+        "tools/call" | "tools/call_batch" => {
             handle_jsonrpc_request(app, inbound_headers, request).await
         }
         "resources/list" => {
@@ -2164,7 +2176,12 @@ fn is_jsonrpc_id(id: &Value) -> bool {
 fn is_jsonrpc_integer(value: &Value) -> bool {
     value.as_f64().is_some_and(|number| number.fract() == 0.0)
 }
-fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
+fn handle_tools_list(
+    id: Option<Value>,
+    app: &SharedAppState,
+    params: &Map,
+    era: ProtocolEra,
+) -> Value {
     let visible_tools = visible_tools_for_app(app);
     let toolset_version = compute_toolset_version(&visible_tools);
     let list_changed = params
@@ -2196,14 +2213,82 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
     };
     let start = requested_start;
     let page_size = app.mcp.max_tools_per_list.max(1);
-    let end = start.saturating_add(page_size).min(visible_tools.len());
-    let tools = visible_tools[start..end]
-        .iter()
-        .map(|tool| tool.descriptor())
-        .collect::<Vec<_>>();
+    let limit = start.saturating_add(page_size).min(visible_tools.len());
+    let mut tools = Vec::new();
+    let mut tools_bytes = 0_usize;
+    let mut response = tools_list_page_response(
+        id.clone(),
+        Vec::new(),
+        None,
+        &toolset_version,
+        list_changed,
+        era,
+    );
+    for (index, tool) in visible_tools.iter().enumerate().take(limit).skip(start) {
+        let next_cursor = (index + 1 < visible_tools.len()).then_some(index + 1);
+        let mut candidate = tools_list_page_response(
+            id.clone(),
+            vec![tool.descriptor()],
+            next_cursor,
+            &toolset_version,
+            list_changed,
+            era,
+        );
+        // Measure each descriptor at its actual JSON nesting depth, with the
+        // exact id, cursor and protocol metadata. Previously admitted tool bytes
+        // contribute additively, so pagination never repeatedly serializes them.
+        let separator = usize::from(!tools.is_empty());
+        let remaining = app
+            .mcp
+            .max_request_bytes
+            .checked_sub(tools_bytes)
+            .and_then(|remaining| remaining.checked_sub(separator));
+        let measured = remaining
+            .ok_or(BoundedJsonError::BodyTooLarge)
+            .and_then(|remaining| bounded_json_value_len(&candidate, remaining));
+        let candidate_bytes = match measured {
+            Ok(bytes) => bytes,
+            Err(BoundedJsonError::BodyTooLarge) if !tools.is_empty() => break,
+            Err(BoundedJsonError::BodyTooLarge) => {
+                return jsonrpc_response_too_large(id, app.mcp.max_request_bytes);
+            }
+            Err(_) => {
+                return jsonrpc_error_response(
+                    id,
+                    JSONRPC_INTERNAL_ERROR,
+                    "MCP tool descriptor cannot be serialized within its response envelope",
+                    Some(norito::json!({ "error_code": "response_serialization_failed" })),
+                );
+            }
+        };
+        let descriptor = candidate
+            .pointer_mut("/result/tools")
+            .and_then(Value::as_array_mut)
+            .and_then(Vec::pop)
+            .expect("one measured tool descriptor");
+        let envelope_bytes = bounded_json_value_len(&candidate, app.mcp.max_request_bytes)
+            .expect("removing a measured descriptor cannot exceed its envelope bounds");
+        tools_bytes += separator + candidate_bytes - envelope_bytes;
+        tools.push(descriptor);
+        response = candidate;
+    }
+    *response
+        .pointer_mut("/result/tools")
+        .expect("tools-list response has its exact tools slot") = Value::Array(tools);
+    response
+}
+
+fn tools_list_page_response(
+    id: Option<Value>,
+    tools: Vec<Value>,
+    next_cursor: Option<usize>,
+    toolset_version: &str,
+    list_changed: bool,
+    era: ProtocolEra,
+) -> Value {
     let mut result = Map::new();
     result.insert("tools".into(), Value::Array(tools));
-    if end < visible_tools.len() {
+    if let Some(end) = next_cursor {
         result.insert("nextCursor".into(), Value::String(end.to_string()));
     }
     result.insert(
@@ -2215,7 +2300,11 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
             }
         }),
     );
-    jsonrpc_result_response(id, Value::Object(result))
+    let mut response = jsonrpc_result_response(id, Value::Object(result));
+    if era.is_modern() {
+        decorate_modern_response("tools/list", &mut response);
+    }
+    response
 }
 async fn handle_tools_call(
     id: Option<Value>,

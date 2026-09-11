@@ -7515,8 +7515,27 @@ fn validate_modern_mcp_result<'a>(
             "MCP {method} response has a substituted JSON-RPC envelope"
         ));
     }
-    if payload.get("error").is_some() {
-        return Err(format!("MCP {method} response contains a JSON-RPC error"));
+    if let Some(error) = payload.get("error") {
+        // Preserve bounded machine diagnostics without copying the upstream
+        // free-form message, arbitrary data, or the complete response body.
+        let code = error
+            .get("code")
+            .and_then(Value::as_i64)
+            .map_or_else(|| "invalid".to_owned(), |code| code.to_string());
+        let error_code = error
+            .pointer("/data/error_code")
+            .and_then(Value::as_str)
+            .filter(|code| {
+                !code.is_empty()
+                    && code.len() <= 64
+                    && code.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+            })
+            .unwrap_or("unspecified");
+        return Err(format!(
+            "MCP {method} response contains a JSON-RPC error: code={code}, error_code={error_code}"
+        ));
     }
     let result = payload
         .get("result")
@@ -13122,6 +13141,28 @@ mod tests {
                 .any(|failure| failure.contains("expected 405"))
         );
     }
+    #[test]
+    fn doctor_reports_bounded_mcp_application_error_codes() {
+        let payload = norito::json!({
+            "jsonrpc": "2.0", "id": 2,
+            "error": {"code": -32000_i64, "message": "do-not-forward-server-message",
+                "data": {"error_code": "response_too_large", "private": "do-not-forward-data"}}
+        });
+        let error = mcp_tool_names(Some(&payload)).expect_err("MCP application error");
+        assert!(error.contains("code=-32000") && error.contains("error_code=response_too_large"));
+        assert!(!error.contains("do-not-forward"));
+        for value in [
+            Value::from("injected\ncode"),
+            Value::from("x".repeat(65)),
+            Value::Bool(false),
+        ] {
+            let mut invalid = payload.clone();
+            *invalid.pointer_mut("/error/data/error_code").unwrap() = value;
+            let error = mcp_tool_names(Some(&invalid)).unwrap_err();
+            assert!(error.contains("error_code=unspecified"));
+        }
+    }
+
     #[test]
     fn doctor_rejects_unknown_namespaces_or_malformed_mcp_tools() {
         for hostile_tool in [

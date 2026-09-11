@@ -51,6 +51,55 @@ async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> boo
     matches!(result, Ok(Ok(true)))
 }
 
+async fn verify_basic_public_doctor(peer: &NetworkPeer) -> Result<()> {
+    let binary = std::env::var_os("TEST_NETWORK_BIN_IROHA")
+        .ok_or_else(|| eyre!("TEST_NETWORK_BIN_IROHA must name the prebuilt native CLI"))?;
+    let root = format!("http://{}", peer.api_address());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    timeout_at(deadline, async {
+        while !validator_admission_ready(peer, deadline).await {
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .wrap_err("validator admission did not become ready for the basic doctor")?;
+    // Exercise the real CLI consumer against the real daemon catalogue before
+    // release compilation. Small mock tool lists cannot qualify this boundary.
+    let output = timeout_at(
+        deadline,
+        tokio::process::Command::new(binary)
+            .env_clear()
+            .args([
+                "--machine",
+                "taira",
+                "doctor",
+                "--scope",
+                "basic",
+                "--public-root",
+                &root,
+                "--json",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .wrap_err("basic public doctor exceeded its fixture deadline")??;
+    ensure!(
+        output.status.success(),
+        "basic public doctor rejected the actual daemon: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: Value =
+        json::from_slice(&output.stdout).wrap_err("basic public doctor returned invalid JSON")?;
+    ensure!(
+        report.get("status").and_then(Value::as_str) == Some("ok")
+            && report.get("scope").and_then(Value::as_str) == Some("basic"),
+        "basic public doctor omitted its successful scope"
+    );
+    eprintln!("Taira basic public doctor passed against the actual native daemon");
+    Ok(())
+}
+
 fn snapshot_log_contains_height(peer: &NetworkPeer, message: &str, height: u64) -> Result<bool> {
     for path in [peer.latest_stdout_log_path(), peer.latest_stderr_log_path()]
         .into_iter()
@@ -190,6 +239,8 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
             multiroute::network_builder()
                 .with_config_layer(|layer| {
                     layer
+                        .write(["torii", "mcp", "enabled"], true)
+                        .write(["torii", "mcp", "profile"], "writer")
                         .write(["snapshot", "mode"], "read_write")
                         .write(["snapshot", "store_dir"], "./storage/snapshot")
                         .write(["snapshot", "create_every_ms"], 1_000_i64)
@@ -223,6 +274,7 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
             client.status().get().await.map_err(eyre::Report::from)
         }))).await.wrap_err("four-peer startup observation exceeded its deadline")??;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
+        verify_basic_public_doctor(&network.peers()[0]).await?;
         let mut builder = network.client().client().to_builder();
         builder.transaction_status_timeout = Duration::from_secs(75);
         // Public QueuePlan certification uses the SDK's routed request budget.
