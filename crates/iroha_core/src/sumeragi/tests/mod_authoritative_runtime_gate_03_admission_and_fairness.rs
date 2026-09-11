@@ -3024,7 +3024,7 @@ fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
     assert!(receiver.try_recv().is_some());
     handle.output_guard.activate_restart_required();
     assert!(!handle.admission_ready());
-    assert!(!SumeragiHandle::emergency_fast_disabled().admission_ready());
+    assert!(!crate::sumeragi::SumeragiHandle::emergency_fast_disabled().admission_ready());
 }
 #[test]
 fn authenticated_lane_drain_votes_enter_the_bounded_live_relay_queue() {
