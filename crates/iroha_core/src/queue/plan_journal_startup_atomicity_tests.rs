@@ -272,12 +272,16 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
     restarted
         .complete_lane_reservation_startup_reconciliation(receipt)
         .expect("complete retained-claim startup");
-    let retry = restarted
+    restarted
         .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
         .expect("retained durable claim becomes retryable after startup completion");
     assert_eq!(
-        retry.journal_record_digest,
-        Some(retained_claim.journal_record_digest)
+        restarted
+            .durable_plan_claims
+            .get(&hash)
+            .expect("retried retained claim")
+            .journal_record_digest,
+        retained_claim.journal_record_digest
     );
     assert_eq!(
         std::fs::read(&plan_path).expect("read retried QueuePlan journal"),
