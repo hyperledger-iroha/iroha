@@ -128,6 +128,29 @@ fn enqueue_autonomous_test_transactions(
     dataspace_id: DataSpaceId,
     count: usize,
 ) -> Vec<TransactionEntrypoint> {
+    enqueue_autonomous_test_transactions_with_builder(
+        adapter,
+        queue,
+        lane_id,
+        dataspace_id,
+        count,
+        |builder, index| {
+            builder.with_instructions([Log::new(
+                Level::INFO,
+                format!("autonomous lane fixture {index}"),
+            )])
+        },
+    )
+}
+
+fn enqueue_autonomous_test_transactions_with_builder(
+    adapter: &V2LaneWorkAdapter,
+    queue: &Queue,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    count: usize,
+    build: impl Fn(TransactionBuilder, usize) -> TransactionBuilder,
+) -> Vec<TransactionEntrypoint> {
     (0..count)
         .map(|index| {
             let seed = u8::try_from(index)
@@ -151,22 +174,16 @@ fn enqueue_autonomous_test_transactions(
                 );
                 world.commit();
             }
-            let transaction = TransactionBuilder::new(
+            let builder = TransactionBuilder::new(
                 adapter.context.network_id,
                 AccountId::new(key.public_key().clone()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
-            .with_instructions([Log::new(
-                Level::INFO,
-                format!("autonomous lane fixture {index}"),
-            )])
-            .with_admission_intent(
-                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-            )
-            .sign(key.private_key());
+            );
+            let transaction = build(builder, index)
+                .with_admission_intent(
+                    iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+                )
+                .sign(key.private_key());
             let accepted =
                 crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
             let entrypoint = accepted.entrypoint().clone();
@@ -201,6 +218,72 @@ fn enqueue_autonomous_test_transactions(
             entrypoint
         })
         .collect()
+}
+
+#[test]
+fn autonomous_full_block_gas_call_reserves_with_idle_catalog_route() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    assert_eq!(
+        adapter
+            .state
+            .consensus_lane_routes_at_height(adapter.context.height)
+            .len(),
+        2,
+        "the idle catalog route previously halved the only busy lane's gas budget"
+    );
+    let journal_dir = tempfile::tempdir().expect("gas-bound reservation journal");
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journal_dir.path().join("lane-reservations.norito"),
+    );
+    let block_gas = {
+        let world = adapter.state.world_view();
+        crate::state::gas_limit_from_parameters(world.parameters())
+    };
+    let entrypoints = enqueue_autonomous_test_transactions_with_builder(
+        &adapter,
+        &queue,
+        lane_id,
+        dataspace_id,
+        1,
+        |builder, _| {
+            builder
+                .with_fee_payment_intent(
+                    iroha_data_model::transaction::FeePaymentIntent::authority(
+                        Vec::new(),
+                        NonZeroU64::new(block_gas),
+                    ),
+                )
+                .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                    iroha_data_model::transaction::executable::ContractInvocation {
+                        contract_address:
+                            "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                                .parse()
+                                .expect("contract address"),
+                        expected_code_hash: Hash::new(b"full-block-gas-source"),
+                        entrypoint: "configure".to_owned(),
+                        arguments: None,
+                    },
+                ))
+        },
+    );
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
+        .expect("full-cap source production");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .next()
+        .expect("the busy lane publishes despite the idle second route");
+    assert_eq!(payload.entrypoints, entrypoints);
+    assert_eq!(queue.live_lane_reservations(), payload.reservation_keys);
+    assert!(queue.fifo_snapshot_for_test().is_empty());
 }
 
 fn install_autonomous_fixture_queue_plan_registry_value(

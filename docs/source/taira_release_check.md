@@ -2,19 +2,26 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **348 native regressions on macOS**: startup
+`--native-check-scope basic` runs **353 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **531-case** native census,
+Use `--native-check-scope full` to execute the full **536-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
+
+Both scopes exercise a full-block-gas contract call with another idle lane,
+reject over-budget sources before anchoring or shared execution, and verify that
+new work cannot repeatedly overtake an older source. Each lane may author a
+source up to the block gas limit. The merge selector reserves the shared budget
+in authenticated origin-height order, then executes its chosen sources in canonical
+lane order. Byte, transaction-count and scan quotas are unchanged.
 
 Both scopes require unsigned node-capability discovery before a fresh account's
 registration transaction can be submitted. The full production HTTP router is

@@ -4866,12 +4866,11 @@ impl V2LaneWorkAdapter {
                 route_index,
                 route_rotation,
             );
-            let gas_limit = Self::autonomous_route_quota(
-                usize::try_from(block_gas_limit).unwrap_or(usize::MAX),
-                route_count,
-                route_index,
-                route_rotation,
-            );
+            // A lane author produces an independent source, not a reserved share of a
+            // particular global block. Dividing gas by the catalog size makes a valid
+            // head transaction permanently unselectable when other lanes are idle.
+            // The merge selector owns the aggregate gas budget across certified sources.
+            let gas_limit = block_gas_limit;
             if transaction_limit == 0
                 || envelope_byte_limit == 0
                 || queue_scan_limit == 0
@@ -4890,7 +4889,7 @@ impl V2LaneWorkAdapter {
                     u64::try_from(envelope_byte_limit).unwrap_or(u64::MAX),
                 )
                 .expect("positive autonomous envelope-byte quota checked above"),
-                max_gas: NonZeroU64::new(u64::try_from(gas_limit).unwrap_or(u64::MAX))
+                max_gas: NonZeroU64::new(gas_limit)
                     .expect("positive autonomous gas quota checked above"),
             };
             let selection_authorization = slot

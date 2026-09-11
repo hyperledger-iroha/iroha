@@ -646,6 +646,13 @@ CORE_ADMISSION_STARTUP_STAGES += (("current Prepare recovery and durable validat
     "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
     "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("autonomous lane gas selection and shared merge budget", (
+    "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
+    "sumeragi::v2_lane_work::tests::autonomous_full_block_gas_call_reserves_with_idle_catalog_route",
+    "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",
+    "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
+    "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
+)),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",

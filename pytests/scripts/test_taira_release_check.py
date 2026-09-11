@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 531
+EXPECTED_REGRESSION_COUNT = 536
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 348)
+        self.assertEqual(gate.selected_regression_count(), 353)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -70,6 +70,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(names), len(set(names)))
         self.assertEqual(basic["core"], gate.CORE_ADMISSION_STARTUP_STAGES)
         for test in (
+            "block::valid::tests::autonomous_anchor_gas_budget_enforces_complete_source_before_anchoring",
+            "sumeragi::v2_lane_work::tests::autonomous_full_block_gas_call_reserves_with_idle_catalog_route",
+            "state::tests::autonomous_full_gas_sources_share_one_merge_budget_before_execution",
+            "state::tests::autonomous_merge_gas_priority_preserves_old_source_and_canonical_order",
+            "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
             "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
             "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
             "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
