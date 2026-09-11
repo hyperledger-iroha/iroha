@@ -5,6 +5,47 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## Group 01 integration fixtures
+
+The reported group passed 56 tests and failed 11. Its fixtures and assertions
+still assumed implicit asset ownership, zero-amount mints, unscoped data-trigger
+registration and execution-ordered block hashes. The production paths enforce
+the current first-release contracts; this repair updates their tests:
+
+- Asset definitions carry explicit owning domains. Domain teardown removes
+  owned definitions and their balances while preserving universal accounts and
+  unrelated domains.
+- Holder-query fixtures require zero-mint rejection, observe a valid positive
+  mint, and exclude the holder after a full burn updates the holder index.
+- Manifest activation rejects missing or wrongly scoped global data-trigger
+  permission, then succeeds with a direct capability on the activator scoped
+  to the actual trigger authority, including the default contract subject.
+- Scheduler tests observe independent account metadata events and compare them
+  with independently sorted entrypoint hashes. Serialized hashes and results
+  retain payload order; a new regression moves a failed transaction through
+  every payload position and checks its result remains attached to that index.
+
+The longer scheduler run also exposed concurrent fixture contamination of the
+global execution-witness recorder: the full group failed FASTPQ source ownership
+while the isolated scheduler and serial group passed. The two direct FASTPQ
+transfer tests and five governance bond/citizenship tests now hold the existing
+execution-witness guard through their direct execution and transcript draining.
+Typed governance movements can publish transcripts even without a transaction
+call hash. Normal block validation already owns this guard.
+
+Validation passes with the shared Core feature graph:
+
+```sh
+cargo test --locked -p iroha_core --test iroha_core_group_01 \
+  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests
+```
+
+The complete group passes all 68 tests with no failures or ignored tests,
+including all 11 reported failures and the new result-index regression. The
+Cargo run and three further executions of the same harness all pass with normal
+parallel test execution (10.62, 10.94, 11.12 and 11.29 seconds). Workspace
+formatting and diff checks pass. Full Core/workspace execution was not rerun.
+
 ## Follow-up from the 57-failure Core run
 
 The next reported full Core run passed 14,770 tests and failed 57. This repair

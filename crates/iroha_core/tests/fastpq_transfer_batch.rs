@@ -13,6 +13,8 @@ use iroha_test_samples::{ALICE_ID, gen_account_in};
 use nonzero_ext::nonzero;
 #[test]
 fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
+    // Direct execution and transcript draining share the block witness recorder.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let (bob_id, _) = gen_account_in("wonderland");
@@ -68,6 +70,8 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
 }
 #[test]
 fn transfer_asset_batch_records_multi_delta_transcript() {
+    // Direct execution and transcript draining share the block witness recorder.
+    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let (bob_id, _) = gen_account_in("wonderland");

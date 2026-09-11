@@ -21,6 +21,7 @@ use iroha_data_model::{
     events::time::{ExecutionTime, TimeEventFilter},
     isi::{
         contract_alias::SetContractAlias,
+        error::{InstructionExecutionError, InvalidParameterError},
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
@@ -33,8 +34,9 @@ use iroha_data_model::{
     },
     trigger::action::Repeats,
 };
-use iroha_executor_data_model::permission::account::{
-    AccountAliasPermissionScope, CanManageAccountAlias,
+use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    trigger::CanRegisterGlobalDataTrigger,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -417,6 +419,7 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
 fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes_them() {
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
+    let contract_subject = contract_address.subject_id();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -500,11 +503,55 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");
-    Register::account(Account::new(contract_address.subject_id()))
+    Register::account(Account::new(contract_subject.clone()))
         .execute(&authority, &mut stx)
         .expect("register the non-signable contract-subject account");
     stx.world
         .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
+    // The unregistered definition is outside the contract subject's owned scope.
+    // A capability scoped to the activator cannot authorize the default subject.
+    let wrong_scope: permission::Permission = CanRegisterGlobalDataTrigger {
+        authority: authority.clone(),
+    }
+    .into();
+    Grant::account_permission(wrong_scope, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("seed activator-scoped global data-trigger capability");
+    let error = ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        expected_revision: 1,
+        code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect_err("activation must require the exact contract-subject scope");
+    assert_eq!(
+        error,
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "data trigger filter exceeds the trigger authority's exact owned scope; CanRegisterGlobalDataTrigger is required"
+                .into(),
+        )),
+    );
+    assert!(stx.world.triggers().ids().get(&data_trigger_id).is_none());
+    assert!(
+        stx.world
+            .triggers()
+            .ids()
+            .get(&pipeline_trigger_id)
+            .is_none()
+    );
+    assert!(
+        stx.world
+            .contract_instances()
+            .get(&contract_address)
+            .is_none()
+    );
+    let exact_scope: permission::Permission = CanRegisterGlobalDataTrigger {
+        authority: contract_subject.clone(),
+    }
+    .into();
+    Grant::account_permission(exact_scope, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("seed exact contract-subject global data-trigger capability on activator");
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,
@@ -526,6 +573,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
                 .for_asset_definition(asset_definition),
         )
     );
+    assert_eq!(data_action.authority, contract_subject);
     assert_contract_trigger_metadata(
         &data_action.metadata,
         &contract_address,
@@ -892,6 +940,45 @@ seiyaku Test {{
     .expect("register manifest");
     stx.world
         .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
+    let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
+    let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
+    let error = ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        expected_revision: 1,
+        code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect_err("compiled manifest must not bypass data-trigger scope authorization");
+    assert_eq!(
+        error,
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "data trigger filter exceeds the trigger authority's exact owned scope; CanRegisterGlobalDataTrigger is required"
+                .into(),
+        )),
+    );
+    assert!(stx.world.triggers().ids().get(&data_trigger_id).is_none());
+    assert!(
+        stx.world
+            .triggers()
+            .ids()
+            .get(&pipeline_trigger_id)
+            .is_none()
+    );
+    assert!(
+        stx.world
+            .contract_instances()
+            .get(&contract_address)
+            .is_none()
+    );
+    // Compiled explicit authorities require a direct capability scoped to that
+    // authority, even when activation takes place in genesis.
+    let exact_scope: permission::Permission = CanRegisterGlobalDataTrigger {
+        authority: authority.clone(),
+    }
+    .into();
+    Grant::account_permission(exact_scope, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("seed exact explicit-authority global data-trigger capability");
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         expected_revision: 1,
@@ -899,8 +986,6 @@ seiyaku Test {{
     }
     .execute(&authority, &mut stx)
     .expect("activate");
-    let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
-    let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
     let asset_definition = opaque_asset_definition_id();
     let data_action = stx
         .world
