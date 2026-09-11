@@ -101,6 +101,92 @@ pub fn mk_app_state_for_tests() -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
 }
 #[tokio::test]
+async fn api_version_negotiates_text_success_and_typed_unavailable() {
+    use iroha_version::Version as _;
+
+    let app = mk_app_state_for_tests();
+    let router = axum::Router::new()
+        .route(
+            iroha_torii_shared::uri::API_VERSION,
+            axum::routing::get(handler_version),
+        )
+        .layer(axum::middleware::from_fn(capture_response_format))
+        .layer(axum::middleware::from_fn(coalesce_accept_headers))
+        .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+        .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+        .with_state(Arc::clone(&app));
+    let request = |accept| {
+        let mut request = axum::http::Request::builder()
+            .uri(iroha_torii_shared::uri::API_VERSION)
+            .header(axum::http::header::ACCEPT, accept)
+            .body(Body::empty())
+            .expect("version request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::core::API_VERSION,
+            ));
+        request
+    };
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("text/plain"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "text-only requests cannot negotiate the public route's typed errors"
+    );
+    let unavailable = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("version response without genesis");
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        unavailable.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+    let bytes = axum::body::to_bytes(unavailable.into_body(), 4096)
+        .await
+        .unwrap();
+    let envelope: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        envelope.get("code").and_then(norito::json::Value::as_str),
+        Some("service_unavailable")
+    );
+
+    let block = make_empty_signed_block(1, None, 0);
+    let expected_version = block.version().to_string();
+    let header = block.header();
+    let hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header, hash);
+    let success = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("version response with committed genesis");
+    assert_eq!(success.status(), StatusCode::OK);
+    assert_eq!(
+        success.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let bytes = axum::body::to_bytes(success.into_body(), 4096)
+        .await
+        .unwrap();
+    assert_eq!(bytes.as_ref(), expected_version.as_bytes());
+    assert_eq!(
+        router
+            .oneshot(request("application/json"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "the successful version representation must still be plain text"
+    );
+}
+#[tokio::test]
 async fn readiness_rejects_closed_consensus_ingress() {
     let mut app = Arc::try_unwrap(mk_app_state_for_tests())
         .unwrap_or_else(|_| panic!("unique readiness app"));
@@ -115,9 +201,41 @@ async fn readiness_rejects_closed_consensus_ingress() {
 #[tokio::test]
 async fn readiness_rejects_empty_queue_startup_reconciliation() {
     let app = mk_app_state_for_tests();
+    // Exercise the response boundary as well as the handler: readiness success
+    // is plain text, while the ordinary failure contract is a JSON envelope.
+    let router = axum::Router::new()
+        .route("/readyz", axum::routing::get(handler_readyz))
+        .layer(axum::middleware::from_fn(capture_response_format))
+        .layer(axum::middleware::from_fn(coalesce_accept_headers))
+        .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+        .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+        .with_state(Arc::clone(&app));
+    let request = |accept| {
+        axum::http::Request::builder()
+            .uri("/readyz")
+            .header(axum::http::header::ACCEPT, accept)
+            .body(Body::empty())
+            .expect("readiness request")
+    };
+    let response = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("healthy readiness response");
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        handler_readyz(State(Arc::clone(&app))).await.status(),
-        StatusCode::OK
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("application/json"))
+            .await
+            .expect("incompatible readiness request")
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "JSON-only probes cannot negotiate a healthy text readiness response"
     );
     let directory = tempfile::tempdir().expect("readiness journal root");
     app.queue
@@ -127,10 +245,18 @@ async fn readiness_rejects_empty_queue_startup_reconciliation() {
         )
         .expect("install actual empty startup journal");
     assert!(app.queue.lane_reservation_startup_reconciliation_pending());
+    let response = router
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("pending readiness response");
     assert_eq!(
-        handler_readyz(State(app)).await.status(),
+        response.status(),
         StatusCode::SERVICE_UNAVAILABLE,
         "an HTTP listener and empty queue do not establish write readiness"
+    );
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
     );
 }
 

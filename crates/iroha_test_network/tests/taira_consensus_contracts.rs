@@ -5,6 +5,7 @@ use futures::future::try_join_all;
 use iroha::client::{AccountTransactionDraft, FeeQuoteRequest};
 use iroha_data_model::{
     Level,
+    account::AccountId,
     isi::{InstructionBox, Log},
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
@@ -34,7 +35,7 @@ async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> boo
         let mut stream = tokio::net::TcpStream::connect(&address).await?;
         stream
             .write_all(
-                format!("GET /readyz HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                format!("GET /readyz HTTP/1.1\r\nHost: {address}\r\nAccept: text/plain, application/json\r\nConnection: close\r\n\r\n")
                     .as_bytes(),
             )
             .await?;
@@ -49,6 +50,55 @@ async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> boo
     })
     .await;
     matches!(result, Ok(Ok(true)))
+}
+
+async fn verify_basic_public_doctor(peer: &NetworkPeer) -> Result<()> {
+    let binary = std::env::var_os("TEST_NETWORK_BIN_IROHA")
+        .ok_or_else(|| eyre!("TEST_NETWORK_BIN_IROHA must name the prebuilt native CLI"))?;
+    let root = format!("http://{}", peer.api_address());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    timeout_at(deadline, async {
+        while !validator_admission_ready(peer, deadline).await {
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .wrap_err("validator admission did not become ready for the basic doctor")?;
+    // Exercise the real CLI consumer against the real daemon catalogue before
+    // release compilation. Small mock tool lists cannot qualify this boundary.
+    let output = timeout_at(
+        deadline,
+        tokio::process::Command::new(binary)
+            .env_clear()
+            .args([
+                "--machine",
+                "taira",
+                "doctor",
+                "--scope",
+                "basic",
+                "--public-root",
+                &root,
+                "--json",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .wrap_err("basic public doctor exceeded its fixture deadline")??;
+    ensure!(
+        output.status.success(),
+        "basic public doctor rejected the actual daemon: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: Value =
+        json::from_slice(&output.stdout).wrap_err("basic public doctor returned invalid JSON")?;
+    ensure!(
+        report.get("status").and_then(Value::as_str) == Some("ok")
+            && report.get("scope").and_then(Value::as_str) == Some("basic"),
+        "basic public doctor omitted its successful scope"
+    );
+    eprintln!("Taira basic public doctor passed against the actual native daemon");
+    Ok(())
 }
 
 fn snapshot_log_contains_height(peer: &NetworkPeer, message: &str, height: u64) -> Result<bool> {
@@ -174,6 +224,15 @@ async fn restart_validator_from_applied_snapshot(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> Result<()> {
+    public_transaction_sequence_reaches_applied(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_peer_universal_public_transaction_sequence_reaches_applied() -> Result<()> {
+    public_transaction_sequence_reaches_applied(true).await
+}
+
+async fn public_transaction_sequence_reaches_applied(universal_route: bool) -> Result<()> {
     init_instruction_registry();
     for variable in ["TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA"] {
         let binary = std::env::var_os(variable)
@@ -186,19 +245,27 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
     let startup_deadline = Instant::now() + Duration::from_secs(180);
     let network = timeout_at(
         startup_deadline,
-        tokio::task::spawn_blocking(|| {
+        tokio::task::spawn_blocking(move || {
             multiroute::network_builder()
                 .with_config_layer(|layer| {
                     layer
+                        .write(["torii", "mcp", "enabled"], true)
+                        .write(["torii", "mcp", "profile"], "writer")
+                        .write(
+                            ["torii", "mcp", "allow_tool_prefixes"],
+                            toml::Value::Array(vec![toml::Value::String("iroha.".to_owned())]),
+                        )
                         .write(["snapshot", "mode"], "read_write")
                         .write(["snapshot", "store_dir"], "./storage/snapshot")
                         .write(["snapshot", "create_every_ms"], 1_000_i64)
                         .write(["logger", "format"], "json")
                         .write(["logger", "level"], "INFO");
                 })
-                .with_base_seed_if_unset(stringify!(
-                    four_peer_multiroute_public_transaction_sequence_reaches_applied
-                ))
+                .with_base_seed_if_unset(if universal_route {
+                    "four_peer_universal_public_transaction_sequence_reaches_applied"
+                } else {
+                    "four_peer_multiroute_public_transaction_sequence_reaches_applied"
+                })
                 .build()
         }),
     )
@@ -223,7 +290,21 @@ async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> R
             client.status().get().await.map_err(eyre::Report::from)
         }))).await.wrap_err("four-peer startup observation exceeded its deadline")??;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
-        let mut builder = network.client().client().to_builder();
+        verify_basic_public_doctor(&network.peers()[0]).await?;
+        // Both scopes retain the same four-validator, three-dataspace topology.
+        // Basic BPNG traffic uses the funded universal default-route account;
+        // the full scope also exercises ALICE's explicit lane-1/dataspace-1 route.
+        let fixture_client = if universal_route {
+            let key_pair = multiroute::universal_route_key_pair();
+            let account_id = AccountId::new(key_pair.public_key().clone());
+            ensure!(account_id != *iroha_test_samples::ALICE_ID
+                && account_id != *iroha_test_samples::BOB_ID,
+                "universal fixture account must not match an explicit account route");
+            network.peers()[0].client_for(&account_id, key_pair.private_key().clone())
+        } else {
+            network.client()
+        };
+        let mut builder = fixture_client.client().to_builder();
         builder.transaction_status_timeout = Duration::from_secs(75);
         // Public QueuePlan certification uses the SDK's routed request budget.
         builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;

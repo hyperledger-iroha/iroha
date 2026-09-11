@@ -48,6 +48,30 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
             .unwrap_or_else(|| panic!("runner lost lifecycle startup anchor: {anchor}"));
         remainder = &remainder[offset + anchor.len()..];
     }
+    let pending = include_str!("../v2_runner/lifecycle_pending_kura.rs");
+    let anchors = [
+        "let (pending, control) = if emergency_fast {",
+        "reconcile_pending_lane_startup(",
+        "if control == PendingCanonicalRecoveryControlV1::Shutdown {",
+        "pending.into_clean_shutdown(activation)?;",
+        "return Ok(());",
+        "let reservation_reconciliation_pending = if emergency_fast {",
+        "reservation_reconciliation_pending",
+        "if queue.lane_reservation_startup_reconciliation_pending() {",
+        "return Err(V2RunnerError::Service(",
+        "false\n    };",
+        "pending.prepare_lane_recovery(",
+        "run_pending_active_height(",
+        "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+        "reservation_reconciliation_pending,",
+    ];
+    let mut remainder = pending;
+    for anchor in anchors {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("pending runner lost completed startup handoff: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
 }
 
 #[test]
@@ -172,6 +196,10 @@ fn empty_lane_evidence_repair_queue() -> (Queue, TempDir) {
         iroha_config::parameters::actual::Queue::default(),
         events_sender,
     );
+    assert!(
+        LaneApplicationEvidenceRepairQueueFence::capture(&queue).is_err(),
+        "an empty Queue without a startup quarantine is not a checked replay"
+    );
     let journal_dir = tempfile::tempdir().expect("empty runner Queue journal directory");
     queue
         .install_plan_journal(
@@ -237,6 +265,20 @@ fn lane_evidence_repair_fence_accepts_an_empty_quarantined_replay() {
     fence
         .revalidate(&queue)
         .expect("unchanged empty Queue replay remains valid through evidence repair");
+    let state = State::new(
+        crate::state::World::default(),
+        Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    queue.complete_empty_startup_for_test(&state);
+    assert!(
+        fence.revalidate(&queue).is_err(),
+        "publishing the Queue gate invalidates the evidence-repair fence"
+    );
+    assert!(
+        LaneApplicationEvidenceRepairQueueFence::capture(&queue).is_err(),
+        "completed empty startup cannot reacquire startup mutation authority"
+    );
 }
 
 #[test]
@@ -287,7 +329,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(",
         "let initial_queue_quarantine = queue.lane_reservation_startup_reconciliation_pending();",
         "let initial_snapshot = queue",
-        "if !initial_snapshot.is_empty() && !initial_queue_quarantine",
+        "if !initial_queue_quarantine",
         "let active_routes = active_lifecycle_routes(state, context)?",
         "let network_id = context.network_id;",
         "pending_autonomous_lifecycle_terminal_outcome_inventory()",

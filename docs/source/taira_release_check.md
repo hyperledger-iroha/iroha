@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **299 native regressions on macOS**: startup
+`--native-check-scope basic` runs **348 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **481-case** native census,
+Use `--native-check-scope full` to execute the full **531-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -16,14 +16,34 @@ changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
 
+Both scopes require unsigned node-capability discovery before a fresh account's
+registration transaction can be submitted. The full production HTTP router is
+tested with an empty account registry, while privacy and operator routes remain
+authenticated. SDK checks still reject ambiguous JSON and missing or mismatched
+data-model and transaction-schema identities before sending transaction bytes.
+OpenAPI authentication metadata and MCP forwarding policy must agree with the
+route catalog. These checks reuse the existing SDK and Torii harnesses.
+
 Both scopes compile the identical configuration, crypto, P2P, CLI, daemon, Core,
 proof, Torii and consensus harness graph plus native shipping binaries with six
 Cargo jobs. This preserves the warm target and dependency feature union. Deferred
 harnesses have compile coverage only; their cases never appear as test passes.
 The basic scope defers 636 seconds of advanced test execution measured in
-preparation56. The new total runtime has not yet been measured. Build, stage and
-test durations remain explicit. Python 3.11+, the repository Rust toolchain and
-previously fetched dependencies are required; Cargo runs offline.
+preparation56. Preparation99 passed its then-selected 330 basic cases in 547.1
+seconds, including 245.2 seconds for the real network sequence; its warm Linux
+release build took 11 minutes 53 seconds. These are observed durations for that
+candidate, not guarantees. Build, stage and test durations remain explicit.
+Python 3.11+, the repository Rust
+toolchain and previously fetched dependencies are required; Cargo runs offline.
+
+Preparation58 passed all 298 then-selected independent native cases, but the
+four-validator check failed after 19.3 seconds before genesis. Its runner fence
+still inferred startup quarantine from whether the replay contained owners.
+The early startup group now also selects the runner's empty-quarantined-replay
+regression and lifecycle startup-order contract. The latter checks that successful
+pending-Kura startup reconciliation clears its pending flag before handing off to
+the successor. These cover the directly changed startup paths in both scopes;
+basic still defers advanced fault matrices and requires actual network success.
 
 The Torii harness executes the shipping routes through plan, prepare and submit,
 checks SDK receipt verification, and applies queued fixture transactions. It
@@ -181,8 +201,12 @@ shorter configured request timeouts, malformed responses and other lookup
 failures remain errors. Confirmation never resubmits the transaction.
 
 The next gate launches four validators from the freshly emitted native
-`iroha3d` binary using the same three-route fixture as the consensus integration
-suite. It submits three consecutive signature-bound `QueuePlanSynced` public transactions, as
+`iroha3d` binary using the same three-dataspace topology and mandatory NPoS/DA
+policies in both scopes. Basic uses the already funded genesis account on the
+universal default route, matching basic BPNG traffic. Full additionally runs the
+original ALICE account route through lane 1/dataspace 1. Neither scope changes
+the network topology, fee policy or confirmation deadlines. Each test submits
+three consecutive signature-bound `QueuePlanSynced` public transactions, as
 required by public Torii admission, and requires state-resolved Applied
 in both local and global status on every validator at each transaction's committed height.
 Between the second and third transactions it waits for a signed snapshot, stops

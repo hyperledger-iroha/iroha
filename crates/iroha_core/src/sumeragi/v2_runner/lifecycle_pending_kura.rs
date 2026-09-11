@@ -1181,6 +1181,20 @@ pub(super) fn run_pending_kura_lifecycle_height(
         pending.into_clean_shutdown(activation)?;
         return Ok(());
     }
+    // Strict pending-tip recovery has consumed the exact Queue startup
+    // receipt before activating this height. Its successor must inherit that
+    // completed phase, rather than reconcile the same open Queue again.
+    // Emergency Fast never consumes that receipt and retains its quarantine.
+    let reservation_reconciliation_pending = if emergency_fast {
+        reservation_reconciliation_pending
+    } else {
+        if queue.lane_reservation_startup_reconciliation_pending() {
+            return Err(V2RunnerError::Service(
+                "pending Kura startup returned without completing Queue reconciliation".to_owned(),
+            ));
+        }
+        false
+    };
     let mut prepared = pending.prepare_lane_recovery(
         &mut setup_runner,
         &queue,

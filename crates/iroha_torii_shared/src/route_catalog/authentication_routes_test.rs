@@ -598,26 +598,20 @@ named_route_policy_test!(zk_compute_routes_require_exact_account_authentication,
     );
 });
 
-named_route_policy_test!(
-    account_bootstrap_capabilities_are_public_without_changing_node_authentication,
-    {
-        assert_route_policies(
-            [application_api::ACCOUNTS_CAPABILITIES_GET],
-            RoutePolicyExpectation {
-                projections: Some(RouteProjections::OPENAPI_AND_SDK),
-                openapi: Some(true),
-                sdk: Some(true),
-                app_api_enabled: Some(true),
-                cataloged: Some(true),
-                ..PUBLIC_READ
-            },
-        );
-        assert_route_policies(
-            [runtime_governance::NODE_CAPABILITIES],
-            ACCOUNT_AUTHENTICATED,
-        );
-    }
-);
+named_route_policy_test!(account_and_node_bootstrap_capabilities_are_public, {
+    assert_route_policies(
+        [application_api::ACCOUNTS_CAPABILITIES_GET],
+        RoutePolicyExpectation {
+            projections: Some(RouteProjections::OPENAPI_AND_SDK),
+            openapi: Some(true),
+            sdk: Some(true),
+            app_api_enabled: Some(true),
+            cataloged: Some(true),
+            ..PUBLIC_READ
+        },
+    );
+    assert_route_policies([runtime_governance::NODE_CAPABILITIES], PUBLIC_READ);
+});
 
 named_route_policy_test!(
     state_backed_runtime_and_governance_routes_require_exact_account_authentication,
@@ -629,7 +623,6 @@ named_route_policy_test!(
                 runtime_governance::ZK_VOTE_TALLY,
                 runtime_governance::RUNTIME_ABI_ACTIVE,
                 runtime_governance::RUNTIME_METRICS,
-                runtime_governance::NODE_CAPABILITIES,
                 runtime_governance::PRIVACY_CAPABILITIES,
                 runtime_governance::NODE_PROJECTION_CHECKPOINT,
                 runtime_governance::MINISTRY_AGENDA_DRAFT,

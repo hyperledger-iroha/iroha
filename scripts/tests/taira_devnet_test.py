@@ -504,7 +504,7 @@ class FakeRuntime:
             option
             for _binary, _subcommands, options in module.INROU_CANARY_CLI_SURFACES
             for option in options
-        } | {"--public-root", "--json"}
+        } | {"--scope", "--public-root", "--json"}
         self.sumeragi_status_http = 401
         self.initial_sumeragi_transport_unavailable_once = False
         self.restart_sumeragi_transport_unavailable_once = False
@@ -5175,6 +5175,15 @@ class TairaDevnetTests(unittest.TestCase):
             any("doctor" in command and "--help" not in command for command in runtime.commands)
         )
 
+    def test_full_doctor_command_uses_explicit_full_scope(self) -> None:
+        runtime = FakeRuntime()
+        target = self.root / "doctor"
+        target.mkdir()
+        module.run_full_doctor(target, Path("/fake/iroha"), "http://127.0.0.1:8080/", runtime.run)
+        command = runtime.commands[-1]
+        self.assertEqual(command[command.index("--scope") + 1], "full")
+        self.assertEqual(command[command.index("--public-root") + 1], "http://127.0.0.1:8080")
+
     def test_full_doctor_runs_after_mandatory_canary(self) -> None:
         runtime = FakeRuntime()
 
@@ -5194,6 +5203,7 @@ class TairaDevnetTests(unittest.TestCase):
             if "doctor" in command and "--help" not in command
         ]
         self.assertEqual(len(doctors), 1)
+        self.assertEqual(doctors[0][doctors[0].index("--scope") + 1], "full")
         deploy_index = next(
             index
             for index, command in enumerate(runtime.commands)

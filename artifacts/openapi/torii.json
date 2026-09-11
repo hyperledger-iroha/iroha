@@ -51775,7 +51775,7 @@
     },
     "/v1/accounts/capabilities": {
       "get": {
-        "description": "Account-free, empty-body GET with no query parameters. Returns exact network identity and an explicit Ed25519 default independent of allow-list ordering or default hashing. Does not change the authenticated /v1/node/capabilities contract. Standard Torii listener access controls still apply.",
+        "description": "Account-free, empty-body GET with no query parameters. Returns exact network identity and an explicit Ed25519 default independent of allow-list ordering or default hashing. Node transaction compatibility metadata is separately available from the public /v1/node/capabilities endpoint. Standard Torii listener access controls still apply.",
         "operationId": "getAccountCapabilities",
         "parameters": [],
         "responses": {
@@ -78709,54 +78709,8 @@
     },
     "/v1/node/capabilities": {
       "get": {
-        "description": "Return supported runtime capabilities.",
-        "parameters": [
-          {
-            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "description": "Return node-wide ABI, data-model, transaction-schema, cryptography, and query capabilities before account registration or submission. No account signature is required; configured Torii API-token and rate limits still apply.",
+        "parameters": [],
         "responses": {
           "200": {
             "content": {
@@ -78766,77 +78720,22 @@
                 }
               }
             },
-            "description": "Successful response",
-            "headers": {
-              "Cache-Control": {
-                "description": "Authenticated responses which must never be retained.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Canonical authentication headers selecting the private response.",
-                "required": true,
-                "schema": {
-                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
-                  "type": "string"
-                }
-              }
-            }
+            "description": "Successful response"
           }
         },
         "security": [
+          {},
           {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
+            "IrohaApiToken": []
           }
         ],
         "summary": "Fetch node capabilities.",
         "tags": [
           "Runtime"
         ],
-        "x-iroha-canonical-auth-v1": {
-          "body_hash_bound": true,
-          "exact_request_target": true,
-          "modes": [
-            {
-              "forbidden_headers": [
-                "X-Iroha-Witness"
-              ],
-              "kind": "single_signature",
-              "required_headers": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ]
-            },
-            {
-              "forbidden_headers": [
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ],
-              "kind": "multisig_witness",
-              "optional_headers": [
-                "X-Iroha-Account"
-              ],
-              "required_headers": [
-                "X-Iroha-Witness"
-              ]
-            }
-          ]
-        },
         "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_account_signature",
+          "admission": "public",
+          "authentication": "torii_default",
           "schemaVersion": 1,
           "stableRouteId": "node.capabilities"
         },

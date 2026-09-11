@@ -41,6 +41,9 @@ directory for each invocation and reports the current phase and elapsed time
 every 30 seconds. Native failures report an operation and errno when available;
 arbitrary stderr stays in the private log path.
 
+The approved guest must provide executable `/usr/bin/curl`; both guest entry
+points check this prerequisite before deployment work or output creation.
+
 ## Operator plan
 
 The plan schema is `taira.same-artifact-retry.v1`. All values describe public
@@ -108,9 +111,10 @@ rebasing retained validator configs. Retry keeps the key unchanged and rejects
 missing or noncanonical public identity before retirement. Native assembly and
 child descriptor custody verify the actual credential; Python reads no key bytes.
 
-Native apply qualifies four-peer convergence, prepared application mutations,
-Inrou runtime health and all four recovery restarts through these direct
-endpoints before staging or switching the public edge. The same retained
+Native apply qualifies four-peer convergence, prepared application mutations
+and one validator restart for signed `core_testnet` scope. The `inrou` scope
+also requires Inrou runtime health and all four ordered restart waves through
+these direct endpoints before staging or switching the public edge. The same retained
 mutations and restart evidence flow into the release proof. After cutover,
 `EdgeVerify` proves public HTTPS, discovery and doctor checks. Candidate failures
 remain before public cutover; a failed rollback remains resumable and must be
@@ -192,12 +196,20 @@ It performs no retirement, assembly, authorization or apply.
 
 Seed verification uses `taira_seed_observation.py` to read the public committed
 height and request a fresh challenge-bound finality attestation. The attestation
-supplies the applied status; the check needs no operator credentials. It retains
+supplies the applied status; the check needs no operator credentials. The observer
+requires the producer's canonical 64-character uppercase hexadecimal JSON challenge
+string, and its test fixture uses that same wire format. It retains
 process, executable, listener and configuration identity checks. Only native
 `sha256sum` consumes the held configuration descriptor; Python never reads the
 private TOML. Transient startup responses have three attempts within a shared
 30-second deadline, while invalid identities and successful malformed responses
 fail immediately.
+
+Boot persistence repairs an enabled nginx link to `/usr/lib/systemd/system/nginx.service`
+by running `systemctl reenable /etc/systemd/system/nginx.service` against the
+authenticated installed fragment. It records intent before the repair, requires
+the canonical link afterward, and verifies unchanged live processes and fragments;
+it does not restart services.
 
 Because the deployment's files already exist, the completed route admits only
 64 MiB for remaining evidence plus guest/backing reserves, instead of charging

@@ -61,7 +61,9 @@ impl Status<'_> {
                     join_torii_url(&self.client.torii_url, uri::API_VERSION),
                 )
                 .max_response_bytes(MAX_VERSION_BYTES),
-            "text/plain",
+            // Public routes negotiate canonical typed errors before dispatch;
+            // the version endpoint's successful representation remains text.
+            "text/plain, application/json",
         )
         .await?;
         if response.status() != StatusCode::OK {

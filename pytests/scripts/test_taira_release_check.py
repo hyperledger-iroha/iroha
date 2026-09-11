@@ -1,6 +1,7 @@
 """Offline checks for the early-gate runner; no Cargo or live inputs required."""
 
 import contextlib
+import errno
 import fcntl
 import hashlib
 import stat
@@ -17,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 481
+EXPECTED_REGRESSION_COUNT = 531
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -36,6 +37,11 @@ def isolate_shipping_fixture(case):
     audit = patch.object(gate, "shipping_harnesses", return_value=())
     audit.start()
     case.addCleanup(audit.stop)
+    # These byte-sized fixtures test orchestration, not the operator's disk.
+    # Capacity regressions override this observation with their exact boundary.
+    capacity = patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=16 * 1024**3))
+    capacity.start()
+    case.addCleanup(capacity.stop)
 
 
 class FixtureCopies(dict):
@@ -53,23 +59,84 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 299)
+        self.assertEqual(gate.selected_regression_count(), 348)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
             with self.subTest(selection=name):
-                if name not in {"core", "proof-flows"}:
+                if name not in {"core", "proof-flows", "network"}:
                     self.assertEqual(basic[name], full[name])
                 names = [test for _, tests in basic[name] for test in tests]
                 self.assertEqual(len(names), len(set(names)))
         self.assertEqual(basic["core"], gate.CORE_ADMISSION_STARTUP_STAGES)
+        for test in (
+            "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
+            "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+            "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
+            "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
+            "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
+            "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
+            "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
+            "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
+            "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
+            "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_timeout_certificate_reservices_only_sealed_periodic_episode",
+            "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
+            "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
+            "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
+            "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_preserves_authority_and_closed_guards",
+            "state::tests::fee_sponsor_safe_activation_height_clamps_elapsed_lower_bound",
+            "state::tests::fee_sponsor_safe_activation_height_preserves_later_request",
+            "state::tests::fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease",
+            "state::tests::fee_sponsor_revision_activation_materializes_at_scheduled_block_height",
+            "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
+            "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
+        ):
+            self.assertIn(test, [test for _, tests in basic["core"] for test in tests])
+        self.assertIn(
+            "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+            [test for _, tests in basic["kagami"] for test in tests],
+        )
         self.assertEqual(basic["proof-flows"], ())
         self.assertTrue(full["proof-flows"])
-        self.assertEqual(basic["network"], gate.NETWORK_STAGES)
+        self.assertEqual(basic["network"], gate.BASIC_NETWORK_STAGES)
+        self.assertEqual([test for _, tests in basic["network"] for test in tests],
+                         ["four_peer_universal_public_transaction_sequence_reaches_applied"])
+        self.assertEqual([test for _, tests in full["network"] for test in tests],
+                         ["four_peer_universal_public_transaction_sequence_reaches_applied",
+                          "four_peer_multiroute_public_transaction_sequence_reaches_applied"])
         for stage in gate.TORII_STARTUP_STAGES:
             self.assertIn(stage, basic["torii-unit"])
         for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
             self.assertIn(stage, full["core"])
+
+    def test_both_scopes_require_unsigned_bootstrap_and_fail_closed_capability_validation(self):
+        required = {
+            "client": {
+                "client::tests::" + name for name in (
+                    "prospective_account_submission_discovers_capabilities_without_account_auth",
+                    "get_node_capabilities_json_requests_json_accept",
+                    "get_node_capabilities_json_accepts_torii_utf8_json_content_type",
+                    "get_node_capabilities_json_rejects_ambiguous_representation",
+                    "submit_transaction_rejects_mismatched_data_model_version",
+                    "submit_transaction_rejects_missing_data_model_version",
+                    "submit_transaction_rejects_missing_signed_transaction_schema_hash",
+                    "submit_transaction_rejects_invalid_signed_transaction_schema_hash",
+                    "submit_transaction_rejects_mismatched_signed_transaction_schema_hash",
+                )
+            },
+            "torii-unit": {
+                "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
+                "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
+                "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
+            },
+        }
+        for scope in gate.QUALIFICATION_SCOPES:
+            selections = gate.qualification_stages(scope)
+            for harness, expected in required.items():
+                with self.subTest(scope=scope, harness=harness):
+                    names = [test for _, tests in selections[harness] for test in tests]
+                    self.assertTrue(expected.issubset(names))
+                    self.assertTrue(all(names.count(test) == 1 for test in expected))
 
     def test_unknown_scope_fails_before_any_source_or_build_action(self):
         for scope in ("", "skip", "core_testnet", None):
@@ -103,7 +170,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  patch.object(gate, "run_stages", side_effect=lambda harness, root, env, stages, locks:
                               executed.extend((harness, test) for _, tests in stages for test in tests)), \
                  patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
-                              executed.extend(("network", test) for _, tests in gate.NETWORK_STAGES for test in tests)), \
+                              executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests)), \
                  contextlib.redirect_stdout(output):
                 gate.run_checks(Path("/frozen"), qualification_scope=scope,
                                 environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
@@ -452,7 +519,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.CheckError, "consensus stalled"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
         network.assert_called_once_with(Path("/frozen"), Path("/warm"),
-            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,), harness="/warm/network")
+            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,),
+            harness="/warm/network", stages=gate.NETWORK_STAGES)
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
@@ -540,14 +608,15 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
              patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
-            gate.run_network_checks(Path("/frozen"), Path("/warm"), env, (77, 88), harness="/warm/network")
+            gate.run_network_checks(Path("/frozen"), Path("/warm"), env, (77, 88),
+                                    harness="/warm/network", stages=gate.BASIC_NETWORK_STAGES)
         selected = run.call_args.args[2]
         for key in ("IROHA_TEST_SKIP_BUILD", "IROHA_FAIL_ON_SANDBOX_SKIP", "IROHA_TEST_REQUIRE_NETWORK", "IROHA_TEST_SERIALIZE_NETWORKS", "IROHA_TEST_NETWORK_KEEP_DIRS"):
             self.assertEqual(selected[key], "1")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHA"], "/warm/client")
         self.assertEqual(selected["TEST_NETWORK_TMP_DIR"], "/warm/private-fixture")
-        self.assertEqual(run.call_args.args[3:], (gate.NETWORK_STAGES, (77, 88)))
+        self.assertEqual(run.call_args.args[3:], (gate.BASIC_NETWORK_STAGES, (77, 88)))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
 
 
@@ -722,7 +791,8 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
              patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
              patch.object(gate, "run_stages") as run, patch.object(gate.tempfile, "mkdtemp") as fixture:
             with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
-                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (), harness="/harness")
+                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (),
+                                        harness="/harness", stages=gate.NETWORK_STAGES)
         run.assert_not_called()
         fixture.assert_not_called()
 
@@ -938,6 +1008,93 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             "sha256": hashlib.sha256(original_bytes).hexdigest(), "size": len(original_bytes),
             "cargo_artifact": row}])
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires native macOS fclonefileat")
+    def test_native_clone_preserves_bytes_after_source_write_and_replacement(self):
+        payload = bytes(range(256)) * 4096
+        executable, row, _ = self.artifact(payload=payload)
+        clone = gate.native_artifact_clone_function()
+        self.assertIsNotNone(clone)
+        cloned = []
+        def observe(*args):
+            result = clone(*args)
+            cloned.append(result)
+            return result
+        with patch.object(gate, "native_artifact_clone_function", return_value=observe):
+            copies = self.isolate({"iroha": row})
+        if cloned == [False]:
+            self.skipTest("fixture filesystem does not support native clones")
+        self.assertEqual(cloned, [True])
+        destination = Path(copies["iroha"])
+        self.assertNotEqual(executable.stat().st_ino, destination.stat().st_ino)
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o500)
+        self.assertEqual(destination.read_bytes(), payload)
+        with executable.open("r+b") as source:
+            source.write(b"MUTATED-SOURCE")
+            source.flush()
+            os.fsync(source.fileno())
+        self.assertEqual(destination.read_bytes(), payload)
+        replacement = executable.with_suffix(".next")
+        replacement.write_bytes(b"REPLACED-SOURCE")
+        os.replace(replacement, executable)
+        self.assertEqual(destination.read_bytes(), payload)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires native macOS fclonefileat")
+    def test_native_clone_accepts_owner_read_execute_source(self):
+        executable, row, _ = self.artifact()
+        payload = executable.read_bytes()
+        executable.chmod(0o500)
+        clone = gate.native_artifact_clone_function()
+        self.assertIsNotNone(clone)
+        cloned = []
+        def observe(*args):
+            result = clone(*args)
+            cloned.append(result)
+            return result
+        with patch.object(gate, "native_artifact_clone_function", return_value=observe):
+            copies = self.isolate({"iroha": row})
+        if cloned == [False]:
+            self.skipTest("fixture filesystem does not support native clones")
+        self.assertEqual(cloned, [True])
+        destination = Path(copies["iroha"])
+        self.assertEqual(destination.read_bytes(), payload)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o500)
+        self.assertNotEqual(executable.stat().st_ino, destination.stat().st_ino)
+
+    def test_unsupported_clone_streams_when_full_capacity_is_available(self):
+        executable, row, _ = self.artifact()
+        with patch.object(gate, "native_artifact_clone_function", return_value=lambda *args: False):
+            copies = self.isolate({"iroha": row})
+        destination = Path(copies["iroha"])
+        self.assertEqual(destination.read_bytes(), executable.read_bytes())
+        self.assertNotEqual(destination.stat().st_ino, executable.stat().st_ino)
+
+    def test_unsupported_clone_requires_capacity_for_all_remaining_full_copies(self):
+        executable, row, _ = self.artifact(payload=b"x" * 1024 * 1024)
+        other, other_row, _ = self.artifact("iroha3d", payload=b"y" * 1024 * 1024)
+        adequate = MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES + 64 * 1024 * 1024)
+        inadequate = MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES
+                               + executable.stat().st_size + other.stat().st_size - 1)
+        with patch.object(gate, "native_artifact_clone_function", return_value=lambda *args: False), \
+             patch.object(gate.shutil, "disk_usage", side_effect=[adequate, adequate, inadequate]):
+            with self.assertRaisesRegex(gate.CheckError, "working-space reserve"):
+                self.isolate({"iroha": row, "iroha3d": other_row})
+        self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha")))
+        self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha3d")))
+        self.assertNotIn("isolated native artifact", self.stdout.getvalue())
+        self.assert_profile_unlocked()
+
+    def test_clone_io_failure_never_streams_or_publishes(self):
+        _, row, _ = self.artifact()
+        def fail(*args):
+            raise OSError(errno.EIO, "fixture clone I/O failure")
+        with patch.object(gate, "native_artifact_clone_function", return_value=fail):
+            with self.assertRaisesRegex(gate.CheckError, "fixture clone I/O failure"):
+                self.isolate({"iroha": row})
+        self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha")))
+        self.assertNotIn("isolated native artifact", self.stdout.getvalue())
+        self.assert_profile_unlocked()
+
     def test_strict_foreign_fingerprints_reject_without_retirement_or_publication(self):
         _, row, _ = self.artifact()
         directory = self.target / "debug" / ".fingerprint" / "iroha_cli-0123456789abcdef"
@@ -1023,7 +1180,8 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 active["changed"] = True
                 executable.write_bytes(b"x" * len(result))
             return result
-        with patch.object(self.contract, "stable_open_relative", side_effect=track_open), \
+        with patch.object(gate, "native_artifact_clone_function", return_value=None), \
+             patch.object(self.contract, "stable_open_relative", side_effect=track_open), \
              patch.object(gate.os, "read", side_effect=mutate_after_read):
             with self.assertRaisesRegex(gate.CheckError, "changed while"):
                 self.isolate({"iroha": row})
@@ -1052,7 +1210,8 @@ class NativeArtifactIsolationTests(unittest.TestCase):
     def test_capacity_reserve_failure_does_not_publish_or_create_copy_directory(self):
         executable, row, _ = self.artifact()
         space = MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES + executable.stat().st_size - 1)
-        with patch.object(gate.shutil, "disk_usage", return_value=space):
+        with patch.object(gate, "native_artifact_clone_function", return_value=None), \
+             patch.object(gate.shutil, "disk_usage", return_value=space):
             with self.assertRaisesRegex(gate.CheckError, "working-space reserve"):
                 self.isolate({"iroha": row})
         self.assertEqual(list(self.target.glob("taira-native-artifacts-*")), [])

@@ -268,6 +268,15 @@ receipts never substitute for current workload liveness. A core testnet result
 does not claim Inrou qualification. The existing host stage/preseed barrier
 remains part of installation in both scopes.
 
+The basic scope restarts one validator and proves all four converge before the
+postrestart onboarding, faucet and Applied write. Inrou qualification exercises
+all four ordered restart waves. `taira doctor --scope basic` is the default
+connectivity check; `--scope full` adds advanced product and synchronized-time
+requirements. Basic reports valid local-clock fallback as a warning. Malformed
+time/MCP responses still fail. Render public validator units with
+`scripts/taira_validator_unit.py`; its Type=exec startup waits for the custody
+launcher before native daemon attestation and readiness begin.
+
 Host cleanup persists one request-bound plan before mutation, then
 removes only marker-admitted upload/release roots and older superseded
 marker-bound Inrou stage roots through crash-resumable tombstones within the

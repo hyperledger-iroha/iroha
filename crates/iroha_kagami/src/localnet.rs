@@ -77,6 +77,7 @@ use iroha_executor_data_model::permission::{
     },
     parameter::{CanSetHijiriParameters, CanSetParameters},
     query::{CanReadAllLedgerData, CanReadRestrictedDataspace},
+    smart_contract::CanRegisterSmartContractCode,
 };
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
@@ -3892,6 +3893,13 @@ fn append_localnet_contract_permissions_for_client(
         }
     };
     push_unique(enact_governance, client_account_id.clone());
+    // This registered, funded runtime operator is the generated network's deployer.
+    // Registrar authority must be seeded in genesis; existing accounts cannot use
+    // the separate missing-authority deployment bootstrap after the network starts.
+    push_unique(
+        CanRegisterSmartContractCode.into(),
+        client_account_id.clone(),
+    );
     push_unique(CanSetParameters.into(), client_account_id.clone());
     push_unique(CanSetHijiriParameters.into(), client_account_id.clone());
     push_unique(CanReadAllLedgerData.into(), client_account_id.clone());
@@ -9765,6 +9773,86 @@ mod tests {
                 .and_then(toml::Value::as_integer),
             Some(369)
         );
+    }
+    #[test]
+    fn generated_taira_genesis_grants_deployment_only_to_generated_client() {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(369);
+        let temp = tempfile::tempdir().expect("temporary Taira directory");
+        let opts = LocalnetOptions {
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(TAIRA_TESTNET_PEERS).expect("four peers"),
+            seed: Some("taira-generated-deployer-permission".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29_080,
+            base_p2p_port: 33_337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: Some(5_000),
+            consensus_mode: SumeragiConsensusMode::Npos,
+        };
+        generate_localnet_inner(
+            &opts,
+            &mut BufWriter::new(Vec::new()),
+            Some(PUBLIC_TAIRA_CHAIN_ID),
+        )
+        .expect("generate Taira with its runtime operator");
+        let client_config: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("read generated client"),
+        )
+        .expect("parse generated client");
+        let client_public_key = client_config
+            .get("account")
+            .and_then(|account| account.get("public_key"))
+            .and_then(toml::Value::as_str)
+            .expect("generated client public key")
+            .parse::<iroha_crypto::PublicKey>()
+            .expect("canonical client public key");
+        let client_account_id = AccountId::new(client_public_key);
+        let operator =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("derive expected generated operator");
+        assert_eq!(client_account_id, operator.account_id);
+        assert_ne!(client_account_id, localnet_client_account_id());
+        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            .expect("parse generated Taira genesis");
+        let registrar_grantees = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter_map(|grant| match grant {
+                GrantBox::Permission(grant)
+                    if CanRegisterSmartContractCode::try_from(grant.object()).is_ok() =>
+                {
+                    Some(grant.destination().clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            registrar_grantees,
+            vec![client_account_id.clone()],
+            "only the generated client receives registrar authority, exactly once"
+        );
+        assert!(manifest.instructions().any(|instruction| {
+            matches!(
+                instruction.as_any().downcast_ref::<RegisterBox>(),
+                Some(RegisterBox::Account(register)) if register.object().id() == &client_account_id
+            )
+        }));
+        let client_fee_asset = AssetId::new(localnet_fee_asset_definition_id(), client_account_id);
+        assert!(manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<MintBox>()
+                .is_some_and(|mint| match mint {
+                    MintBox::Asset(mint) => {
+                        mint.destination() == &client_fee_asset && !mint.object().is_zero()
+                    }
+                    _ => false,
+                })
+        }));
     }
     #[test]
     fn generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission() {

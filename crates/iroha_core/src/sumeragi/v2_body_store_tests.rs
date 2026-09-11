@@ -2108,6 +2108,171 @@ mod tests {
 
     #[cfg(all(unix, not(target_os = "espidf")))]
     #[test]
+    fn validation_marker_publication_reuses_exact_durable_outcomes() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        for rejected in [false, true] {
+            let root = TempDir::new().expect("temporary body-store root");
+            let (context, keys) = context_and_keys();
+            let (body, manifest) = body_and_manifest(&context, &keys, None);
+            let mut store = V2BodyStore::open(root.path(), context.clone()).expect("open store");
+            let receipt = store
+                .store(manifest, body)
+                .expect("store authenticated body");
+            let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+            let outcome = if rejected {
+                ValidationOutcomeMarkerKind::Rejected(
+                    BodyValidationRejectionIdentity::Rejected.canonical_code(),
+                )
+            } else {
+                ValidationOutcomeMarkerKind::Validated(commitment)
+            };
+            let marker = ValidationOutcomeMarker {
+                version: VALIDATION_OUTCOME_MARKER_VERSION,
+                context_id: receipt.context_id(),
+                round: receipt.round(),
+                subject: receipt.subject(),
+                manifest_hash: receipt.manifest_hash(),
+                body_frame_hash: receipt.frame_hash,
+                outcome,
+            };
+            let path = store.validated_path_for(receipt.round(), receipt.subject());
+            // Reproduce publication completing before the volatile result is installed.
+            super::write_validation_outcome_marker_bound(
+                store.bound_directory.as_ref().expect("bound context"),
+                path.file_name().expect("marker leaf"),
+                &marker,
+            )
+            .expect("publish durable result before settlement");
+            let before = durable_files_snapshot(root.path());
+            let metadata = fs::metadata(&path).expect("marker metadata");
+            let called = Cell::new(false);
+            let result = store
+                .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |block| {
+                    called.set(true);
+                    assert_eq!(block.hash(), receipt.subject().block_hash);
+                    if rejected {
+                        Err(FixtureValidationError::Invalid("reproduced rejection"))
+                    } else {
+                        Ok(commitment)
+                    }
+                })
+                .expect("exact freshly reproduced marker is reusable");
+            assert!(
+                called.get(),
+                "disk bytes alone cannot mint semantic validation"
+            );
+            assert_eq!(result.durable_body(), &receipt);
+            assert_eq!(result.validated_receipt().is_some(), !rejected);
+            assert_eq!(result.rejection_identity().is_some(), rejected);
+            assert_eq!(
+                fs::metadata(&path).expect("retained metadata").ino(),
+                metadata.ino()
+            );
+            assert_eq!(durable_files_snapshot(root.path()), before);
+            drop(store);
+            let mut reopened =
+                V2BodyStore::open(root.path(), context).expect("reopen unchanged durable result");
+            reopened
+                .revalidate_recovered_markers(|_| {
+                    if rejected {
+                        Err(FixtureValidationError::Invalid("reproduced rejection"))
+                    } else {
+                        Ok(commitment)
+                    }
+                })
+                .expect("the same result remains valid after real reopen");
+            reopened
+                .ensure_recovered_markers_revalidated()
+                .expect("no quarantined result remains");
+            assert_eq!(durable_files_snapshot(root.path()), before);
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn validation_marker_publication_rejects_changed_or_linked_artifacts() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = TempDir::new().expect("temporary body-store root");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(root.path(), context).expect("open store");
+        let receipt = store
+            .store(manifest, body)
+            .expect("store authenticated body");
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        let marker = ValidationOutcomeMarker {
+            version: VALIDATION_OUTCOME_MARKER_VERSION,
+            context_id: receipt.context_id(),
+            round: receipt.round(),
+            subject: receipt.subject(),
+            manifest_hash: receipt.manifest_hash(),
+            body_frame_hash: receipt.frame_hash,
+            outcome: ValidationOutcomeMarkerKind::Validated(commitment),
+        };
+        let path = store.validated_path_for(receipt.round(), receipt.subject());
+        let mut changed_context = marker.clone();
+        changed_context.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(
+            Hash::new(b"foreign marker context"),
+        ));
+        let mut changed_outcome = marker.clone();
+        changed_outcome.outcome = ValidationOutcomeMarkerKind::Rejected(
+            BodyValidationRejectionIdentity::Rejected.canonical_code(),
+        );
+        let mut changed_body = marker.clone();
+        changed_body.body_frame_hash = Hash::new(b"foreign body frame");
+        for changed in [changed_context, changed_outcome, changed_body] {
+            write_validation_outcome_marker(&path, &changed).expect("seed different framed marker");
+            let before = durable_files_snapshot(root.path());
+            let inode = fs::metadata(&path).expect("marker metadata").ino();
+            assert!(matches!(
+                store.persist_validated_receipt(&receipt, commitment),
+                Err(V2BodyStoreError::ValidationMarkerMismatch)
+            ));
+            assert!(store.validated.is_empty());
+            assert_eq!(durable_files_snapshot(root.path()), before);
+            assert_eq!(fs::metadata(&path).expect("retained metadata").ino(), inode);
+        }
+        let wrong_frame = super::frame_payload_with_magic(
+            STORE_MAGIC,
+            b"wrong marker kind",
+            super::FramePayloadKind::Body,
+        )
+        .expect("frame wrong marker type");
+        fs::write(&path, wrong_frame).expect("seed wrong frame type at marker path");
+        let before = durable_files_snapshot(root.path());
+        assert!(matches!(
+            store.persist_validated_receipt(&receipt, commitment),
+            Err(V2BodyStoreError::CorruptFrame)
+        ));
+        assert_eq!(durable_files_snapshot(root.path()), before);
+        fs::remove_file(&path).expect("remove fixture marker");
+        let outside = TempDir::new().expect("outside directory");
+        let retained = outside.path().join("retained.validated");
+        write_validation_outcome_marker(&retained, &marker).expect("write exact outside marker");
+        let retained_bytes = fs::read(&retained).expect("read outside marker");
+        for hard_link in [false, true] {
+            if hard_link {
+                fs::hard_link(&retained, &path).expect("install hard link");
+            } else {
+                std::os::unix::fs::symlink(&retained, &path).expect("install symlink");
+            }
+            assert!(matches!(
+                store.persist_validated_receipt(&receipt, commitment),
+                Err(V2BodyStoreError::UnexpectedEntry(_))
+            ));
+            assert!(store.validated.is_empty());
+            assert_eq!(
+                fs::read(&retained).expect("outside marker preserved"),
+                retained_bytes
+            );
+            fs::remove_file(&path).expect("remove fixture link");
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
     fn atomic_publication_never_follows_preexisting_temp_links() {
         fn temporary_path(destination: &Path) -> std::path::PathBuf {
             let mut name = destination.as_os_str().to_os_string();

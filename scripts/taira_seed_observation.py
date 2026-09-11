@@ -245,10 +245,11 @@ def _validate(attestation, height, challenge, row, network_id, genesis_hash):
     try:
         body = attestation['body']
         status = body['status']
+        # Norito's [u8; 32] JSON codec emits one uppercase hexadecimal string.
         _need(type(body['version']) is int and body['version'] == 1
-              and isinstance(body['challenge'], list) and len(body['challenge']) == 32
-              and all(type(byte) is int and 0 <= byte <= 255 for byte in body['challenge'])
-              and body['challenge'] == list(challenge) and body['network_id'] == network_id
+              and isinstance(body['challenge'], str)
+              and re.fullmatch('[0-9A-F]{64}', body['challenge']) is not None
+              and body['challenge'] == challenge.hex().upper() and body['network_id'] == network_id
               and body['node_id'] == row['peer_id'], 'attestation identity differs')
         _need(body['genesis_block_hash'] == network_id and _hash(network_id) == genesis_hash,
               'attestation genesis differs')

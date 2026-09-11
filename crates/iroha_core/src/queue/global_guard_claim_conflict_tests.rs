@@ -41,7 +41,7 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
     // A durable autonomous owner leaves the physical FIFO but keeps its
     // immutable ordinal. That virtual predecessor must fence an ordinary
     // follower until the reservation reaches a terminal release.
-    let fixture = globally_bound_guard_fixture();
+    let fixture = globally_bound_guard_fixture_with_journals(0, true);
     let hash = fixture.transaction.hash_as_entrypoint();
     let follower_hash = fixture.follower_transaction.hash_as_entrypoint();
     fixture
@@ -49,7 +49,6 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
         .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
         .expect("enqueue virtual-cut follower");
     install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
-    install_test_reservation_journal(&fixture.queue, &fixture._dir);
     let reserved = fixture
         .queue
         .reserve_transactions_for_lane(

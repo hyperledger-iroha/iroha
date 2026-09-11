@@ -131,6 +131,11 @@ fn catalog_dispatch_prefers_exact_paths_and_rejects_ambiguous_templates() {
 fn target_policy_requires_inner_canonical_proof_only_for_canonical_route() {
     assert_eq!(
         target_extra_header_policy(&Method::GET, "/v1/node/capabilities")
+            .expect("cataloged public bootstrap route"),
+        ExtraHeaderPolicy::Default
+    );
+    assert_eq!(
+        target_extra_header_policy(&Method::GET, "/v1/privacy/capabilities")
             .expect("cataloged account route"),
         ExtraHeaderPolicy::CanonicalAccountAuthentication
     );
@@ -2420,8 +2425,15 @@ fn whole_catalog_publishes_self_contained_input_schemas() {
         let input_schema = descriptor
             .get("inputSchema")
             .expect("tool descriptor inputSchema");
-        reject_unresolved_schema_refs(
+        let input_schema = expand_advertised_schema_refs(input_schema);
+        assert_eq!(
             input_schema,
+            sanitize_tool_input_schema(&tool.input_schema),
+            "tool `{}` advertised references must preserve every input constraint",
+            tool.name
+        );
+        reject_unresolved_schema_refs(
+            &input_schema,
             &format!("tool `{}` advertised inputSchema", tool.name),
         )
         .unwrap_or_else(|error| panic!("{error}"));

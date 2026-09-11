@@ -19156,12 +19156,6 @@ pub mod isi {
             };
             let program_id = self.program_id().clone();
             ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
-            if *self.activate_at_height() < state_transaction.block_height() {
-                return Err(invalid_fee_sponsor_program(format!(
-                    "fee sponsor revision activation height cannot precede executing block height {}",
-                    state_transaction.block_height()
-                )));
-            }
             let mut program = state_transaction
                 .world
                 .fee_sponsor_programs
@@ -19394,17 +19388,9 @@ pub mod isi {
                     "closed fee sponsor program cannot enroll beneficiaries",
                 ));
             }
-            if state_transaction
-                .world
-                .accounts
-                .get(self.beneficiary())
-                .is_none()
-            {
-                return Err(invalid_fee_sponsor_program(format!(
-                    "unknown fee sponsor beneficiary `{}`",
-                    self.beneficiary()
-                )));
-            }
+            // Eligibility binds an exact account identity, not account existence. An
+            // authorized sponsor may fund that identity's first self-registration
+            // transaction; enrollment itself creates no account or execution authority.
             let key = FeeSponsorEnrollmentKey {
                 program_id,
                 beneficiary: self.beneficiary().clone(),

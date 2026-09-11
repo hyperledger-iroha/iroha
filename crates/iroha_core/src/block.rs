@@ -18024,6 +18024,11 @@ pub(crate) mod valid {
                 .expect("persist actual predecessor finality before application receipts");
             {
                 let mut state_block = state.block(committed.as_ref().header());
+                // This fixture supplies the results directly, so it must also stage
+                // the execution-owned frontier before finality applies those results.
+                state_block
+                    .stage_ordinary_lane_frontiers(committed.as_ref())
+                    .expect("stage the exact predecessor execution frontier");
                 let _ = state_block
                     .apply_without_execution_with_verified_v2_finality(&committed)
                     .expect("apply predecessor under exact finality topology");
@@ -20174,6 +20179,20 @@ pub(crate) mod valid {
                 .expect("publish exact finality before admitting raw predecessor ownership");
             {
                 let mut state_block = state.block(committed_first.as_ref().header());
+                let error = state_block
+                    .apply_without_execution_with_verified_v2_finality(&committed_first)
+                    .expect_err("finality alone cannot invent an unexecuted lane frontier");
+                assert!(
+                    matches!(
+                        error,
+                        crate::state::MergeLedgerCommitError::ExecutionMarkerConflict(ref message)
+                            if message.contains("missing its exact executed frontier")
+                    ),
+                    "unexpected unexecuted predecessor error: {error:?}"
+                );
+                state_block
+                    .stage_ordinary_lane_frontiers(committed_first.as_ref())
+                    .expect("stage the result-bearing predecessor execution frontier");
                 let _ = state_block
                     .apply_without_execution_with_verified_v2_finality(&committed_first)
                     .expect("apply the exact predecessor under its frozen finality authority");

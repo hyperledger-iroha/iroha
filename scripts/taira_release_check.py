@@ -11,6 +11,10 @@ explicitly selected. This preference never changes Linux release compilation.
 Private test-executable copies are released after their last subprocess exits,
 including failed checks; their observations and test logs remain available.
 Native node/client snapshots remain retained for network and CLI capture consumers.
+On macOS, descriptor-bound copy-on-write clones avoid full duplicate allocation
+while retaining independent inodes and exact content/stat validation. Unsupported
+filesystems stream only when all remaining copies fit beside the working reserve;
+later Cargo writes can still allocate new blocks for changed cloned content.
 The default basic scope keeps deployment custody, authentication, application and
 startup admission checks plus real four-validator Applied transactions and restart.
 Full additionally executes advanced Core recovery and proof-production matrices.
@@ -26,6 +30,8 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -70,6 +76,18 @@ STAGES = (
         "taira_public_reset::executor_model::tests::qualification_scope_is_bound_before_normal_and_recovery_signature_admission",
         "taira_public_reset::executor_model::tests::qualification_scope_is_immutable_in_recovery_and_reported_explicitly",
         "taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan",
+        "taira_public_reset::host::tests::restart_recovery_reconstructs_only_the_final_frontier_receipt",
+        "taira_public_reset::host::tests::cohost_mutation_boundaries_share_the_complete_plan_and_lock_namespace",
+    )),
+    ("public doctor producer and deployment contract", (
+        "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
+        "taira::tests::doctor_tools_list_consumes_pages_and_rejects_invalid_cursors",
+        "taira::tests::doctor_reports_bounded_mcp_application_error_codes",
+        "taira::tests::doctor_mock_healthy_flow_reports_ok",
+        "taira::tests::time_snapshot_requires_network_time_and_every_health_axis",
+        "taira::tests::doctor_rejects_unknown_namespaces_or_malformed_mcp_tools",
+        "taira::tests::doctor_mock_required_tool_missing_reports_failure",
+        "taira_public_reset::host::tests::doctor_report_requires_the_exact_first_release_check_surface",
     )),
     ("private config descriptors", (
         "client_config::tests::inherited_config_loads_exact_descriptor_without_reopening_provenance",
@@ -177,7 +195,7 @@ STAGES = (
         "taira_public_reset::host::tests::validator_http_readiness_retries_cold_backends_before_strict_checks",
         "taira_public_reset::host::tests::validator_http_readiness_rejects_permanent_http_errors",
         "taira_public_reset::host::tests::validator_http_readiness_keeps_deadline_and_authorization",
-        "taira_public_reset::host::tests::doctor_failure_reports_only_fixed_checks_and_status_codes",
+        "taira_public_reset::host::tests::doctor_failure_reports_bounded_public_check_diagnostics",
         "taira_public_reset::host::tests::manager_evidence_stays_pending_until_exact_terminal_job",
         "taira_public_reset::host::tests::manager_recovery_uses_immutable_mutation_deadline_but_observes_terminal_state",
         "taira_public_reset::host::tests::manager_evidence_rejects_wrong_or_duplicate_exec_identity",
@@ -450,7 +468,17 @@ CORE_STAGES += (("resolved validation and exact application ownership", (
     "sumeragi::v2_lane_work::tests::autonomous_fixture_binds_final_lane_context_before_opening_signing_guards",
 )),)
 
-CLIENT_STAGES = (("shared absolute HTTP operation deadline", (
+CLIENT_STAGES = (("public compatibility discovery before account bootstrap", (
+    "client::tests::prospective_account_submission_discovers_capabilities_without_account_auth",
+    "client::tests::get_node_capabilities_json_requests_json_accept",
+    "client::tests::get_node_capabilities_json_accepts_torii_utf8_json_content_type",
+    "client::tests::get_node_capabilities_json_rejects_ambiguous_representation",
+    "client::tests::submit_transaction_rejects_mismatched_data_model_version",
+    "client::tests::submit_transaction_rejects_missing_data_model_version",
+    "client::tests::submit_transaction_rejects_missing_signed_transaction_schema_hash",
+    "client::tests::submit_transaction_rejects_invalid_signed_transaction_schema_hash",
+    "client::tests::submit_transaction_rejects_mismatched_signed_transaction_schema_hash",
+)), ("shared absolute HTTP operation deadline", (
     "http_default::tests::operation_deadline_bounds_sequential_blocking_dispatches",
     "http_default::tests::expired_operation_deadline_prevents_dispatch_and_cannot_be_extended",
     "http_default::tests::operation_deadline_cancels_injected_async_transport",
@@ -507,8 +535,19 @@ DAEMON_STAGES += DAEMON_STARTUP_STAGES
 TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation", (
     "tests_runtime_handlers::readiness_rejects_empty_queue_startup_reconciliation",
     "tests_runtime_handlers::readiness_rejects_closed_consensus_ingress",
+)), ("actual public MCP catalogue and response bounds", (
+    "mcp::tests::tools_list_writer_catalog_roundtrips_through_modern_http_byte_limit",
+    "mcp::tests::tools_list_byte_budget_includes_envelope_and_rejects_oversized_single_tool",
+    "mcp::tests::advertised_schema_factoring_preserves_subschemas_and_literal_values",
+    "mcp::tests::registry_security::musubi_v1_mcp_bodies_are_self_contained_closed_schemas",
+    "mcp::tests::whole_catalog_publishes_self_contained_input_schemas",
+    "mcp::tests::registry_security::tools_list_list_changed_tracks_toolset_version",
 )),)
-TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public contract retained payload and certified ingress", (
+TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
+    "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
+    "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
+    "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
+)), ("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
     "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
     "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",
@@ -580,7 +619,32 @@ CORE_STAGES += (("authenticated admission and coherent State publication", (
 
 CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "queue::tests::empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion",
+    "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
+    "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+    "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
+    "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
+)), ("fee sponsor activation and prospective account bootstrap", (
+    "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
+    "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
+    "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
+    "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_preserves_authority_and_closed_guards",
+    "state::tests::fee_sponsor_safe_activation_height_clamps_elapsed_lower_bound",
+    "state::tests::fee_sponsor_safe_activation_height_preserves_later_request",
+    "state::tests::fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease",
+    "state::tests::fee_sponsor_revision_activation_materializes_at_scheduled_block_height",
+    "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
+    "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("completed consensus outputs after durable restart", (
+    "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
+    "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_timeout_certificate_reservices_only_sealed_periodic_episode",
+)),)
+CORE_ADMISSION_STARTUP_STAGES += (("current Prepare recovery and durable validation retry", (
+    "sumeragi::v2_runtime::tests::periodic_current_prepare_retries_bind_store_and_validate_before_lock",
+    "sumeragi::v2_effects::tests::missing_replay_validate_rejects_ordinary_phase_none_binding",
+    "sumeragi::v2_body_store::tests::validation_marker_publication_reuses_exact_durable_outcomes",
+    "sumeragi::v2_body_store::tests::validation_marker_publication_rejects_changed_or_linked_artifacts",
 )),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
@@ -649,7 +713,10 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
 )),)
 
-NETWORK_STAGES = (("four-validator multi-route commit and signed snapshot restart", (
+BASIC_NETWORK_STAGES = (("four-validator universal-route commit and signed snapshot restart", (
+    "four_peer_universal_public_transaction_sequence_reaches_applied",
+)),)
+NETWORK_STAGES = BASIC_NETWORK_STAGES + (("four-validator multi-route commit and signed snapshot restart", (
     "four_peer_multiroute_public_transaction_sequence_reaches_applied",
 )),)
 
@@ -679,6 +746,8 @@ HARNESS_TARGETS = {
 
 KAGAMI_STAGES = (("canonical Kagami export projection", (
     "kura::scaling_evidence::export::tests::unix::strict_projection_has_exact_types_order_and_signed_hash_identity",
+)), ("generated Taira operator deployment authority", (
+    "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
 )),)
 
 
@@ -769,11 +838,12 @@ def qualification_stages(qualification_scope: str = "basic") -> dict[str, tuple]
         "daemon": DAEMON_STAGES, "network": NETWORK_STAGES, "cli": STAGES,
     }
     if qualification_scope == "basic":
-        # These affected startup regressions and the unchanged real network
+        # These affected startup regressions and the real universal-route network
         # exercise admission/restart. Advanced storage/fault matrices remain
         # selectable with full. Crypto, proof bounds and custody stay mandatory.
         selected["core"] = CORE_ADMISSION_STARTUP_STAGES
         selected["proof-flows"] = ()
+        selected["network"] = BASIC_NETWORK_STAGES
     return selected
 
 
@@ -998,6 +1068,39 @@ def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
         os.close(fd)
 
 
+def native_artifact_clone_function():
+    """Return macOS descriptor cloning, or None where this API is unavailable.
+
+    fclonefileat creates an absent destination atomically with independent inode
+    and copy-on-write contents. It never falls back internally to a full copy.
+    """
+    if sys.platform != "darwin":
+        return None
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        clone = library.fclonefileat
+    except AttributeError:
+        return None
+    clone.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    clone.restype = ctypes.c_int
+
+    def clone_descriptor(source: int, directory: int, name: str) -> bool:
+        if not name or name in {".", ".."} or "/" in name or "\x00" in name:
+            raise CheckError("native clone requires one exact destination basename")
+        # sys/clonefile.h: CLONE_NOFOLLOW | CLONE_NOOWNERCOPY. The source is
+        # already pinned; destination resolution is beneath a private dirfd.
+        if clone(source, directory, os.fsencode(name), 0x0001 | 0x0002) == 0:
+            return True
+        error = ctypes.get_errno()
+        if error in {errno.ENOTSUP, errno.EXDEV, errno.ENOSYS}:
+            return False
+        # EEXIST, EINVAL, ENOSPC and I/O errors are not permission to retry via
+        # a different copy mechanism. Atomic clone failure creates no file.
+        raise OSError(error, os.strerror(error), name)
+
+    return clone_descriptor
+
+
 def isolate_native_artifacts(root: Path, env: dict[str, str],
                              records: dict[str, dict[str, object]]) -> NativeArtifactCopies:
     """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
@@ -1033,7 +1136,13 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                         or info.st_nlink != 1 or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
                     raise CheckError("native Cargo artifact must be a bounded owner-held executable without hardlinks")
                 identities[selection] = stable_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
-            required = sum(info.size for info in identities.values()) + NETWORK_FIXTURE_FREE_BYTES
+            clone = native_artifact_clone_function()
+            remaining_bytes = sum(info.size for info in identities.values())
+            # Clones need metadata, not another logical-size data allocation.
+            # Preserve the working reserve and explicit metadata headroom; also
+            # recheck actual free bytes after every copy before publication.
+            clone_headroom = 64 * 1024 * 1024
+            required = NETWORK_FIXTURE_FREE_BYTES + (min(clone_headroom, remaining_bytes) if clone else remaining_bytes)
             if shutil.disk_usage(target).free < required:
                 raise CheckError("native artifact copies would consume the required working-space reserve")
             output = Path(tempfile.mkdtemp(prefix="taira-native-artifacts-", dir=target))
@@ -1043,25 +1152,47 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 destination = output / selection
                 digest, size = hashlib.sha256(), 0
                 with stable_open_relative(target, str(path.relative_to(target)), expected=expected) as source:
-                    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                    cloned = False
+                    if clone is not None:
+                        if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES + min(clone_headroom, remaining_bytes):
+                            raise CheckError("native artifact clones would consume the required working-space reserve")
+                        directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                        try:
+                            cloned = clone(source, directory_fd, selection)
+                        finally:
+                            os.close(directory_fd)
+                    if not cloned:
+                        # An unsupported filesystem may stream only after all
+                        # remaining full copies plus the working reserve fit.
+                        if shutil.disk_usage(target).free < remaining_bytes + NETWORK_FIXTURE_FREE_BYTES:
+                            raise CheckError("native artifact copies would consume the required working-space reserve")
+                        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                    else:
+                        fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
                     try:
-                        while block := os.read(source, 1024 * 1024):
+                        # Verify the actual clone's contents against the stable
+                        # source capture; a successful syscall alone is not evidence.
+                        reader = fd if cloned else source
+                        while block := os.read(reader, 1024 * 1024):
                             size += len(block)
                             if size > expected.size:
                                 raise CheckError("native artifact grew during descriptor copy")
                             digest.update(block)
-                            view = memoryview(block)
-                            while view:
-                                written = os.write(fd, view)
-                                if written <= 0:
-                                    raise CheckError("native artifact copy made no progress")
-                                view = view[written:]
+                            if not cloned:
+                                view = memoryview(block)
+                                while view:
+                                    written = os.write(fd, view)
+                                    if written <= 0:
+                                        raise CheckError("native artifact copy made no progress")
+                                    view = view[written:]
                         if size != expected.size or digest.hexdigest() != expected.sha256:
                             raise CheckError("native artifact changed during descriptor copy")
                         os.fchmod(fd, 0o500)
                         os.fsync(fd)
-                        opened, named = os.fstat(fd), destination.lstat()
+                        opened, named, origin = os.fstat(fd), destination.lstat(), os.fstat(source)
                         if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+                                or (opened.st_dev, opened.st_ino) == (origin.st_dev, origin.st_ino)
+                                or not stat.S_ISREG(opened.st_mode)
                                 or opened.st_size != expected.size or named.st_size != expected.size
                                 or named.st_uid != os.geteuid() or named.st_nlink != 1
                                 or stat.S_IMODE(named.st_mode) != 0o500):
@@ -1070,9 +1201,14 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                             named.st_mode, named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
                     finally:
                         os.close(fd)
+                remaining_bytes -= expected.size
+                if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES:
+                    raise CheckError("native artifact copies consumed the required working-space reserve")
                 copied[selection] = str(destination)
                 observations.append({"selection": selection, "path": str(destination),
                     "sha256": expected.sha256, "size": expected.size, "cargo_artifact": records[selection]})
+            if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES:
+                raise CheckError("native artifact copies consumed the required working-space reserve")
             for destination, expected_identity in published.items():
                 named = destination.lstat()
                 if expected_identity != (named.st_dev, named.st_ino, named.st_size, named.st_mode,
@@ -1204,7 +1340,7 @@ def run_config_checks(harnesses: NativeArtifactCopies, fixture_root: Path, env: 
 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
-                       *, harness: str) -> None:
+                       *, harness: str, stages: tuple) -> None:
     binaries = compile_network_binaries(root, env, lock_fds)
     require_network_fixture_capacity(fixture_root)
     # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
@@ -1221,7 +1357,7 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
         "IROHA_TEST_SERIALIZE_NETWORKS": "1",
     }
     print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
-    run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
+    run_stages(harness, fixture_root, network_env, stages, lock_fds)
 
 
 def require_network_fixture_capacity(directory: Path) -> None:
@@ -1363,7 +1499,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     print(f"[taira-check] qualification scope {qualification_scope}; "
           f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
-    if NETWORK_STAGES:
+    if scoped_stages["network"]:
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
@@ -1393,7 +1529,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     early_stages = tuple((name, scoped_stages[name]) for name, _ in full_early
                          if scoped_stages[name])
     selections = (("config",) if CONFIG_STAGES else ()) + tuple(name for name, _ in full_early)
-    if NETWORK_STAGES:
+    if full_stages["network"]:
         selections += ("network",)
     if STAGES:
         selections += ("cli",)
@@ -1459,8 +1595,9 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 raise SelectedRegressionFailures(failures)
             if not reuse_independent and update_independent_checks is not None:
                 update_independent_checks(evidence)
-            if NETWORK_STAGES:
-                run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
+            if scoped_stages["network"]:
+                run_network_checks(root, fixture_root, env, lock_fds,
+                                   harness=harnesses["network"], stages=scoped_stages["network"])
                 harnesses.release("network")
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:

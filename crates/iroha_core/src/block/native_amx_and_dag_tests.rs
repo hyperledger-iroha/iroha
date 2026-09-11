@@ -132,22 +132,14 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let block_height = 1;
     let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
     source_id.copy_from_slice(tx.hash().as_ref());
-    let receipt = signed_native_amx_receipt(
-        source_id,
-        tx.hash_as_entrypoint(),
-        &plan,
-        block_height,
-        &keypairs,
-    );
-    let context = crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
-        .with_native_amx_receipt(receipt.clone());
+    let coordinator = plan.coordinator_route();
     let coordinator_manifest_root: [u8; Hash::LENGTH] =
         Hash::new(b"native AMX coordinator finality manifest").into();
     state.set_axt_policy(
-        context.dataspace_id,
+        coordinator.dataspace_id,
         iroha_data_model::nexus::AxtPolicyEntry {
             manifest_root: coordinator_manifest_root,
-            target_lane: context.lane_id,
+            target_lane: coordinator.lane_id,
             active_handle_era: 1,
             next_handle_counter: 1,
             current_slot: 0,
@@ -161,23 +153,23 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let mut ownership = iroha_data_model::block::consensus::SumeragiLanePayloadOwnership {
         proposal_height: block_height,
         proposal_view: 0,
-        lane_id: receipt.lane_id,
-        dataspace_id: receipt.dataspace_id,
-        lane_incarnation: receipt.lane_incarnation,
-        lane_block_height: receipt.lane_block_height,
-        lane_block_view: receipt.lane_block_view,
+        lane_id: coordinator.lane_id,
+        dataspace_id: coordinator.dataspace_id,
+        lane_incarnation: state
+            .lane_incarnation_at_height(coordinator.lane_id, block_height)
+            .expect("coordinator incarnation at its first applied slot"),
+        lane_block_height: 1,
+        lane_block_view: 0,
         subject_hash: Hash::new(b"native AMX settlement subject placeholder"),
         qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
-            receipt.lane_id,
-            receipt.dataspace_id,
+            coordinator.lane_id,
+            coordinator.dataspace_id,
             "native-amx-settlement-test",
         ),
         accepted_candidate_indices: vec![0],
         accepted_transaction_hashes: vec![Hash::from(tx.hash_as_entrypoint())],
-        previous_lane_block_height: receipt.lane_block_height.saturating_sub(1),
-        previous_lane_block_descriptor_hash: Some(Hash::new(
-            b"native AMX settlement predecessor descriptor",
-        )),
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
         lane_block_descriptor_hash: Some(Hash::new(
             b"native AMX settlement descriptor placeholder",
         )),
@@ -198,6 +190,18 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
     ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
     ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    let coordinator_proposal = native_amx_coordinator_proposal_from_ownership(&ownership)
+        .expect("Native AMX receipt must bind the exact executed coordinator ownership");
+    let receipt = signed_native_amx_receipt_for_coordinator(
+        source_id,
+        tx.hash_as_entrypoint(),
+        &plan,
+        coordinator_proposal,
+        &keypairs,
+        crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len()),
+    );
+    let context = crate::queue::execution_context_for_routing_plan(tx.hash_as_entrypoint(), &plan)
+        .with_native_amx_receipt(receipt.clone());
     let execution_context = BlockExecutionContextBundle::new(vec![context])
         .with_lane_payload_ownerships(vec![ownership]);
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -226,6 +230,17 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let statements = valid_block.as_ref().lane_finality_statements();
     assert_eq!(statements.len(), 1);
     let statement = &statements[0];
+    let ownership = &valid_block
+        .as_ref()
+        .execution_context()
+        .expect("executed coordinator ownership")
+        .lane_payload_ownerships[0];
+    assert_eq!(statement.lane_incarnation, ownership.lane_incarnation);
+    assert_eq!(statement.block_height, ownership.lane_block_height);
+    assert_eq!(
+        Some(statement.lane_block_descriptor_hash),
+        ownership.lane_block_descriptor_hash,
+    );
     assert_eq!(statement.block_header_hash, valid_block.as_ref().hash());
     assert_eq!(statement.manifest_root, coordinator_manifest_root);
     let commitment = &statement.settlement_commitment;

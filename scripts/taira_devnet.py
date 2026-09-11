@@ -2728,7 +2728,7 @@ def preflight_cli_surfaces(
     surfaces = [*CLI_SURFACES, *INROU_CANARY_CLI_SURFACES]
     if full_doctor:
         surfaces.append(
-            ("iroha", ("taira", "doctor"), ("--public-root", "--json"))
+            ("iroha", ("taira", "doctor"), ("--scope", "--public-root", "--json"))
         )
     def validate_surface(
         surface_spec: tuple[str, tuple[str, ...], tuple[str, ...]],
@@ -3163,6 +3163,8 @@ def run_full_doctor(target: Path, iroha: Path, root: str, run: Runner) -> None:
             str(target / "client.toml"),
             "taira",
             "doctor",
+            "--scope",
+            "full",
             "--public-root",
             root.rstrip("/"),
             "--json",

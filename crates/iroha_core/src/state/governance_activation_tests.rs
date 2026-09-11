@@ -87,6 +87,20 @@ fn fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease() {
     assert!(error.contains("never drains"));
 }
 #[test]
+fn fee_sponsor_safe_activation_height_clamps_elapsed_lower_bound() {
+    let sponsor = fee_sponsor_activation_account(b"fee-sponsor-elapsed-activation");
+    let program_id = FeeSponsorProgramId::new(sponsor, "elapsed".parse().expect("program name"));
+    let world = World::default();
+    let world = world.block();
+    for (requested, expected) in [(0, 146), (144, 146), (146, 146), (147, 147)] {
+        assert_eq!(
+            fee_sponsor_revision_safe_activation_height(&world, &program_id, 1, 146, requested)
+                .expect("requested activation is a lower bound"),
+            expected
+        );
+    }
+}
+#[test]
 fn fee_sponsor_safe_activation_height_preserves_later_request() {
     let sponsor = fee_sponsor_activation_account(b"fee-sponsor-later-activation");
     let program_id = FeeSponsorProgramId::new(sponsor, "later".parse().expect("program name"));
@@ -113,6 +127,21 @@ fn fee_sponsor_safe_activation_height_preserves_later_request() {
     assert_eq!(
         fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 2)
             .expect("finite lease drains"),
+        6
+    );
+    assert_eq!(
+        fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 2, 0)
+            .expect("elapsed lower bound cannot bypass a live older-revision lease"),
+        6
+    );
+    assert_eq!(
+        fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 5, 1)
+            .expect("lease remains live through its expiry height"),
+        6
+    );
+    assert_eq!(
+        fee_sponsor_revision_safe_activation_height(&world, &program_id, 2, 6, 1)
+            .expect("expired lease cannot move activation behind current height"),
         6
     );
 }

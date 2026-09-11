@@ -41120,20 +41120,45 @@ impl Kura {
         if entry.epoch_id != frontier.merge_epoch_id {
             return None;
         }
-        let carrier = self
-            .merge_carrier_for_entry_under_prune_and_canonical_guards(frontier.merge_entry_hash)
-            .ok()
-            .flatten()?;
-        if carrier
-            != (MergeLedgerCarrierRecord {
-                version: 1,
-                entry_hash: frontier.merge_entry_hash,
-                epoch_id: frontier.merge_epoch_id,
-                block_height: frontier.application_block_height,
-                block_hash: frontier.application_block_hash,
-            })
+        // The cursor already names the exact canonical carrier. Authenticate
+        // that identity from finality and the full entry, so startup can plan
+        // reconstruction of a missing reverse index before publishing it.
+        // Any retained index record must agree with the same authority.
+        let carrier = MergeLedgerCarrierRecord {
+            version: 1,
+            entry_hash: frontier.merge_entry_hash,
+            epoch_id: frontier.merge_epoch_id,
+            block_height: frontier.application_block_height,
+            block_hash: frontier.application_block_hash,
+        };
+        let height = NonZeroUsize::new(usize::try_from(carrier.block_height).ok()?)?;
+        // Read before finality authentication: an invalid inline body poisons
+        // canonical storage and must not be mistaken for a remote-only body.
+        let block = self.get_block_without_merge_sidecar(height);
+        let (header, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                carrier.block_height,
+            )
+            .ok()??;
+        Self::validate_merge_carrier_finality_projection(carrier, &entry, &header, &finality)
+            .ok()?;
+        if let Some(block) = block
+            && (block.header() != header
+                || !Self::block_merge_reference(&block)
+                    .is_some_and(|reference| reference.matches_entry(&entry)))
         {
             return None;
+        }
+        {
+            let _carrier_guard = self.merge_carrier_lock.lock();
+            self.preflight_merge_carrier_record_unlocked(carrier).ok()?;
+            if self
+                .read_merge_carrier_path(&self.merge_carrier_path(carrier.block_height))
+                .ok()?
+                .is_some_and(|persisted| persisted != carrier)
+            {
+                return None;
+            }
         }
         let batch = entry.execution_batch.as_ref()?;
         let execution = batch.lanes.iter().find(|execution| {

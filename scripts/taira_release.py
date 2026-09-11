@@ -17,7 +17,8 @@ The persistent compiler cache starts through a descriptor-isolated version probe
 before Cargo inherits the build locks; existing cache contents are preserved.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
-Existing source, outputs and Cargo caches are never overwritten or cleaned.
+Successful source refreshes retire their verified previous materialization only
+after durable publication. Failed captures, outputs and Cargo caches remain intact.
 """
 
 from __future__ import annotations
@@ -259,12 +260,65 @@ def frozen_snapshot(source: Path, entries: bytes, target_dir: Path) -> list[dict
     return rows
 
 
+def retire_source_capture(source: Path, entries: bytes, target_dir: Path) -> None:
+    """Remove only one authenticated, superseded capture under the source-lane lock."""
+    require(re.fullmatch(r"source\.retained-[0-9a-f]{32}", source.name) is not None,
+            "only a superseded source capture may be retired")
+    real_path(source)
+    before = source.lstat()
+    rows = frozen_snapshot(source, entries, target_dir)
+    # Build an exact deletion plan from authenticated entries. Never follow the
+    # target symlink into the warm Cargo lane or recurse through unknown inputs.
+    tree: dict = {"target": None}
+    for row in rows:
+        parts = Path(row["path"]).parts
+        node = tree
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = {} if row["kind"] == "gitlink" else None
+
+    def remove_contents(fd: int, expected: dict) -> None:
+        info = os.fstat(fd)
+        require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o500,
+                "retired source directory custody changed")
+        require(set(os.listdir(fd)) == set(expected), "retired source has unknown inputs")
+        os.fchmod(fd, 0o700)
+        for name, children in expected.items():
+            if children is None:
+                os.unlink(name, dir_fd=fd)
+            else:
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                dir_fd=fd)
+                try:
+                    remove_contents(child, children)
+                finally:
+                    os.close(child)
+                os.rmdir(name, dir_fd=fd)
+        os.fsync(fd)
+
+    parent = os.open(source.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fd = os.open(source.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     dir_fd=parent)
+        try:
+            require(file_identity(os.fstat(fd)) == file_identity(before),
+                    "retired source changed before removal")
+            remove_contents(fd, tree)
+        finally:
+            os.close(fd)
+        os.rmdir(source.name, dir_fd=parent)
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+
+
 def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
     parent = source.parent
     state_path = parent / "source-state.json"
     state = read_record(state_path) if state_path.exists() else None
     require(state is None or set(state) == {"commit"}, "invalid captured source checkpoint")
+    previous_entries = None
     if os.path.lexists(source):
         real_path(source)
         if state == {"commit": commit}:
@@ -275,7 +329,8 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
         except PrepareError:
             require(state is not None, "unexpected unrecorded source capture")
             # Preserve timestamps only from a complete, unchanged previous tree.
-            frozen_snapshot(source, commit_entries(root, state["commit"]), target_dir)
+            previous_entries = commit_entries(root, state["commit"])
+            frozen_snapshot(source, previous_entries, target_dir)
         else:
             # Publication may have completed before its small pointer checkpoint.
             checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
@@ -340,9 +395,12 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     for path, directories, _ in os.walk(pending, topdown=False):
         freeze(Path(path), directory=True)
     frozen_snapshot(pending, entries, target_dir)
+    retained = None
     if os.path.lexists(source):
         real_path(source)
-        os.rename(source, parent / ("source.retained-" + uuid.uuid4().hex))
+        require(previous_entries is not None, "previous source lacks an authenticated binding")
+        retained = parent / ("source.retained-" + uuid.uuid4().hex)
+        os.rename(source, retained)
     os.rename(pending, source)
     checkpoint = parent / ("source-state.pending-" + uuid.uuid4().hex)
     write_record(checkpoint, {"commit": commit})
@@ -352,6 +410,11 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
         os.fsync(fd)
     finally:
         os.close(fd)
+    if retained is not None:
+        # Keep rollback input through every capture/checkpoint publication failure.
+        # Older retained/pending directories belong to interrupted attempts and
+        # are deliberately not discovered or deleted by a successful refresh.
+        retire_source_capture(retained, previous_entries, target_dir)
     return source
 
 

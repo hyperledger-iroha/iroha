@@ -858,6 +858,461 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
         &Quantity::from(10_u32),
     );
 }
+
+#[test]
+fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
+    use iroha_data_model::{
+        isi::{
+            instruction_wire_id,
+            nexus::{ActivateFeeSponsorProgramRevision, EnrollFeeSponsorBeneficiary},
+            smart_contract_code::UploadSmartContractCodeChunk,
+        },
+        nexus::{
+            FeeRejectionCode, FeeSponsorEnrollmentKey, FeeSponsorNativeInstructionSelector,
+            FeeSponsorProgramRevisionKey, FeeSponsorRuleSelector,
+        },
+        transaction::{
+            FeePaymentIntent, TransactionAdmissionIntent, TransactionDomain,
+            signed::TransactionPayload,
+        },
+    };
+    let fresh = |seed| {
+        AccountId::new(
+            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive prospective beneficiary")
+                .public_key()
+                .clone(),
+        )
+    };
+    let beneficiary = fresh(0x71);
+    let other = fresh(0x72);
+    let bootstrap = |authority: &AccountId| -> Vec<InstructionBox> {
+        let permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        vec![
+            Register::account(Account::new(authority.clone())).into(),
+            Grant::account_permission(permission, authority.clone()).into(),
+            UploadSmartContractCodeChunk {
+                code_hash: Hash::new(b"prospective publisher code"),
+                total_size: 4,
+                chunk_index: 0,
+                chunk_count: 1,
+                chunk: vec![1, 2, 3, 4],
+            }
+            .into(),
+        ]
+    };
+    let (state, program_id, vault_key) = staged_fee_sponsor_activation_fixture();
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(146).unwrap(),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    assert!(!crate::executor::is_initial_genesis_context(&stx));
+    assert!(stx.world.account(&beneficiary).is_err());
+    assert!(stx.world.account(&other).is_err());
+    stx.world
+        .fee_sponsor_enrollments
+        .remove(FeeSponsorEnrollmentKey {
+            program_id: program_id.clone(),
+            beneficiary: ALICE_ID.clone(),
+        });
+    EnrollFeeSponsorBeneficiary {
+        program_id: program_id.clone(),
+        beneficiary: beneficiary.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("owner may authorize an exact prospective beneficiary");
+    assert!(
+        stx.world.account(&beneficiary).is_err(),
+        "enrollment does not create the account"
+    );
+    let revision_key = FeeSponsorProgramRevisionKey::new(program_id.clone(), 1);
+    let mut revision = stx
+        .world
+        .fee_sponsor_program_revisions
+        .get(&revision_key)
+        .unwrap()
+        .clone();
+    revision.rules[0].selectors = bootstrap(&beneficiary)
+        .iter()
+        .map(|instruction| {
+            FeeSponsorRuleSelector::NativeInstruction(FeeSponsorNativeInstructionSelector {
+                wire_id: instruction_wire_id(instruction).unwrap().to_owned(),
+                asset_definition_id: None,
+            })
+        })
+        .collect();
+    revision.asset_budgets[0].per_transaction = Quantity::from(2_u32);
+    revision
+        .validate()
+        .expect("bounded native bootstrap revision");
+    stx.world
+        .fee_sponsor_program_revisions
+        .insert(revision_key, revision);
+    ActivateFeeSponsorProgramRevision {
+        program_id: program_id.clone(),
+        revision: 1,
+        activate_at_height: 146,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("funded program activates with exact prospective eligibility");
+    let mut nexus = stx.nexus.clone();
+    nexus.dataspace_fee_sponsor_program_ids.clear();
+    nexus.fees.fee_asset_id = vault_key.asset_definition_id.to_string();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = "0.001".parse().unwrap();
+    nexus.fees.per_gas_unit_fee = "0.00005".parse().unwrap();
+    nexus.fees.settlement_mode = iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
+    let pipeline = iroha_config::parameters::actual::Pipeline::default();
+    for (authority, eligible) in [(&beneficiary, true), (&other, false)] {
+        let mut payload = TransactionPayload {
+            domain: TransactionDomain::Network(
+                "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .unwrap(),
+            ),
+            authority: authority.clone(),
+            creation_time_ms: 0,
+            instructions: bootstrap(authority).into(),
+            time_to_live_ms: NonZeroU64::new(60_000),
+            nonce: None,
+            fee_payment: FeePaymentIntent::sponsor(program_id.clone(), 1, Vec::new(), None),
+            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
+            metadata: Metadata::default(),
+            attachments: None,
+        };
+        let result = crate::executor::quote_nexus_fee_admission_draft(
+            &stx.world, &nexus, &pipeline, &payload, 0, 146, None,
+        );
+        if eligible {
+            let quoted = result.expect("exact absent beneficiary can fund its first bootstrap");
+            assert!(
+                !quoted.quote.charges.is_empty(),
+                "bootstrap remains fee-paying"
+            );
+            payload.fee_payment = quoted.recommended_intent;
+            crate::executor::quote_nexus_fee_admission_payload(
+                &stx.world, &nexus, &pipeline, &payload, 0, 146, None,
+            )
+            .expect("exact signature-bound quote also passes strict admission");
+        } else {
+            assert_eq!(
+                result
+                    .expect_err("other absent identity is not enrolled")
+                    .code(),
+                FeeRejectionCode::BeneficiaryNotEligible
+            );
+        }
+    }
+    assert!(stx.world.account(&beneficiary).is_err());
+    assert!(stx.world.account(&other).is_err());
+}
+
+#[test]
+fn prospective_fee_sponsor_enrollment_preserves_authority_and_closed_guards() {
+    use iroha_data_model::{
+        isi::nexus::EnrollFeeSponsorBeneficiary,
+        nexus::{FeeSponsorEnrollmentKey, FeeSponsorProgramId, FeeSponsorProgramLifecycle},
+        permission::Permissions,
+    };
+    use iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorProgram;
+    let beneficiary = AccountId::new(
+        iroha_crypto::KeyPair::try_from_seed(vec![0x73; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("derive prospective beneficiary")
+            .public_key()
+            .clone(),
+    );
+    for case in ["unauthorized", "wrong_program", "exact_delegate", "closed"] {
+        let (state, program_id, _) = staged_fee_sponsor_activation_fixture();
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(146).unwrap(),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        assert!(!crate::executor::is_initial_genesis_context(&stx));
+        if matches!(case, "wrong_program" | "exact_delegate") {
+            let delegated_id = if case == "exact_delegate" {
+                program_id.clone()
+            } else {
+                FeeSponsorProgramId::new(ALICE_ID.clone(), "different".parse().unwrap())
+            };
+            stx.world.account_permissions.insert(
+                BOB_ID.clone(),
+                Permissions::from([CanEnrollFeeSponsorProgram {
+                    program_id: delegated_id,
+                }
+                .into()]),
+            );
+        }
+        if case == "closed" {
+            let mut program = stx
+                .world
+                .fee_sponsor_programs
+                .get(&program_id)
+                .unwrap()
+                .clone();
+            program.lifecycle = FeeSponsorProgramLifecycle::Closed;
+            stx.world
+                .fee_sponsor_programs
+                .insert(program_id.clone(), program);
+        }
+        let key = FeeSponsorEnrollmentKey {
+            program_id: program_id.clone(),
+            beneficiary: beneficiary.clone(),
+        };
+        let authority = if case == "closed" {
+            &*ALICE_ID
+        } else {
+            &*BOB_ID
+        };
+        let result = EnrollFeeSponsorBeneficiary {
+            program_id,
+            beneficiary: beneficiary.clone(),
+        }
+        .execute(authority, &mut stx);
+        if case == "exact_delegate" {
+            result.expect("existing exact program enrollment delegation remains supported");
+            assert_eq!(
+                stx.world.fee_sponsor_enrollments.get(&key).unwrap().key,
+                key
+            );
+        } else {
+            let error = result.expect_err("unauthorized or closed program cannot enroll");
+            let expected = if case == "closed" {
+                "closed fee sponsor program"
+            } else {
+                "cannot manage enrollments"
+            };
+            assert!(format!("{error:?}").contains(expected), "{case}: {error:?}");
+            assert!(stx.world.fee_sponsor_enrollments.get(&key).is_none());
+        }
+        assert!(stx.world.account(&beneficiary).is_err());
+    }
+}
+
+fn staged_fee_sponsor_activation_fixture() -> (
+    State,
+    iroha_data_model::nexus::FeeSponsorProgramId,
+    iroha_data_model::nexus::FeeSponsorVaultKey,
+) {
+    use iroha_data_model::nexus::{
+        FeeSponsorEnrollment, FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramRevisionKey, FeeSponsorVault, FeeSponsorVaultKey,
+    };
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "activation_lower_bound".parse().expect("program name"),
+    );
+    let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+        .parse()
+        .expect("canonical fee asset");
+    let revision = fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1);
+    revision.validate().expect("valid staged revision");
+    let mut world = World::default();
+    for account in [ALICE_ID.clone(), BOB_ID.clone()] {
+        world.accounts.insert(
+            account,
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+    }
+    world.asset_definitions.insert(
+        asset_definition_id.clone(),
+        AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "activation fee asset".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID),
+    );
+    world.fee_sponsor_program_revisions.insert(
+        FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
+        revision,
+    );
+    let mut program = FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone());
+    program.staged_revision = Some(1);
+    world
+        .fee_sponsor_programs
+        .insert(program_id.clone(), program);
+    let enrollment_key = FeeSponsorEnrollmentKey {
+        program_id: program_id.clone(),
+        beneficiary: ALICE_ID.clone(),
+    };
+    world.fee_sponsor_enrollments.insert(
+        enrollment_key.clone(),
+        FeeSponsorEnrollment {
+            key: enrollment_key,
+            enrolled_at_height: 142,
+        },
+    );
+    let vault_key = FeeSponsorVaultKey {
+        program_id: program_id.clone(),
+        asset_definition_id,
+    };
+    world.fee_sponsor_vaults.insert(
+        vault_key.clone(),
+        FeeSponsorVault {
+            key: vault_key.clone(),
+            balance: Quantity::from(10_u32),
+        },
+    );
+    (
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ),
+        program_id,
+        vault_key,
+    )
+}
+
+#[test]
+fn fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound() {
+    use iroha_data_model::{
+        isi::nexus::ActivateFeeSponsorProgramRevision,
+        nexus::{FeeSponsorProgramActivation, FeeSponsorProgramLifecycle},
+    };
+    for requested in [0, 144, 146, 147] {
+        let (state, program_id, _) = staged_fee_sponsor_activation_fixture();
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(146).expect("nonzero executing height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        assert!(!crate::executor::is_initial_genesis_context(&stx));
+        ActivateFeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: 1,
+            activate_at_height: requested,
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("the lower bound must survive ordinary inclusion delay");
+        let program = stx.world.fee_sponsor_programs.get(&program_id).unwrap();
+        if requested <= 146 {
+            assert_eq!(program.lifecycle, FeeSponsorProgramLifecycle::Active);
+            assert_eq!(program.active_revision, Some(1));
+            assert_eq!(program.staged_revision, None);
+            assert_eq!(program.scheduled_activation, None);
+        } else {
+            assert_eq!(program.lifecycle, FeeSponsorProgramLifecycle::Staged);
+            assert_eq!(program.active_revision, None);
+            assert_eq!(program.staged_revision, Some(1));
+            assert_eq!(
+                program.scheduled_activation,
+                Some(FeeSponsorProgramActivation {
+                    revision: 1,
+                    activate_at_height: requested,
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards() {
+    use iroha_data_model::{
+        isi::nexus::ActivateFeeSponsorProgramRevision,
+        nexus::{FeeSponsorEnrollmentKey, FeeSponsorProgramLifecycle, FeeSponsorVault},
+    };
+    for (case, expected) in [
+        ("owner", "cannot manage fee sponsor program"),
+        ("revision", "requested fee sponsor revision is not staged"),
+        (
+            "closing",
+            "closing or closed fee sponsor program cannot activate",
+        ),
+        ("vault", "before activation; available 0"),
+        ("enrollment", "no eligible beneficiary"),
+    ] {
+        let (state, program_id, vault_key) = staged_fee_sponsor_activation_fixture();
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(146).expect("nonzero executing height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        match case {
+            "closing" => {
+                let mut program = stx
+                    .world
+                    .fee_sponsor_programs
+                    .get(&program_id)
+                    .unwrap()
+                    .clone();
+                program.lifecycle = FeeSponsorProgramLifecycle::Closing;
+                stx.world
+                    .fee_sponsor_programs
+                    .insert(program_id.clone(), program);
+            }
+            "vault" => {
+                stx.world.fee_sponsor_vaults.insert(
+                    vault_key.clone(),
+                    FeeSponsorVault {
+                        key: vault_key,
+                        balance: Quantity::zero(),
+                    },
+                );
+            }
+            "enrollment" => {
+                stx.world
+                    .fee_sponsor_enrollments
+                    .remove(FeeSponsorEnrollmentKey {
+                        program_id: program_id.clone(),
+                        beneficiary: ALICE_ID.clone(),
+                    });
+            }
+            _ => {}
+        }
+        let before = stx
+            .world
+            .fee_sponsor_programs
+            .get(&program_id)
+            .unwrap()
+            .clone();
+        let authority = if case == "owner" {
+            &*BOB_ID
+        } else {
+            &*ALICE_ID
+        };
+        let error = ActivateFeeSponsorProgramRevision {
+            program_id: program_id.clone(),
+            revision: if case == "revision" { 2 } else { 1 },
+            activate_at_height: 144,
+        }
+        .execute(authority, &mut stx)
+        .expect_err("elapsed activation cannot bypass readiness or authority");
+        assert!(format!("{error:?}").contains(expected), "{case}: {error:?}");
+        assert_eq!(
+            stx.world.fee_sponsor_programs.get(&program_id),
+            Some(&before)
+        );
+    }
+}
 #[test]
 fn post_genesis_authority_cannot_bootstrap_another_sponsors_program() {
     use iroha_data_model::{

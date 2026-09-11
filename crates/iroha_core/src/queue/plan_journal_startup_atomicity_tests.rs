@@ -287,11 +287,23 @@ fn empty_replayed_journals_keep_ingress_closed_until_reconciliation_completion()
         .expect("retained durable claim becomes retryable after startup completion");
     assert_eq!(retry.routing_plan, plan);
     assert_eq!(retry.context, retained_claim.admission_context);
-    assert_eq!(retry.journal_record_digest, retained_claim.journal_record_digest);
-    assert_eq!(retry.enqueue_timestamp_ms, retained_claim.enqueue_timestamp_ms);
+    assert_eq!(
+        retry.journal_record_digest,
+        retained_claim.journal_record_digest
+    );
+    assert_eq!(
+        retry.enqueue_timestamp_ms,
+        retained_claim.enqueue_timestamp_ms
+    );
     assert_eq!(retry.entrypoint_hash, retained_claim.entrypoint_hash);
-    assert_eq!(retry.signed_transaction_hash, retained_claim.signed_transaction_hash);
-    assert_eq!(retry.global_admission_identity, retained_claim.global_admission_identity);
+    assert_eq!(
+        retry.signed_transaction_hash,
+        retained_claim.signed_transaction_hash
+    );
+    assert_eq!(
+        retry.global_admission_identity,
+        retained_claim.global_admission_identity
+    );
     assert_eq!(
         restarted
             .durable_plan_claims

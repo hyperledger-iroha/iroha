@@ -7,31 +7,26 @@
 /// Queue ownership/gate drift before reservation planning.
 struct LaneApplicationEvidenceRepairQueueFence {
     snapshot: crate::queue::LaneQueueReservationReconciliationSnapshotV1,
-    quarantine: bool,
 }
 impl LaneApplicationEvidenceRepairQueueFence {
     fn capture(queue: &Queue) -> Result<Self, V2RunnerError> {
         let snapshot = queue
             .lane_reservation_reconciliation_snapshot()
             .map_err(V2ReservationLifecycleError::from)?;
-        let quarantine = queue.lane_reservation_startup_reconciliation_pending();
-        if !quarantine {
+        if !queue.lane_reservation_startup_reconciliation_pending() {
             return Err(V2RunnerError::Service(
                 "lane application evidence repair reached startup after the Queue publication gate opened"
                     .to_owned(),
             ));
         }
-        Ok(Self {
-            snapshot,
-            quarantine,
-        })
+        Ok(Self { snapshot })
     }
     fn revalidate(&self, queue: &Queue) -> Result<(), V2RunnerError> {
         let snapshot = queue
             .lane_reservation_reconciliation_snapshot()
             .map_err(V2ReservationLifecycleError::from)?;
         if snapshot != self.snapshot
-            || queue.lane_reservation_startup_reconciliation_pending() != self.quarantine
+            || !queue.lane_reservation_startup_reconciliation_pending()
         {
             return Err(V2RunnerError::Service(
                 "lane application evidence repair observed Queue ownership or publication-gate drift"

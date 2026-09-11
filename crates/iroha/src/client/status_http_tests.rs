@@ -347,7 +347,7 @@ async fn version_uses_the_canonical_text_contract_and_exact_size_limit() {
         .filter(|(name, _)| name == http::header::ACCEPT)
         .collect();
     assert_eq!(accepts.len(), 1);
-    assert_eq!(accepts[0].1, "text/plain");
+    assert_eq!(accepts[0].1, "text/plain, application/json");
     for reply in [
         response(Vec::new(), "text/plain"),
         response(b" \n ".to_vec(), "text/plain"),
