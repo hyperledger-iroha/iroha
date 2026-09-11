@@ -8,11 +8,12 @@ The existing sibling .taira-testnet-build-targets/routine lane is the default;
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
 Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
 explicitly selected. This preference never changes Linux release compilation.
-Private test-executable copies are released after their last subprocess exits,
-including failed checks; their observations and test logs remain available.
-Native node/client snapshots remain retained for network and CLI capture consumers.
-Successful captures record final Cargo test executables in a bounded lane ledger;
-later captures retire only recorded superseded closed executables, preserving caches.
+Temporary executable copies are released after their last subprocess exits,
+including non-CLI native network binaries and failed checks; observations and logs
+remain. The published native `iroha` CLI is retained for operator consumers; the
+`cli` test harness is temporary. Busy or unverified copies are retained. Verified Cargo test outputs are recorded
+in a bounded lane ledger before copy allocation; later captures retire only
+recorded superseded closed test executables, preserving current outputs and caches.
 On macOS, descriptor-bound copy-on-write clones avoid full duplicate allocation
 while retaining independent inodes and exact content/stat validation. Unsupported
 filesystems stream only when all remaining copies fit beside the working reserve;
@@ -992,16 +993,18 @@ NATIVE_ARTIFACT_MAX_BYTES = 4 * 1024**3
 
 
 class NativeArtifactCopies(dict[str, str]):
-    """Own only the private copied test files from one completed isolation call."""
+    """Own temporary copies while retaining the published native CLI for operators."""
 
     def __init__(self, output: Path, copied: dict[str, str],
-                 identities: dict[Path, tuple[int, ...]], observations: list[dict[str, object]]):
+                 identities: dict[Path, tuple[int, ...]], observations: list[dict[str, object]],
+                 *, retain_operator_cli: bool = True):
         super().__init__(copied)
         self.output = output
         self.observations = tuple(observations)
         self.pending = {row["selection"]: (identities[Path(row["path"])], row)
-                        for row in observations if row["selection"] in HARNESS_TARGETS
-                        and row["cargo_artifact"]["profile"].get("test") is True}
+                        for row in observations
+                        if not (retain_operator_cli and row["selection"] == "iroha"
+                                and row["cargo_artifact"]["profile"].get("test") is False)}
         self.directory_fd = (os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
                              if self.pending else None)
 
@@ -1009,22 +1012,33 @@ class NativeArtifactCopies(dict[str, str]):
         return self
 
     def release(self, selection: str) -> None:
-        """Release a completed test's exact copy; production snapshots are retained."""
+        """Release one closed exact copy after its last consumer has exited."""
         if selection not in self.pending:
             return
         expected, observation = self.pending[selection]
         fd = self.directory_fd
         assert fd is not None
-        held, named = os.fstat(fd), self.output.lstat()
-        if ((held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
-                or held.st_uid != os.geteuid() or not stat.S_ISDIR(named.st_mode)
-                or stat.S_IMODE(named.st_mode) != 0o500):
-            raise CheckError("native test copy directory changed before release")
-        named = os.stat(selection, dir_fd=fd, follow_symlinks=False)
-        actual = (named.st_dev, named.st_ino, named.st_size, named.st_mode,
-                  named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
-        if actual != expected:
-            raise CheckError("native test copy changed before release: " + selection)
+
+        def verify_identity():
+            held, named = os.fstat(fd), self.output.lstat()
+            if ((held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
+                    or held.st_uid != os.geteuid() or not stat.S_ISDIR(named.st_mode)
+                    or stat.S_IMODE(named.st_mode) != 0o500):
+                raise CheckError("native copy directory changed before release")
+            named = os.stat(selection, dir_fd=fd, follow_symlinks=False)
+            actual = (named.st_dev, named.st_ino, named.st_size, named.st_mode,
+                      named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
+            if actual != expected:
+                raise CheckError("native copy changed before release: " + selection)
+
+        verify_identity()
+        # A failed network harness can leave a daemon alive. Never unlink its
+        # executable, or guess that an unavailable OS observation means closed.
+        if native_test_output_confirmed_closed(self.output / selection) is not True:
+            print("[taira-check] retained native artifact copy: busy or unverified: "
+                  + selection, file=sys.stderr, flush=True)
+            return
+        verify_identity()  # The pathname must still name our inode after the OS query.
         os.fchmod(fd, 0o700)
         try:
             os.unlink(selection, dir_fd=fd)
@@ -1032,7 +1046,7 @@ class NativeArtifactCopies(dict[str, str]):
         finally:
             os.fchmod(fd, 0o500)
         del self.pending[selection]
-        print("[taira-check] released native test artifact "
+        print("[taira-check] released native artifact "
               + json.dumps(observation, sort_keys=True), flush=True)
 
     def __exit__(self, exception_type, exception, traceback):
@@ -1048,11 +1062,41 @@ class NativeArtifactCopies(dict[str, str]):
                 os.close(self.directory_fd)
                 self.directory_fd = None
         if failures:
-            message = "native test artifact release failed; copies retained: " + "; ".join(failures)
+            message = "native artifact release failed; copies retained: " + "; ".join(failures)
             if exception is None:
                 raise CheckError(message)
             print("[taira-check] " + message, file=sys.stderr, flush=True)
         return False
+
+
+def discard_unpublished_native_artifacts(output: Path, directory_identity: tuple[int, int],
+                                         published: dict[Path, tuple[int, ...]],
+                                         records: dict[str, dict[str, object]]) -> None:
+    """Discard verified earlier copies when a later copy fails; never adopt partial files."""
+    if not published:
+        return
+    directory = None
+    try:
+        directory = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        held, named = os.fstat(directory), output.lstat()
+        if ((held.st_dev, held.st_ino) != directory_identity
+                or (named.st_dev, named.st_ino) != directory_identity
+                or not stat.S_ISDIR(named.st_mode) or held.st_uid != os.geteuid()
+                or stat.S_IMODE(held.st_mode) not in {0o700, 0o500}):
+            raise CheckError("unpublished native copy directory changed before cleanup")
+        os.fchmod(directory, 0o500)
+        observations = [{"selection": path.name, "path": str(path),
+                         "cargo_artifact": records[path.name]} for path in published]
+        # No copy in a failed isolation batch was handed to an operator. Its
+        # verified CLI copy is temporary too; incomplete/unknown files stay out.
+        with NativeArtifactCopies(output, {}, published, observations, retain_operator_cli=False):
+            pass
+    except (CheckError, OSError, ValueError) as error:
+        print("[taira-check] unpublished native artifact cleanup retained files: "
+              + str(error), file=sys.stderr, flush=True)
+    finally:
+        if directory is not None:
+            os.close(directory)
 
 
 def native_artifact_record(event: dict[str, object]) -> dict[str, object]:
@@ -1331,7 +1375,7 @@ def retire_superseded_native_test_outputs(root: Path, target: Path, current: dic
     """Record verified final tests and retire closed predecessors under Cargo locks.
 
     Callers pass only successful Cargo test outputs, using the source identity
-    already verified while copying. Failures retain files and never fail a build.
+    already verified before copying. Failures retain files and never fail a build.
     """
     if not current:
         return
@@ -1398,6 +1442,10 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
     from release_artifact_contract import ReleaseArtifactError, stable_hash_path, stable_open_relative
     target = Path(env["CARGO_TARGET_DIR"])
+    output = directory_identity = None
+    published = {}
+    copies = None
+    completed = False
     try:
         if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
@@ -1428,6 +1476,16 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                         or info.st_nlink != 1 or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
                     raise CheckError("native Cargo artifact must be a bounded owner-held executable without hardlinks")
                 identities[selection] = stable_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
+            # Reuse source identities already verified above. The ledger owns
+            # only final tests, never shipping binaries or Cargo cache entries.
+            retire_superseded_native_test_outputs(root, target, {
+                selection: {"selection": selection, "path": str(paths[selection]),
+                    "identity": [expected.device, expected.inode, expected.size,
+                        stat.S_IFREG | expected.mode, os.geteuid(), expected.link_count,
+                        expected.mtime_ns, expected.ctime_ns], "quarantine": None}
+                for selection, expected in identities.items()
+                if selection in HARNESS_TARGETS and records[selection]["profile"].get("test") is True
+            })
             clone = native_artifact_clone_function()
             remaining_bytes = sum(info.size for info in identities.values())
             # Clones need metadata, not another logical-size data allocation.
@@ -1438,7 +1496,9 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
             if shutil.disk_usage(target).free < required:
                 raise CheckError("native artifact copies would consume the required working-space reserve")
             output = Path(tempfile.mkdtemp(prefix="taira-native-artifacts-", dir=target))
-            copied, observations, published = {}, [], {}
+            directory_stat = output.lstat()
+            directory_identity = (directory_stat.st_dev, directory_stat.st_ino)
+            copied, observations = {}, []
             for selection, path in paths.items():
                 expected = identities[selection]
                 destination = output / selection
@@ -1517,22 +1577,25 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 os.fsync(parent_fd)
             finally:
                 os.close(parent_fd)
-            # Reuse source identities already verified above. The ledger owns
-            # only final tests, never shipping binaries or Cargo cache entries.
-            retire_superseded_native_test_outputs(root, target, {
-                selection: {"selection": selection, "path": str(paths[selection]),
-                    "identity": [expected.device, expected.inode, expected.size,
-                        stat.S_IFREG | expected.mode, os.geteuid(), expected.link_count,
-                        expected.mtime_ns, expected.ctime_ns], "quarantine": None}
-                for selection, expected in identities.items()
-                if selection in HARNESS_TARGETS and records[selection]["profile"].get("test") is True
-            })
         # Publish observations only when the complete batch is frozen and the locks released.
+        copies = NativeArtifactCopies(output, copied, published, observations)
         for observation in observations:
             print("[taira-check] isolated native artifact " + json.dumps(observation, sort_keys=True), flush=True)
-        return NativeArtifactCopies(output, copied, published, observations)
+        completed = True
+        return copies
     except (OSError, ValueError, ReleaseArtifactError, subprocess.SubprocessError) as error:
         raise CheckError(f"native artifact isolation failed: {error}") from error
+    finally:
+        if not completed:
+            if copies is not None and copies.directory_fd is not None:
+                try:
+                    os.close(copies.directory_fd)
+                except OSError:
+                    pass  # Preserve the publication error; cleanup still checks exact copy identities.
+                finally:
+                    copies.directory_fd = None
+            if output is not None and directory_identity is not None:
+                discard_unpublished_native_artifacts(output, directory_identity, published, records)
 
 
 def require_tests(listing: str, stages=None) -> None:
@@ -1584,7 +1647,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
         raise SelectedRegressionFailures(failures)
 
 
-def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:
+def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> NativeArtifactCopies:
     """Build the shipping package graph plus the ordinary fixture launcher."""
     expected = {"iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli")}
     for selection in shipping_harnesses(root):
@@ -1643,23 +1706,23 @@ def run_config_checks(harnesses: NativeArtifactCopies, fixture_root: Path, env: 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                        *, harness: str, stages: tuple) -> None:
-    binaries = compile_network_binaries(root, env, lock_fds)
-    require_network_fixture_capacity(fixture_root)
-    # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
-    directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
-    network_env = env | {
-        "TEST_NETWORK_BIN_IROHAD": binaries["iroha3d"],
-        "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
-        "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
-        "TEST_NETWORK_TMP_DIR": str(directory),
-        "IROHA_TEST_NETWORK_KEEP_DIRS": "1",
-        "IROHA_TEST_SKIP_BUILD": "1",
-        "IROHA_FAIL_ON_SANDBOX_SKIP": "1",
-        "IROHA_TEST_REQUIRE_NETWORK": "1",
-        "IROHA_TEST_SERIALIZE_NETWORKS": "1",
-    }
-    print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
-    run_stages(harness, fixture_root, network_env, stages, lock_fds)
+    with compile_network_binaries(root, env, lock_fds) as binaries:
+        require_network_fixture_capacity(fixture_root)
+        # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
+        directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
+        network_env = env | {
+            "TEST_NETWORK_BIN_IROHAD": binaries["iroha3d"],
+            "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
+            "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
+            "TEST_NETWORK_TMP_DIR": str(directory),
+            "IROHA_TEST_NETWORK_KEEP_DIRS": "1",
+            "IROHA_TEST_SKIP_BUILD": "1",
+            "IROHA_FAIL_ON_SANDBOX_SKIP": "1",
+            "IROHA_TEST_REQUIRE_NETWORK": "1",
+            "IROHA_TEST_SERIALIZE_NETWORKS": "1",
+        }
+        print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
+        run_stages(harness, fixture_root, network_env, stages, lock_fds)
 
 
 def require_network_fixture_capacity(directory: Path) -> None:

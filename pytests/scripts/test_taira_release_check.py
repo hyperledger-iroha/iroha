@@ -609,7 +609,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_gate_forbids_fallback_builds_and_sandbox_skips(self):
         env = {"CARGO_TARGET_DIR": "/warm"}
-        with patch.object(gate, "compile_network_binaries", return_value={"iroha3d": "/warm/node", "iroha": "/warm/client"}), \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client"})), \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
              patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
@@ -791,7 +791,7 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
         fsm.assert_not_called()
 
     def test_capacity_is_checked_again_after_builds_before_starting_peers(self):
-        with patch.object(gate, "compile_network_binaries", return_value={"iroha3d": "/node", "iroha": "/cli"}), \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/node", "iroha": "/cli"})), \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/harness")), \
              patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
              patch.object(gate, "run_stages") as run, patch.object(gate.tempfile, "mkdtemp") as fixture:
@@ -939,7 +939,10 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         redirect = contextlib.redirect_stdout(self.stdout)
         redirect.__enter__()
         self.addCleanup(redirect.__exit__, None, None, None)
-        # Read-only captures are retained in production; release test-owned paths for cleanup.
+        closed = patch.object(gate, "native_test_output_confirmed_closed", return_value=True)
+        self.closed = closed.start()
+        self.addCleanup(closed.stop)
+        # Retained read-only copies still belong to these disposable fixtures.
         self.addCleanup(self.make_fixture_writable)
 
     def make_fixture_writable(self):
@@ -1040,14 +1043,74 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         self.assertTrue(Path(copies["core"]).exists())
         self.assertIn("retirement skipped", self.stdout.getvalue())
 
-    def test_failed_copy_never_records_or_retires_test_outputs(self):
-        _, row, _ = self.artifact("core")
+    def superseded_harness(self):
+        old, row, _ = self.artifact("core")
+        with self.isolate({"core": row}):
+            pass
+        new = old.with_name(gate.HARNESS_TARGETS["core"][1] + "-ffffffffffffffff")
+        new.write_bytes(b"new verified executable")
+        new.chmod(0o700)
+        return old, new, row | {"executable": str(new)}
+
+    def test_verified_retirement_frees_reserve_before_new_copy(self):
+        old, new, row = self.superseded_harness()
+        observed = []
+        def capacity(path):
+            self.assert_profile_locked()
+            observed.append(old.exists())
+            return MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES + new.stat().st_size
+                             - int(old.exists()))
         with patch.object(gate, "native_artifact_clone_function", return_value=None), \
-             patch.object(gate.os, "write", side_effect=OSError("copy failed")), \
-             patch.object(gate, "retire_superseded_native_test_outputs") as retirement:
-            with self.assertRaises(gate.CheckError):
+             patch.object(gate.shutil, "disk_usage", side_effect=capacity):
+            with self.isolate({"core": row}) as copies:
+                self.assertEqual(Path(copies["core"]).read_bytes(), new.read_bytes())
+        self.assertTrue(observed)
+        self.assertFalse(any(observed), "reserve checks must observe already-freed predecessors")
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+
+    def test_busy_predecessor_retained_and_reserve_failure_is_accurate(self):
+        old, new, row = self.superseded_harness()
+        self.closed.return_value = False
+        outputs = set(self.target.glob("taira-native-artifacts-*"))
+        available = gate.NETWORK_FIXTURE_FREE_BYTES + new.stat().st_size - 1
+        with patch.object(gate, "native_artifact_clone_function", return_value=None), \
+             patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=available)):
+            with self.assertRaisesRegex(gate.CheckError, "working-space reserve"):
                 self.isolate({"core": row})
-        retirement.assert_not_called()
+        self.assertTrue(old.exists())
+        self.assertTrue(new.exists())
+        self.assertEqual(set(self.target.glob("taira-native-artifacts-*")), outputs)
+        self.assertIn("superseded test outputs: busy, changed, or unverified", self.stdout.getvalue())
+
+    def test_copy_failure_after_verified_retirement_keeps_current_producer(self):
+        old, new, row = self.superseded_harness()
+        def failed_clone(*args):
+            self.assert_profile_locked()
+            self.assertFalse(old.exists(), "verified retirement must precede copy attempts")
+            raise OSError(errno.EIO, "fixture copy failed")
+        with patch.object(gate, "native_artifact_clone_function", return_value=failed_clone):
+            with self.assertRaisesRegex(gate.CheckError, "fixture copy failed"):
+                self.isolate({"core": row})
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+        ledger = next(self.target.glob("taira-native-test-outputs-*/ledger.json"))
+        self.assertEqual(json.loads(ledger.read_text())["current"]["core"]["path"], str(new))
+        self.assert_profile_unlocked()
+
+    def test_later_invalid_identity_blocks_all_retirement(self):
+        rows = {name: self.artifact(name)[1] for name in ("core", "cli")}
+        original = self.contract.stable_hash_path
+        def verify(path, **kwargs):
+            if path == Path(rows["cli"]["executable"]):
+                raise OSError("later artifact identity invalid")
+            return original(path, **kwargs)
+        with patch.object(self.contract, "stable_hash_path", side_effect=verify), \
+             patch.object(gate, "retire_superseded_native_test_outputs") as retire:
+            with self.assertRaisesRegex(gate.CheckError, "later artifact identity invalid"):
+                self.isolate(rows)
+        retire.assert_not_called()
+        self.assertEqual(list(self.target.glob("taira-native-artifacts-*")), [])
 
     @unittest.skipUnless(sys.platform == "darwin", "requires native macOS fclonefileat")
     def test_native_clone_preserves_bytes_after_source_write_and_replacement(self):
@@ -1135,6 +1198,86 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha")))
         self.assertNotIn("isolated native artifact", self.stdout.getvalue())
         self.assert_profile_unlocked()
+
+    def test_second_copy_failure_cleans_only_verified_closed_unpublished_copies(self):
+        for state in ("closed", "busy", "unverified", "replaced"):
+            with self.subTest(state=state):
+                rows = {name: self.artifact(name, ("producer-" + name).encode())[1]
+                        for name in ("iroha", "iroha3d")}
+                before = set(self.target.glob("taira-native-artifacts-*"))
+                self.closed.return_value = {"busy": False, "unverified": None}.get(state, True)
+                def second_copy_fails(source, directory, name):
+                    if name == "iroha":
+                        return False  # Let the first copy pass the actual streamed verification.
+                    output, = set(self.target.glob("taira-native-artifacts-*")) - before
+                    first = output / "iroha"
+                    self.assertEqual(first.read_bytes(), b"producer-iroha")
+                    if state == "replaced":
+                        first.unlink()
+                        first.write_bytes(b"foreign replacement")
+                        first.chmod(0o500)
+                    (output / name).write_bytes(b"incomplete second copy")
+                    (output / "unrecorded").write_bytes(b"unowned diagnostic")
+                    raise OSError(errno.EIO, "second artifact copy failed")
+                errors = io.StringIO()
+                with patch.object(gate, "native_artifact_clone_function", return_value=second_copy_fails), \
+                     contextlib.redirect_stderr(errors):
+                    with self.assertRaisesRegex(gate.CheckError, "second artifact copy failed"):
+                        self.isolate(rows)
+                self.closed.return_value = True
+                output, = set(self.target.glob("taira-native-artifacts-*")) - before
+                if state == "closed":
+                    self.assertFalse((output / "iroha").exists(), "unpublished CLI is not retained for operators")
+                else:
+                    expected = b"foreign replacement" if state == "replaced" else b"producer-iroha"
+                    self.assertEqual((output / "iroha").read_bytes(), expected)
+                    self.assertIn("retained", errors.getvalue())
+                self.assertEqual((output / "iroha3d").read_bytes(), b"incomplete second copy")
+                self.assertEqual((output / "unrecorded").read_bytes(), b"unowned diagnostic")
+                for name, row in rows.items():
+                    self.assertEqual(Path(row["executable"]).read_bytes(), ("producer-" + name).encode())
+                self.assertNotIn("isolated native artifact", self.stdout.getvalue())
+                self.assert_profile_unlocked()
+
+    def test_publication_failure_closes_owner_and_discards_unpublished_copies(self):
+        original_owner, original_print = gate.NativeArtifactCopies, print
+        for failed_observation in (1, 2):
+            with self.subTest(failed_observation=failed_observation):
+                rows = {name: self.artifact(name, ("producer-" + name).encode())[1]
+                        for name in ("iroha", "iroha3d")}
+                before = set(self.target.glob("taira-native-artifacts-*"))
+                owners, descriptors, observed = [], [], []
+                failure = BrokenPipeError(errno.EPIPE, "fixture publication channel failed")
+                def track_owner(*args, **kwargs):
+                    owner = original_owner(*args, **kwargs)
+                    owners.append(owner)
+                    descriptors.append(owner.directory_fd)
+                    return owner
+                def fail_publication(*args, **kwargs):
+                    if args and str(args[0]).startswith("[taira-check] isolated native artifact "):
+                        self.assertTrue(owners, "publication begins only after constructing the owner")
+                        self.assertIsNotNone(owners[0].directory_fd)
+                        observed.append(args[0])
+                        if len(observed) == failed_observation:
+                            raise failure
+                    return original_print(*args, **kwargs)
+                with patch.object(gate, "NativeArtifactCopies", side_effect=track_owner), \
+                     patch("builtins.print", side_effect=fail_publication):
+                    with self.assertRaisesRegex(gate.CheckError, "fixture publication channel failed") as raised:
+                        self.isolate(rows)
+                self.assertIs(raised.exception.__cause__, failure)
+                self.assertEqual(len(observed), failed_observation)
+                self.assertTrue(all(owner.directory_fd is None for owner in owners))
+                for descriptor in descriptors:
+                    self.assertIsNotNone(descriptor)
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+                output, = set(self.target.glob("taira-native-artifacts-*")) - before
+                self.assertFalse((output / "iroha").exists())
+                self.assertFalse((output / "iroha3d").exists())
+                for name, row in rows.items():
+                    self.assertEqual(Path(row["executable"]).read_bytes(), ("producer-" + name).encode())
+                self.assert_profile_unlocked()
 
     def test_strict_foreign_fingerprints_reject_without_retirement_or_publication(self):
         _, row, _ = self.artifact()
@@ -1321,13 +1464,13 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 self.assertFalse(copied.exists())
                 self.assertEqual(original.read_bytes(), payload)
                 self.assertEqual(stat.S_IMODE(copied.parent.stat().st_mode), 0o500)
-                self.assertIn('released native test artifact', self.stdout.getvalue())
+                self.assertIn('released native artifact', self.stdout.getvalue())
                 self.assertIn(hashlib.sha256(payload).hexdigest(), self.stdout.getvalue())
                 if not succeeds:
                     self.assertIn('diagnostic retained', error_output.getvalue())
 
-    def test_batch_releases_completed_then_unused_tests_preserving_native_and_unowned_files(self):
-        rows = {name: self.artifact(name)[1] for name in ("core", "network", "iroha", "iroha3d")}
+    def test_batch_releases_temporary_copies_preserving_published_cli_and_producers(self):
+        rows = {name: self.artifact(name)[1] for name in ("core", "cli", "network", "iroha", "iroha3d")}
         copies = self.isolate(rows)
         output = Path(copies["core"]).parent
         output.chmod(0o700)
@@ -1338,14 +1481,117 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             with copies:
                 copies.release("core")
                 self.assertFalse(Path(copies["core"]).exists())
+                copies.release("cli")
+                self.assertFalse(Path(copies["cli"]).exists(), "CLI test harness is temporary")
+                copies.release("iroha")
+                self.assertTrue(Path(copies["iroha"]).exists(), "published shipping CLI remains usable")
                 self.assertTrue(Path(copies["network"]).exists())
                 raise gate.CheckError("later fixture failed")
         self.assertFalse(Path(copies["network"]).exists())
-        for name in ("iroha", "iroha3d"):
-            self.assertTrue(Path(copies[name]).exists())
+        self.assertFalse(Path(copies["iroha3d"]).exists())
+        self.assertTrue(Path(copies["iroha"]).exists())
         for row in rows.values():
             self.assertTrue(Path(row["executable"]).exists(), "Cargo output must remain warm")
         self.assertEqual(note.read_text(), "retain diagnostic")
+        self.assertIsNone(copies.directory_fd)
+
+    def test_network_copies_live_through_real_children_then_retain_only_published_cli(self):
+        child_payload = (f"#!{sys.executable}\nimport os, sys\nfrom pathlib import Path\n"
+                         "assert Path(sys.argv[0]).is_file()\n"
+                         "for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHA'):\n"
+                         "    assert Path(os.environ[key]).is_file()\n"
+                         "print('native child completed')\n").encode()
+        for succeeds in (True, False):
+            with self.subTest(succeeds=succeeds):
+                rows = {name: self.artifact(name, child_payload)[1] for name in ("iroha", "iroha3d")}
+                copies = self.isolate(rows)
+                output = Path(copies["iroha"]).parent
+                output.chmod(0o700)
+                unrecorded = output / "unrecorded"
+                unrecorded.write_bytes(b"leave unowned files")
+                output.chmod(0o500)
+                harness_payload = (f"#!{sys.executable}\nimport os, subprocess, sys\nfrom pathlib import Path\n"
+                    "if '--list' in sys.argv: print('fixture: test'); sys.exit(0)\n"
+                    "log = Path(os.environ['TEST_NETWORK_TMP_DIR']) / 'native.log'\n"
+                    "with log.open('w') as stream:\n"
+                    "    for key in ('TEST_NETWORK_BIN_IROHAD', 'TEST_NETWORK_BIN_IROHA'):\n"
+                    "        subprocess.run([os.environ[key]], check=True, stdout=stream)\n"
+                    + ("print('test fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;')\n"
+                       if succeeds else "print('network fixture failed after children'); sys.exit(101)\n")).encode()
+                harness, _, _ = self.artifact("network", harness_payload)
+                errors = io.StringIO()
+                expected = contextlib.nullcontext() if succeeds else self.assertRaisesRegex(
+                    gate.CheckError, "fixture.*101")
+                with patch.object(gate, "compile_network_binaries", return_value=copies), \
+                     contextlib.redirect_stderr(errors), expected:
+                    gate.run_network_checks(self.source, self.target, dict(os.environ) | self.env, (),
+                                            harness=str(harness), stages=(("real network child", ("fixture",)),))
+                self.assertFalse(Path(copies["iroha3d"]).exists())
+                self.assertTrue(Path(copies["iroha"]).exists())
+                self.assertTrue(all(Path(row["executable"]).exists() for row in rows.values()))
+                self.assertTrue(harness.exists())
+                self.assertEqual(unrecorded.read_bytes(), b"leave unowned files")
+                logs = list(self.target.glob("taira-consensus-check-*/native.log"))
+                self.assertEqual(len(logs), 1 if succeeds else 2)
+                self.assertTrue(all(log.read_text() == "native child completed\nnative child completed\n"
+                                    for log in logs))
+                self.assertIsNone(copies.directory_fd)
+                if not succeeds:
+                    self.assertIn("network fixture failed after children", errors.getvalue())
+
+    def test_busy_or_inconclusive_copies_are_retained_without_masking_fixture_failure(self):
+        for closed in (False, None):
+            for fails in (False, True):
+                with self.subTest(closed=closed, fails=fails):
+                    copies = self.isolate({name: self.artifact(name)[1] for name in ("iroha3d", "core")})
+                    self.closed.side_effect = lambda path: closed if path.name == "iroha3d" else True
+                    errors = io.StringIO()
+                    expected = self.assertRaisesRegex(gate.CheckError, "original child failed") if fails else contextlib.nullcontext()
+                    with expected, contextlib.redirect_stderr(errors):
+                        with copies:
+                            if fails:
+                                raise gate.CheckError("original child failed")
+                    self.closed.side_effect = None
+                    self.assertTrue(Path(copies["iroha3d"]).exists())
+                    self.assertFalse(Path(copies["core"]).exists())
+                    self.assertIn("retained", errors.getvalue())
+                    self.assertIsNone(copies.directory_fd)
+
+    def test_network_capacity_or_fixture_failure_retains_only_published_cli(self):
+        for failure in ("capacity", "fixture"):
+            with self.subTest(failure=failure):
+                rows = {name: self.artifact(name)[1] for name in ("iroha", "iroha3d")}
+                copies = self.isolate(rows)
+                owner = gate if failure == "capacity" else gate.tempfile
+                function = "require_network_fixture_capacity" if failure == "capacity" else "mkdtemp"
+                with patch.object(gate, "compile_network_binaries", return_value=copies), \
+                     patch.object(gate, "run_stages") as run, \
+                     patch.object(owner, function, side_effect=gate.CheckError(failure + " failed")):
+                    with self.assertRaisesRegex(gate.CheckError, failure + " failed"):
+                        gate.run_network_checks(self.source, self.target, self.env, (),
+                                                harness="unused", stages=())
+                run.assert_not_called()
+                self.assertFalse(Path(copies["iroha3d"]).exists())
+                self.assertTrue(Path(copies["iroha"]).exists())
+                self.assertTrue(all(Path(row["executable"]).exists() for row in rows.values()))
+
+    def test_copy_replaced_during_closed_check_is_retained(self):
+        copies = self.isolate({name: self.artifact(name)[1] for name in ("iroha3d", "core")})
+        copied = Path(copies["iroha3d"])
+        def replace_during_check(path):
+            if path == copied:
+                copied.parent.chmod(0o700)
+                copied.unlink()
+                copied.write_bytes(b"foreign replacement during inspection")
+                copied.chmod(0o500)
+                copied.parent.chmod(0o500)
+            return True
+        with patch.object(gate, "native_test_output_confirmed_closed", side_effect=replace_during_check):
+            with self.assertRaisesRegex(gate.CheckError, "changed before release: iroha3d"):
+                with copies:
+                    pass
+        self.assertEqual(copied.read_bytes(), b"foreign replacement during inspection")
+        self.assertFalse(Path(copies["core"]).exists())
         self.assertIsNone(copies.directory_fd)
 
     def test_failed_early_run_preserves_original_failure_and_releases_only_owned_batch(self):

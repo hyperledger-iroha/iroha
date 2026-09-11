@@ -81,9 +81,11 @@ installed sccache remain in use. No target or cache is cleaned or replaced.
 Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
 The native gate receives the same source, toolchain and explicit target directory.
 
-After successful native capture, a bounded owner-private ledger records only the
-gate's final Cargo test executables. Later captures retire recorded superseded
-outputs under Cargo's locks after exact inode checks and an OS open-file check.
+After verifying the complete native Cargo output set, a bounded owner-private
+ledger records only final test executables and retires recorded superseded outputs
+before checking copy capacity. Retirement runs under Cargo's locks after exact
+inode checks and an OS open-file check; a later copy failure leaves the current
+verified Cargo outputs intact.
 The first run only records current outputs; unrecorded files, production binaries,
 libraries, object files and warm compiler caches are retained. Busy files or an
 unavailable/inconclusive `lsof` check cause retention. A private quarantine closes
@@ -92,6 +94,15 @@ recorded. Retries recover both rename windows using the recorded inode and stabl
 metadata, recheck open-file status, and never adopt an unrelated replacement. A
 full ledger retries pending cleanup before admitting successors, so closing an
 old reader restores progress without manual ledger edits.
+
+Temporary executable copies, including non-CLI native network binaries, are
+released after their last child exits, on success or failure. The published native
+`iroha` CLI snapshot remains available to operator custody and deployment consumers;
+the `cli` test harness is temporary. Exact identity and closed-file checks preserve
+replaced or busy copies. If isolation fails partway through a batch, only already
+verified copies are cleanup-owned, including an unpublished CLI; incomplete or
+unrecorded files are retained. Observations and fixture logs remain. Cargo producers
+and Linux release artifacts are outside temporary-copy cleanup.
 
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both
