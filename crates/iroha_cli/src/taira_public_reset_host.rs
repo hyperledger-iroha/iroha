@@ -11406,7 +11406,8 @@ fn wait_for_validator_http_readiness(
             }
             match http
                 .get(url.clone())
-                .header(ACCEPT, "application/json")
+                // Readiness succeeds as text; unavailable/error responses use JSON.
+                .header(ACCEPT, "text/plain, application/json")
                 .timeout(Duration::from_secs(2).min(remaining))
                 .send()
             {
@@ -18160,6 +18161,16 @@ mod tests {
                     request.extend_from_slice(&buffer[..count]);
                 }
                 assert!(request.starts_with(b"GET /readyz HTTP/1.1\r\n"));
+                let request_text = std::str::from_utf8(&request).expect("readiness request headers");
+                let accept = request_text
+                    .split("\r\n")
+                    .skip(1)
+                    .take_while(|line| !line.is_empty())
+                    .filter_map(|line| line.split_once(':'))
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                    .map(|(_, value)| value.trim())
+                    .collect::<Vec<_>>();
+                assert_eq!(accept, ["text/plain, application/json"]);
                 stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).expect("readiness response");
             }
             count
@@ -18181,7 +18192,9 @@ mod tests {
         // Give the worker time to accept an empty socket before sending the request.
         std::thread::sleep(Duration::from_millis(50));
         client
-            .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .write_all(
+                b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nAccept: text/plain, application/json\r\n\r\n",
+            )
             .expect("send delayed request");
         let mut response = String::new();
         client

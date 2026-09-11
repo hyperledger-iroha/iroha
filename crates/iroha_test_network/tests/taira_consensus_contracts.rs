@@ -34,7 +34,7 @@ async fn validator_admission_ready(peer: &NetworkPeer, deadline: Instant) -> boo
         let mut stream = tokio::net::TcpStream::connect(&address).await?;
         stream
             .write_all(
-                format!("GET /readyz HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                format!("GET /readyz HTTP/1.1\r\nHost: {address}\r\nAccept: text/plain, application/json\r\nConnection: close\r\n\r\n")
                     .as_bytes(),
             )
             .await?;

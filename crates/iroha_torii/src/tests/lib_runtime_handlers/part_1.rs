@@ -111,9 +111,41 @@ async fn readiness_rejects_closed_consensus_ingress() {
 #[tokio::test]
 async fn readiness_rejects_empty_queue_startup_reconciliation() {
     let app = mk_app_state_for_tests();
+    // Exercise the response boundary as well as the handler: readiness success
+    // is plain text, while the ordinary failure contract is a JSON envelope.
+    let router = axum::Router::new()
+        .route("/readyz", axum::routing::get(handler_readyz))
+        .layer(axum::middleware::from_fn(capture_response_format))
+        .layer(axum::middleware::from_fn(coalesce_accept_headers))
+        .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+        .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+        .with_state(Arc::clone(&app));
+    let request = |accept| {
+        axum::http::Request::builder()
+            .uri("/readyz")
+            .header(axum::http::header::ACCEPT, accept)
+            .body(Body::empty())
+            .expect("readiness request")
+    };
+    let response = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("healthy readiness response");
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        handler_readyz(State(Arc::clone(&app))).await.status(),
-        StatusCode::OK
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("application/json"))
+            .await
+            .expect("incompatible readiness request")
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "JSON-only probes cannot negotiate a healthy text readiness response"
     );
     let directory = tempfile::tempdir().expect("readiness journal root");
     app.queue
@@ -123,10 +155,18 @@ async fn readiness_rejects_empty_queue_startup_reconciliation() {
         )
         .expect("install actual empty startup journal");
     assert!(app.queue.lane_reservation_startup_reconciliation_pending());
+    let response = router
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("pending readiness response");
     assert_eq!(
-        handler_readyz(State(app)).await.status(),
+        response.status(),
         StatusCode::SERVICE_UNAVAILABLE,
         "an HTTP listener and empty queue do not establish write readiness"
+    );
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
     );
 }
 
