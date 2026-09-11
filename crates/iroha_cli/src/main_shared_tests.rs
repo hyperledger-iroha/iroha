@@ -13,6 +13,7 @@ use iroha::data_model::{
 use iroha_i18n::{Bundle, Language, Localizer};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use std::{
     fs,
     num::NonZeroU64,
@@ -2970,7 +2971,7 @@ fn ledger_asset_get_uses_exact_singular_query_and_preserves_not_found() {
 
     for scope in [
         AssetBalanceScope::Global,
-        AssetBalanceScope::Dataspace(iroha::data_model::nexus::DataSpaceId::new(3)),
+        AssetBalanceScope::Dataspace(DataSpaceId::new(3)),
     ] {
         for missing in [false, true] {
             let account = fallback_config().account;
