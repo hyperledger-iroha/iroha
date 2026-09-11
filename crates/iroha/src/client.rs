@@ -21907,7 +21907,8 @@ impl Client {
         )?;
         Self::decode_json_ok(resp, "Failed to get runtime ABI hash")
     }
-    /// GET `/v1/node/capabilities`
+    /// GET public `/v1/node/capabilities` without canonical account authentication.
+    /// Discovery must work before the transaction authority has registered an account.
     /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -21932,7 +21933,7 @@ impl Client {
     fn node_capabilities_request(&self) -> Result<DefaultRequest> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
         let request = self
-            .account_signed_get_request(url)?
+            .request_without_canonical_account_auth(HttpMethod::GET, url)
             .header(http::header::ACCEPT, APPLICATION_JSON)
             .max_response_bytes(NODE_CAPABILITIES_RESPONSE_MAX_BYTES)
             .build()?;
@@ -32179,6 +32180,92 @@ mod tests {
             NODE_CAPABILITIES_RESPONSE_MAX_BYTES
         );
         assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
+    }
+    #[test]
+    fn prospective_account_submission_discovers_capabilities_without_account_auth() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let response = match snapshot.url.path() {
+                    "/v1/node/capabilities" => {
+                        let carries_account_auth = snapshot.headers.iter().any(|(name, _)| {
+                            [
+                                HEADER_ACCOUNT,
+                                HEADER_SIGNATURE,
+                                HEADER_TIMESTAMP_MS,
+                                HEADER_NONCE,
+                                HEADER_WITNESS,
+                            ]
+                            .iter()
+                            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+                        });
+                        if carries_account_auth {
+                            json_response(
+                                StatusCode::FORBIDDEN,
+                                r#"{"code":"query_validation_failed","message":"canonical request account is not registered"}"#,
+                            )
+                        } else {
+                            json_response(StatusCode::OK, &compatible_capabilities_body())
+                        }
+                    }
+                    path if path == torii_uri::TRANSACTION => json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"code":"transaction_rejected","message":"bootstrap dispatch observed"}"#,
+                    ),
+                    path => panic!("unexpected bootstrap request: {path}"),
+                };
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(response)
+            }
+        };
+        let expected_hash = with_mock_http(responder, |mock_transport| {
+            let mut client =
+                client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
+            for name in [
+                HEADER_ACCOUNT,
+                HEADER_SIGNATURE,
+                HEADER_TIMESTAMP_MS,
+                HEADER_NONCE,
+                HEADER_WITNESS,
+            ] {
+                client
+                    .headers
+                    .insert(name.to_ascii_uppercase(), "stale-fixture-header".to_owned());
+            }
+            client
+                .headers
+                .insert("X-API-Token".to_owned(), "test-transport-policy".to_owned());
+            let transaction = build_transaction(
+                &client,
+                vec![InstructionBox::from(Register::account(Account::new(
+                    client.account.clone(),
+                )))],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            let error = client
+                .submit_transaction_for_test(&transaction)
+                .expect_err("fixture stops only after observing the signed POST");
+            assert!(format!("{error:#}").contains("bootstrap dispatch observed"));
+            transaction.hash()
+        });
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2, "one discovery and one exact submission");
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert!(
+            snapshots[0]
+                .headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("X-API-Token")
+                    && value == "test-transport-policy")
+        );
+        let signed = SignedTransaction::decode_all_versioned(&snapshots[1].body)
+            .expect("bootstrap remains a canonical signed transaction");
+        assert_eq!(signed.hash(), expected_hash);
+        signed
+            .verify_signature()
+            .expect("publisher signature remains intact");
     }
     #[test]
     fn get_node_capabilities_json_accepts_torii_utf8_json_content_type() {

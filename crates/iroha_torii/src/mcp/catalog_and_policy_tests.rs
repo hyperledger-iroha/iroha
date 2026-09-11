@@ -131,6 +131,11 @@ fn catalog_dispatch_prefers_exact_paths_and_rejects_ambiguous_templates() {
 fn target_policy_requires_inner_canonical_proof_only_for_canonical_route() {
     assert_eq!(
         target_extra_header_policy(&Method::GET, "/v1/node/capabilities")
+            .expect("cataloged public bootstrap route"),
+        ExtraHeaderPolicy::Default
+    );
+    assert_eq!(
+        target_extra_header_policy(&Method::GET, "/v1/privacy/capabilities")
             .expect("cataloged account route"),
         ExtraHeaderPolicy::CanonicalAccountAuthentication
     );

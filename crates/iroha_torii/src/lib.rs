@@ -14188,7 +14188,7 @@ async fn handler_runtime_metrics(
     let payload = crate::runtime::handle_runtime_metrics(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-/// GET /v1/node/capabilities — wrapper enforcing access policy.
+/// GET /v1/node/capabilities — public compatibility metadata with listener access policy.
 async fn handler_node_capabilities(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -45040,7 +45040,7 @@ impl Torii {
             RUNTIME_ABI_ACTIVE => canonical_account_get(handler_runtime_abi_active, app_state, 0);
             RUNTIME_ABI_HASH => public_get(handler_runtime_abi_hash);
             RUNTIME_METRICS => canonical_account_get(handler_runtime_metrics, app_state, 0);
-            NODE_CAPABILITIES => canonical_account_get(handler_node_capabilities, app_state, 0);
+            NODE_CAPABILITIES => public_get(handler_node_capabilities);
             PRIVACY_CAPABILITIES => canonical_account_get(handler_privacy_capabilities, app_state, 0);
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_authorize, 1);
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_issue, privacy_issuance_api::BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1);

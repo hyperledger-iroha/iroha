@@ -1721,6 +1721,50 @@ impl RuntimeApiRouterFixture {
         self.router.shutdown().await;
     }
 }
+#[tokio::test]
+async fn node_capabilities_http_bootstraps_without_registered_account() {
+    // This fixture has an empty world and mounts the production route catalog,
+    // including authentication middleware. Calling the handler alone misses
+    // the circular dependency between account registration and SDK preflight.
+    let fixture = RuntimeApiRouterFixture::standard("public-node-capabilities-test");
+    for (path, expected) in [
+        ("/v1/node/capabilities", StatusCode::OK),
+        ("/v1/privacy/capabilities", StatusCode::UNAUTHORIZED),
+        ("/v1/runtime/upgrades", StatusCode::UNAUTHORIZED),
+    ] {
+        let mut request = Request::builder()
+            .method(HttpMethod::GET)
+            .uri(path)
+            .header(axum::http::header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .expect("unsigned metadata request");
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("production route response");
+        assert_eq!(response.status(), expected, "GET {path}");
+        if expected == StatusCode::OK {
+            let body = torii_body_bytes(response, "node capabilities body").await;
+            let capabilities: crate::runtime::NodeCapabilitiesResponse =
+                norito::json::from_slice(&body).expect("typed node capability metadata");
+            assert_eq!(capabilities.abi_version, 1);
+            assert_eq!(
+                capabilities.data_model_version,
+                iroha_data_model::DATA_MODEL_VERSION
+            );
+            assert_eq!(
+                capabilities.signed_transaction_schema_hash_hex,
+                hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
+            );
+        }
+    }
+    fixture.shutdown().await;
+}
 #[cfg(not(feature = "app_api"))]
 #[tokio::test]
 async fn public_sorafs_gateway_routes_are_mounted_without_app_api() {

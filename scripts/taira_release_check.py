@@ -468,7 +468,17 @@ CORE_STAGES += (("resolved validation and exact application ownership", (
     "sumeragi::v2_lane_work::tests::autonomous_fixture_binds_final_lane_context_before_opening_signing_guards",
 )),)
 
-CLIENT_STAGES = (("shared absolute HTTP operation deadline", (
+CLIENT_STAGES = (("public compatibility discovery before account bootstrap", (
+    "client::tests::prospective_account_submission_discovers_capabilities_without_account_auth",
+    "client::tests::get_node_capabilities_json_requests_json_accept",
+    "client::tests::get_node_capabilities_json_accepts_torii_utf8_json_content_type",
+    "client::tests::get_node_capabilities_json_rejects_ambiguous_representation",
+    "client::tests::submit_transaction_rejects_mismatched_data_model_version",
+    "client::tests::submit_transaction_rejects_missing_data_model_version",
+    "client::tests::submit_transaction_rejects_missing_signed_transaction_schema_hash",
+    "client::tests::submit_transaction_rejects_invalid_signed_transaction_schema_hash",
+    "client::tests::submit_transaction_rejects_mismatched_signed_transaction_schema_hash",
+)), ("shared absolute HTTP operation deadline", (
     "http_default::tests::operation_deadline_bounds_sequential_blocking_dispatches",
     "http_default::tests::expired_operation_deadline_prevents_dispatch_and_cannot_be_extended",
     "http_default::tests::operation_deadline_cancels_injected_async_transport",
@@ -533,7 +543,13 @@ TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation"
     "mcp::tests::whole_catalog_publishes_self_contained_input_schemas",
     "mcp::tests::registry_security::tools_list_list_changed_tracks_toolset_version",
 )),)
-TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public contract retained payload and certified ingress", (
+TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
+    "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
+    "openapi::tests::account_capabilities_document_exact_public_bootstrap_policy",
+    "openapi::tests::openapi_route_auth_metadata_matches_enabled_catalog_projection",
+    "openapi::tests::openapi_standard_security_matches_enabled_catalog_authentication",
+    "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
+)), ("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
     "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
     "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",

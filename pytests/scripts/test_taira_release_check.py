@@ -18,7 +18,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 517
+EXPECTED_REGRESSION_COUNT = 531
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -59,7 +59,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 334)
+        self.assertEqual(gate.selected_regression_count(), 348)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -106,6 +106,37 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             self.assertIn(stage, basic["torii-unit"])
         for stage in gate.CORE_ADMISSION_STARTUP_STAGES:
             self.assertIn(stage, full["core"])
+
+    def test_both_scopes_require_unsigned_bootstrap_and_fail_closed_capability_validation(self):
+        required = {
+            "client": {
+                "client::tests::" + name for name in (
+                    "prospective_account_submission_discovers_capabilities_without_account_auth",
+                    "get_node_capabilities_json_requests_json_accept",
+                    "get_node_capabilities_json_accepts_torii_utf8_json_content_type",
+                    "get_node_capabilities_json_rejects_ambiguous_representation",
+                    "submit_transaction_rejects_mismatched_data_model_version",
+                    "submit_transaction_rejects_missing_data_model_version",
+                    "submit_transaction_rejects_missing_signed_transaction_schema_hash",
+                    "submit_transaction_rejects_invalid_signed_transaction_schema_hash",
+                    "submit_transaction_rejects_mismatched_signed_transaction_schema_hash",
+                )
+            },
+            "torii-unit": {
+                "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
+                "openapi::tests::account_capabilities_document_exact_public_bootstrap_policy",
+                "openapi::tests::openapi_route_auth_metadata_matches_enabled_catalog_projection",
+                "openapi::tests::openapi_standard_security_matches_enabled_catalog_authentication",
+                "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
+            },
+        }
+        for scope in gate.QUALIFICATION_SCOPES:
+            selections = gate.qualification_stages(scope)
+            for harness, expected in required.items():
+                with self.subTest(scope=scope, harness=harness):
+                    names = [test for _, tests in selections[harness] for test in tests]
+                    self.assertTrue(expected.issubset(names))
+                    self.assertTrue(all(names.count(test) == 1 for test in expected))
 
     def test_unknown_scope_fails_before_any_source_or_build_action(self):
         for scope in ("", "skip", "core_testnet", None):

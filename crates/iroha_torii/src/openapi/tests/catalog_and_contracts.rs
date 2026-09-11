@@ -916,11 +916,23 @@ fn account_capabilities_document_exact_public_bootstrap_policy() {
     assert_eq!(schema["required"].as_array().expect("required").len(), 5);
     let node = openapi_operation(&document, "/v1/node/capabilities", "get");
     assert!(
+        node["parameters"]
+            .as_array()
+            .expect("node parameters")
+            .is_empty()
+    );
+    assert!(node.get("x-iroha-canonical-auth-v1").is_none());
+    assert!(node["responses"]["200"].get("headers").is_none());
+    assert_eq!(
+        node["x-iroha-route-auth"]["admission"].as_str(),
+        Some("public")
+    );
+    assert!(
         node["security"]
             .as_array()
             .expect("node security")
             .iter()
-            .all(|value| { value.as_object().is_some_and(|object| !object.is_empty()) })
+            .any(|value| { value.as_object().is_some_and(Map::is_empty) })
     );
 }
 
