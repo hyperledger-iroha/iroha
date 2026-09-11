@@ -614,6 +614,10 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
     "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
 )),)
+CORE_ADMISSION_STARTUP_STAGES += (("completed consensus outputs after durable restart", (
+    "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
+    "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_timeout_certificate_reservices_only_sealed_periodic_episode",
+)),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
