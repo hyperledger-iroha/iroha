@@ -8351,6 +8351,34 @@ fn validate_loaded_unit_evidence(bytes: &[u8], expected_fragment: &Path) -> Resu
 enum ValidatorProcessReadiness {
     Attested,
     LauncherPending,
+    ExecPending,
+}
+
+/// Read a bounded observation before checking whether the executable changed.
+fn read_validator_cmdline(path: &Path, maximum: usize) -> Result<Vec<u8>> {
+    let read_bound = u64::try_from(maximum)?
+        .checked_add(1)
+        .ok_or_else(|| eyre!("validator cmdline read bound overflow"))?;
+    let mut cmdline = Vec::new();
+    fs::File::open(path)?
+        .take(read_bound)
+        .read_to_end(&mut cmdline)?;
+    Ok(cmdline)
+}
+
+/// Classify argv only after confirming that its executable stayed unchanged.
+/// Empty procfs bytes are pending observation, never successful attestation.
+fn validator_cmdline_is_complete(cmdline: &[u8], maximum: usize) -> Result<bool> {
+    if cmdline.is_empty() {
+        return Ok(false);
+    }
+    if cmdline.len() > maximum {
+        return Err(eyre!("validator MainPID cmdline exceeds the exact byte bound"));
+    }
+    if !cmdline.ends_with(&[0]) {
+        return Err(eyre!("validator MainPID cmdline is missing its terminal NUL"));
+    }
+    Ok(true)
 }
 
 fn wait_for_validator_process(
@@ -8384,6 +8412,9 @@ fn attest_validator_process(
         ValidatorProcessReadiness::Attested => Ok(()),
         ValidatorProcessReadiness::LauncherPending => Err(eyre!(
             "validator MainPID still executes its signed launcher"
+        )),
+        ValidatorProcessReadiness::ExecPending => Err(eyre!(
+            "validator MainPID has not yet published a complete argv observation"
         )),
     }
 }
@@ -8428,7 +8459,7 @@ fn observe_validator_process(
             ));
         }
         super::validate_fixed_executable(&launcher, "validator Python launcher")?;
-        let cmdline = fs::read(proc_root.join("cmdline"))?;
+        let cmdline = read_validator_cmdline(&proc_root.join("cmdline"), 64 * 1024)?;
         // The launcher can exec the daemon between the exe and argv reads. Only
         // that exact transition may defer the complete attestation to the next poll.
         let executable_after = fs::read_link(proc_root.join("exe"))?;
@@ -8443,7 +8474,9 @@ fn observe_validator_process(
             if sha256_hex(&unit) != validator.systemd_unit_sha256 {
                 return Err(eyre!("validator launcher unit changed after attestation"));
             }
-            validate_validator_launcher_argv(&cmdline, &unit)?;
+            if validator_cmdline_is_complete(&cmdline, 64 * 1024)? {
+                validate_validator_launcher_argv(&cmdline, &unit)?;
+            }
         }
         let pid_after = run_host_command(
             SYSTEMCTL,
@@ -8460,13 +8493,37 @@ fn observe_validator_process(
                 "validator MainPID changed during launcher attestation"
             ));
         }
-        return Ok(ValidatorProcessReadiness::LauncherPending);
+        return Ok(if executable_after == expected_executable || cmdline.is_empty() {
+            ValidatorProcessReadiness::ExecPending
+        } else {
+            ValidatorProcessReadiness::LauncherPending
+        });
     }
-    let cmdline = fs::read(proc_root.join("cmdline"))?;
-    if cmdline.is_empty() || cmdline.len() > 8 * 1024 || !cmdline.ends_with(&[0]) {
+    let cmdline = read_validator_cmdline(&proc_root.join("cmdline"), 8 * 1024)?;
+    if fs::read_link(proc_root.join("exe"))? != expected_executable {
         return Err(eyre!(
-            "validator MainPID cmdline is outside the exact bound"
+            "validator daemon changed to an unexpected executable"
         ));
+    }
+    if !validator_cmdline_is_complete(&cmdline, 8 * 1024)? {
+        let pid_after = run_host_command(
+            SYSTEMCTL,
+            &[
+                "show",
+                "--property=MainPID",
+                "--value",
+                &validator.systemd_unit,
+            ],
+            admitted.action_deadline,
+        )?;
+        if pid_after != pid_bytes {
+            return Err(eyre!(
+                "validator MainPID changed during process attestation"
+            ));
+        }
+        // Repeat the whole observation, including unit/selector/exe/argv and
+        // config/genesis custody, before a later poll may return Attested.
+        return Ok(ValidatorProcessReadiness::ExecPending);
     }
     let arguments = cmdline[..cmdline.len() - 1]
         .split(|byte| *byte == 0)
@@ -8696,12 +8753,14 @@ fn rollback_host(admitted: &HostAdmission) -> Result<()> {
                 Path::new(&validator.admitted_release()?.release_root),
             )?;
             start_unit(admitted, "rollback-start", &validator.systemd_unit)?;
-            attest_validator_process(
-                admitted,
-                validator,
-                Path::new(&validator.admitted_release()?.release_root),
-                false,
-            )
+            wait_for_validator_process(admitted.action_deadline, || {
+                observe_validator_process(
+                    admitted,
+                    validator,
+                    Path::new(&validator.admitted_release()?.release_root),
+                    false,
+                )
+            })
         }
         HostTarget::Edge(edge) => {
             if edge.is_vacant() {
@@ -23489,22 +23548,72 @@ time.sleep(30)
     fn validator_process_readiness_waits_for_launcher_then_daemon() {
         let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"import os\\nos.execv(\\\"daemon\\\", [\\\"daemon\\\"])\"\n";
         let launcher = b"/usr/bin/python3\0-c\0import os\nos.execv(\"daemon\", [\"daemon\"])\0";
+        let directory = tempfile::tempdir().expect("process observation fixture");
+        let cmdline = directory.path().join("cmdline");
+        fs::write(&cmdline, b"").expect("empty exec observation");
         let mut observations = 0;
-        wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+        let mut complete_attestations = 0;
+        wait_for_validator_process(Instant::now() + Duration::from_secs(2), || {
             observations += 1;
-            if observations == 1 {
-                validate_validator_launcher_argv(launcher, unit)?;
-                Ok(ValidatorProcessReadiness::LauncherPending)
-            } else {
-                Ok(ValidatorProcessReadiness::Attested)
+            match observations {
+                1 => {
+                    assert!(!validator_cmdline_is_complete(
+                        &read_validator_cmdline(&cmdline, 64 * 1024)?,
+                        64 * 1024,
+                    )?);
+                    fs::write(&cmdline, launcher)?;
+                    Ok(ValidatorProcessReadiness::ExecPending)
+                }
+                2 => {
+                    let argv = read_validator_cmdline(&cmdline, 64 * 1024)?;
+                    assert!(validator_cmdline_is_complete(&argv, 64 * 1024)?);
+                    validate_validator_launcher_argv(&argv, unit)?;
+                    fs::write(&cmdline, b"fragment across launcher exec")?;
+                    Ok(ValidatorProcessReadiness::LauncherPending)
+                }
+                3 => {
+                    let fragment = read_validator_cmdline(&cmdline, 64 * 1024)?;
+                    assert!(!fragment.ends_with(&[0]));
+                    // An exact launcher-to-daemon exe change retires this raw
+                    // observation before framing checks; the next poll rereads.
+                    fs::write(&cmdline, b"")?;
+                    Ok(ValidatorProcessReadiness::ExecPending)
+                }
+                4 => {
+                    assert!(!validator_cmdline_is_complete(
+                        &read_validator_cmdline(&cmdline, 8 * 1024)?,
+                        8 * 1024,
+                    )?);
+                    fs::write(&cmdline, b"/service/current/bin/iroha3d_taira\0--config\0/service/current/config/config.toml\0--sora\0")?;
+                    Ok(ValidatorProcessReadiness::ExecPending)
+                }
+                _ => {
+                    let argv = read_validator_cmdline(&cmdline, 8 * 1024)?;
+                    assert!(validator_cmdline_is_complete(&argv, 8 * 1024)?);
+                    let arguments = argv[..argv.len() - 1]
+                        .split(|byte| *byte == 0)
+                        .map(|bytes| std::str::from_utf8(bytes).map(PathBuf::from))
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    validate_validator_argv(
+                        &arguments,
+                        Path::new("/service/current/bin/iroha3d_taira"),
+                        Path::new("/service/current/config/config.toml"),
+                    )?;
+                    complete_attestations += 1;
+                    Ok(ValidatorProcessReadiness::Attested)
+                }
             }
         })
-        .expect("the signed launcher must be followed by complete daemon attestation");
-        assert_eq!(observations, 2);
+        .expect("empty observations require a fresh complete daemon attestation");
+        assert_eq!(observations, 5);
+        assert_eq!(complete_attestations, 1);
     }
 
     #[test]
     fn validator_process_readiness_preserves_original_deadline() {
+        let directory = tempfile::tempdir().expect("process deadline fixture");
+        let cmdline = directory.path().join("cmdline");
+        fs::write(&cmdline, b"").expect("empty exec observation");
         let mut observations = 0;
         let _ = wait_for_validator_process(Instant::now(), || {
             observations += 1;
@@ -23519,9 +23628,13 @@ time.sleep(30)
             // Force this observation to exhaust the original deadline instead of
             // depending on how many polling ticks the scheduler grants the test.
             std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-            Ok(ValidatorProcessReadiness::LauncherPending)
+            assert!(!validator_cmdline_is_complete(
+                &read_validator_cmdline(&cmdline, 8 * 1024)?,
+                8 * 1024,
+            )?);
+            Ok(ValidatorProcessReadiness::ExecPending)
         })
-        .expect_err("a launcher cannot extend the existing action deadline");
+        .expect_err("an incomplete exec observation cannot extend the existing action deadline");
         assert_eq!(observations, 1);
         let _ = wait_for_validator_process(deadline, || {
             observations += 1;
@@ -23529,13 +23642,39 @@ time.sleep(30)
         })
         .expect_err("reentry cannot renew the elapsed deadline or perform more work");
         assert_eq!(observations, 1);
-        // Both callers submit their durable manager operation before entering
-        // this observer-only loop; pending observations cannot resubmit it.
+        // Start, Restart and rollback-start submit their durable manager operation
+        // before this observer-only loop; pending observations cannot resubmit it.
     }
 
     #[test]
     fn validator_process_readiness_rejects_changed_launcher_immediately() {
         let unit = b"[Service]\nExecStart=/usr/bin/python3 -c \"signed_command()\"\n";
+        let directory = tempfile::tempdir().expect("invalid process observation fixture");
+        let cmdline = directory.path().join("cmdline");
+        for maximum in [8 * 1024, 64 * 1024] {
+            for (argv, expected_error) in [
+                (
+                    b"nonempty without NUL".to_vec(),
+                    "validator MainPID cmdline is missing its terminal NUL",
+                ),
+                (
+                    vec![0; maximum + 1],
+                    "validator MainPID cmdline exceeds the exact byte bound",
+                ),
+            ] {
+                fs::write(&cmdline, argv).expect("invalid bounded cmdline");
+                let mut observations = 0;
+                let error = wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
+                    observations += 1;
+                    let argv = read_validator_cmdline(&cmdline, maximum)?;
+                    validator_cmdline_is_complete(&argv, maximum)?;
+                    Ok(ValidatorProcessReadiness::ExecPending)
+                })
+                .expect_err("malformed nonempty or oversized argv must never become pending");
+                assert_eq!(error.to_string(), expected_error);
+                assert_eq!(observations, 1);
+            }
+        }
         let mut observations = 0;
         let _ = wait_for_validator_process(Instant::now() + Duration::from_secs(1), || {
             observations += 1;
