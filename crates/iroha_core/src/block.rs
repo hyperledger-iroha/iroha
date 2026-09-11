@@ -9519,6 +9519,12 @@ pub(crate) mod valid {
             let mut seen_reservation_entrypoints = BTreeSet::new();
             let mut seen_entrypoints = BTreeSet::new();
             let mut total_entrypoints = 0_usize;
+            // These envelopes originate at this carrier height. Static validation reads its
+            // committed parent policy, including during replay, before any carrier effects.
+            // Bound each independent source, not the sum of sources: separate sources may
+            // consume separate future merge carriers, but one source cannot be split later.
+            let source_gas_limit =
+                crate::state::gas_limit_from_parameters(state.world().parameters());
             for (index, envelope) in envelopes.iter().enumerate() {
                 let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                     envelope,
@@ -9697,6 +9703,17 @@ pub(crate) mod valid {
                 if total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
                     return Err(Self::execution_context_error(format!(
                         "autonomous lane payload entrypoint count exceeds hard limit {MAX_MERGE_EXECUTION_ENTRYPOINTS} at envelope {index}"
+                    )));
+                }
+                let source_gas = crate::state::merge_execution_proposal_gas(&payload.entrypoints)
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "autonomous lane payload envelope {index} has invalid proposal gas accounting: {error}"
+                        ))
+                    })?;
+                if !crate::gas::gas_components_fit_block_limit(source_gas_limit, [source_gas]) {
+                    return Err(Self::execution_context_error(format!(
+                        "autonomous lane payload envelope {index} exceeds its origin block proposal gas budget: {source_gas} > {source_gas_limit}"
                     )));
                 }
                 for ((entrypoint_hash, reservation), entrypoint) in payload
@@ -16733,6 +16750,17 @@ pub(crate) mod valid {
             lane_incarnation_override: Option<Hash>,
             lane_block_view: u64,
         ) -> AutonomousAnchorFixture {
+            autonomous_anchor_fixture_with_gas_limits(
+                lane_incarnation_override,
+                lane_block_view,
+                None,
+            )
+        }
+        fn autonomous_anchor_fixture_with_gas_limits(
+            lane_incarnation_override: Option<Hash>,
+            lane_block_view: u64,
+            gas_limits: Option<&[u64]>,
+        ) -> AutonomousAnchorFixture {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let validator_keys = core::iter::repeat_with(|| {
@@ -16803,8 +16831,35 @@ pub(crate) mod valid {
                 iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
             )
             .sign(signer.private_key());
-            let entrypoint = TransactionEntrypoint::External(signed);
-            let entrypoint_hash = Hash::from(entrypoint.hash());
+            let entrypoints = gas_limits.map_or_else(
+                || vec![TransactionEntrypoint::External(signed.clone())],
+                |gas_limits| {
+                    gas_limits.iter().enumerate().map(|(index, gas)| {
+                        TransactionEntrypoint::External(TransactionBuilder::new_with_time_source(
+                            state.network_id,
+                            signed.authority().clone(),
+                            &time_source,
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(), core::num::NonZeroU64::new(*gas),
+                            ),
+                        )
+                        .with_executable(Executable::ContractCall(
+                            iroha_data_model::transaction::executable::ContractInvocation {
+                                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                                    .parse().expect("contract address"),
+                                expected_code_hash: Hash::new(b"autonomous-anchor-gas-contract"),
+                                entrypoint: format!("configure_{index}"),
+                                arguments: None,
+                            },
+                        ))
+                        .with_admission_intent(
+                            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+                        )
+                        .sign(signer.private_key()))
+                    }).collect::<Vec<_>>()
+                },
+            );
+            let entrypoint = entrypoints[0].clone();
             let mut validator_set = topology.as_ref().to_vec();
             validator_set.sort();
             let validator_count =
@@ -16825,8 +16880,13 @@ pub(crate) mod valid {
                 subject_hash: Hash::new(b"block-autonomous-anchor-subject"),
                 payload_ownership_hash: Hash::new(b"block-autonomous-anchor-ownership"),
                 rbc_instance_hash: Hash::new(b"block-autonomous-anchor-rbc"),
-                accepted_candidate_indices: vec![0],
-                accepted_transaction_hashes: vec![entrypoint_hash],
+                accepted_candidate_indices: (0..entrypoints.len())
+                    .map(|index| u64::try_from(index).expect("fixture index fits u64"))
+                    .collect(),
+                accepted_transaction_hashes: entrypoints
+                    .iter()
+                    .map(|entrypoint| Hash::from(entrypoint.hash()))
+                    .collect(),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set: validator_set.clone(),
@@ -16886,15 +16946,24 @@ pub(crate) mod valid {
                 reservation_owner_hash,
                 proposal_identity_hash,
             };
+            let reservations = entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    let mut reservation = reservation.clone();
+                    reservation.entrypoint_hash = entrypoint.hash();
+                    reservation
+                })
+                .collect();
+            let entrypoint_count = entrypoints.len();
             let payload =
                 crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
                     network_id,
                     epoch,
                     proposal,
-                    vec![entrypoint.clone()],
-                    vec![reservation],
-                    vec![routing_plan],
-                    vec![None],
+                    entrypoints,
+                    reservations,
+                    vec![routing_plan; entrypoint_count],
+                    vec![None; entrypoint_count],
                     producer,
                     producer_key.private_key(),
                 )
@@ -16967,6 +17036,7 @@ pub(crate) mod valid {
             .expect("exact control-only autonomous anchor must validate");
         }
         include!("block/autonomous_anchor_network_tests.rs");
+        include!("block/autonomous_anchor_gas_budget_tests.rs");
         #[test]
         fn autonomous_anchor_admission_uses_lane_slot_author_not_global_leader() {
             let fixture = autonomous_anchor_fixture(None, 0);

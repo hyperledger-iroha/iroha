@@ -1,5 +1,6 @@
 include!("autonomous_merge_and_queue_plan_test_support.rs");
 include!("autonomous_merge_admission_intent_tests.rs");
+include!("autonomous_merge_gas_budget_tests.rs");
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

@@ -42,7 +42,7 @@ class ShippingSourceTests(unittest.TestCase):
     def test_real_shipping_table_manifests_and_defaults_have_exact_native_coverage(self):
         self.assertEqual(ACTUAL_SHIPPING_AUDIT(existing.SCRIPT.parent.parent), SHIPPING)
         self.assertEqual(ACTUAL_SHIPPING_AUDIT(self.root), SHIPPING)
-        self.assertEqual(gate.selected_regression_count(), existing.EXPECTED_REGRESSION_COUNT)
+        self.assertEqual(gate.selected_regression_count("full"), existing.EXPECTED_REGRESSION_COUNT)
 
     def test_new_shipping_target_requires_explicit_early_coverage(self):
         table = self.root / "scripts/taira_release.py"
@@ -132,6 +132,7 @@ class ShippingArtifactTests(unittest.TestCase):
                      "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
             stack.enter_context(patch.object(gate, name, ()))
         stack.enter_context(patch.object(gate, "STAGES", (("CLI", (self.names["cli"],)),)))
+        stack.enter_context(patch.object(gate, "KAGAMI_STAGES", (("Kagami", (self.names["kagami"],)),)))
         stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network", (self.names["network"],)),)))
         stack.enter_context(patch.object(gate, "shipping_harnesses", wraps=ACTUAL_SHIPPING_AUDIT))
         for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
@@ -162,19 +163,21 @@ class ShippingArtifactTests(unittest.TestCase):
         self.observations.append(result.observations)
         return result
 
-    def network(self, root, fixture, env, lock_fds, *, harness):
+    def network(self, root, fixture, env, lock_fds, *, harness, stages):
         self.network_calls += 1
         for row in self.observations[-1]:
             self.assertEqual(Path(row["path"]).exists(), row["selection"] == "network")
         self.assertEqual({row["selection"] for row in self.checkpoint["artifacts"]}, {"cli", "kagami"})
-        gate.run_stages(harness, fixture, env, gate.NETWORK_STAGES, lock_fds)
+        self.assertEqual(stages, gate.NETWORK_STAGES)
+        gate.run_stages(harness, fixture, env, stages, lock_fds)
         if self.network_failure:
             raise gate.CheckError("fixture network failure")
 
     def run_gate(self):
         def update(value):
             self.checkpoint = copy.deepcopy(value)
-        gate.run_checks(self.source, environment=self.env | {"CARGO_HOME": str(self.directory)},
+        gate.run_checks(self.source, qualification_scope="full",
+                        environment=self.env | {"CARGO_HOME": str(self.directory)},
                         source_commit="a" * 40, completed_independent_checks=self.checkpoint,
                         update_independent_checks=update)
 
