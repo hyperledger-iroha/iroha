@@ -102,6 +102,10 @@ into the output directory.
   belong to the supplied genesis authority; localnet operator grants and optional
   sample assets belong to the generated runtime operator. Gas custody uses a
   protocol-derived non-signing account.
+- The generated `client.toml` operator is funded and receives
+  `CanRegisterSmartContractCode` in genesis so it can deploy contracts immediately.
+  This registrar grant is not assigned to the genesis signer, onboarding signer,
+  validators, or public sample accounts.
 - Taira generation requires runtime output outside a Git checkout. Each validator
   has an independent private mint-finality seed, retained in an owner-only runtime
   sidecar. The launcher stages consumed descriptor 199 alongside the Soracloud

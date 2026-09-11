@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 483
+EXPECTED_REGRESSION_COUNT = 510
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -53,7 +53,7 @@ class FixtureCopies(dict):
 class BasicReleaseQualificationTests(unittest.TestCase):
     def test_basic_census_keeps_security_and_application_checks_and_defers_advanced_core(self):
         basic, full = gate.qualification_stages(), gate.qualification_stages("full")
-        self.assertEqual(gate.selected_regression_count(), 301)
+        self.assertEqual(gate.selected_regression_count(), 328)
         self.assertEqual(gate.selected_regression_count("full"), EXPECTED_REGRESSION_COUNT)
         self.assertEqual(set(basic), set(full))
         for name in basic:
@@ -66,8 +66,22 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for test in (
             "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
             "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
+            "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
+            "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
+            "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
+            "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_preserves_authority_and_closed_guards",
+            "state::tests::fee_sponsor_safe_activation_height_clamps_elapsed_lower_bound",
+            "state::tests::fee_sponsor_safe_activation_height_preserves_later_request",
+            "state::tests::fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease",
+            "state::tests::fee_sponsor_revision_activation_materializes_at_scheduled_block_height",
+            "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
+            "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
         ):
             self.assertIn(test, [test for _, tests in basic["core"] for test in tests])
+        self.assertIn(
+            "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
+            [test for _, tests in basic["kagami"] for test in tests],
+        )
         self.assertEqual(basic["proof-flows"], ())
         self.assertTrue(full["proof-flows"])
         self.assertEqual(basic["network"], gate.NETWORK_STAGES)

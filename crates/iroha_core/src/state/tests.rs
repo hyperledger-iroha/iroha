@@ -43725,6 +43725,7 @@ include!("view_projection_tests.rs");
 include!("musubi_snapshot_validation_tests.rs");
 include!("lane_authority_exactness_tests.rs");
 include!("snapshot_owner_policy_tests.rs");
+include!("governance_activation_tests.rs");
 
 state_test! { sync certified_snapshot_corruption_cannot_become_an_empty_lane
     let lane_id = LaneId::new(1);

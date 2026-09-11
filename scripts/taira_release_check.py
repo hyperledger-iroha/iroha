@@ -602,6 +602,17 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "sumeragi::v2_runner::tests::lane_evidence_repair_fence_accepts_an_empty_quarantined_replay",
     "sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
+)), ("fee sponsor activation and prospective account bootstrap", (
+    "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
+    "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
+    "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
+    "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_preserves_authority_and_closed_guards",
+    "state::tests::fee_sponsor_safe_activation_height_clamps_elapsed_lower_bound",
+    "state::tests::fee_sponsor_safe_activation_height_preserves_later_request",
+    "state::tests::fee_sponsor_safe_activation_height_fails_closed_for_non_draining_lease",
+    "state::tests::fee_sponsor_revision_activation_materializes_at_scheduled_block_height",
+    "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
+    "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
 )),)
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
@@ -700,6 +711,8 @@ HARNESS_TARGETS = {
 
 KAGAMI_STAGES = (("canonical Kagami export projection", (
     "kura::scaling_evidence::export::tests::unix::strict_projection_has_exact_types_order_and_signed_hash_identity",
+)), ("generated Taira operator deployment authority", (
+    "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
 )),)
 
 

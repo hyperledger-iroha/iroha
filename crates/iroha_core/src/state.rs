@@ -20967,9 +20967,10 @@ fn account_scope_index_keys(
 ///
 /// Sponsor-vault spend leases remain live through their expiry height. An older
 /// revision therefore drains on the following height. The requested activation
-/// is treated as a lower bound, while leases already expired before
-/// `current_height` do not delay it. Persisted `u64::MAX` leases fail closed
-/// because no representable activation height follows them.
+/// is treated as a lower bound and clamped to `current_height`, so a transaction
+/// included after its requested height can activate immediately. Leases already
+/// expired before `current_height` do not delay it. Persisted `u64::MAX` leases
+/// fail closed because no representable activation height follows them.
 pub(crate) fn fee_sponsor_revision_safe_activation_height(
     world: &impl WorldReadOnly,
     program_id: &FeeSponsorProgramId,
@@ -20977,7 +20978,7 @@ pub(crate) fn fee_sponsor_revision_safe_activation_height(
     current_height: u64,
     requested_height: u64,
 ) -> Result<u64, String> {
-    let mut safe_height = requested_height;
+    let mut safe_height = requested_height.max(current_height);
     for (key, payload) in world.smart_contract_state().iter() {
         if !key
             .to_string()

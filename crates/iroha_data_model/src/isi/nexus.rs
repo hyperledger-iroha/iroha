@@ -145,8 +145,9 @@ iroha_data_model_derive::model_single! {
         pub revision: u64,
         /// Earliest consensus height at which activation may take effect.
         ///
-        /// The runtime postpones activation until every spend lease from an older revision has
-        /// expired.
+        /// Inclusion after this lower bound activates at the executing height, subject to every
+        /// spend lease from an older revision having expired. A future lower bound schedules
+        /// activation; it does not cause the chain to produce a block.
         pub activate_at_height: u64,
     }
 }
@@ -198,13 +199,16 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Enroll an exact canonical account in a fee sponsor program.
+    /// Enroll an exact canonical account identity in a fee sponsor program.
+    ///
+    /// The beneficiary may be registered by its first sponsored transaction. Enrollment
+    /// does not register the account or grant permission to execute its instructions.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary")]
     pub struct EnrollFeeSponsorBeneficiary {
         /// Program granting eligibility.
         pub program_id: FeeSponsorProgramId,
-        /// Canonical beneficiary account to enroll.
+        /// Canonical beneficiary identity to enroll, whether or not its account exists yet.
         pub beneficiary: AccountId,
     }
 }
