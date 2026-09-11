@@ -15,6 +15,8 @@ use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, asset::CanTransferAsset, domain::CanModifyDomainMetadata,
     nft::CanModifyNftMetadata,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
 use std::{

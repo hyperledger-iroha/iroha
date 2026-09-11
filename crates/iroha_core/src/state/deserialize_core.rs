@@ -1,4 +1,5 @@
 use super::{default_oracle, *};
+use iroha_model_base::chain::ChainId;
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};

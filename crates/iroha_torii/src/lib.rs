@@ -277,7 +277,6 @@ use iroha_data_model::proof::ProofRecord;
 use iroha_data_model::sorafs::capacity::ProviderId;
 #[cfg(feature = "app_api")]
 use iroha_data_model::{
-    ChainId,
     account::{
         AccountAddress, AccountId,
         rekey::{AccountAlias, AccountAliasDomain},
@@ -288,12 +287,11 @@ use iroha_data_model::{
         AssetId,
     },
     block::proofs::BlockProofs,
-    domain::DomainId,
     events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
-    nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
+    nexus::{FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId},
     nft::NftId,
-    peer::{Peer, PeerId},
+    peer::Peer,
     permission::Permission,
     query::{CommittedTransaction, SignedQuery},
     rwa::RwaId,
@@ -323,8 +321,13 @@ use iroha_executor_data_model::permission::query::{
     CanReadAllLedgerData, CanReadRestrictedDataspace,
 };
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::chain::ChainId;
+#[cfg(feature = "app_api")]
+use iroha_model_base::domain::DomainId;
 #[cfg(feature = "app_api")]
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_primitives::{addr::SocketAddr, numeric::Quantity};
@@ -8571,7 +8574,7 @@ struct InternalAccountReadResponse {
     /// Canonical domainless account identifier.
     id: AccountId,
     /// Complete account metadata.
-    metadata: iroha_data_model::metadata::Metadata,
+    metadata: iroha_model_base::metadata::Metadata,
     /// Universal account identifier, when assigned.
     #[norito(default)]
     uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
@@ -14520,7 +14523,7 @@ pub struct ZkIvmDeriveRequestDto {
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Transaction metadata. Retired fee and gas keys are rejected.
     #[norito(default)]
-    pub metadata: iroha_data_model::metadata::Metadata,
+    pub metadata: iroha_model_base::metadata::Metadata,
     /// IVM bytecode to execute.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
 }
@@ -14566,7 +14569,7 @@ pub struct ZkIvmProveRequestDto {
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
     /// Transaction metadata. Retired fee and gas keys are rejected.
     #[norito(default)]
-    pub metadata: iroha_data_model::metadata::Metadata,
+    pub metadata: iroha_model_base::metadata::Metadata,
     /// IVM bytecode to execute and prove.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
     /// Optional client-provided proved payload.
@@ -15923,7 +15926,7 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
 #[cfg(feature = "app_api")]
 fn validate_zk_ivm_fee_payment(
     fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
-    metadata: &iroha_data_model::metadata::Metadata,
+    metadata: &iroha_model_base::metadata::Metadata,
 ) -> Result<(), Error> {
     let invalid = |message: String| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17436,7 +17439,7 @@ fn authoritative_pending_public_mailbox_messages(
 #[cfg(feature = "app_api")]
 fn exact_local_soracloud_runtime_peer_id(
     app: &SharedAppState,
-) -> Result<iroha_data_model::peer::PeerId, SoracloudRuntimeExecutionError> {
+) -> Result<iroha_model_base::peer::PeerId, SoracloudRuntimeExecutionError> {
     let runtime = app.soracloud_runtime.as_ref().ok_or_else(|| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -17449,7 +17452,7 @@ fn exact_local_soracloud_runtime_peer_id(
             "Soracloud runtime does not advertise a local peer id",
         )
     })?;
-    let runtime_peer_id: iroha_data_model::peer::PeerId =
+    let runtime_peer_id: iroha_model_base::peer::PeerId =
         runtime_peer_id.parse().map_err(|error| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -17896,7 +17899,7 @@ fn torii_autoscale_capacity_lane_ids_for_status(
 }
 fn resolve_torii_route_for_dataspace_id(
     app: &AppState,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
 ) -> Result<RoutingDecision, queue::RoutingResolveError> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -17932,7 +17935,7 @@ fn resolve_torii_route_for_dataspace_id(
 }
 fn torii_routes_for_dataspaces(
     app: &AppState,
-    dataspaces: impl IntoIterator<Item = iroha_data_model::nexus::DataSpaceId>,
+    dataspaces: impl IntoIterator<Item = iroha_model_base::topology::DataSpaceId>,
 ) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let mut routes = BTreeMap::new();
     for dataspace_id in dataspaces {
@@ -18004,7 +18007,7 @@ fn resolve_torii_target_alias_routes(
 }
 fn torii_target_domain_routes(
     app: &AppState,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) -> Result<Vec<RoutingDecision>, Response> {
     resolve_torii_target_domain_routes(app, domain_id).map_err(|error| {
         torii_proxy_error_response(
@@ -18016,7 +18019,7 @@ fn torii_target_domain_routes(
 }
 fn resolve_torii_target_domain_routes(
     app: &AppState,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     let dataspace_id = app
         .state
@@ -18807,7 +18810,7 @@ fn validate_incoming_read_proxy_route(
 #[cfg(feature = "app_api")]
 fn torii_route_for_lane_id(
     app: &AppState,
-    lane_id: iroha_data_model::nexus::LaneId,
+    lane_id: iroha_model_base::topology::LaneId,
 ) -> Result<RoutingDecision, Error> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -18847,7 +18850,7 @@ fn torii_route_for_lane_id(
 #[cfg(feature = "app_api")]
 fn torii_route_for_public_lane_id(
     app: &AppState,
-    lane_id: iroha_data_model::nexus::LaneId,
+    lane_id: iroha_model_base::topology::LaneId,
 ) -> Result<RoutingDecision, Error> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -18867,7 +18870,7 @@ fn torii_route_for_public_lane_id(
 #[cfg(feature = "app_api")]
 fn torii_route_for_dataspace_id(
     app: &AppState,
-    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+    dataspace_id: iroha_model_base::topology::DataSpaceId,
 ) -> Result<RoutingDecision, Error> {
     resolve_torii_route_for_dataspace_id(app, dataspace_id).map_err(|error| Error::PushIntoQueue {
         source: Box::new(queue::Error::UnresolvedRoute {
@@ -19796,8 +19799,10 @@ fn torii_account_read_route_scope(
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
-    let mut routes =
-        BTreeMap::<iroha_data_model::nexus::DataSpaceId, iroha_data_model::nexus::LaneId>::new();
+    let mut routes = BTreeMap::<
+        iroha_model_base::topology::DataSpaceId,
+        iroha_model_base::topology::LaneId,
+    >::new();
     for lane in nexus.lane_catalog.lanes() {
         if !torii_lane_active_for_routing(app, lane.id) {
             continue;
@@ -20191,7 +20196,7 @@ enum SignedQueryScope {
     CrossDataspaceFanout,
     TargetAccount(AccountId),
     TargetAlias(iroha_data_model::account::AccountAlias),
-    TargetDomain(iroha_data_model::domain::DomainId),
+    TargetDomain(iroha_model_base::domain::DomainId),
 }
 fn torii_signed_query_permission_denied_response(
     authority: &AccountId,
@@ -20484,7 +20489,7 @@ fn resolve_asset_definition_scope(
 #[cfg(feature = "app_api")]
 fn asset_definition_domain_snapshot(
     app: &AppState,
-) -> BTreeMap<iroha_data_model::asset::AssetDefinitionId, iroha_data_model::domain::DomainId> {
+) -> BTreeMap<iroha_data_model::asset::AssetDefinitionId, iroha_model_base::domain::DomainId> {
     app.state
         .world_view()
         .asset_definition_domains()
@@ -20533,7 +20538,7 @@ fn target_account_iterable_query(
 }
 fn target_domain_iterable_query(
     _query: &iroha_data_model::query::QueryWithParams,
-) -> Option<iroha_data_model::domain::DomainId> {
+) -> Option<iroha_model_base::domain::DomainId> {
     None
 }
 fn target_scope_singular_query_for_app(
@@ -20554,7 +20559,7 @@ fn target_scope_singular_query_for_app(
 fn target_domain_iterable_query_for_app(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
-) -> Option<iroha_data_model::domain::DomainId> {
+) -> Option<iroha_model_base::domain::DomainId> {
     use iroha_data_model::prelude::FindAccountsWithAsset;
     (query.item == iroha_data_model::query::QueryItemKind::Account)
         .then(|| decode_query_payload::<FindAccountsWithAsset>(&query.query_payload))
@@ -20640,7 +20645,7 @@ fn target_domain_iterable_query_for_app_bounded(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
     memory_limits: QueryScopeMemoryLimits,
-) -> Result<Option<iroha_data_model::domain::DomainId>, Response> {
+) -> Result<Option<iroha_model_base::domain::DomainId>, Response> {
     use iroha_data_model::prelude::FindAccountsWithAsset;
     let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind != iroha_data_model::query::QueryItemKind::Account {
@@ -37362,7 +37367,7 @@ async fn handler_alias_setup_plan(
         nonce: None,
         fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-        metadata: iroha_data_model::metadata::Metadata::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         attachments: None,
     };
     let canonical_unsigned_payload_bytes =

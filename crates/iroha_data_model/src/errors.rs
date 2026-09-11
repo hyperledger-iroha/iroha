@@ -3,7 +3,7 @@
 //! These types provide a shared, machine-readable schema for the NX-17 error
 //! catalog. Each variant maps to a deterministic `reason_code` so operators and
 //! SDKs can branch on stable integers instead of parsing strings.
-use crate::nexus::DataSpaceId;
+use iroha_model_base::topology::DataSpaceId;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::Hash;

@@ -11,6 +11,10 @@ use iroha_data_model::{
     prelude::*,
     smart_contract::manifest,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use ivm::{ProgramMetadata, encoding};
 use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};

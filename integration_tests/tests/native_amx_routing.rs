@@ -19,7 +19,7 @@ use iroha::{
             },
         },
         da::commitment::DaProofPolicyBundle,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -36,7 +36,6 @@ use iroha::{
             },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
         musubi::{
             ArchiveId, MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1, MUSUBI_REGISTRY_VERSION_V1,
             MusubiAbiBindingV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1,
@@ -56,11 +55,10 @@ use iroha::{
             musubi_provider_bundle_attestation_set_digest_v1,
         },
         nexus::{
-            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneRelayEnvelope,
-            LaneVisibility, compute_settlement_hash,
+            LaneCatalog, LaneConfig as ModelLaneConfig, LaneRelayEnvelope, LaneVisibility,
+            compute_settlement_hash,
         },
         parameter::{Parameter, system::SumeragiNposParameters},
-        peer::PeerId,
         permission::Permission,
         prelude::Quantity,
         query::{
@@ -98,6 +96,10 @@ use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::sorafs::{
     CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
     domain_setup_instruction_in_dataspace, init_instruction_registry,

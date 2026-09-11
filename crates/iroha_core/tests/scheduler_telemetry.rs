@@ -17,14 +17,16 @@ use iroha_core::{
 };
 use iroha_data_model::{
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig as ModelLaneConfig, LaneId, LaneSchedulerPolicy, LaneStorageProfile,
-        LaneVisibility,
+        DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig as ModelLaneConfig,
+        LaneSchedulerPolicy, LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
 #[cfg(feature = "telemetry")]
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},

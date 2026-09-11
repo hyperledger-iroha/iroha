@@ -13,7 +13,11 @@ fn policy() -> MultisigPolicy {
             .enumerate()
             .map(|(index, seed)| {
                 let pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
-                MultisigMember::new(pair.public_key().clone(), (index + 1) as u16).unwrap()
+                MultisigMember::new(
+                    pair.public_key().clone(),
+                    u16::try_from(index + 1).expect("fixture value fits u16"),
+                )
+                .unwrap()
             })
             .collect(),
     )

@@ -14,6 +14,7 @@ path = "src/lib.rs"
 test = []
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_config.workspace = true
 iroha = { workspace = true }
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }

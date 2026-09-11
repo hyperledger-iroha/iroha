@@ -11,7 +11,6 @@ use fastpq_prover::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    DataSpaceId,
     fastpq::{FastpqTransitionBatch, normalized_numeric_to_u64},
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtTouchSpec,
@@ -19,6 +18,7 @@ use iroha_data_model::{
         TouchManifest, compute_remote_spend_claim_commitment_v1, lane_relay_fastpq_claim_digest,
     },
 };
+use iroha_model_base::topology::DataSpaceId;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     encode_canonical, json,
@@ -943,9 +943,8 @@ fn duration_ms(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{
-        AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtProofEnvelope, LaneId,
-    };
+    use iroha_data_model::nexus::{AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtProofEnvelope};
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::Quantity;
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
         ProofRequest {

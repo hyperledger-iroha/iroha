@@ -6,12 +6,12 @@ use iroha_data_model::nexus::{
     AssetHandle, AxtAssetIncarnationV1, AxtBinding, AxtDescriptor, AxtHandleCounterRecord,
     AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding,
     AxtPolicyEntry, AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec, AxtValidationError,
-    DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId, RemoteSpendIntent, SpendOp,
-    TouchManifest, UniversalAccountId, validate_descriptor,
+    GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent, SpendOp, TouchManifest,
+    UniversalAccountId, validate_descriptor,
 };
-use iroha_data_model::{
-    NetworkId, asset::id::AssetDefinitionId, block::BlockHeader, domain::DomainId,
-};
+use iroha_data_model::{NetworkId, asset::id::AssetDefinitionId, block::BlockHeader};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use ivm_abi::axt;
 fn assert_bytes_match(name: &str, actual: &[u8], expected: &[u8]) {

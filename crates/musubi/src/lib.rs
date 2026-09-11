@@ -12,6 +12,8 @@ mod lockfile;
 pub mod manifest;
 mod output;
 mod package;
+#[cfg(test)]
+mod persistence_frame_fixture;
 pub mod publication_runtime;
 pub mod publish;
 pub mod registry;

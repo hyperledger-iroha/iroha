@@ -246,7 +246,7 @@ impl GenesisArtifactSettings {
 struct PeerSettings {
     /// If `true`, include a healthcheck for every service in the configuration.
     healthcheck: bool,
-    chain: iroha_data_model::ChainId,
+    chain: iroha_model_base::chain::ChainId,
     network: std::collections::BTreeMap<u16, peer::PeerInfo>,
     topology: std::collections::BTreeSet<iroha_data_model::peer::Peer>,
     sumeragi_body_bytes: Option<usize>,
@@ -445,7 +445,7 @@ impl PeerSettings {
         reason = "prepared-bundle validation is one ordered fail-closed admission transaction"
     )]
     fn prepared(
-        chain: iroha_data_model::ChainId,
+        chain: iroha_model_base::chain::ChainId,
         validators: Vec<PreparedValidator>,
         healthcheck: bool,
         target_dir: &path::AbsolutePath,
@@ -645,7 +645,7 @@ impl<'a> Swarm<'a> {
     /// Creates a Swarm from one authoritative prepared validator/genesis bundle.
     #[allow(clippy::missing_errors_doc, clippy::too_many_arguments)]
     pub fn from_prepared(
-        chain: iroha_data_model::ChainId,
+        chain: iroha_model_base::chain::ChainId,
         validators: Vec<PreparedValidator>,
         artifacts: PreparedGenesisArtifacts<'_>,
         healthcheck: bool,

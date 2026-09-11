@@ -10,7 +10,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 
-use super::{BTreeMap, DataSpaceId, Hash, StateBlock};
+use super::{BTreeMap, Hash, StateBlock};
 use crate::{
     fastpq::{
         FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
@@ -18,6 +18,7 @@ use crate::{
     },
     queue::RoutingDecision,
 };
+use iroha_model_base::topology::DataSpaceId;
 
 mod content_verification;
 // Qualification support until authenticated policy and mandatory-work accounting own D7 capture.

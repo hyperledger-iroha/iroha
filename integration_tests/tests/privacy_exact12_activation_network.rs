@@ -34,7 +34,6 @@ use iroha_data_model::{
         Grant, InstructionBox, Log,
         privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
     },
-    metadata::Metadata,
     permission::Permission,
     privacy::{
         PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
@@ -45,6 +44,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use std::time::Duration;
 use tokio::time::{Instant, sleep, timeout};

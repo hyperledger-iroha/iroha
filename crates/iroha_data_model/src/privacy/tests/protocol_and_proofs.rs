@@ -11,9 +11,9 @@ use super::{
     },
     *,
 };
-use iroha_model_base::name::Name;
-use crate::{domain::DomainId, };
 use hex_literal::hex;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use std::str::FromStr as _;
 fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
     (1..=count)
@@ -498,7 +498,7 @@ fn proof_envelope_wire_rejects_pre_release_layout_magic_and_catalog() {
         .to_le_bytes();
     assert_eq!(magic_bytes, PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1);
     assert_eq!(usize::from(encoded[0]), magic_bytes.len());
-    assert_eq!(&encoded[1..1 + magic_bytes.len()], &magic_bytes);
+    assert_eq!(&encoded[1..=magic_bytes.len()], &magic_bytes);
     let catalog_length_offset = 1 + magic_bytes.len();
     assert_eq!(
         usize::from(encoded[catalog_length_offset]),

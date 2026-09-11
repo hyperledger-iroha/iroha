@@ -17,7 +17,7 @@ use iroha_crypto::SignatureOf;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 #[cfg(feature = "bls")]
 use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use std::collections::BTreeSet;
 #[cfg(feature = "bls")]
 use std::num::NonZeroU64;

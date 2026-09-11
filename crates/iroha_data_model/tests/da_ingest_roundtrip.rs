@@ -5,9 +5,9 @@ use iroha_data_model::{
     account::AccountId,
     block::BlockHeader,
     da::prelude::*,
-    nexus::LaneId,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
+use iroha_model_base::topology::LaneId;
 use norito::{
     DeserializePayload,
     codec::{DecodeAll as _, Encode as _},

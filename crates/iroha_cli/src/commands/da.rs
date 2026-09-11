@@ -28,9 +28,9 @@ use iroha::data_model::{
             ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::XorQuantity;
 use iroha_storage_client::da::build_car_plan_from_manifest;
 use norito::{
@@ -1768,10 +1768,7 @@ mod tests {
     use iroha::{
         config::{self, Config},
         crypto::{Hash, HashOf, KeyPair},
-        data_model::{
-            Metadata,
-            prelude::{AccountId, ChainId},
-        },
+        data_model::prelude::AccountId,
     };
     use iroha_crypto::Algorithm;
     use iroha_data_model::da::{
@@ -1788,6 +1785,8 @@ mod tests {
     };
     use iroha_data_model::sorafs::pin_registry::StorageClass;
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use norito::{json::JsonSerialize, to_bytes};
     use std::{
         fmt::Display,
@@ -2472,7 +2471,7 @@ mod tests {
         let potr = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+                iroha_model_base::domain::DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
         let accounts = da::DaRentLedgerAccounts {

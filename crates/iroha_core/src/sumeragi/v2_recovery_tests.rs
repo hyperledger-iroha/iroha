@@ -23,23 +23,26 @@ use crate::{
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId, Registrable,
+    Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder, consensus::SumeragiLanePayloadOwnership, consensus_v2 as wire,
     },
     consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-    domain::{Domain, DomainId},
+    domain::Domain,
     kaigi::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-    peer::PeerId,
+    nexus::LaneRelayEnvelope,
     transaction::{TransactionBuilder, signed::TransactionResultInner},
     trigger::DataTriggerSequence,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use std::{
     io::Write,

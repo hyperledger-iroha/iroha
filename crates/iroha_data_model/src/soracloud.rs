@@ -11,8 +11,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    nexus::LaneId,
-    peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
         MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
@@ -36,6 +34,8 @@ use iroha_crypto::{
     },
 };
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericOperationError, Quantity},
@@ -528,6 +528,17 @@ include!("soracloud/host_protocol.rs");
 include!("soracloud/prelude.rs");
 #[cfg(test)]
 mod tests {
+    mod hosting_validation;
+    mod runtime_state_validation;
+    mod schema_assertions;
+    use self::schema_assertions::{
+        assert_schema_bool_field, assert_schema_object, assert_schema_string_field,
+        assert_schema_u64_field, assert_soracloud_artifact_digest_domains,
+        assert_soracloud_execution_schema_sections, assert_soracloud_proof_key_commitment_domains,
+        assert_soracloud_release_audit_schema_sections,
+    };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     include!("soracloud/tests/mutation_draft.rs");
     include!("soracloud/tests/fixtures_and_manifests.rs");
     include!("soracloud/tests/proof_schemas.rs");
@@ -536,6 +547,7 @@ mod tests {
 
     include!("soracloud/tests/generic_identity_tests.rs");
     include!("soracloud/tests/manifest_validation.rs");
+    mod lease_checkpoint_validation;
     include!("soracloud/tests/fhe_policy.rs");
     include!("soracloud/tests/decryption_and_records.rs");
 }

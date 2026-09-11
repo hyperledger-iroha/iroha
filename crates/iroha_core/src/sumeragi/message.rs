@@ -10,9 +10,9 @@ use iroha_data_model::{
             finality::V2FinalityArtifact,
         },
     },
-    peer::PeerId,
 };
 use iroha_macro::*;
+use iroha_model_base::peer::PeerId;
 use norito::{
     DeserializePayload, SerializePayload,
     codec::{Decode, Encode},
@@ -629,8 +629,8 @@ mod tests {
     use iroha_data_model::{
         block::consensus::{CertPhase, LaneBlockDescriptorV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::{core as norito_core, decode_from_bytes};
     use std::sync::Arc;
 

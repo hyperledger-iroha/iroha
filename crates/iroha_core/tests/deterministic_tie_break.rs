@@ -8,6 +8,8 @@ use iroha_core::{
     governance::manifest::LaneManifestRegistry,
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use std::{borrow::Cow, sync::Arc};
 fn build_world() -> (
     iroha_core::state::State,

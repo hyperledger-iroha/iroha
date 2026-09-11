@@ -599,10 +599,10 @@ mod tests {
         bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
         execution_proofs::{ExecutionProofEnvelopeV1, ExecutionPublicInputsV1},
         game::GameOutcomeV1,
-        peer::PeerId,
         transaction::{FeePaymentIntent, TransactionResultInner, signed::TransactionBuilder},
         trigger::DataTriggerSequence,
     };
+    use iroha_model_base::peer::PeerId;
     use std::{num::NonZeroU64, str::FromStr as _};
     const FIXTURE_NETWORK_ID: &str =
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7";

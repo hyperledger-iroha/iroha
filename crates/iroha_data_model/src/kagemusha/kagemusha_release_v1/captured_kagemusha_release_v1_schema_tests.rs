@@ -1,104 +1,110 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
-#[test]
-fn captured_codec_schema_identities() {
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaArtifactRoleV1>(
+const CASES: &[crate::captured_schema_tests::Case] = &[
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaArtifactRoleV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactRoleV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaArtifactBindingV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaArtifactBindingV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactBindingV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaEvidenceFileV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaEvidenceFileV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEvidenceFileV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaEnabledProfileV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaEnabledProfileV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEnabledProfileV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaQualifiedRelationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaQualifiedRelationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaQualifiedRelationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaQualifiedHelperCircuitV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaQualifiedHelperCircuitV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaQualifiedHelperCircuitV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaHelperProtocolV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaHelperProtocolV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHelperProtocolV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaHelperQualificationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaHelperQualificationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHelperQualificationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaRelationQualificationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaRelationQualificationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaRelationQualificationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::KagemushaRecursiveDepthQualificationV1,
     >(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaRecursiveDepthQualificationV1"
-    );
-    crate::captured_schema_tests::assert_bidirectional::<
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<
         super::KagemushaAggregateBalanceQualificationV1,
     >(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaAggregateBalanceQualificationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaThermalQualificationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaThermalQualificationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaThermalQualificationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaEnvelopeQualificationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaEnvelopeQualificationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEnvelopeQualificationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaProfileQualificationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaProfileQualificationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProfileQualificationV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaAcceptanceCaseV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaAcceptanceCaseV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaAcceptanceCaseV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaAcceptanceCaseEvidenceV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaAcceptanceCaseEvidenceV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaAcceptanceCaseEvidenceV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReproducibleBuildV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReproducibleBuildV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReproducibleBuildV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaEvidenceClosureV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaEvidenceClosureV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaEvidenceClosureV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaInternalValidationReceiptV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaInternalValidationReceiptV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaInternalValidationReceiptV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReleaseManifestV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseManifestV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseManifestV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReleaseAuthorityPolicyV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseAuthorityPolicyV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAuthorityPolicyV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReleaseAttestationSubjectV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseAttestationSubjectV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAttestationSubjectV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReleaseApprovalPayloadV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseApprovalPayloadV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseApprovalPayloadV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReleaseApprovalV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseApprovalV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseApprovalV1",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::KagemushaReleaseAttestationV1>(
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseAttestationV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseAttestationV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::KagemushaReleaseSubjectV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::KagemushaReleaseSubjectV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseSubjectV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::KagemushaVkSetSubjectV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::KagemushaVkSetSubjectV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaVkSetSubjectV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::KagemushaArtifactSetDigestSubjectV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::KagemushaArtifactSetDigestSubjectV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactSetDigestSubjectV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::KagemushaHardwarePolicyDigestSubjectV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::KagemushaHardwarePolicyDigestSubjectV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHardwarePolicyDigestSubjectV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<
+    ),
+    crate::captured_schema_tests::Case::serialize::<
         super::KagemushaProfileQualificationDigestSubjectV1,
     >(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProfileQualificationDigestSubjectV1",
-    );
-    crate::captured_schema_tests::assert_serialize::<super::KagemushaReleaseProfileDigestSubjectV1>(
+    ),
+    crate::captured_schema_tests::Case::serialize::<super::KagemushaReleaseProfileDigestSubjectV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseProfileDigestSubjectV1",
-    );
+    ),
+];
+
+#[test]
+fn captured_codec_schema_identities() {
+    for case in CASES {
+        case.check();
+    }
 }

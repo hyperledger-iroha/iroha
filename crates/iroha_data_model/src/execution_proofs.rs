@@ -15,11 +15,11 @@ use norito::codec::{Decode, Encode};
 /// independent limits before admitting funded execution profiles.
 pub const EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1: usize = 4 * 1024 * 1024;
 
-/// Simulation ticks per second in the immutable RaceV1 rules.
+/// Simulation ticks per second in the immutable `RaceV1` rules.
 pub const RACE_TICKS_PER_SECOND_V1: u32 = 30;
-/// Maximum duration of one RaceV1 run.
+/// Maximum duration of one `RaceV1` run.
 pub const RACE_MAX_TICKS_V1: u32 = 5_400;
-/// Maximum authenticated racers in a RaceV1 run.
+/// Maximum authenticated racers in a `RaceV1` run.
 pub const RACE_MAX_PLAYERS_V1: u8 = 8;
 /// Required completed laps.
 pub const RACE_LAPS_V1: u32 = 3;
@@ -257,7 +257,7 @@ pub struct RaceResultV1 {
     pub winners: Vec<u8>,
 }
 
-/// Ledger-bound statement for a native RaceV1 execution proof.
+/// Ledger-bound statement for a native `RaceV1` execution proof.
 #[derive(
     Clone,
     Debug,
@@ -371,7 +371,7 @@ pub struct RaceProofPayloadV1 {
     pub manifest: crate::game::GameManifestV1,
     /// Public immutable admission body whose canonical commitment must match the statement.
     pub admission: crate::game::GameAdmissionBodyV1,
-    /// Typed generic payout outcome, derived from the proof-bound RaceV1 final state.
+    /// Typed generic payout outcome, derived from the proof-bound `RaceV1` final state.
     pub outcome: crate::game::GameOutcomeV1,
     /// Race-specific relation statement; it is not part of any generic native instruction.
     pub relation_inputs: RacePublicInputsV1,

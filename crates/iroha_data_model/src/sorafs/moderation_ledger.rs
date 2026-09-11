@@ -75,7 +75,7 @@ pub const MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation
 pub const MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-snapshot.v1";
 /// Domain separator for the shared, per-appeal `PoP` proof challenge.
 pub const MODERATION_POP_CHALLENGE_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-challenge.v1";
-/// Domain separating the authenticated recipient of one moderation PoP presentation.
+/// Domain separating the authenticated recipient of one moderation `PoP` presentation.
 pub const MODERATION_POP_PRESENTATION_BINDING_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.pop-presentation-binding.v1";
 /// Domain separator for deterministic panel-selection seed derivation.
@@ -951,7 +951,7 @@ pub fn sorafs_moderation_pop_verifier_context_v1(intake_digest: [u8; 32]) -> Str
         hex::encode(intake_digest)
     )
 }
-/// Bind a PoP presentation to the exact authenticated juror without changing
+/// Bind a `PoP` presentation to the exact authenticated juror without changing
 /// the shared per-appeal nullifier domain.
 ///
 /// The canonical account frame is independent of configured display prefixes
@@ -2702,7 +2702,7 @@ mod tests {
     }
     fn challenge_voting_asset() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
-            crate::domain::DomainId::parse_fully_qualified("sora.universal")
+            iroha_model_base::domain::DomainId::parse_fully_qualified("sora.universal")
                 .expect("test governance domain"),
             "xor".parse().expect("test governance asset name"),
         )
@@ -2868,6 +2868,8 @@ mod tests {
 
     #[test]
     fn moderation_pop_presentation_binding_pins_intake_and_authenticated_account() {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+
         let intake = [0x31; 32];
         let juror = account(21);
         let binding = sorafs_moderation_pop_presentation_binding_v1(intake, &juror).unwrap();
@@ -2897,7 +2899,6 @@ mod tests {
         assert_eq!(binding, *expected.finalize().as_bytes());
         let display = juror.to_i105_for_discriminant(73).unwrap();
         assert_ne!(display, juror.to_i105_for_discriminant(74).unwrap());
-        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
         let layouts = [
             0,
             COMPACT_LEN,

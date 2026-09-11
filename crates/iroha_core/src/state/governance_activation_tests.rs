@@ -3,6 +3,7 @@ fn fee_sponsor_activation_lease(
     revision: u64,
     expires_at_height: u64,
 ) -> VerifiedFeeSponsorVaultAllocation {
+    use iroha_model_base::topology::DataSpaceId;
     let asset_definition_id = AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )

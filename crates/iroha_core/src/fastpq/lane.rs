@@ -747,10 +747,10 @@ mod tests {
         DigestAccelerationTestGuard, FastpqPublicInputsTemplate, authority_digest,
         batches_from_bundles, transition_batch_to_dto,
     };
-    use iroha_data_model::domain::DomainId;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};

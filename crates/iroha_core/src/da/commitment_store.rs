@@ -11,9 +11,9 @@ use iroha_data_model::{
         DaCommitmentWithLocation,
     },
     da::types::StorageTicketId,
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::topology::LaneId;
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Bound::{Excluded, Unbounded},
@@ -266,13 +266,11 @@ impl DaCommitmentStore {
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, Signature};
-    use iroha_data_model::{
-        da::{
-            commitment::{DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, RetentionClass},
-            types::{BlobDigest, StorageTicketId},
-        },
-        nexus::LaneId,
+    use iroha_data_model::da::{
+        commitment::{DaCommitmentBundle, DaCommitmentLocation, DaProofScheme, RetentionClass},
+        types::{BlobDigest, StorageTicketId},
     };
+    use iroha_model_base::topology::LaneId;
     fn sample_record(id: u32, epoch: u64, seq: u64) -> DaCommitmentRecord {
         let id_u8 = u8::try_from(id).expect("lane id fits in u8 for test");
         let epoch_u8 = u8::try_from(epoch).unwrap_or(u8::MAX);

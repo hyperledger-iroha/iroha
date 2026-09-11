@@ -174,14 +174,14 @@ fn bridge_finality_chain_fixture() -> (
         })
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| {
-        iroha_data_model::peer::PeerId::new(left.public_key().clone()).cmp(
-            &iroha_data_model::peer::PeerId::new(right.public_key().clone()),
+        iroha_model_base::peer::PeerId::new(left.public_key().clone()).cmp(
+            &iroha_model_base::peer::PeerId::new(right.public_key().clone()),
         )
     });
     let roster = keys
         .iter()
         .map(|key| ValidatorPower {
-            validator: iroha_data_model::peer::PeerId::new(key.public_key().clone()),
+            validator: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
             power: 1,
         })
         .collect::<Vec<_>>();

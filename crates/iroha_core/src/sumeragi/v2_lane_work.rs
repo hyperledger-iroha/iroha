@@ -156,9 +156,10 @@ use iroha_data_model::{
         MERGE_COMMITTEE_SIGNATURE_VERSION_V2, MergeCommitteeSignature, MergeLedgerEntry,
         MergeQuorumCertificate, MergeSignerProof,
     },
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
-    peer::PeerId,
+    nexus::LaneRelayEnvelope,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_p2p::network::{
     NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
@@ -20554,7 +20555,7 @@ pub(super) mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId, Level, Registrable,
+        Level, Registrable,
         account::{AccountDetails, AccountId, AccountValue},
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, ExternalExecutionContext,
@@ -20567,16 +20568,19 @@ pub(super) mod tests {
             consensus_v2 as wire,
         },
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{InstructionBox, Log},
         nexus::{
-            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneId, LaneStorageProfile, LaneVisibility,
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneFastpqProofMaterial,
+            LaneStorageProfile, LaneVisibility,
         },
-        peer::PeerId,
         transaction::{TransactionBuilder, TransactionEntrypoint, signed::TransactionResultInner},
         trigger::DataTriggerSequence,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly as _;
     use std::{

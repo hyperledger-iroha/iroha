@@ -304,6 +304,8 @@ pub mod isi {
             query::error::FindError,
             role::{Role, RoleId},
         };
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::metadata::Metadata;
         use iroha_test_samples::ALICE_ID;
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("NFT ISI fixture key generation should succeed")
@@ -317,7 +319,7 @@ pub mod isi {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());
@@ -534,6 +536,7 @@ pub mod query {
             json::PredicateJson,
         },
     };
+    use iroha_model_base::domain::DomainId;
     use norito::json::Value;
     use std::collections::BTreeSet;
     #[derive(Debug, Default)]
@@ -826,6 +829,7 @@ pub mod query {
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::IntoKeyValue;
+        use iroha_model_base::metadata::Metadata;
         use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
@@ -868,7 +872,7 @@ pub mod query {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());

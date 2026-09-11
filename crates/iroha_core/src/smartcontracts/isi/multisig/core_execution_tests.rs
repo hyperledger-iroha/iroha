@@ -14,7 +14,7 @@ fn checked_keypair_helper_preserves_default_algorithm() {
 fn register_account_in_domain(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
-    _domain_id: &iroha_data_model::domain::DomainId,
+    _domain_id: &iroha_model_base::domain::DomainId,
     account_id: &AccountId,
     label: &str,
 ) {
@@ -27,7 +27,7 @@ fn register_account_in_domain(
 fn register_multisig_account(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner_id: &AccountId,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
     spec: &MultisigSpec,
     label: &str,
 ) -> AccountId {
@@ -113,10 +113,9 @@ fn install_trigger_contract(
         state_transaction,
     )
     .expect("register trigger contract manifest");
-    state_transaction.world.bind_inactive_contract_subject_for_testing(
-        contract_address.clone(),
-        authority.clone(),
-    );
+    state_transaction
+        .world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), authority.clone());
     crate::smartcontracts::code::activate_instance(
         authority,
         contract_address.clone(),
@@ -131,7 +130,7 @@ fn bind_account_label(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     account_id: &AccountId,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
     label: &str,
 ) -> AccountAlias {
     bind_account_label_in_dataspace(
@@ -147,7 +146,7 @@ fn bind_account_label_in_dataspace(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     account_id: &AccountId,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
     dataspace: DataSpaceId,
     label: &str,
 ) -> AccountAlias {
@@ -265,7 +264,7 @@ fn multisig_policy_for_members(members: &[(&KeyPair, u16)]) -> MultisigPolicy {
 fn seed_domain_name_lease(
     world: &mut World,
     owner: &AccountId,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) {
     let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
     let address =
@@ -289,7 +288,7 @@ fn seed_domain_name_lease(
 fn seed_domain_name_lease_tx(
     state_transaction: &mut StateTransaction<'_, '_>,
     owner: &AccountId,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
 ) {
     let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
     let address =
@@ -367,7 +366,7 @@ fn durable_state_values_under_contract_prefix(
 fn register_domain_with_name_lease(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
-    domain_id: &iroha_data_model::domain::DomainId,
+    domain_id: &iroha_model_base::domain::DomainId,
     label: &str,
 ) {
     seed_domain_name_lease_tx(state_transaction, authority, domain_id);
@@ -388,7 +387,7 @@ fn initial_executor_runs_multisig_flow() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_transaction = block.transaction();
-    let domain_id: iroha_data_model::domain::DomainId =
+    let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("acme", "universal").unwrap();
     let signer1 = checked_keypair();
     let signer2 = checked_keypair();

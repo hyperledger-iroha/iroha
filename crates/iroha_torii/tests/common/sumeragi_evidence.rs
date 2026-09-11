@@ -16,8 +16,8 @@ use iroha_data_model::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 
 /// Build conflicting Prepare votes with aligned mint-finality keys and valid BLS proofs.
 pub(super) fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {

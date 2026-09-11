@@ -557,8 +557,8 @@ mod tests {
             MusubiPackageRevisionsV1, MusubiPackageScopeV1, MusubiReleaseMetadataV1,
             MusubiSearchPageRequestV1,
         },
-        nexus::DataSpaceId,
     };
+    use iroha_model_base::topology::DataSpaceId;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives account");

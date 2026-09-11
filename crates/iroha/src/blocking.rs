@@ -19,12 +19,12 @@ use iroha_data_model::{
     account::AccountId,
     alias_setup::{AliasLifecycleTransactionPlanV1, AliasTransactionPlanV1},
     isi::{InstructionBox, SetParameter, register::RegisterBox},
-    metadata::Metadata,
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan},
     parameter::Parameter,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_torii_shared::{
     FeeQuoteResponse, validation_fee_api::ValidationFeeProposalDraftRequestV1,
 };
@@ -598,7 +598,9 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use iroha_data_model::{ChainId, metadata::Metadata, transaction::FeePaymentIntent};
+    use iroha_data_model::transaction::FeePaymentIntent;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
     use iroha_test_samples::gen_account_in;
     use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
@@ -686,7 +688,7 @@ mod tests {
                         observation: iroha_torii_shared::FeeQuoteObservation {
                             ledger_time_ms: 1,
                             next_block_height: 1,
-                            route_dataspace_id: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                         },
                         components: Vec::new(),
                         capacities: Vec::new(),

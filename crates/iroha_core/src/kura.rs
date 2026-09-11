@@ -112,7 +112,7 @@ use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 use iroha_data_model::{
-    AccountId, DomainId, NetworkId,
+    AccountId, NetworkId,
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
@@ -139,7 +139,7 @@ use iroha_data_model::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
         MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
     },
-    nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleParameterV1},
+    nexus::{LaneCatalog, LaneLifecycleParameterV1},
     parliament_casting::{
         ParliamentTimedOvnCastingContextBindingV1,
         ParliamentTimedOvnCastingContextMembershipProofV1,
@@ -147,7 +147,6 @@ use iroha_data_model::{
         ParliamentTimedOvnFinalizedCastingProofV1,
     },
     parliament_types::BallotAttemptId,
-    peer::PeerId,
     privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
@@ -155,7 +154,10 @@ use iroha_data_model::{
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
 #[cfg(test)]
@@ -2388,7 +2390,7 @@ impl Kura {
             .map(|entry| iroha_data_model::nexus::LaneConfig {
                 id: entry.lane_id,
                 shard_id: (entry.shard_id != entry.lane_id.as_u32())
-                    .then_some(iroha_data_model::nexus::ShardId::new(entry.shard_id)),
+                    .then_some(iroha_model_base::topology::ShardId::new(entry.shard_id)),
                 dataspace_id: entry.dataspace_id,
                 alias: entry.alias.clone(),
                 description: None,
@@ -46620,7 +46622,7 @@ pub(crate) mod tests {
 
     fn kaigi_signal_test_call(name: &str) -> iroha_data_model::kaigi::KaigiId {
         iroha_data_model::kaigi::KaigiId::new(
-            iroha_data_model::DomainId::try_new("kaigi", "universal").expect("test domain"),
+            iroha_model_base::domain::DomainId::try_new("kaigi", "universal").expect("test domain"),
             name.parse().expect("test call name"),
         )
     }

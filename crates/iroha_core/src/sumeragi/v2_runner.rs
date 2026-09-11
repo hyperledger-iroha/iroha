@@ -112,8 +112,8 @@ use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock, consensus_v2 as wire},
     events::{EventBox, pipeline::PipelineEventBox},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use thiserror::Error;
 
 #[path = "v2_runner/lifecycle_height_driver.rs"]

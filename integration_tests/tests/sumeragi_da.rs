@@ -22,20 +22,21 @@ use iroha::{
         },
         block::{SignedBlock, decode_framed_signed_block},
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             Log, Mint, Register, SetParameter,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
-        nexus::LaneId,
         parameter::{CustomParameter, CustomParameterId, Parameter, TransactionParameter},
-        peer::PeerId,
         transaction::{Executable, SignedTransaction},
     },
 };
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,

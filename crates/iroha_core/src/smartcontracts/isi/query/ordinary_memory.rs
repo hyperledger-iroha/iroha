@@ -676,8 +676,8 @@ fn canonical_peer_source_shape(
     let mut decoder =
         super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
     let _: FindPeers = decoder.decode(payload)?;
-    let predicate: CompoundPredicate<iroha_data_model::peer::PeerId> = decoder.decode(predicate)?;
-    let selector: SelectorTuple<iroha_data_model::peer::PeerId> = decoder.decode(selector)?;
+    let predicate: CompoundPredicate<iroha_model_base::peer::PeerId> = decoder.decode(predicate)?;
+    let selector: SelectorTuple<iroha_model_base::peer::PeerId> = decoder.decode(selector)?;
     Ok(predicate.is_pass() && selector.iter().next().is_none())
 }
 fn canonical_account_source_shape(
@@ -1549,14 +1549,12 @@ mod tests {
             .expect("ordinary policy")
     }
     fn peer_start(params: QueryParams) -> QueryRequest {
-        use iroha_data_model::{
-            peer::PeerId,
-            query::{
-                ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryWithParams,
-                dsl::{CompoundPredicate, SelectorTuple},
-                peer::prelude::FindPeers,
-            },
+        use iroha_data_model::query::{
+            ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryWithParams,
+            dsl::{CompoundPredicate, SelectorTuple},
+            peer::prelude::FindPeers,
         };
+        use iroha_model_base::peer::PeerId;
         let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<PeerId>::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),

@@ -2,10 +2,15 @@
 
 Core data structures for the Hyperledger Iroha blockchain.
 
-Names, state paths and their parsing errors are owned by `iroha_model_base`.
-Import `iroha_model_base::name::Name`, `iroha_model_base::state_path::StatePath`
-and `iroha_model_base::error::ParseError` directly. Ledger composition and the
-complete built-in registry remain here. The mixed `base_wire_fixtures` tests
+Chain labels, domain, topology and peer identities, names, state paths, metadata and parsing errors are owned by
+`iroha_model_base`. Import `iroha_model_base::chain::ChainId`,
+`iroha_model_base::domain::DomainId`,
+`iroha_model_base::name::Name`, `iroha_model_base::state_path::StatePath`,
+`iroha_model_base::metadata::Metadata`, `iroha_model_base::error::ParseError` and
+`iroha_model_base::topology::{DataSpaceId, LaneId, ShardId, LaneIdError}` and
+`iroha_model_base::peer::PeerId` directly. The `peer::Peer` ledger entity remains here. Ledger composition and the
+complete built-in registry remain here. `NetworkId` retains the exact
+genesis-block-header hash and remains part of ledger composition. The mixed `base_wire_fixtures` tests
 preserve their declared frame identities across this compilation boundary.
 
 ## Dependency boundary

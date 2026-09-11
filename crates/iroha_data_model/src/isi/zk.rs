@@ -409,10 +409,8 @@ mod tests {
             })
         );
     }
-    use crate::{
-        domain::DomainId,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-    };
+    use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(

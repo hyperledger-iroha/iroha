@@ -1315,15 +1315,45 @@ def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> No
 
         observe_source_members(source_root / "Resources", "Resources")
         observe_source_members(source_root / "lib", "lib")
+        transforms = {
+            record["path"]: record
+            for record in relocation["closure"]["transforms"]
+        }
+        assert len(transforms) == len(relocation["closure"]["transforms"])
+        input_records = {
+            record["path"]: record for record in runtime_document["input_records"]
+        }
+        assert len(input_records) == len(runtime_document["input_records"])
+        for path, transform in transforms.items():
+            source = input_records[transform["input_path"]]
+            derived = runtime_records[path]
+            assert source["kind"] == derived["kind"] == "file"
+            assert (source["size"], source["sha256"], source["source_mode"]) == (
+                transform["source_size_bytes"], transform["source_sha256"],
+                transform["source_mode"],
+            )
+            assert (derived["size"], derived["sha256"], derived["mode"]) == (
+                transform["derived_size_bytes"], transform["derived_sha256"],
+                transform["derived_mode"],
+            )
+            payload = (runtime / path).read_bytes()
+            assert (len(payload), hashlib.sha256(payload).hexdigest()) == (
+                transform["derived_size_bytes"], transform["derived_sha256"],
+            )
         for path, expected in source_records.items():
             if path == site_packages_path or path.startswith(f"{site_packages_path}/"):
                 continue
             actual = runtime_records[path]
             assert actual["kind"] == expected[0]
             if expected[0] == "file":
-                if path == "Resources/Python.app/Contents/MacOS/Python":
-                    continue
-                assert (actual["size"], actual["sha256"]) == expected[1:]
+                if path in transforms:
+                    transform = transforms[path]
+                    assert transform["input_path"] == path
+                    assert (
+                        transform["source_size_bytes"], transform["source_sha256"]
+                    ) == expected[1:]
+                else:
+                    assert (actual["size"], actual["sha256"]) == expected[1:]
             elif expected[0] == "symlink":
                 assert actual["target"] == expected[1]
         archived_python = runtime / "bin" / "python3"

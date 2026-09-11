@@ -4,6 +4,8 @@
 use iroha_core::{governance::manifest::LaneManifestRegistry, smartcontracts::ivm::host::CoreHost};
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use std::{num::NonZeroU64, sync::Arc};

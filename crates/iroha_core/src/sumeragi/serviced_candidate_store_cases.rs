@@ -26,7 +26,8 @@ mod tests {
     }
     fn context_with_roster_len(roster_len: usize) -> wire::HeightContext {
         use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
+        use iroha_data_model::{NetworkId, block::BlockHeader};
+        use iroha_model_base::peer::PeerId;
         assert!((4..=31).contains(&roster_len) && (roster_len - 1) % 3 == 0);
         let mut roster = (0..roster_len)
             .map(|index| {

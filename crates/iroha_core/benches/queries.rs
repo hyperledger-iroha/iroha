@@ -32,6 +32,8 @@ use iroha_data_model::{
         trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM,

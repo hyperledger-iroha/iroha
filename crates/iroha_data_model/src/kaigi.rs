@@ -4,10 +4,12 @@ pub mod authorization;
 pub mod participation;
 /// Exact canonical Pasta field encodings used by Kaigi authorization.
 pub mod scalar;
-use crate::{account::AccountId, domain::DomainId, metadata::Metadata};
+use crate::account::AccountId;
 use derive_more::Display;
 use getset::Getters;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::{
@@ -1061,7 +1063,7 @@ mod tests {
         let template = NewKaigi::with_defaults(call_id, host.clone());
         let mut record = KaigiRecord::from_new(&template, 0);
         assert_eq!(record.roster_root(), empty_roster_root());
-        record.push_commitment(commitment.clone());
+        record.push_commitment(commitment);
         assert_eq!(record.roster_root(), populated_root);
         assert!(record.has_commitment(&commitment));
         let removed = record.remove_commitment(&commitment);

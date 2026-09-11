@@ -26,12 +26,10 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{
-    NetworkId,
-    prelude::{Peer, PeerId},
-};
+use iroha_data_model::{NetworkId, prelude::Peer};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
     codec::{Decode, Encode},
@@ -8924,7 +8922,8 @@ mod accept_stream_tests {
         LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
-    use iroha_data_model::peer::{Peer, PeerId};
+    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     #[cfg(feature = "quic")]
@@ -9664,7 +9663,7 @@ mod accept_stream_tests {
             Err(e) => panic!("network start: {e:?}"),
         };
         let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = iroha_data_model::peer::PeerId::from(peer_key.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::from(peer_key.public_key().clone());
         let addr = socket_addr!(127.0.0.1:9);
         handle.update_peers_addresses(UpdatePeers(vec![(peer_id.clone(), addr)]));
         let mut topology = HashSet::new();

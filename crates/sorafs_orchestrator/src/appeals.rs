@@ -1305,7 +1305,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
     use iroha_crypto::{Algorithm, PublicKey};
-    use iroha_data_model::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     fn make_account(label: u8, _domain: &DomainId) -> AccountId {
         let seed = [label; ed25519_dalek::SECRET_KEY_LENGTH];
         let signer = SigningKey::from_bytes(&seed);

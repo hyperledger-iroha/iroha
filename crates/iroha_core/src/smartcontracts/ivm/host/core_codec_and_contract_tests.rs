@@ -306,10 +306,10 @@ fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
     Account::new(id.clone()).build(authority)
 }
 fn retail_dataspace_catalog() -> (
-    iroha_data_model::nexus::DataSpaceId,
+    iroha_model_base::topology::DataSpaceId,
     iroha_data_model::nexus::DataSpaceCatalog,
 ) {
-    let paynet = iroha_data_model::nexus::DataSpaceId::new(12);
+    let paynet = iroha_model_base::topology::DataSpaceId::new(12);
     let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
         iroha_data_model::nexus::DataSpaceMetadata::default(),
         iroha_data_model::nexus::DataSpaceMetadata {

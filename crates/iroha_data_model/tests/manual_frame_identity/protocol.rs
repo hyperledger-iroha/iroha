@@ -20,7 +20,6 @@ use iroha_data_model::{
         CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1, CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1,
         ConfidentialMemoEnvelopeV1, ConfidentialMemoRecipientSlotV1, ConfidentialMemoSuiteV1,
     },
-    domain::DomainId,
     isi::repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     kagemusha::{
         KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaIpm1PayloadKindV1,
@@ -31,6 +30,7 @@ use iroha_data_model::{
     },
     repo::{RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
+use iroha_model_base::domain::DomainId;
 
 use crate::frame_identity_test_support::record_binary as record;
 
@@ -126,7 +126,7 @@ fn privacy_values(rows: &mut Vec<Value>) {
     assert_eq!(catalog.encode(), catalog.digest().encode());
     for lane in 0..6 {
         let mut words = catalog.digest().words();
-        words[lane] = if words[lane] == 0 { 1 } else { 0 };
+        words[lane] = u64::from(words[lane] == 0);
         let different = GoldilocksDigest384V1::new(words).unwrap();
         assert_ne!(&different, catalog.digest());
         reject_payload::<PrivacyExact12CatalogCommitmentV1>(&different.encode());

@@ -200,7 +200,6 @@ mod tests {
         account::AccountId,
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
         kagemusha::{
             KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
             KagemushaLifecycleBindingV1, KagemushaMintAuthorizationContextV1,
@@ -209,6 +208,7 @@ mod tests {
         },
         nexus::AxtAssetIncarnationV1,
     };
+    use iroha_model_base::domain::DomainId;
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
     const PUBLIC_CREDIT_ID: DigestV1 = [0x31; 32];

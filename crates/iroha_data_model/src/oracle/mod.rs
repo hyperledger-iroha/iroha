@@ -153,7 +153,6 @@ pub struct DefiOracleAttestationSource {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct DefiOracleAttestation {
     /// Domain and subject id this attestation is valid for.
     pub key: DefiOracleAttestationKey,
@@ -202,7 +201,6 @@ pub struct DefiOracleAttestation {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct FeedId(pub Name);
 impl FeedId {
     /// Borrow the feed identifier as a string slice.
@@ -249,7 +247,6 @@ impl FromStr for FeedId {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct FeedConfigVersion(pub u32);
 impl From<u32> for FeedConfigVersion {
     fn from(value: u32) -> Self {
@@ -1873,7 +1870,6 @@ pub struct OracleProviderStatsRecord {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct OracleDisputeId(pub u64);
 /// Resolution status for a dispute.
 #[derive(
@@ -3064,8 +3060,8 @@ pub mod kits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_model_base::domain::DomainId;
     use norito::json;
     use std::str::FromStr;
     fn feed_id(name: &str) -> FeedId {

@@ -18,13 +18,13 @@ use iroha_data_model::{
     account::AccountId,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile,
-        LaneVisibility,
+        AUTOSCALE_META_MANAGED, LaneCatalog, LaneConfig, LaneStorageProfile, LaneVisibility,
     },
-    peer::PeerId,
 };
 use iroha_logger::{debug, info, warn};
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue},

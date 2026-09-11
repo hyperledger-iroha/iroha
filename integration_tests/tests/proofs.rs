@@ -243,7 +243,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
             .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [isi],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                iroha_data_model::metadata::Metadata::default(),
+                iroha_model_base::metadata::Metadata::default(),
             ))
             .and_then(|payload| account.sign_transaction(payload))
     }

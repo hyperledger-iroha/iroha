@@ -507,7 +507,7 @@ fn governance_service_catalog_projects_only_exact_public_provider_bindings() {
 }
 #[test]
 fn standalone_governance_service_projection_is_exact_and_mode_scoped() {
-    let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
+    let chain_id = iroha_model_base::chain::ChainId::from("governance-service-projection");
     let network_id = test_network_id(0xA5);
     let signed_head_view = governance_service_view("signed_http");
     let request_max = signed_head_view.service.max_request_bytes.0;
@@ -589,7 +589,7 @@ fn governance_request_ingress_binding_rejects_zero_public_bound() {
 }
 #[test]
 fn standalone_governance_service_view_projection_rejects_invalid_public_bindings() {
-    let chain_id = iroha_data_model::ChainId::from("governance-service-projection");
+    let chain_id = iroha_model_base::chain::ChainId::from("governance-service-projection");
     let assert_invalid =
         |view: &iroha_config::parameters::actual::SorafsGovernanceDagServiceView, slot| {
             assert_eq!(

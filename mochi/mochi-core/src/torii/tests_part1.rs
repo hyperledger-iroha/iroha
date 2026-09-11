@@ -30,14 +30,15 @@ use iroha_data_model::{
     },
     isi::InstructionBox,
     nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
-    peer::PeerId,
-    prelude::{DomainId, Quantity},
+    prelude::Quantity,
     query::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
         executor::FindExecutorDataModel, prelude::SingularQueryBox,
     },
     transaction::signed::TransactionBuilder,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, PEER_KEYPAIR};
 use iroha_torii_shared::{
     NORITO_V1_WEBSOCKET_SUBPROTOCOL,
@@ -195,7 +196,7 @@ fn try_start_mock_server() -> Option<MockServer> {
 fn lifecycle_status() -> LaneLifecycleStatusV1 {
     let catalog = LaneCatalog::default();
     let incarnations = std::collections::BTreeMap::from([(
-        iroha_data_model::nexus::LaneId::SINGLE,
+        iroha_model_base::topology::LaneId::SINGLE,
         Hash::new(b"mochi-lifecycle-status-incarnation"),
     )]);
     LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
@@ -1553,10 +1554,8 @@ async fn submit_and_wait_for_commit_times_out_without_events() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives() {
-    use iroha_data_model::{
-        events::pipeline::{TransactionEvent, TransactionStatus},
-        nexus::{DataSpaceId, LaneId},
-    };
+    use iroha_data_model::events::pipeline::{TransactionEvent, TransactionStatus};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let block = sample_block();
     let tx_hash = block
         .external_transactions()
@@ -1605,9 +1604,9 @@ async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives(
 async fn submit_and_wait_for_commit_reports_rejected_when_pipeline_event_rejects() {
     use iroha_data_model::{
         events::pipeline::{TransactionEvent, TransactionStatus},
-        nexus::{DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let block = sample_block();
     let tx_hash = block
         .external_transactions()

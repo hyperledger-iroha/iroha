@@ -21,13 +21,13 @@ use iroha_data_model::{
         MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiSearchHitV1, MusubiSearchPageV1,
         MusubiSearchSnapshotV1, MusubiVerificationNodeV1,
     },
-    nexus::DataSpaceId,
 };
 #[cfg(unix)]
 use iroha_data_model::{
     musubi::{MUSUBI_REGISTRY_VERSION_V1, MusubiPublicationV1, MusubiVerificationLockV1},
     sorafs::capacity::ProviderId,
 };
+use iroha_model_base::topology::DataSpaceId;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::{io::Write as _, net::TcpListener, thread, time::Duration};

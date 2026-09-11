@@ -4,8 +4,10 @@ use eyre::{OptionExt, Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     crypto::{Algorithm, KeyPair, bls_normal_pop_prove},
-    data_model::{isi::register::RegisterPeerWithPop, peer::PeerId, prelude::*},
+    data_model::{isi::register::RegisterPeerWithPop, prelude::*},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::{Duration, Instant};

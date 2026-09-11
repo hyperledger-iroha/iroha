@@ -822,7 +822,6 @@ mod tests {
     use hex::encode_upper;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        DataSpaceId,
         account::{Account, AccountId},
         asset::{
             Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinition,
@@ -830,7 +829,7 @@ mod tests {
             prelude::{AssetDefinitionId, AssetId},
         },
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::data::prelude::{AccountEvent, DataEvent, RepoAccountEvent, RepoAccountRole},
         isi::{InstructionBox, error::AssetTransferAdmissionError, repo::RepoInstructionBox},
         permission::Permission,
@@ -838,6 +837,8 @@ mod tests {
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
     use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;

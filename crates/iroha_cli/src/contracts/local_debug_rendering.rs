@@ -1,8 +1,8 @@
 //! Rendering helpers for local contract-debug responses.
 use super::{LocalContractDebugEntrypoint, LocalContractDebugParam};
 use eyre::{Result, WrapErr as _};
+use iroha::data_model::isi::InstructionBox;
 use iroha_model_base::state_path::StatePath;
-use iroha::data_model::{isi::InstructionBox, };
 use std::collections::BTreeMap;
 /// Build the stable JSON-facing entrypoint description for a local execution.
 pub(super) fn build_local_debug_entrypoint(

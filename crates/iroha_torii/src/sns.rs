@@ -364,7 +364,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         )
     }
     #[test]

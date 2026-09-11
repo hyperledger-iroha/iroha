@@ -17,7 +17,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     kagemusha::{
         KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
         KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
@@ -34,6 +33,7 @@ use iroha_data_model::{
     },
     nexus::AxtAssetIncarnationV1,
 };
+use iroha_model_base::domain::DomainId;
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 use sha2::{Digest as _, Sha256};
 use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};

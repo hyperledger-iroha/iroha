@@ -1,5 +1,6 @@
 //! Bounded execution resources shared by the real four-validator SoraFS tests.
 
+use iroha_model_base::metadata::Metadata;
 use std::future::Future;
 
 use eyre::{Result, WrapErr as _, ensure};

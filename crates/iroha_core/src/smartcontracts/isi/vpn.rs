@@ -20,7 +20,6 @@ use iroha_data_model::{
     IntoKeyValue,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
     isi::vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     prelude::*,
     soranet::vpn::{
@@ -31,6 +30,8 @@ use iroha_data_model::{
     transaction::SignedTransaction,
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;

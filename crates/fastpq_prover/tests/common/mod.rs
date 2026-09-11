@@ -10,9 +10,10 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    domain::DomainId,
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
+#[cfg(feature = "dev-tools")]
+use iroha_model_base::domain::DomainId;
 #[cfg(feature = "dev-tools")]
 use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "dev-tools")]

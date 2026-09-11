@@ -12,7 +12,7 @@ boundaries and where to make changes.
 | --- | --- |
 | [`norito`](../crates/norito), `norito_derive` | Canonical binary/JSON codecs and generated codec implementations. Wire layouts are specified in [Norito](../norito.md). |
 | `iroha_schema`, `iroha_derive`, `iroha_primitives`, `iroha_crypto` | Schema contracts, derive support, value primitives, identities, hashes, and cryptographic algorithms. Runtime callers depend on these owners. |
-| [`iroha_model_base`](../crates/iroha_model_base) | Canonical names, state paths, parsing errors and their complete validation/codec implementations. Consumers import these owners directly; aggregate, transport and runtime dependencies are forbidden. Further identity/value extraction remains outstanding. |
+| [`iroha_model_base`](../crates/iroha_model_base) | Canonical chain labels, domain, topology and peer identities, names, state paths, metadata, parsing errors and their complete validation/codec implementations. Consumers import these owners directly; aggregate, transport and runtime dependencies are forbidden. Further identity/value extraction remains outstanding. |
 | [`iroha_service_model`](../crates/iroha_service_model) | State-independent SoraNet policy records and SoraFS defaults. No aggregate ledger, node, SDK, or runtime dependency is allowed. |
 | [`iroha_data_model`](../crates/iroha_data_model) | Ledger transactions, blocks, aggregate instructions/events/queries, and built-in model composition. Privacy and most service records still await extraction. |
 | [`iroha_torii_shared`](../crates/iroha_torii_shared) | HTTP contracts, canonical route descriptions, configuration projections, and status records. Node-owned code converts runtime state into these records. |

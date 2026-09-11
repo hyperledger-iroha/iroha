@@ -1117,15 +1117,18 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::error::{InstructionExecutionError, InvalidParameterError},
         nexus::{
-            AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId,
+            AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog,
             DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+            LaneFastpqProofMaterial, LaneRelayEnvelope, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
             ProofBlob, VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
         },
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::{name::Name, state_path::StatePath};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,

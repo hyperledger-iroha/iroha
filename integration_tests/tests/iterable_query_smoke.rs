@@ -4,6 +4,7 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // not used in this smoke test
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;

@@ -140,7 +140,6 @@ mod tests {
     use crate::{
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         soranet::vpn::{
             VpnAddressSlotV1, VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1,
             VpnSessionReceiptV1, VpnSignedQuoteV1, VpnSignedSessionReceiptV1, VpnTariffV1,
@@ -149,6 +148,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {

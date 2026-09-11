@@ -3,8 +3,7 @@
 // production serializer without affecting the existing allocation-test binaries.
 #![allow(unsafe_code)]
 
-use iroha_data_model::metadata::Metadata;
-use iroha_model_base::name::Name;
+use iroha_model_base::{metadata::Metadata, name::Name};
 use iroha_primitives::json::Json;
 use norito::core::{DecodeFlagsGuard, Encoder, SerializePayload, header_flags};
 use std::{

@@ -8,9 +8,11 @@ use iroha_data_model::{
     account::Account,
     asset::{AssetDefinition, AssetDefinitionAlias},
     domain::Domain,
-    nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
+    nexus::{AxtRejectContext, AxtRejectReason},
     transaction::error::{TransactionLimitError, TransactionRejectionReason},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use p256::{
     ecdsa::{
         SigningKey as P256SigningKey,
@@ -9122,11 +9124,7 @@ fn committed_lifecycle_journal_recovers_both_records_after_materialization_outag
     fs::rename(&messages_dir, &backup_dir).expect("move message store aside");
     fs::write(&messages_dir, b"block lifecycle materialization").expect("write blocker");
     let (outcome, lifecycle_status) = runtime
-        .apply_inbound_lifecycle_message_with_status(
-            lifecycle_id,
-            "pacs.002",
-            &lifecycle,
-        )
+        .apply_inbound_lifecycle_message_with_status(lifecycle_id, "pacs.002", &lifecycle)
         .expect("the durable journal is the lifecycle commit point");
     assert_eq!(outcome.action(), "marked_pending");
     assert_eq!(lifecycle_status.status_label(), "Accepted");
@@ -12838,9 +12836,7 @@ fn profile_policy_digest_covers_every_security_and_message_constraint() {
                 .push("11".repeat(32));
         }),
         ("trust-anchor pins", |profile| {
-            profile
-                .x509_trust_anchor_sha256_pins
-                .push("22".repeat(32));
+            profile.x509_trust_anchor_sha256_pins.push("22".repeat(32));
         }),
         ("certificate policy OIDs", |profile| {
             profile
@@ -12848,8 +12844,7 @@ fn profile_policy_digest_covers_every_security_and_message_constraint() {
                 .push("1.2.3.4".to_owned());
         }),
         ("CRL requirement", |profile| {
-            profile.x509_require_crl_revocation_check =
-                !profile.x509_require_crl_revocation_check;
+            profile.x509_require_crl_revocation_check = !profile.x509_require_crl_revocation_check;
         }),
         ("CRL material", |profile| {
             profile.x509_crl_der_base64.push("AA==".to_owned());
@@ -12881,7 +12876,9 @@ fn profile_policy_digest_covers_every_security_and_message_constraint() {
             }
         }),
         ("message type", |profile| {
-            profile.message_profiles[0].message_type.push_str(".changed");
+            profile.message_profiles[0]
+                .message_type
+                .push_str(".changed");
         }),
         ("message direction", |profile| {
             profile.message_profiles[0].direction = MessageDirection::FollowUp;

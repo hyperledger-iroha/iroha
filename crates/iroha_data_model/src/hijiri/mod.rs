@@ -7,11 +7,11 @@
 //! compensated.
 use crate::{
     account::AccountId,
-    metadata::Metadata,
     parameter::{CustomParameter, CustomParameterId},
 };
 use derive_more::{AsRef, Deref};
 use iroha_crypto::Hash;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
@@ -651,7 +651,7 @@ impl FeeMultiplierBand {
         band.validate()?;
         Ok(band)
     }
-    fn validate(&self) -> Result<(), FeePolicyError> {
+    fn validate(self) -> Result<(), FeePolicyError> {
         if self.max_risk.0 == 0 {
             return Err(FeePolicyError::ZeroUpperBound);
         }
@@ -1398,8 +1398,8 @@ pub enum HijiriParametersError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::Metadata;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::metadata::Metadata;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }

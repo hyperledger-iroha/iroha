@@ -4,7 +4,7 @@ use super::{
     tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
     *,
 };
-use iroha_data_model::nexus::LaneId;
+use iroha_model_base::topology::LaneId;
 use iroha_test_samples::ALICE_ID;
 
 fn assert_no_cached_capture(block: &mut StateBlock<'_>) {

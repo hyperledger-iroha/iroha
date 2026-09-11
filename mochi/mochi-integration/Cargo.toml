@@ -20,6 +20,7 @@ required-features = ["dev-tools"]
 dev-tools = ["mochi-core/test"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha = { workspace = true }
 base64 = { workspace = true }
 color-eyre = { workspace = true }

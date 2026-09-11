@@ -19,8 +19,9 @@ use iroha_data_model::{
             MAX_VALIDATORS_PER_HEIGHT, PayloadManifest, ValidatorIndex,
         },
     },
-    peer::{Peer, PeerId},
+    peer::Peer,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::network::NetworkReplyRoute;
 use norito::{
     codec::Encode,

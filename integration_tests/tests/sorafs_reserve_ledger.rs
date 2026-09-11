@@ -4,6 +4,8 @@
 //! use signed transactions through the Initial executor. Rent coverage rejects premature charging;
 //! elapsed monthly rent settlement and hardware service qualification are separate scenarios.
 
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
 use super::sorafs_network::{prepare_transaction, submit_instruction};

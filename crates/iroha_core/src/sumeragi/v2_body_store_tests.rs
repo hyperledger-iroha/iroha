@@ -21,8 +21,8 @@ mod tests {
             consensus_v2 as wire, decode_framed_signed_block,
         },
         merge::MergeQuorumCertificate,
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
     use std::{cell::Cell, fs, num::NonZeroU64, path::Path};
     use tempfile::TempDir;
     fn test_network_id() -> NetworkId {

@@ -24,7 +24,6 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
-        peer::PeerId,
         prelude::FindAccountById,
         query::{
             block::prelude::FindBlocks,
@@ -34,6 +33,7 @@ use iroha::{
         transaction::Executable,
     },
 };
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
     ConsensusMessageControlRule, NetworkBuilder, NetworkPeer, ObserverP2pBootstrap,
@@ -813,6 +813,7 @@ fn distinct_prepare_qc_receiver_rules(
 }
 #[cfg(test)]
 mod prepare_qc_split_tests {
+    use iroha_model_base::peer::PeerId;
     include!("sumeragi_v2_runner/prepare_qc_split_tests.rs");
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

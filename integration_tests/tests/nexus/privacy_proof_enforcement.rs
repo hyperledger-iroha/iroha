@@ -14,11 +14,12 @@ use iroha_crypto::{
 use iroha_data_model::{
     account::AccountId,
     nexus::{
-        DataSpaceId, JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId,
-        LaneComplianceRule, LaneId, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
-        LaneStorageProfile, LaneVisibility, ParticipantSelector,
+        JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
+        LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile,
+        LaneVisibility, ParticipantSelector,
     },
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::ALICE_ID;
 use std::{collections::BTreeSet, sync::Arc};
 #[test]

@@ -12,7 +12,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId},
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
-    domain::DomainId,
     isi::kagemusha_v1::{
         KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityEpochRosterV1,
         KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
@@ -33,6 +32,7 @@ use iroha_data_model::{
     },
     nexus::AxtAssetIncarnationV1,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::JsonDeserialize;
 use sha2::{Digest as _, Sha256};

@@ -9,7 +9,8 @@ use axum::http::{Request, StatusCode, Uri};
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
-use iroha_data_model::{ChainId, peer::PeerId};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use norito::json;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot

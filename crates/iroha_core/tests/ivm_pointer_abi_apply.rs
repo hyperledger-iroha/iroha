@@ -8,6 +8,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::{
     IVM, PointerType, ProgramMetadata, encoding, instruction, kotodama::compiler::Compiler,
@@ -64,7 +65,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount = Quantity::from(500_u64);
     let amount_bytes = quantity_tlv(&amount);
-    let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
+    let dataspace = iroha_model_base::topology::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;
@@ -242,7 +243,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount_bytes = quantity_tlv(&amount);
-    let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
+    let dataspace = iroha_model_base::topology::DataSpaceId::UNIVERSAL;
     let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;

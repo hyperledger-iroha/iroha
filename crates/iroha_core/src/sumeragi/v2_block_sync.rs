@@ -50,7 +50,8 @@ pub(crate) use historical_body_serve::{
     PreparedHistoricalBodyPostOutcome,
 };
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::{NetworkId, block::consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 #[cfg(test)]
 use norito::codec::Encode as _;
 use std::{

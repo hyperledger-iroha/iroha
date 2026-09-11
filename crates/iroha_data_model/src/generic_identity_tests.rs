@@ -10,7 +10,6 @@ use crate::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::BlockHeader,
-    domain::DomainId,
     events::data::prelude::MetadataChanged,
     id::NetworkId,
     isi::{InstructionBox, Log, error::Mismatch},
@@ -21,9 +20,10 @@ use crate::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionDomain},
     trigger::TriggerId,
 };
+use iroha_model_base::domain::DomainId;
 
 /// Check the declared serializer identity and reproduce its immutable frame record.
-pub(crate) fn encoded_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Value {
+pub fn encoded_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Value {
     let bare = norito::codec::encode_adaptive(value);
     let frame = norito::encode_canonical(value).expect("encode complete identity capture frame");
     let expected_hash = norito::schema::identity::frame_hash::<T>();
@@ -40,11 +40,11 @@ pub(crate) fn encoded_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Va
     })
 }
 
-fn record<T>(value: T) -> Value
+fn record<T>(value: &T) -> Value
 where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
-    let frame = norito::encode_canonical(&value).expect("encode generic identity frame");
+    let frame = norito::encode_canonical(value).expect("encode generic identity frame");
     let decoded: T = norito::decode_from_bytes(&frame).expect("decode generic identity frame");
     assert_eq!(
         norito::encode_canonical(&decoded).expect("re-encode generic identity frame"),
@@ -60,7 +60,7 @@ where
         assert!(norito::decode_from_bytes::<T>(&frame[..end]).is_err());
     }
     norito::json!({
-        "encoding": (encoded_record(&value)),
+        "encoding": (encoded_record(value)),
         "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "decode_reencode_exact": true,
     })
@@ -72,10 +72,10 @@ where
 {
     norito::json!({
         "case": label,
-        "root": (record(make())),
-        "vec": (record(vec![make(), make()])),
-        "option": (record(Some(make()))),
-        "map": (record(BTreeMap::from([(7_u32, make()), (31, make())]))),
+        "root": (record(&make())),
+        "vec": (record(&vec![make(), make()])),
+        "option": (record(&Some(make()))),
+        "map": (record(&BTreeMap::from([(7_u32, make()), (31, make())]))),
     })
 }
 
@@ -232,7 +232,7 @@ fn generic_identity_arguments_preserve_root_projections() {
         TriggerId::nominal_name(),
         "iroha_data_model::trigger::model::model::TriggerId",
     );
-    record(trigger);
+    record(&trigger);
 
     assert_eq!(
         InstructionBox::nominal_name(),
@@ -303,21 +303,21 @@ fn generic_identity_markers_do_not_require_payload_codecs() {
     );
 }
 
-fn reject_other_argument<T, U>(left: T, right: U)
+fn reject_other_argument<T, U>(left: &T, right: &U)
 where
     T: NoritoSchema + NoritoSerialize,
     U: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
     assert_eq!(
-        norito::codec::encode_adaptive(&left),
-        norito::codec::encode_adaptive(&right),
+        norito::codec::encode_adaptive(left),
+        norito::codec::encode_adaptive(right),
     );
     assert_ne!(
         norito::schema::identity::frame_hash::<T>(),
         norito::schema::identity::frame_hash::<U>(),
     );
     assert!(matches!(
-        norito::decode_from_bytes::<U>(&norito::encode_canonical(&left).unwrap()),
+        norito::decode_from_bytes::<U>(&norito::encode_canonical(left).unwrap()),
         Err(norito::core::Error::SchemaMismatch)
     ));
 }
@@ -327,25 +327,25 @@ fn generic_frames_preserve_nominal_arguments_despite_equal_payloads() {
     // These string forms share root-frame projections and payload bytes. A
     // containing generic record must still retain its argument's nominal name.
     reject_other_argument(
-        metadata(Box::<str>::from("same target")),
-        metadata(String::from("same target")),
+        &metadata(Box::<str>::from("same target")),
+        &metadata(String::from("same target")),
     );
     reject_other_argument(
-        Validate {
+        &Validate {
             context: context(),
             target: Box::<str>::from("same target"),
         },
-        Validate {
+        &Validate {
             context: context(),
             target: String::from("same target"),
         },
     );
     reject_other_argument(
-        Mismatch {
+        &Mismatch {
             expected: Box::<str>::from("expected"),
             actual: Box::<str>::from("observed"),
         },
-        Mismatch {
+        &Mismatch {
             expected: String::from("expected"),
             actual: String::from("observed"),
         },

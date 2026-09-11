@@ -35,8 +35,8 @@ use iroha_data_model::{
         GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureProofV1,
         GlobalThresholdBeaconPartialSignatureV1, GlobalThresholdBeaconPublicShareV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
@@ -2501,7 +2501,6 @@ pub(crate) mod tests {
         threshold_bls::{AdaptiveThresholdBlsSecretShare, TleReleasePurpose},
     };
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::{BlockHeader, consensus_v2 as wire},
         consensus::{
@@ -2516,8 +2515,9 @@ pub(crate) mod tests {
             parliament_candidate_root_v1,
         },
         musubi::MusubiRegistrySnapshotV1,
-        peer::PeerId,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use rand::rngs::StdRng;
     use std::sync::{
         Arc,

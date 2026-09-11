@@ -1,8 +1,9 @@
 //! Izanami-backed chaos helpers for the Mochi desktop shell.
 use crate::{Supervisor, ToriiClient};
 use color_eyre::{Result as EyreResult, eyre::eyre};
-use iroha_data_model::{domain::DomainId, isi::InstructionBox};
+use iroha_data_model::isi::InstructionBox;
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::domain::DomainId;
 use izanami::faults::{
     CpuStressConfig, DiskSaturationConfig, FaultClient, FaultConfig, FaultPeer, FaultScenarioKind,
     NetworkLatencyConfig, NetworkPartitionConfig, apply_fault_scenario,

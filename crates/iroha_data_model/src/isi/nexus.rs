@@ -2,13 +2,15 @@ use super::*;
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    metadata::Metadata,
     nexus::{
-        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
-        LaneRelayEnvelope, ProofBlob,
+        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneRelayEnvelope,
+        ProofBlob,
     },
-    peer::PeerId,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 isi! {
     /// Set or clear emergency validator peers used for lane relay quorum recovery.
@@ -494,10 +496,11 @@ mod tests {
         block::{BlockHeader, consensus::LaneBlockCommitment},
         nexus::{
             FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
-            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
+            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::{Decode, Encode};
     use std::num::NonZeroU64;

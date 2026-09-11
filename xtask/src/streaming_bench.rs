@@ -1,8 +1,7 @@
 use norito::{
-    NoritoSerialize, SerializePayload,
+    SerializePayload,
     codec::encode_with_header_flags,
-    core::Header,
-    crc64_fallback, decode_from_bytes,
+    decode_from_bytes,
     json::{self, Value},
     streaming::{
         BUNDLED_RANS_BUILD_AVAILABLE, BundleAcceleration, EntropyMode,
@@ -799,38 +798,7 @@ fn write_segment_bundles(
         })
         .collect();
     let (payload, flags) = encode_with_header_flags(&bundles);
-    let checksum = crc64_fallback(&payload);
-    let header = Header::new(
-        <Vec<SegmentBundle> as NoritoSerialize>::schema_hash(),
-        payload.len() as u64,
-        checksum,
-    );
-    let mut header_bytes = Vec::with_capacity(Header::SIZE);
-    let header = Header {
-        flags: header.flags | flags,
-        ..header
-    };
-    header_bytes.extend_from_slice(&header.magic);
-    header_bytes.push(header.major);
-    header_bytes.push(header.minor);
-    header_bytes.extend_from_slice(&header.schema);
-    header_bytes.push(header.compression as u8);
-    header_bytes.extend_from_slice(&header.length.to_le_bytes());
-    header_bytes.extend_from_slice(&header.checksum.to_le_bytes());
-    header_bytes.push(header.flags);
-    let align = norito::core::archived_payload_align::<Vec<SegmentBundle>>();
-    let padding = if align <= 1 {
-        0
-    } else {
-        let remainder = Header::SIZE % align;
-        if remainder == 0 { 0 } else { align - remainder }
-    };
-    let mut bytes = Vec::with_capacity(Header::SIZE + padding + payload.len());
-    bytes.extend_from_slice(&header_bytes);
-    if padding != 0 {
-        bytes.resize(bytes.len() + padding, 0);
-    }
-    bytes.extend_from_slice(&payload);
+    let bytes = norito::core::frame_bare_with_header_flags::<Vec<SegmentBundle>>(&payload, flags)?;
     decode_from_bytes::<Vec<SegmentBundle>>(&bytes)?;
     std::fs::write(path, bytes)?;
     Ok(())

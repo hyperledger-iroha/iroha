@@ -50,14 +50,14 @@ fn take_len_prefixed_slice<'a>(
 /// Split the two fields shared by proof and verifier-key byte boxes without allocating.
 ///
 /// These boxes use a bounded custom decoder, so they must parse every advertised struct
-/// layout themselves instead of assuming the length-prefixed AoS layout. The returned byte
+/// layout themselves instead of assuming the length-prefixed `AoS` layout. The returned byte
 /// field includes its sequence-length header, allowing callers to reject oversized payloads
 /// before `Vec<u8>` allocates.
-fn take_byte_box_fields<'a>(
-    bytes: &'a [u8],
+fn take_byte_box_fields(
+    bytes: &[u8],
     max_byte_field_len: usize,
     max_payload_len: Option<usize>,
-) -> Result<(&'a [u8], &'a [u8], usize), ncore::Error> {
+) -> Result<(&[u8], &[u8], usize), ncore::Error> {
     if !ncore::use_packed_struct() {
         let mut offset = 0usize;
         let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
@@ -936,7 +936,6 @@ fn proof_attachment_json_unknown_field(field: &str, parent: &str) -> norito::jso
     }
 }
 /// A string whose exact decoded UTF-8 length is bounded before an owned allocation is created.
-
 struct ProofAttachmentJsonBoundedStringV1<const MAX: usize>(String);
 
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonBoundedStringV1<MAX> {
@@ -984,7 +983,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonBytes32V1 {
 /// Streaming byte-array decoder used for proof payloads. The length check is
 /// performed before reserving or pushing the next byte, so an over-limit
 /// element can never grow the output allocation.
-
 struct ProofAttachmentJsonBoundedBytesVisitorV1 {
     maximum: usize,
 }

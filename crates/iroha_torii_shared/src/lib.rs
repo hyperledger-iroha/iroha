@@ -2,11 +2,12 @@
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
     asset::AssetDefinitionId,
-    nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
+    nexus::{FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
     query::CommittedTransaction,
     transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
+use iroha_model_base::topology::DataSpaceId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Public account-bootstrap network and signing policy.
 pub mod account_capabilities;
@@ -1226,14 +1227,15 @@ mod tests {
         alias_setup::AccountAliasName,
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
-        nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
+        nexus::{FeeDebitSource, FeeSponsorProgramId},
         prelude::Quantity,
         transaction::{
             FeeChargeKind, FeeChargeLimit, FeePaymentIntent, TransactionBuilder, TransactionPayload,
         },
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU64;
 
     fn checked_test_keypair(seed: u8) -> KeyPair {

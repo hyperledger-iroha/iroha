@@ -17,7 +17,9 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
+use iroha_data_model::{NetworkId, account::AccountId};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, TestApiRouterRuntime, Torii};

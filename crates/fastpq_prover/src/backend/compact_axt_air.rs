@@ -99,7 +99,7 @@ mod tests {
         backend::{GOLDILOCKS_MODULUS, compact_axt_context::tests::Fixture},
         gadgets::compact_smt_air::COLUMN_COUNT,
     };
-    use iroha_data_model::DataSpaceId;
+    use iroha_model_base::topology::DataSpaceId;
 
     fn relation(fixture: &Fixture) -> Result<AxtTransferAir> {
         let prepared = fixture.prepare(ProofSemantics::AxtTransferClaim);

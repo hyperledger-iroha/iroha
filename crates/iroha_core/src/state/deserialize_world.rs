@@ -4239,7 +4239,6 @@ mod soracloud_service_lease_replay_tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::AccountId,
-        peer::PeerId,
         soracloud::{
             SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
             SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
@@ -4251,6 +4250,7 @@ mod soracloud_service_lease_replay_tests {
             SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
         },
     };
+    use iroha_model_base::peer::PeerId;
 
     fn sample_assignment(service_version: &str) -> SoraServiceLeaseReporterAssignmentV1 {
         let key_pair = KeyPair::try_from_seed(vec![91; 32], Algorithm::Ed25519)
@@ -5814,8 +5814,8 @@ mod global_beacon_persistence_tests {
     use iroha_data_model::{
         block::BlockHeader,
         governance::types::{BodyElectionAttemptId, ParliamentBody},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
 
     #[test]
     fn restore_rejects_pulse_after_sortition_slot_was_terminally_unavailable() {
@@ -8607,9 +8607,9 @@ mod asset_transfer_control_persistence_tests {
             ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy, AssetDefinition,
             AssetDefinitionId, AssetTransferControlRecord, AssetTransferControlStoreV1,
         },
-        domain::DomainId,
-        metadata::Metadata,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
 
@@ -8718,7 +8718,7 @@ struct BuildStateInputs {
     lane_incarnation_lineage: BTreeMap<LaneId, LaneIncarnationLineage>,
     lane_incarnation_activation_heights: BTreeMap<LaneId, u64>,
     autoscale_sample_history: VecDeque<AutoscaleSampleRecord>,
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
     snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord>,
     nexus_runtime_restored_from_snapshot: bool,

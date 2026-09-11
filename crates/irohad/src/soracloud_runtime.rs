@@ -10095,7 +10095,7 @@ fn local_inrou_replica_placements(
     local_validator_account_id: Option<&AccountId>,
     local_peer_id: Option<&str>,
     current_height: u64,
-    lane_is_active_for_authority: impl Fn(iroha_data_model::nexus::LaneId) -> bool,
+    lane_is_active_for_authority: impl Fn(iroha_model_base::topology::LaneId) -> bool,
 ) -> Vec<SoraInrouReplicaPlacementV1> {
     let Some(local_validator_account_id) = local_validator_account_id else {
         return Vec::new();
@@ -21742,7 +21742,6 @@ mod tests {
         Level,
         block::BlockHeader,
         isi::Log,
-        metadata::Metadata,
         smart_contract::manifest::EntryPointKind,
         soracloud::{
             AgentApartmentManifestV1, SECRET_ENVELOPE_VERSION_V1,
@@ -21762,6 +21761,7 @@ mod tests {
         },
     };
     use iroha_futures::supervisor::Supervisor;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::{json::Json, numeric::Quantity};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
@@ -24573,7 +24573,7 @@ mod tests {
         insert_inrou_service_placement_record_fixture(world, bundle, placements);
     }
     fn insert_active_public_lane_validator_fixture(state: &State, local_peer_id: &str) {
-        let lane_id = iroha_data_model::nexus::LaneId::SINGLE;
+        let lane_id = iroha_model_base::topology::LaneId::SINGLE;
         let next_height = state
             .latest_block_header_fast()
             .map_or(1, |header| header.height().get().saturating_add(1));

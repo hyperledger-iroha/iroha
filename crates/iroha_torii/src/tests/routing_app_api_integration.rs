@@ -1229,7 +1229,7 @@ mod app_api_integration_tests {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kina_def = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let dataspace_scope = iroha_data_model::asset::AssetBalanceScope::Dataspace(
-            iroha_data_model::nexus::DataSpaceId::new(10),
+            iroha_model_base::topology::DataSpaceId::new(10),
         );
         let assets = vec![Asset::new(
             AssetId::with_scope(kina_def.clone(), holder_id.clone(), dataspace_scope),
@@ -1936,11 +1936,7 @@ mod app_api_integration_tests {
     }
     #[tokio::test]
     async fn asset_holders_query_aggregate_requires_capability_for_remote_projection_hydration() {
-        use axum::{
-            Router,
-            extract::Path as AxumPath,
-            routing::get,
-        };
+        use axum::{Router, extract::Path as AxumPath, routing::get};
         use std::sync::atomic::{AtomicUsize, Ordering};
         let _guard = app_query_limits_guard();
         clear_query_projection_archive_cache_for_tests();
@@ -1993,23 +1989,23 @@ mod app_api_integration_tests {
             );
         }
         let remote_router = Router::new().route(
-                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
-                get({
+            "/v1/sorafs/storage/manifest/{manifest_id_hex}",
+            get({
+                let manifest_requests = Arc::clone(&manifest_requests);
+                let manifest_responses = manifest_responses.clone();
+                move |AxumPath(manifest_id_hex): AxumPath<String>| {
                     let manifest_requests = Arc::clone(&manifest_requests);
                     let manifest_responses = manifest_responses.clone();
-                    move |AxumPath(manifest_id_hex): AxumPath<String>| {
-                        let manifest_requests = Arc::clone(&manifest_requests);
-                        let manifest_responses = manifest_responses.clone();
-                        async move {
-                            manifest_requests.fetch_add(1, Ordering::SeqCst);
-                            let Some(response) = manifest_responses.get(&manifest_id_hex) else {
-                                return axum::http::StatusCode::NOT_FOUND.into_response();
-                            };
-                            crate::JsonBody(response.clone()).into_response()
-                        }
+                    async move {
+                        manifest_requests.fetch_add(1, Ordering::SeqCst);
+                        let Some(response) = manifest_responses.get(&manifest_id_hex) else {
+                            return axum::http::StatusCode::NOT_FOUND.into_response();
+                        };
+                        crate::JsonBody(response.clone()).into_response()
                     }
-                }),
-            );
+                }
+            }),
+        );
         let remote_server = tokio::spawn(async move {
             axum::serve(listener, remote_router)
                 .await
@@ -2121,7 +2117,7 @@ mod app_api_integration_tests {
             None,
         )
         .build(&alice_id);
-        let paynet_dataspace_id = iroha_data_model::nexus::DataSpaceId::new(92);
+        let paynet_dataspace_id = iroha_model_base::topology::DataSpaceId::new(92);
         let assets = vec![
             Asset::new(
                 AssetId::new(pkr_def.clone(), alice_id.clone()),
@@ -2201,7 +2197,7 @@ mod app_api_integration_tests {
             vec![
                 iroha_data_model::nexus::LaneConfig::default(),
                 iroha_data_model::nexus::LaneConfig {
-                    id: iroha_data_model::nexus::LaneId::new(1),
+                    id: iroha_model_base::topology::LaneId::new(1),
                     dataspace_id: paynet_dataspace_id,
                     alias: "paynet".to_owned(),
                     visibility: iroha_data_model::nexus::LaneVisibility::Public,
@@ -2229,7 +2225,7 @@ mod app_api_integration_tests {
     fn install_asset_holder_alias_parent_leases_for_test(
         world: &mut World,
         owner: &AccountId,
-        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        dataspace_id: iroha_model_base::topology::DataSpaceId,
         domains: &[&DomainId],
     ) {
         let controller = iroha_data_model::sns::NameControllerV1::account(
@@ -2238,7 +2234,7 @@ mod app_api_integration_tests {
         );
         let dataspace_selector =
             iroha_core::sns::selector_for_dataspace_alias("paynet").expect("paynet selector");
-        let mut dataspace_metadata = iroha_data_model::metadata::Metadata::default();
+        let mut dataspace_metadata = iroha_model_base::metadata::Metadata::default();
         dataspace_metadata.insert(
             iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
                 .parse()
@@ -2272,7 +2268,7 @@ mod app_api_integration_tests {
                 u64::MAX,
                 u64::MAX,
                 u64::MAX,
-                iroha_data_model::metadata::Metadata::default(),
+                iroha_model_base::metadata::Metadata::default(),
             );
             world.smart_contract_state_mut_for_testing().insert(
                 iroha_core::sns::record_storage_key(&selector),
@@ -2427,7 +2423,7 @@ mod app_api_integration_tests {
             5,
             None,
             None,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         manifest_record.record_pin_fee_payment(
             iroha_data_model::sorafs::pin_registry::PinFeePayment {

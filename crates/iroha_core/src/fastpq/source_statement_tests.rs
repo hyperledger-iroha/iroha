@@ -2,11 +2,9 @@
 use super::{FastpqSourceOpeningBuildLimits, fastpq_ordinary_source_statement_opening_v1};
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
-    NetworkId,
-    execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
-    fastpq::*,
-    nexus::{DataSpaceId, LaneId},
+    NetworkId, execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1, fastpq::*,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 fn network(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed])))
 }

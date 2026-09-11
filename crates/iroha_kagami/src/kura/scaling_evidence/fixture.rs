@@ -32,11 +32,11 @@ use iroha_data_model::{
         KagemushaMintFinalityValidatorKeysV1,
     },
     merge::{MergeExecutionBatch, MergeLaneSignerProof, MergeQuorumCertificate, MergeSignerProof},
-    peer::PeerId,
     query::CertifiedMergeTransactionInclusion,
     transaction::{FeePaymentIntent, TransactionBuilder, signed::TransactionResult},
     trigger::DataTriggerSequence,
 };
+use iroha_model_base::peer::PeerId;
 use std::num::NonZeroU64;
 
 fn h(label: &str) -> Hash {

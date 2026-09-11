@@ -9,7 +9,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use iroha_torii::Torii;
 use std::sync::Arc;
 use tower::ServiceExt as _;

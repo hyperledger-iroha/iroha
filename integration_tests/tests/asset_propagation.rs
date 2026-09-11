@@ -3,6 +3,7 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use std::time::Duration;

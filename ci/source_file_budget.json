@@ -145,7 +145,7 @@
     "javascript/iroha_js/test/toriiClient.test.js": 25203,
     "javascript/iroha_js/test/transactionBuilder.test.js": 3578,
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt": 4602,
-    "mochi/mochi-ui-egui/src/gui.rs": 11900,
+    "mochi/mochi-ui-egui/src/gui.rs": 11129,
     "pytests/scripts/iso_audit_notary_adapter_test.py": 6588,
     "pytests/scripts/iso_operator_canary_test.py": 6235,
     "pytests/scripts/iso_operator_evidence_verify_test.py": 15246,
@@ -155,7 +155,7 @@
     "pytests/scripts/iso_trust_bundle_verify_test.py": 4314,
     "pytests/scripts/iso_xsd_fixture_verify_test.py": 8472,
     "pytests/scripts/sumeragi_v2_proof_ledger_test.py": 33974,
-    "pytests/scripts/sumeragi_v2_release_receipt_test.py": 5048,
+    "pytests/scripts/sumeragi_v2_release_receipt_test.py": 4969,
     "python/iroha_python/iroha_python_rs/src/lib.rs": 14671,
     "python/iroha_python/src/iroha_python/client.py": 21254,
     "python/iroha_python/tests/client_ledger_helpers_test.py": 3126,
@@ -169,8 +169,7 @@
     "scripts/tests/check_sorafs_rollout_gate_contract_test.py": 28429,
     "scripts/tests/sorafs_evidence_validation_test.py": 9386,
     "scripts/tests/sorafs_runner_preflight_test.py": 3989,
-    "xtask/src/main.rs": 14477,
-    "xtask/src/sorafs.rs": 7763
+    "xtask/src/main.rs": 14477
   },
   "excluded_prefixes": [
     "docs/portal/node_modules/",

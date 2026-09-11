@@ -1,10 +1,10 @@
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     da::types::{BlobDigest, RetentionPolicy, StorageTicketId},
-    nexus::{DataSpaceId, LaneId},
     sorafs::pin_registry::ManifestDigest,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},

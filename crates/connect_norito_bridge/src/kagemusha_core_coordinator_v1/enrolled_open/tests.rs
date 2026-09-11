@@ -456,7 +456,7 @@ fn account_challenge_commits_full_owner_source_catalog_and_purpose() {
             3 => challenge.owner.runtime.fi_id = "other-fi".parse().unwrap(),
             4 => {
                 challenge.owner.runtime.ledger_dataspace_id =
-                    iroha_data_model::nexus::DataSpaceId::new(11)
+                    iroha_model_base::topology::DataSpaceId::new(11)
             }
             5 => challenge.owner.runtime.authentication_namespace = "other-auth".parse().unwrap(),
             6 => {
@@ -478,7 +478,7 @@ fn account_challenge_commits_full_owner_source_catalog_and_purpose() {
             14 => {
                 challenge.owner.runtime.asset =
                     iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                        iroha_data_model::domain::DomainId::try_new("hardware", "universal")
+                        iroha_model_base::domain::DomainId::try_new("hardware", "universal")
                             .unwrap(),
                         "other-cash".parse().unwrap(),
                     )

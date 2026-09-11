@@ -910,7 +910,7 @@ exports = []
             network_id: network_id(),
             namespace_binding: MusubiNamespaceBindingV1 {
                 namespace: "apps.sora".parse().expect("namespace"),
-                home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+                home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
                 scope: MusubiPackageScopeV1::Domain("apps".parse().expect("domain")),
                 generation: 1,
             },
@@ -930,12 +930,12 @@ exports = []
             index_revision: 4,
         };
         let package = MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
+            iroha_model_base::topology::DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
             "parent".parse().expect("package name"),
         );
         let leaf = MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
+            iroha_model_base::topology::DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
             "leaf".parse().expect("package name"),
         );
@@ -1015,7 +1015,7 @@ exports = []
     #[test]
     fn initial_query_inventory_contains_only_current_manifest_ranges() {
         let package = MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
+            iroha_model_base::topology::DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
             "codec".parse().expect("package name"),
         );
@@ -1072,7 +1072,7 @@ exports = []
         let mut page = anchor_page(8);
         page.namespace_binding = MusubiNamespaceBindingV1 {
             namespace: "other.sora".parse().expect("namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+            home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
             scope: MusubiPackageScopeV1::Domain("other".parse().expect("domain")),
             generation: 1,
         };
@@ -1217,7 +1217,7 @@ ignored = { package = "libs.sora/ignored", version = "^1.0.0" }
             index_revision: 4,
         };
         let package = MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
+            iroha_model_base::topology::DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
             "demo".parse().expect("package name"),
         );

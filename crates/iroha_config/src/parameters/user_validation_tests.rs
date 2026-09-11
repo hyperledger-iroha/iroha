@@ -3,7 +3,7 @@
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
-        DaManifestPolicy, DomainId, Emitter, LaneId, NexusFees, NonZeroU64,
+        DaManifestPolicy, DomainId, Emitter, NexusFees, NonZeroU64,
         RETIRED_LANE_FUNCTIONAL_METADATA_KEYS, SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1,
         SORA_INROU_MIN_CPU_MILLIS_V1, SORA_INROU_MIN_MEMORY_BYTES_V1,
         SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1, SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
@@ -28,7 +28,7 @@ mod duration_clamp_tests {
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
         },
     };
-    use iroha_model_base::name::Name;
+    use iroha_model_base::{name::Name, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use std::{
         fs,
@@ -1065,7 +1065,7 @@ policy_digest_hex = "{policy_digest_hex}"
         );
 
         let actual = load_root(table);
-        let lane_id = iroha_data_model::nexus::LaneId::new(1);
+        let lane_id = iroha_model_base::topology::LaneId::new(1);
         let lane = actual
             .nexus
             .lane_catalog
@@ -1075,7 +1075,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect("configured sharded lane");
         assert_eq!(
             lane.shard_id,
-            Some(iroha_data_model::nexus::ShardId::new(9)),
+            Some(iroha_model_base::topology::ShardId::new(9)),
             "the typed shard_id field must survive catalog construction"
         );
         assert!(!lane.metadata.contains_key("da_shard_id"));

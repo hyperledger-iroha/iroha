@@ -66,7 +66,11 @@ fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
             "E_UNKNOWN_NAMED_ARGUMENT",
             "call `Json::parse` has no parameter named `raw`",
         ),
-        ("Json::parse()", "E_MISSING_NAMED_ARGUMENT", "call `Json::parse` is missing required argument `value`"),
+        (
+            "Json::parse()",
+            "E_MISSING_NAMED_ARGUMENT",
+            "call `Json::parse` is missing required argument `value`",
+        ),
         (
             r#"Json::parse("{}", "{}")"#,
             "K2003",
@@ -192,11 +196,11 @@ fn trigger_decl_supports_structured_data_filters_for_core_families() {
             },
         },
         nft::NftId,
-        peer::PeerId,
         role::RoleId,
         rwa::RwaId,
         trigger::TriggerId,
     };
+    use iroha_model_base::peer::PeerId;
     let account_literal = sample_account_literal();
     let account = AccountId::parse_encoded(account_literal.as_str()).expect("account");
     let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";

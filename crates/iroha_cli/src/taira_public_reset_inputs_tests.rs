@@ -7,7 +7,7 @@ fn validator_pin_fee_asset_must_match_the_typed_faucet_funding_asset() {
     validate_validator_pin_fee_asset(&faucet, &inventory.faucet_policy.asset_definition_id)
         .expect("faucet funds the exact validator pin-fee asset");
     let other = iroha::data_model::asset::AssetDefinitionId::derive_from_components(
-        iroha::data_model::domain::DomainId::try_new("feetest", "universal").unwrap(),
+        iroha_model_base::domain::DomainId::try_new("feetest", "universal").unwrap(),
         "other".parse().unwrap(),
     );
     assert_ne!(faucet, other);

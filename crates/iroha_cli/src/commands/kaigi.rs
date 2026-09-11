@@ -12,14 +12,15 @@ use iroha::data_model::{
         KAIGI_MAX_PARTICIPANTS_V1, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
         KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
     },
-    metadata::Metadata,
     prelude::{
-        AccountId, DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
+        AccountId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
         KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRelayRegistration,
         KaigiRoomPolicy, NewKaigi,
     },
 };
 use iroha_crypto::Hash;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use std::{
     collections::BTreeSet,
     fmt::Write as _,

@@ -4,7 +4,8 @@
 //! Run:
 //!   cargo run -p `iroha_torii_shared` --example `permissions_preimage`
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::{NetworkId, account::AccountId, block::BlockHeader, domain::DomainId};
+use iroha_data_model::{NetworkId, account::AccountId, block::BlockHeader};
+use iroha_model_base::domain::DomainId;
 use iroha_torii_shared::{connect as proto, connect_sdk as sdk};
 fn deterministic_wallet_keypair() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)

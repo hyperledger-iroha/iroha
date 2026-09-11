@@ -1,5 +1,5 @@
 use iroha_crypto::{Hash, PublicKey};
-use iroha_data_model::nexus::DataSpaceId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
 use norito::to_bytes;

@@ -184,10 +184,10 @@ mod tests {
             AliasTargetV1, ResolvedAccountAliasV1,
         },
         asset::AssetDefinitionId,
-        domain::DomainId,
-        nexus::DataSpaceId,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

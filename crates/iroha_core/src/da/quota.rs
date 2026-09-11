@@ -200,9 +200,9 @@ mod tests {
             pin_intent::DaPinIntent,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU64;
     fn authorized_intent(owner_seed: u8, sequence: u64, payload_bytes: u64) -> DaPinIntent {
         let key_pair = KeyPair::try_from_seed(vec![owner_seed; 32], Algorithm::Ed25519)

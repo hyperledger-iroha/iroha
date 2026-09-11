@@ -1,11 +1,12 @@
 //! Deterministic NFT and RWA storage values for exact identity and frame checks.
 
 use crate::{
-    metadata::Metadata,
     nft::NftData,
-    prelude::{AccountId, DomainId, Hash, Json, NumericSpec, PublicKey, Quantity, RoleId},
+    prelude::{AccountId, Hash, Json, NumericSpec, PublicKey, Quantity, RoleId},
     rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 
 const OWNER_KEY: &str = "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";

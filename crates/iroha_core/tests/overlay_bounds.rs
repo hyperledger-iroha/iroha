@@ -8,6 +8,8 @@ use iroha_core::{
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use norito::codec::Encode as NoritoEncode;
 use std::{borrow::Cow, str::FromStr, sync::Arc};
 fn build_min_world() -> (
@@ -200,7 +202,7 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
     )
     .with_instructions([Log::new(Level::INFO, "expired".to_string())])
     .with_metadata({
-        let mut md = iroha_data_model::metadata::Metadata::default();
+        let mut md = iroha_model_base::metadata::Metadata::default();
         let exp_key = iroha_model_base::name::Name::from_str("expires_at_height").unwrap();
         md.insert(exp_key, iroha_primitives::json::Json::new(0u64));
         md

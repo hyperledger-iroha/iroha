@@ -75,15 +75,14 @@ use iroha_data_model::{
         AxtDescriptor, AxtEnvelopeRecord, AxtFastpqBinding, AxtHandleBudgetKey,
         AxtHandleBudgetRecord, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
         AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment, AxtRejectReason,
-        AxtRemoteSpendClaimV1, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceId,
-        DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
-        LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement, LaneId,
+        AxtRemoteSpendClaimV1, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceMetadata,
+        GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
+        LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement,
         LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneSchedulerPolicy,
         LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
         PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent,
-        ShardId, SpendOp, TouchManifest,
+        SpendOp, TouchManifest,
     },
-    peer::PeerId,
     proof::{ProofId, ProofRecord, ProofStatus},
     query::{
         dsl::CompoundPredicate,
@@ -98,7 +97,10 @@ use iroha_data_model::{
     },
     transaction::ExecutionStep,
 };
+use iroha_model_base::chain::ChainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -33304,7 +33306,7 @@ state_test! { sync remove_asset_and_metadata_with_total_decrements_definition_to
         .expect("mint tracked balance");
     stx.world.asset_metadata.insert(
         asset_id.clone(),
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     let_row! { removed = stx .world .remove_asset_and_metadata_with_total(&asset_id) .expect("remove succeeds") };
     assert!(removed.is_some(), "asset should be removed");
@@ -33519,7 +33521,7 @@ state_test! { sync asset_definition_holder_index_waits_for_last_partition_remova
         .insert(global_asset_id.clone(), global_asset_value);
     stx.world.track_asset_holder(&global_asset_id);
     stx.world.track_nonzero_asset_holder(&global_asset_id);
-    let_row! { scoped_asset_id = AssetId::with_scope( asset_def_id.clone(), ALICE_ID.clone(), iroha_data_model::asset::AssetBalanceScope::Dataspace( iroha_data_model::nexus::DataSpaceId::new(7), ), ) };
+    let_row! { scoped_asset_id = AssetId::with_scope( asset_def_id.clone(), ALICE_ID.clone(), iroha_data_model::asset::AssetBalanceScope::Dataspace( iroha_model_base::topology::DataSpaceId::new(7), ), ) };
     let (_, scoped_asset_value) = Asset::new(scoped_asset_id.clone(), 1_u32).into_key_value();
     stx.world
         .assets
@@ -33596,7 +33598,7 @@ state_test! { sync assets_by_definition_iter_includes_all_tracked_partitions
     .execute(&ALICE_ID, &mut stx)
     .expect("register other asset definition");
     let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    let_row! { scoped_asset_id = AssetId::with_scope( asset_def_id.clone(), ALICE_ID.clone(), iroha_data_model::asset::AssetBalanceScope::Dataspace( iroha_data_model::nexus::DataSpaceId::new(7), ), ) };
+    let_row! { scoped_asset_id = AssetId::with_scope( asset_def_id.clone(), ALICE_ID.clone(), iroha_data_model::asset::AssetBalanceScope::Dataspace( iroha_model_base::topology::DataSpaceId::new(7), ), ) };
     let other_asset_id = AssetId::new(other_asset_def_id, ALICE_ID.clone());
     for asset_id in [
         global_asset_id.clone(),
@@ -33651,7 +33653,7 @@ state_test! { sync remove_asset_and_metadata_with_total_cleans_orphan_metadata
     let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
     stx.world.asset_metadata.insert(
         asset_id.clone(),
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     assert!(stx.world.assets.get(&asset_id).is_none(), "no asset stored");
     let_row! { removed = stx .world .remove_asset_and_metadata_with_total(&asset_id) .expect("orphan cleanup succeeds") };
@@ -34807,7 +34809,7 @@ state_test! { sync sccp_registry_local_profile_rejects_foreign_chain_and_alias_c
         // The pre-v2 Taira chain is archived and cannot host current SCCP state.
         "809574F5-FEE7-5E69-BFCF-52451E42D50F",
     ] {
-        let_row! { error = validate_sccp_registry_local_profile( registry.as_ref(), &iroha_data_model::ChainId::from(chain_id), ) .expect_err("foreign or alias chain id must fail closed") };
+        let_row! { error = validate_sccp_registry_local_profile( registry.as_ref(), &iroha_model_base::chain::ChainId::from(chain_id), ) .expect_err("foreign or alias chain id must fail closed") };
         assert!(
             error.contains("foreign SORA profile")
                 || error.contains("not a canonical public SORA chain id"),
@@ -34816,7 +34818,7 @@ state_test! { sync sccp_registry_local_profile_rejects_foreign_chain_and_alias_c
     }
     validate_sccp_registry_local_profile(
         registry.as_ref(),
-        &iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+        &iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     )
     .expect("canonical Taira chain id accepts the Taira registry");
 }
@@ -35504,7 +35506,7 @@ fn sample_snapshot_mailbox_receipt(
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence,
         execution_host: Some(SoraRuntimeDeterministicValidatorHostV1 {
-            lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+            lane_id: iroha_model_base::topology::LaneId::SINGLE,
             validator_account_id: ALICE_ID.clone(),
             peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
         }),
@@ -41615,7 +41617,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             Permission::from(
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     ),
                 },
             ),
@@ -41639,7 +41641,7 @@ state_test! { sync execute_data_trigger_supports_alias_resolve_and_json_amount_t
             Permission::from(
                 iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                     scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     ),
                 },
             ),
@@ -41762,13 +41764,14 @@ fn build_executor_verdict_program(
 }
 state_test! { sync execute_called_trigger_respects_executor_validation
     use iroha_data_model::{
-        ChainId, Level,
+        Level,
         events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
         executor as data_model_executor,
         isi::Log,
         transaction::executable::IvmBytecode,
         trigger::TriggerId,
     };
+    use iroha_model_base::chain::ChainId;
     let_row! { verdict = Err(iroha_data_model::ValidationFail::NotPermitted( "executor denied".to_owned(), )) };
     let bytecode = build_executor_verdict_program(&verdict);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));

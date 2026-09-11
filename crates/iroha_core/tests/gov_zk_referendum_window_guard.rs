@@ -9,12 +9,12 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
-    domain::DomainId,
     isi::governance::CastZkBallot,
     permission::Permission,
     prelude::{Account, Domain, Grant},
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
 #[test]

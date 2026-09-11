@@ -20,7 +20,7 @@ fn exercise_final_canary_deadline(applied: bool) {
                 observation: iroha_torii_shared::FeeQuoteObservation {
                     ledger_time_ms: 1,
                     next_block_height: 2,
-                    route_dataspace_id: iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                    route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 },
                 components: Vec::new(),
                 capacities: Vec::new(),

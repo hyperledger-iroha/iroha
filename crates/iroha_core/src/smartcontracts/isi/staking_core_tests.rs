@@ -128,14 +128,14 @@ fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog
 fn register_peer_for_account(
     stx: &mut StateTransaction<'_, '_>,
     account: &AccountId,
-) -> crate::PeerId {
+) -> iroha_model_base::peer::PeerId {
     let peer = validator_peer_id(account);
     let _ = stx.world.peers.push(peer.clone());
     seed_validator_consensus_key(stx, &peer, ConsensusKeyStatus::Active);
     peer
 }
-fn validator_peer_id(account: &AccountId) -> crate::PeerId {
-    crate::PeerId::from(
+fn validator_peer_id(account: &AccountId) -> iroha_model_base::peer::PeerId {
+    iroha_model_base::peer::PeerId::from(
         account
             .try_signatory()
             .expect("test accounts are single-signatory")
@@ -144,7 +144,7 @@ fn validator_peer_id(account: &AccountId) -> crate::PeerId {
 }
 fn seed_validator_consensus_key(
     stx: &mut StateTransaction<'_, '_>,
-    peer: &crate::PeerId,
+    peer: &iroha_model_base::peer::PeerId,
     status: ConsensusKeyStatus,
 ) {
     let activation_height = stx.block_height();
@@ -154,7 +154,7 @@ fn seed_validator_consensus_key(
 }
 fn seed_validator_consensus_key_with_heights(
     stx: &mut StateTransaction<'_, '_>,
-    peer: &crate::PeerId,
+    peer: &iroha_model_base::peer::PeerId,
     status: ConsensusKeyStatus,
     activation_height: u64,
     expiry_height: Option<u64>,
@@ -172,7 +172,7 @@ fn seed_validator_consensus_key_with_heights(
 }
 fn seed_consensus_key_for_role_with_heights(
     stx: &mut StateTransaction<'_, '_>,
-    peer: &crate::PeerId,
+    peer: &iroha_model_base::peer::PeerId,
     role: ConsensusKeyRole,
     status: ConsensusKeyStatus,
     activation_height: u64,
@@ -212,7 +212,10 @@ fn seed_consensus_key_for_role_with_heights(
         stx.world.consensus_keys_by_pk.insert(key_label, by_pk);
     }
 }
-fn clear_consensus_keys_for_peer(stx: &mut StateTransaction<'_, '_>, peer: &crate::PeerId) {
+fn clear_consensus_keys_for_peer(
+    stx: &mut StateTransaction<'_, '_>,
+    peer: &iroha_model_base::peer::PeerId,
+) {
     let label = peer.public_key().to_string();
     if let Some(ids) = stx.world.consensus_keys_by_pk.remove(label.clone()) {
         for id in ids {

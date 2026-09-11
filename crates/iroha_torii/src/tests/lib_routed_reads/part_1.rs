@@ -1655,7 +1655,7 @@ fn exact_alias_resolve_rejects_expired_authoritative_lease() {
         1,
         1,
         1,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     let height = app
         .state

@@ -96,7 +96,8 @@ fn lane_path_previews_include_slugged_paths() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("lane-preview-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -144,7 +145,8 @@ fn lane_path_previews_without_supervisor_use_validated_selected_storage() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("detached-lane-preview-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -180,7 +182,8 @@ fn detached_lane_path_previews_retain_selection_lease_until_drop() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("detached-lane-lease-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -217,7 +220,8 @@ fn lane_path_previews_without_supervisor_reject_tampered_selection() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("tampered-lane-preview-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -253,7 +257,8 @@ fn reset_lane_lifecycle_plan_builds_consensus_replacement() {
     let _irohad_guard = TestEnvGuard::set("MOCHI_IROHAD", &irohad_stub);
     let data_root = temp.path().join("lane-reset-inner-data");
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",

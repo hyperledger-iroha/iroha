@@ -63,7 +63,7 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
     confidential::{ConfidentialMemoEnvelopeV1, ConfidentialMemoSuiteV1},
     da::manifest::DaManifestV1,
-    domain::{Domain, DomainId, NewDomain},
+    domain::{Domain, NewDomain},
     escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     governance::types::{
@@ -108,17 +108,15 @@ use iroha_data_model::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
         KaigiRelayRegistration, NewKaigi, scalar::KaigiAuthorizationScalarV1,
     },
-    metadata::Metadata,
     ministry::AgendaProposalV1,
     nexus::{
-        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId,
-        LaneRelayEnvelope, TouchManifest, compute_descriptor_binding, compute_settlement_hash,
-        validate_descriptor,
+        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, LaneRelayEnvelope, TouchManifest,
+        compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
     },
     nft::{NewNft, Nft, NftId},
     oracle::KeyedHash,
     parameter::{CustomParameter, Parameter},
-    peer::{Peer, PeerId},
+    peer::Peer,
     permission::Permission,
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -147,7 +145,11 @@ use iroha_data_model::{
     },
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_storage_client::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
@@ -12907,7 +12909,6 @@ mod tests {
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
         da::manifest::DaManifestV1,
-        domain::DomainId,
         events::EventFilterBox,
         isi::{
             Burn, BurnBox, CreateKaigi, CustomInstruction, InstructionBox, JoinKaigi, LeaveKaigi,
@@ -12926,13 +12927,12 @@ mod tests {
             KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
             KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, NewKaigi,
         },
-        metadata::Metadata,
         ministry::{
             AgendaEvidenceAttachment, AgendaEvidenceKind, AgendaProposalAction,
             AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
         },
         nft::NftId,
-        peer::{Peer, PeerId},
+        peer::Peer,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
         smart_contract::manifest::{
@@ -12953,7 +12953,10 @@ mod tests {
             validation_fee_payout_recipient_share,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::peer::PeerId;
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
         DeserializePayload,
@@ -17519,7 +17522,7 @@ seiyaku Privacy {
             &test_network_id(b"activate-contract-instance"),
             &authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::new(0),
+            iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
@@ -17550,7 +17553,7 @@ seiyaku Privacy {
             &test_network_id(b"contract-lifecycle-cas"),
             &authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::new(0),
+            iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("contract address");
         for value in [

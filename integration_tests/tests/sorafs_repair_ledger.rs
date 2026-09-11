@@ -3,6 +3,7 @@
 //! These exercise native ledger transitions. Provider storage execution and
 //! production evidence collection remain separate qualification requirements.
 
+use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
 use eyre::{Result, WrapErr as _, ensure, eyre};

@@ -18,6 +18,11 @@ from typing import Any, Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Keep the unittest script entry point usable as well as package-based pytest.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from scripts.tests.multilane_scaling_fixture import ScalingRunFixture, fixed_workload
+
 sys.path.insert(0, str(REPO_ROOT / "scripts/nexus"))
 sys.path.insert(0, str(REPO_ROOT / "scripts/tests"))
 import scaling_main_component_fixture as COMPONENT
@@ -37,23 +42,14 @@ def digest_file(path: Path) -> str:
     return digest_bytes(path.read_bytes())
 
 
-class EvidenceBundle:
+class EvidenceBundle(ScalingRunFixture):
     """Build a synthetic, in-temporary-directory contract fixture."""
 
     def __init__(self, root: Path) -> None:
         root = root.resolve(strict=True)
         self.root = root
         self.manifest_path = root / "scaling_evidence.json"
-        self.workload = {
-            "offered_load_tps": 20.0,
-            "warmup_seconds": 5.0,
-            "measurement_seconds": 20.0,
-            "drain_seconds": 2.0,
-            "max_submission_lag_ms": 10.0,
-            "min_interval_samples": 20,
-            "min_latency_samples": 100,
-            "max_offered_load_deviation_fraction": 0.01,
-        }
+        self.workload = fixed_workload()
         self.budgets = {
             "queue_depth_max": 100,
             "index_entries_max": 200,
@@ -254,154 +250,19 @@ class EvidenceBundle:
         latency: float,
         offered: int = 400,
     ) -> dict[str, Any]:
-        intervals = 20
-        def distribute(total: int) -> list[int]:
-            quotient, remainder = divmod(total, intervals)
-            return [quotient + (1 if index < remainder else 0) for index in range(intervals)]
-
-        offered_parts = distribute(offered)
-        committed_parts = distribute(committed)
-        samples = []
-        for index in range(intervals):
-            interval_committed = committed_parts[index]
-            samples.append(
-                {
-                    "sequence": index + 1,
-                    "start_offset_seconds": float(index),
-                    "end_offset_seconds": float(index + 1),
-                    "offered_count": offered_parts[index],
-                    "accepted_count": offered_parts[index],
-                    "committed_count": interval_committed,
-                    "commit_latencies_ms": [latency] * interval_committed,
-                    "queue_depth": 10 + (index % 3),
-                    "index_entries": 20 + (index % 5),
-                    "memory_bytes": 1_000 + index,
-                    "disk_bytes": 2_000 + index,
-                }
-            )
-        lane_ids = ["lane-a"] if active_lanes == 1 else ["lane-a", "lane-b", "lane-c", "lane-d"]
-        support_dir = self.root / "runs" / f"pair_{pair_index:02d}" / variant / "support"
-        support_dir.mkdir(parents=True, exist_ok=True)
-        lifecycle = support_dir / "lifecycle.json"
-        metrics = support_dir / "metrics.prom"
-        load_log = support_dir / "tx_load.log"
-        nexus_manifest = support_dir / "load_test_manifest.json"
-        trace_path = support_dir / "transaction_trace.json"
-        self.write_json(lifecycle, {"active_execution_lanes": lane_ids})
-        metrics.write_text(
-            f"nexus_lane_configured_total {active_lanes}\n",
-            encoding="utf-8",
+        """Bind shared run fixtures to complete outcomes and resource evidence."""
+        raw = super().raw_run(
+            pair_index=pair_index,
+            variant=variant,
+            active_lanes=active_lanes,
+            seed=seed,
+            committed=committed,
+            latency=latency,
+            offered=offered,
+            accepted=offered,
         )
-        load_log.write_text("synthetic tx_load contract output\n", encoding="utf-8")
-        self.write_json(
-            nexus_manifest,
-            {
-                "version": 1,
-                "lanes": lane_ids,
-                "workload_seed": seed,
-                "inputs": {
-                    "lifecycle_file": lifecycle.name,
-                    "metrics_file": metrics.name,
-                    "telemetry_file": None,
-                    "alias_migrations": [],
-                },
-            },
-        )
-        transactions = []
-        for cohort, count, start in (("warmup", 100, -7_000_000_000), ("measurement", offered, 0)):
-            for index in range(count):
-                sequence = index + 1
-                scheduled = start + index * 50_000_000
-                offer = scheduled + 100_000
-                tx_hash = digest_bytes(f"{pair_index}:{variant}:{cohort}:{sequence}".encode())[:-1] + "1"
-                transactions.append({
-                    "cohort": cohort,
-                    "sequence": sequence,
-                    "logical_id": digest_bytes(f"{seed}:{cohort}:{sequence}".encode()),
-                    "hash": tx_hash,
-                    "scheduled_offset_ns": scheduled,
-                    "offer_offset_ns": offer,
-                    "submission_lag_ns": 100_000,
-                    "acknowledgment": {
-                        "offset_ns": offer + 1_000_000,
-                        "hash": tx_hash,
-                        "status": "Accepted",
-                        "rejection": None,
-                    },
-                    "applied": {
-                        "offset_ns": offer + round(latency * 1_000_000),
-                        "hash": tx_hash,
-                        "scope": "global",
-                        "resolved_from": "state",
-                        "status": "Applied",
-                        "block_height": 1 + index // 20,
-                    },
-                })
-        self.write_json(trace_path, {
-            "schema": VALIDATOR.TRACE_SCHEMA,
-            "pair_index": pair_index,
-            "variant": variant,
-            "seed": seed,
-            "clock": "monotonic_nanoseconds_relative_to_measurement_start",
-            "logical_id_derivation": VALIDATOR.LOGICAL_ID_DERIVATION,
-            "transaction_hash_source": "iroha_data_model::transaction::SignedTransaction::hash",
-            "transactions": transactions,
-        })
-        drain_samples = []
-        for index in range(2):
-            sample = copy.deepcopy(samples[-1])
-            sample.update({
-                "sequence": index + 1,
-                "start_offset_seconds": 20.0 + index,
-                "end_offset_seconds": 21.0 + index,
-                "offered_count": 0,
-                "accepted_count": 0,
-                "committed_count": 0,
-                "commit_latencies_ms": [],
-            })
-            drain_samples.append(sample)
-        raw = {
-            "schema": VALIDATOR.RUN_SCHEMA,
-            "pair_index": pair_index,
-            "variant": variant,
-            "active_execution_lanes": active_lanes,
-            "execution_lane_ids": lane_ids,
-            "seed": seed,
-            "identity_before": copy.deepcopy(self.identity),
-            "identity_after": copy.deepcopy(self.identity),
-            "workload": copy.deepcopy(self.workload),
-            "status": {"outcome": "passed", "skipped": False, "failure": None},
-            "summary": {
-                "offered_count": offered,
-                "accepted_count": offered,
-                "committed_count": committed,
-                "queue_depth_max": 12,
-                "index_entries_max": 24,
-                "memory_bytes_max": 1_019,
-                "disk_bytes_max": 2_019,
-            },
-            "samples": samples,
-            "warmup": {"offered_count": 100, "accepted_count": 100, "committed_count": 100},
-            "drain": {
-                "summary": {
-                    "offered_count": 0, "accepted_count": 0, "committed_count": 0,
-                    "queue_depth_max": samples[-1]["queue_depth"],
-                    "index_entries_max": samples[-1]["index_entries"],
-                    "memory_bytes_max": samples[-1]["memory_bytes"],
-                    "disk_bytes_max": samples[-1]["disk_bytes"],
-                },
-                "samples": drain_samples,
-            },
-            "artifacts": {
-                "nexus_load_test_manifest": self.ref(nexus_manifest),
-                "lifecycle_snapshot": self.ref(lifecycle),
-                "metrics_snapshot": self.ref(metrics),
-                "load_generator_log": self.ref(load_log),
-                "transaction_trace": self.ref(trace_path),
-            },
-        }
-
-        trace = json.loads(trace_path.read_text())
+        trace_path = self.root / raw["artifacts"]["transaction_trace"]["path"]
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
         return COMPONENT.complete_outcomes(self, raw, trace, committed, latency)
 
     def replace_variant_runs(self, variant: str, *, committed: int, latency: float) -> None:

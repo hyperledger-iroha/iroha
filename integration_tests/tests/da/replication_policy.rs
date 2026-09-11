@@ -16,11 +16,11 @@ use iroha_data_model::{
             ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
-    nexus::LaneId,
     parameter::system::SumeragiNposParameters,
     sorafs::pin_registry::StorageClass,
     taikai::TaikaiAvailabilityClass,
 };
+use iroha_model_base::topology::LaneId;
 use iroha_test_network::{Network, NetworkBuilder};
 use iroha_test_samples::ALICE_KEYPAIR;
 use iroha_torii::{

@@ -6,10 +6,10 @@ use iroha_data_model::{
     account::{AccountController, AccountId, NewAccount},
     asset::{AssetDefinitionId, AssetId},
     block::{BlockHeader, SignedBlock, decode_framed_signed_block},
-    domain::DomainId,
     isi::{InstructionBox, Log, Register, Transfer},
     transaction::signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::const_vec::ConstVec;
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use nonzero_ext::nonzero;

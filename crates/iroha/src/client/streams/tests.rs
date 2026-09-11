@@ -26,10 +26,16 @@ struct TestTransport {
     pending_connect: bool,
     pending_send: bool,
     pending_close: bool,
-    eof: bool,
+    read_termination: ReadTermination,
     status: u16,
     protocols: Vec<&'static str>,
     pending_read: Mutex<Option<PendingRead>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReadTermination {
+    Pending,
+    EndOfStream,
 }
 
 #[derive(Debug)]
@@ -46,7 +52,7 @@ impl TestTransport {
             pending_connect: false,
             pending_send: false,
             pending_close: false,
-            eof: false,
+            read_termination: ReadTermination::Pending,
             status: 101,
             protocols: vec![NORITO_V1_WEBSOCKET_SUBPROTOCOL],
             pending_read: Mutex::new(None),
@@ -59,7 +65,7 @@ struct TestSocket {
     frames: VecDeque<Result<StreamFrame>>,
     pending_send: bool,
     pending_close: bool,
-    eof: bool,
+    read_termination: ReadTermination,
     pending_read: Option<PendingRead>,
 }
 
@@ -74,7 +80,7 @@ impl Stream for TestSocket {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(frame) = self.frames.pop_front() {
             Poll::Ready(Some(frame))
-        } else if self.eof {
+        } else if matches!(self.read_termination, ReadTermination::EndOfStream) {
             Poll::Ready(None)
         } else if let Some(control) = &mut self.pending_read {
             if let Some(started) = control.started.take() {
@@ -136,7 +142,7 @@ impl StreamTransport for TestTransport {
                     frames: std::mem::take(&mut *self.frames.lock().unwrap()),
                     pending_send: self.pending_send,
                     pending_close: self.pending_close,
-                    eof: self.eof,
+                    read_termination: self.read_termination,
                     pending_read: self.pending_read.lock().unwrap().take(),
                 }),
             })
@@ -264,11 +270,12 @@ async fn block_stream_preserves_start_height_and_exact_authority() {
         .subscribe(NonZeroU64::new(37).unwrap())
         .await
         .unwrap();
-    let sent = transport.observed.sent.lock().unwrap();
-    let request: crate::data_model::block::stream::BlockSubscriptionRequest =
-        norito::decode_from_bytes(&sent[0]).unwrap();
-    assert_eq!(request.0.get(), 37);
-    drop(sent);
+    {
+        let sent = transport.observed.sent.lock().unwrap();
+        let request: crate::data_model::block::stream::BlockSubscriptionRequest =
+            norito::decode_from_bytes(&sent[0]).unwrap();
+        assert_eq!(request.0.get(), 37);
+    }
     assert_eq!(
         transport.observed.requests.lock().unwrap()[0].operation,
         BLOCKS_OPERATION
@@ -396,7 +403,7 @@ async fn policy_backpressure_and_missing_close_preserve_disposition() {
         assert!(stream.next().await.is_none());
     }
     let mut transport = TestTransport::new([]);
-    transport.eof = true;
+    transport.read_termination = ReadTermination::EndOfStream;
     let mut stream = account(Arc::new(transport))
         .events()
         .subscribe([filter()])
@@ -857,7 +864,7 @@ async fn yielded_transport_and_close_failures_clear_message_bytes() {
         if let Some(terminal) = terminal {
             transport.frames.lock().unwrap().push_back(terminal);
         } else {
-            transport.eof = true;
+            transport.read_termination = ReadTermination::EndOfStream;
         }
         let mut stream = account(Arc::new(transport))
             .events()

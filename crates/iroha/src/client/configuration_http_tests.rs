@@ -130,6 +130,8 @@ fn assert_signature(request: &TransportRequest, network: &NetworkId, key: &KeyPa
 
 #[tokio::test(flavor = "current_thread")]
 async fn configuration_is_async_and_signed_by_the_bound_operator_for_exact_request() {
+    fn require_send(_: impl Send) {}
+
     let (client, requests, completed) = attach(
         |_| Ok(response()),
         Duration::from_millis(15),
@@ -138,7 +140,6 @@ async fn configuration_is_async_and_signed_by_the_bound_operator_for_exact_reque
     let key = super::checked_random_keypair();
     let operator = client.operator_client(key.clone()).unwrap();
     let capability = operator.configuration();
-    fn require_send(_: impl Send) {}
     require_send(capability.get());
     let (result, progressed) = tokio::join!(capability.get(), async {
         tokio::task::yield_now().await;

@@ -118,7 +118,6 @@ where
 
 use crate::{
     account::AccountId,
-    domain::DomainId,
     isi::kaigi::*,
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
@@ -127,6 +126,7 @@ use crate::{
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 fn account(seed: u8) -> AccountId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();

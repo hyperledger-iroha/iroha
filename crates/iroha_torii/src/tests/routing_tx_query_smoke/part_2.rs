@@ -16,7 +16,8 @@ async fn or_multi_field_with_ties_and_sorting() {
         iroha_crypto::Algorithm::Ed25519,
         "derive multi-field account transaction filter fixture key",
     );
-    let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_b = dm::AccountId::new(kp_b.public_key().clone());
     // Pre-register the domain and the successful authority (account B).
     {
@@ -25,7 +26,9 @@ async fn or_multi_field_with_ties_and_sorting() {
             iroha_crypto::Algorithm::BlsNormal,
             "derive multi-field preregistration block leader fixture key",
         );
-        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+            leader0.public_key().clone(),
+        )]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
@@ -105,7 +108,9 @@ async fn or_multi_field_with_ties_and_sorting() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive multi-field transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx_success, tx_fail_c, tx_fail_d, tx_fail_e])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -210,7 +215,8 @@ async fn stable_ordering_with_multiple_keys() {
         iroha_crypto::Algorithm::Ed25519,
         "derive stable-ordering account transaction fixture key",
     );
-    let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     // Pre-register domain and accounts so A exists; B and C will attempt invalid ops later
     {
@@ -219,7 +225,9 @@ async fn stable_ordering_with_multiple_keys() {
             iroha_crypto::Algorithm::BlsNormal,
             "derive stable-ordering preregistration block leader fixture key",
         );
-        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+            leader0.public_key().clone(),
+        )]);
         let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, state.view().latest_block().as_deref())
             .sign(leader0.private_key())
@@ -294,7 +302,9 @@ async fn stable_ordering_with_multiple_keys() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive stable-ordering transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2, tx3])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())

@@ -176,13 +176,14 @@ pub(super) mod tests {
     };
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        DataSpaceId, DomainId,
         asset::id::AssetDefinitionId,
         nexus::{
-            AxtEffectBinding, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId,
+            AxtEffectBinding, AxtHandleIssuerContextV1, AxtHandleReplayKey,
             compute_remote_spend_claim_commitment_v1,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use iroha_zkp_halo2::poseidon::PoseidonByteHasher;

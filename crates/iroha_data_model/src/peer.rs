@@ -1,10 +1,9 @@
 //! This module contains [`Peer`] structure and related implementations and traits implementations.
 pub use self::model::*;
 use crate::{Identifiable, Registered};
-use derive_more::Constructor;
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::model;
-use iroha_model_base::error::ParseError;
+use iroha_model_base::{error::ParseError, peer::PeerId};
 use iroha_primitives::addr::SocketAddr;
 
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
@@ -17,38 +16,6 @@ mod model {
     use iroha_data_model_derive::IdEqOrdHash;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    /// Peer's identification.
-    ///
-    /// Equality is tested by `public_key` field only. Each peer should have a unique public key.
-    #[derive(
-        derive_more::Debug,
-        derive_more::Display,
-        Clone,
-        Constructor,
-        Ord,
-        PartialOrd,
-        Eq,
-        PartialEq,
-        Hash,
-        Decode,
-        Encode,
-        IntoSchema,
-        Getters,
-    )]
-    #[display("{public_key}")]
-    #[debug("{public_key}")]
-    #[getset(get = "pub")]
-    #[repr(transparent)]
-    #[cfg_attr(
-        any(feature = "ffi_export", feature = "ffi_import"),
-        ffi_type(unsafe {robust})
-    )]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::peer::model::PeerId")]
-    pub struct PeerId {
-        /// Public Key of the [`Peer`].
-        pub public_key: PublicKey,
-    }
     /// Representation of other Iroha Peer instances running in separate processes.
     #[derive(
         derive_more::Debug,
@@ -71,17 +38,6 @@ mod model {
         /// Peer Identification.
         #[getset(get = "pub")]
         pub id: PeerId,
-    }
-}
-impl FromStr for PeerId {
-    type Err = iroha_crypto::error::ParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        PublicKey::from_str(s).map(Self::new)
-    }
-}
-impl From<PublicKey> for PeerId {
-    fn from(public_key: PublicKey) -> Self {
-        Self { public_key }
     }
 }
 impl Peer {
@@ -141,7 +97,7 @@ mod parse_tests {
         let candidate = format!("{key}@{literal}");
         let peer = Peer::from_str(&candidate).expect("peer parses from addr literal");
         assert_eq!(peer.address().to_string(), "127.0.0.1:1337");
-        assert_eq!(peer.id().public_key.to_string(), key);
+        assert_eq!(peer.id().public_key().to_string(), key);
     }
     #[test]
     fn peer_from_str_rejects_malformed_addr_literal() {
@@ -156,7 +112,7 @@ mod parse_tests {
     fn peer_from_str_accepts_bare_public_key() {
         let key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
         let peer = Peer::from_str(key).expect("peer parses from bare public key");
-        assert_eq!(peer.id().public_key.to_string(), key);
+        assert_eq!(peer.id().public_key().to_string(), key);
         assert_eq!(peer.address().to_string(), "0.0.0.0:0");
     }
 }
@@ -165,33 +121,7 @@ impl Registered for Peer {
 }
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
-    pub use super::{Peer, PeerId};
-}
-
-impl FastJsonWrite for PeerId {
-    fn write_json(&self, out: &mut String) {
-        json::write_json_string(&self.public_key.to_string(), out);
-    }
-    fn write_json_to(
-        &self,
-        out: &mut dyn json::JsonWriteSink,
-    ) -> Result<(), json::BoundedJsonError> {
-        norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)
-    }
-}
-
-impl JsonDeserialize for PeerId {
-    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        peer_id_from_json_str(&value)
-    }
-
-    fn json_from_value(value: &json::Value) -> Result<Self, json::Error> {
-        let json::Value::String(value) = value else {
-            return Err(invalid_peer_id_json());
-        };
-        peer_id_from_json_str(value)
-    }
+    pub use super::Peer;
 }
 
 impl norito::json::JsonObjectKey for Peer {
@@ -216,43 +146,6 @@ impl norito::json::JsonObjectKey for Peer {
 impl norito::json::JsonObjectKeyOwned for Peer {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         peer_from_json_str(key)
-    }
-}
-
-impl norito::json::JsonObjectKey for PeerId {
-    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
-        norito::json::JsonObjectKey::visit_json_key_text(&self.public_key, visitor)
-    }
-    fn visit_json_key_text_checked(
-        &self,
-        visitor: impl FnMut(&str) -> Result<(), json::BoundedJsonError>,
-    ) -> Result<(), json::BoundedJsonError> {
-        norito::json::JsonObjectKey::visit_json_key_text_checked(&self.public_key, visitor)
-    }
-}
-
-impl norito::json::JsonObjectKeyOwned for PeerId {
-    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-        peer_id_from_json_str(key)
-    }
-}
-
-fn peer_id_from_json_str(value: &str) -> Result<PeerId, json::Error> {
-    PublicKey::from_canonical_str_for_decode(value)
-        .map(PeerId::new)
-        .map_err(|error| {
-            if error.is_decode_resource_limit() {
-                json::Error::from_decode_resource(error)
-            } else {
-                invalid_peer_id_json()
-            }
-        })
-}
-
-fn invalid_peer_id_json() -> json::Error {
-    json::Error::InvalidField {
-        field: "peer_id".into(),
-        message: "invalid public key".to_owned(),
     }
 }
 
@@ -340,7 +233,7 @@ mod tests {
         assert_eq!(json, format!("\"{pk}@{addr}\""));
         let decoded: Peer = json::from_json(&json).expect("deserialize peer");
         assert_eq!(decoded.address(), &addr);
-        assert_eq!(decoded.id().public_key, peer.id().public_key);
+        assert_eq!(decoded.id().public_key(), peer.id().public_key());
     }
 
     #[test]
@@ -443,12 +336,15 @@ mod tests {
         let (peer_id, usage) = norito::core::with_decode_limits_measured(limits(key_bytes), || {
             <PeerId as JsonDeserialize>::json_from_value(&peer_id_value)
         });
-        assert_eq!(peer_id.expect("PeerId value").public_key.to_string(), key);
+        assert_eq!(peer_id.expect("PeerId value").public_key().to_string(), key);
         assert_eq!(usage.total_allocated_bytes(), key_bytes);
         let (peer_id, usage) = norito::core::with_decode_limits_measured(limits(key_bytes), || {
             <PeerId as norito::json::JsonObjectKeyOwned>::from_json_key_text(key)
         });
-        assert_eq!(peer_id.expect("PeerId map key").public_key.to_string(), key);
+        assert_eq!(
+            peer_id.expect("PeerId map key").public_key().to_string(),
+            key
+        );
         assert_eq!(usage.total_allocated_bytes(), key_bytes);
 
         let host = "source-controlled-hostname.example";
@@ -478,31 +374,6 @@ mod tests {
             });
         assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
         assert_eq!(usage.total_allocated_bytes(), key_bytes);
-    }
-    #[test]
-    fn peer_id_bounded_json_delegates_to_public_key_without_scratch() {
-        let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
-        let peer_id = PeerId::new(literal.parse::<PublicKey>().expect("valid key"));
-        let expected = format!("\"{literal}\"");
-        assert_eq!(
-            json::to_json_bounded(&peer_id, expected.len()).expect("exact checked PeerId JSON"),
-            expected
-        );
-        assert!(matches!(
-            json::to_json_bounded(&peer_id, expected.len() - 1),
-            Err(json::BoundedJsonError::BodyTooLarge)
-        ));
-        let map = std::collections::BTreeMap::from([(&peer_id, 3_u8)]);
-        let expected_map = format!("{{\"{literal}\":3}}");
-        assert_eq!(
-            json::to_json_bounded(&map, expected_map.len())
-                .expect("serialize borrowed PeerId key at exact bound"),
-            expected_map
-        );
-        assert!(matches!(
-            json::to_json_bounded(&map, expected_map.len() - 1),
-            Err(json::BoundedJsonError::BodyTooLarge)
-        ));
     }
 
     #[test]
@@ -548,37 +419,5 @@ mod tests {
         .expect_err("invalid peer key must fail before output");
         assert!(matches!(error, json::BoundedJsonError::Unsupported));
         assert!(!emitted);
-    }
-
-    #[test]
-    fn peer_id_json_decode_preserves_public_key_resource_errors() {
-        let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
-        let encoded = format!("\"{literal}\"");
-        let limits = norito::core::DecodeLimits::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            literal.len(),
-            usize::MAX,
-        );
-        let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
-            json::from_str::<PeerId>(&encoded)
-        });
-        assert!(matches!(decoded, Err(json::Error::DecodeResourceLimit)));
-        assert_eq!(
-            usage.total_allocated_bytes(),
-            literal.len(),
-            "the JSON string allocation should be admitted before PublicKey retention is denied"
-        );
-    }
-
-    #[test]
-    fn peer_id_json_wraps_only_semantic_public_key_errors() {
-        let error = json::from_str::<PeerId>(r#""not-a-public-key""#)
-            .expect_err("invalid public key must fail");
-        assert!(matches!(
-            error,
-            json::Error::InvalidField { field, .. } if field == "peer_id"
-        ));
     }
 }

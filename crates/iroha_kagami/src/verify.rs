@@ -18,9 +18,11 @@ use iroha_data_model::{
         custom::CustomParameterId,
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
     },
-    prelude::{AssetDefinition, DomainId, PeerId},
+    prelude::AssetDefinition,
 };
 use iroha_genesis::RawGenesisTransaction;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use std::{
     collections::{BTreeSet, HashSet},
     io::{BufWriter, Write},
@@ -335,11 +337,13 @@ mod tests {
         asset::{AssetDefinitionAlias, AssetDefinitionId},
         isi::asset_alias::SetAssetDefinitionAlias,
         parameter::system::SumeragiConsensusMode,
-        prelude::{
-            AssetDefinition, ChainId, DomainId, Metadata, NumericSpec, PeerId, PublicKey, Register,
-        },
+        prelude::{AssetDefinition, NumericSpec, PublicKey, Register},
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use tempfile::NamedTempFile;
     fn test_public_xor_asset_definition_id(profile: GenesisProfile) -> AssetDefinitionId {

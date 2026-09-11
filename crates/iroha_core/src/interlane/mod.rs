@@ -6,7 +6,8 @@ use crate::governance::manifest::{LaneManifestRegistry, LaneManifestStatus};
 use iroha_crypto::privacy::{
     LaneCommitmentId, LanePrivacyCommitment, PrivacyError, PrivacyWitness,
 };
-use iroha_data_model::nexus::{DataSpaceId, LaneId, LanePrivacyProof};
+use iroha_data_model::nexus::LanePrivacyProof;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -188,9 +189,10 @@ mod tests {
         },
     };
     use iroha_data_model::nexus::{
-        DataSpaceId, LaneId, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
-        LaneStorageProfile, LaneVisibility,
+        LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile,
+        LaneVisibility,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     fn status_with_commitments(
         lane: LaneId,
         dataspace: DataSpaceId,

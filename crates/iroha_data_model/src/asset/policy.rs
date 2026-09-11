@@ -4,7 +4,9 @@ use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
 };
-use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId};
+use crate::{account::AccountId, asset::AssetDefinitionId};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::{BTreeMap, BTreeSet};

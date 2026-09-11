@@ -20,12 +20,10 @@ use crate::{
         value::Asset,
     },
     block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock},
-    domain::{Domain, DomainId},
+    domain::Domain,
     merge::MergeLedgerEntry,
-    metadata::Metadata,
     nft::{Nft, NftId},
     parameter::{Parameter, Parameters},
-    peer::PeerId,
     permission::Permission,
     repo::RepoAgreement,
     role::{Role, RoleId},
@@ -39,7 +37,10 @@ use iroha_crypto::{
 };
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
@@ -530,7 +531,6 @@ pub mod json_wrappers {
     }
 }
 /// JSON utilities for assembling and parsing queries.
-
 #[doc = "JSON conversion helpers used by query APIs."]
 pub mod json;
 // NOTE: Additional encode instrumentation for queries lives in iroha_crypto (SignatureOf::new, HashOf::new).
@@ -632,10 +632,9 @@ struct QueryRegistryEntry {
 }
 impl QueryRegistryEntry {
     fn collides_with(&self, other: &Self) -> bool {
-        self.type_name == other.type_name
-            || self.type_name == other.wire_id
-            || self.wire_id == other.type_name
-            || self.wire_id == other.wire_id
+        [self.type_name, self.wire_id]
+            .iter()
+            .any(|key| [other.type_name, other.wire_id].contains(key))
     }
 }
 /// Registry mapping Rust type names for encoding and stable wire identifiers for decoding.
@@ -669,12 +668,11 @@ impl QueryRegistry {
             wire_id,
             ctor: ctor::<T>,
         };
-        if entry.type_name == entry.wire_id {
-            panic!(
-                "query registry key collision for `{}`: the wire identifier must differ from the concrete Rust type name",
-                entry.type_name
-            );
-        }
+        assert!(
+            entry.type_name != entry.wire_id,
+            "query registry key collision for `{}`: the wire identifier must differ from the concrete Rust type name",
+            entry.type_name
+        );
         if let Some(previous) = self
             .entries
             .iter()
@@ -761,7 +759,7 @@ define_builtin_query_registry! {
         => "iroha.query.v1::iterable::role::Role",
     ErasedIterQuery<crate::role::RoleId>
         => "iroha.query.v1::iterable::role::RoleId",
-    ErasedIterQuery<crate::peer::PeerId>
+    ErasedIterQuery<iroha_model_base::peer::PeerId>
         => "iroha.query.v1::iterable::peer::PeerId",
     ErasedIterQuery<crate::trigger::TriggerId>
         => "iroha.query.v1::iterable::trigger::TriggerId",
@@ -1772,7 +1770,7 @@ mod model {
             try_build!(crate::rwa::Rwa, Rwa);
             try_build!(crate::role::Role, Role);
             try_build!(crate::role::RoleId, RoleId);
-            try_build!(crate::peer::PeerId, PeerId);
+            try_build!(iroha_model_base::peer::PeerId, PeerId);
             try_build!(crate::trigger::TriggerId, TriggerId);
             try_build!(crate::trigger::Trigger, Trigger);
             try_build!(crate::query::CommittedTransaction, CommittedTransaction);
@@ -4342,7 +4340,7 @@ impl_iter_queries! {
     FindRwas => crate::rwa::Rwa,
     FindDomains => crate::domain::Domain,
     domain::prelude::FindDomainsByAccountId => crate::domain::Domain,
-    FindPeers => crate::peer::PeerId,
+    FindPeers => iroha_model_base::peer::PeerId,
     FindActiveTriggerIds => crate::trigger::TriggerId,
     FindTriggers => crate::trigger::Trigger,
     escrow::FindAssetEscrows => crate::escrow::AssetEscrowRecord,
@@ -4710,8 +4708,8 @@ pub mod sns {
     //! SNS-related query definitions.
     //!
     //! Queries related to authoritative SNS-backed ownership.
-    use crate::nexus::DataSpaceId;
     use derive_more::Display;
+    use iroha_model_base::topology::DataSpaceId;
     queries! {
         /// Fetch the active SNS owner for a dataspace alias resolved from the current catalog.
         #[derive(Display)]

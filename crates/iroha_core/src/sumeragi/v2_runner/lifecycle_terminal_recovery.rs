@@ -1,10 +1,10 @@
 /// Immutable Queue boundary spanning Kura-only lane-evidence startup repair.
 ///
 /// The runner's one-shot reconciliation flag is independent of Queue's
-/// durable publication gate.
-/// Every installed replay remains quarantined until exact startup completion,
-/// including an empty replay. Revalidation prevents evidence repair from racing
-/// or masking Queue ownership/gate drift before reservation planning.
+/// durable publication gate. Both empty and non-empty checked replays must
+/// remain quarantined until exact State/Kura-aware reconciliation publishes
+/// completion. Revalidation prevents evidence repair from racing or masking
+/// Queue ownership/gate drift before reservation planning.
 struct LaneApplicationEvidenceRepairQueueFence {
     snapshot: crate::queue::LaneQueueReservationReconciliationSnapshotV1,
 }
@@ -15,7 +15,7 @@ impl LaneApplicationEvidenceRepairQueueFence {
             .map_err(V2ReservationLifecycleError::from)?;
         if !queue.lane_reservation_startup_reconciliation_pending() {
             return Err(V2RunnerError::Service(
-                "lane application evidence startup repair requires a closed Queue publication gate"
+                "lane application evidence repair reached startup after the Queue publication gate opened"
                     .to_owned(),
             ));
         }

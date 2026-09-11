@@ -1,8 +1,11 @@
 //! Startup policy loading must precede replay and remain frozen through runtime handoff.
 use super::*;
-use iroha_data_model::{
+use iroha_data_model::nexus::{
+    AuditControls, JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId,
+};
+use iroha_model_base::{
     metadata::Metadata,
-    nexus::{AuditControls, DataSpaceId, JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId, LaneId},
+    topology::{DataSpaceId, LaneId},
 };
 
 fn policy() -> LaneCompliancePolicy {

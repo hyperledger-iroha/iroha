@@ -1,11 +1,11 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    nexus::DataSpaceId,
     prelude::{AccountId, AssetDefinitionId},
     smart_contract::ContractAddress,
 };
 use iroha_model_base::state_path::StatePath;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,

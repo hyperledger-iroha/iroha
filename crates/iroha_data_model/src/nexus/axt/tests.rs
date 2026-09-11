@@ -1,8 +1,8 @@
 //! AXT transaction, issuer, budget, replay and proof-binding contract regressions.
 
 use super::*;
-use crate::domain::DomainId;
 use iroha_crypto::{Algorithm, KeyPair};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::{bigint::BigInt, numeric::Numeric};
 
 use mv::json::JsonKeyCodec;
@@ -257,7 +257,7 @@ fn sample_finalized_spend_anchor(
 }
 fn sample_anchored_spend_draft(
     handle: AssetHandle,
-    anchor: AxtFinalizedSpendAnchorV1,
+    anchor: &AxtFinalizedSpendAnchorV1,
 ) -> AxtAnchoredSpendDraftV1 {
     let binding = sample_fastpq_binding(anchor.dataspace_id);
     let envelope = AxtProofEnvelope {
@@ -385,6 +385,48 @@ fn finalized_spend_anchor_and_nonce_reject_every_absence_sentinel() {
         );
     }
 }
+fn assert_anchored_spend_authority(
+    signed: &AxtAnchoredSpendV1,
+    context: &AxtHandleIssuerContextV1,
+    anchor: &AxtFinalizedSpendAnchorV1,
+    issuer: &KeyPair,
+) {
+    let mut changed_expiry = signed.clone();
+    changed_expiry.authorization.expiry_slot = 101;
+    assert_eq!(
+        changed_expiry.verify_issuer_signatures_v1(*context, *anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::Expiry)
+    );
+    let mut changed_nonce = signed.clone();
+    changed_nonce.authorization.nonce =
+        AxtSpendNonceV1::try_new([0x78; 32]).expect("non-zero nonce");
+    assert_eq!(
+        changed_nonce.verify_issuer_signatures_v1(*context, *anchor, issuer.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
+    );
+    let impostor = KeyPair::from_seed(vec![0x34; 32], Algorithm::Ed25519);
+    assert_eq!(
+        signed.verify_issuer_signatures_v1(*context, *anchor, impostor.public_key()),
+        Err(AxtAnchoredSpendValidationErrorV1::HandleSignature)
+    );
+    let mut wrong_authoritative_anchor = *anchor;
+    wrong_authoritative_anchor.finalized_height += 1;
+    assert_eq!(
+        signed.verify_issuer_signatures_v1(
+            *context,
+            wrong_authoritative_anchor,
+            issuer.public_key()
+        ),
+        Err(AxtAnchoredSpendValidationErrorV1::AnchorMismatch)
+    );
+
+    let retired_wire = norito::to_bytes(&signed.draft).expect("encode unsigned retired wire");
+    assert!(
+        norito::decode_from_bytes::<AxtAnchoredSpendV1>(&retired_wire).is_err(),
+        "a pre-anchor spend draft must not decode as the admission wire"
+    );
+}
+
 #[test]
 fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
     let issuer = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
@@ -395,7 +437,7 @@ fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
     let anchor =
         sample_finalized_spend_anchor(context.network_id, context.asset_dsid, handle.target_lane);
     let nonce = AxtSpendNonceV1::try_new([0x77; 32]).expect("non-zero nonce");
-    let draft = sample_anchored_spend_draft(handle, anchor);
+    let draft = sample_anchored_spend_draft(handle, &anchor);
     let envelope: AxtProofEnvelope =
         norito::decode_canonical(&draft.proof.as_ref().expect("proof").payload).expect("envelope");
     assert_ne!(
@@ -466,41 +508,9 @@ fn anchored_spend_signature_binds_proof_amount_anchor_expiry_and_nonce() {
         ),
         Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
     );
-    let mut changed_expiry = signed.clone();
-    changed_expiry.authorization.expiry_slot = 101;
-    assert_eq!(
-        changed_expiry.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::Expiry)
-    );
-    let mut changed_nonce = signed.clone();
-    changed_nonce.authorization.nonce =
-        AxtSpendNonceV1::try_new([0x78; 32]).expect("non-zero nonce");
-    assert_eq!(
-        changed_nonce.verify_issuer_signatures_v1(context, anchor, issuer.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::SpendSignature)
-    );
-    let impostor = KeyPair::from_seed(vec![0x34; 32], Algorithm::Ed25519);
-    assert_eq!(
-        signed.verify_issuer_signatures_v1(context, anchor, impostor.public_key()),
-        Err(AxtAnchoredSpendValidationErrorV1::HandleSignature)
-    );
-    let mut wrong_authoritative_anchor = anchor;
-    wrong_authoritative_anchor.finalized_height += 1;
-    assert_eq!(
-        signed.verify_issuer_signatures_v1(
-            context,
-            wrong_authoritative_anchor,
-            issuer.public_key()
-        ),
-        Err(AxtAnchoredSpendValidationErrorV1::AnchorMismatch)
-    );
-
-    let retired_wire = norito::to_bytes(&signed.draft).expect("encode unsigned retired wire");
-    assert!(
-        norito::decode_from_bytes::<AxtAnchoredSpendV1>(&retired_wire).is_err(),
-        "a pre-anchor spend draft must not decode as the admission wire"
-    );
+    assert_anchored_spend_authority(&signed, &context, &anchor, &issuer);
 }
+
 #[test]
 fn handle_replay_key_scopes_identical_ticket_by_dataspace_and_asset_incarnation() {
     let handle = sample_asset_handle();

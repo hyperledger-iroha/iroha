@@ -2012,7 +2012,7 @@ fn transfer_rejects_materialized_kagemusha_reserve_source() {
 }
 #[test]
 fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
-    let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
+    let chain_id: iroha_model_base::chain::ChainId = "testnet".parse().expect("chain id");
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -2090,7 +2090,7 @@ fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
 }
 #[test]
 fn burn_rejects_kagemusha_reserve_for_owner_and_delegated_authority() {
-    let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
+    let chain_id: iroha_model_base::chain::ChainId = "testnet".parse().expect("chain id");
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -2777,8 +2777,8 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
             Quantity::from(3_u32),
             |tx| {
                 tx.tx_call_hash = Some(hash);
-                tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
-                tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::new(7));
+                tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
+                tx.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::new(7));
             },
             true,
         )
@@ -2817,7 +2817,7 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
     let capture = block.captured_fastpq_transcript_sources().unwrap()[&hash];
     assert_eq!(
         capture.dataspace_id(),
-        iroha_data_model::nexus::DataSpaceId::new(7)
+        iroha_model_base::topology::DataSpaceId::new(7)
     );
     assert!(!capture.is_protocol_purpose());
 }

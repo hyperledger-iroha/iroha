@@ -167,8 +167,9 @@ pub struct DecisionAggregate {
 #[cfg(all(test, feature = "governance"))]
 mod tests {
     use super::*;
-    use crate::{asset::id::AssetDefinitionId, domain::DomainId};
+    use crate::asset::id::AssetDefinitionId;
     use iroha_crypto::KeyPair;
+    use iroha_model_base::domain::DomainId;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked fraud fixture keypair")
     }

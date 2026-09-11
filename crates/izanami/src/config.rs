@@ -19,8 +19,9 @@ use iroha_data_model::{
     block::consensus_v2::{
         MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
     },
-    nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
+    nexus::{DataSpaceCatalog, LaneCatalog},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use std::{
     collections::BTreeMap, ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration,

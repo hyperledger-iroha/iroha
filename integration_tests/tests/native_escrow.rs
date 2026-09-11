@@ -14,6 +14,7 @@ use iroha::{
 };
 use iroha_crypto::Hash;
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};

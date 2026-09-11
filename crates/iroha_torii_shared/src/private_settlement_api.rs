@@ -1260,7 +1260,7 @@ mod tests {
         account::AccountId,
         block::BlockHeader,
         nexus::{
-            DataSpaceId, LaneId, PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1,
+            PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1,
             PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1, PrivateSettlementAbortReasonV1,
             PrivateSettlementAuditAadV1,
             PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
@@ -1270,7 +1270,6 @@ mod tests {
             PrivateSettlementLegCommitmentV1, PrivateSettlementProofProfileV1,
             PrivateSettlementWrappedDekV1,
         },
-        peer::PeerId,
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
@@ -1278,6 +1277,8 @@ mod tests {
         },
         transaction::FeePaymentIntent,
     };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 
     struct ResponseValidationFixtureV1 {
         network_id: NetworkId,

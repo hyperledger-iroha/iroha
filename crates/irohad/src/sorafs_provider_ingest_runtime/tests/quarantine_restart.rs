@@ -4,7 +4,6 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     block::BlockHeader,
-    metadata::Metadata,
     musubi::{
         MusubiArchiveCommitmentV1, MusubiContentDigestV1, MusubiReplicationOrderArchiveBindingV1,
     },
@@ -19,6 +18,7 @@ use iroha_data_model::{
     },
     transaction::{SignedTransaction, TransactionPayload},
 };
+use iroha_model_base::metadata::Metadata;
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy as ManifestPinPolicy,

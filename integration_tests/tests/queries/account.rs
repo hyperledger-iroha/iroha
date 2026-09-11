@@ -3,6 +3,7 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::collections::HashSet;
 #[test]

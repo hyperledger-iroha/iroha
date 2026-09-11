@@ -52,9 +52,10 @@ fn identity(kind: &str, fields: &[&[u8]]) -> String {
 mod tests {
     use super::*;
     use iroha_data_model::{
-        musubi::MusubiPackageIdV1, nexus::DataSpaceId,
+        musubi::MusubiPackageIdV1,
         smart_contract::entrypoint::is_canonical_kotodama_package_identity,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::collections::BTreeSet;
 
     #[test]

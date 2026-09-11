@@ -3,9 +3,9 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     block::decode_framed_signed_block,
     parameter::BlockParameter,
-    peer::PeerId,
     prelude::{Parameter, SetParameter},
 };
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
 use nonzero_ext::nonzero;

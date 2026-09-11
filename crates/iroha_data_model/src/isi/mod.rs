@@ -1501,12 +1501,11 @@ impl InstructionRegistry {
             || self.entries.contains_key(entry.wire_id)
             || self.wire_entries.contains_key(entry.type_name)
             || self.wire_entries.contains_key(entry.wire_id);
-        if collision {
-            panic!(
-                "instruction registry key collision for type `{}` and wire identifier `{}`",
-                entry.type_name, entry.wire_id
-            );
-        }
+        assert!(
+            !collision,
+            "instruction registry key collision for type `{}` and wire identifier `{}`",
+            entry.type_name, entry.wire_id
+        );
         self.entries.insert(entry.type_name, entry);
         self.wire_entries.insert(entry.wire_id, entry);
     }

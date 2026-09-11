@@ -1018,7 +1018,8 @@ pub type ConnectP2pMessage = ConnectP2pMessageV1;
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf, PublicKey};
-    use iroha_data_model::{account::AccountId, block::BlockHeader, domain::DomainId};
+    use iroha_data_model::{account::AccountId, block::BlockHeader};
+    use iroha_model_base::domain::DomainId;
     use norito::core::{Error, header_flags};
     use rand::{Rng, SeedableRng};
     fn test_network_id(label: &[u8]) -> NetworkId {

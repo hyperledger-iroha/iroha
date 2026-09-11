@@ -1,6 +1,7 @@
 #[test]
 fn transaction_height_expiry_is_exclusive_when_ttl_is_optional() {
-    use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
+    use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+    use iroha_model_base::metadata::Metadata;
     use iroha_logger::Level;
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;

@@ -2237,7 +2237,6 @@ mod tests {
                 encode_kagemusha_consensus_signature_envelope_v1, finality::V2FinalityArtifact,
             },
         },
-        domain::DomainId,
         isi::{
             KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1,
             KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
@@ -2258,8 +2257,9 @@ mod tests {
             KagemushaTrustedCommitTimeV1, kagemusha_credit_opening_canonical_len_v1,
             kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
         },
-        peer::PeerId,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
     use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};

@@ -13,12 +13,13 @@ use crate::{
         BlockHeader, consensus::LaneBlockCommitment, consensus_v2::finality::V2FinalityArtifact,
     },
     da::commitment::DaCommitmentBundle,
-    nexus::{AxtFastpqBinding, DataSpaceId, FeeSponsorProgramId, LaneId},
-    peer::PeerId,
-    prelude::Metadata,
+    nexus::{AxtFastpqBinding, FeeSponsorProgramId},
 };
 use core::cmp::Ordering;
 use iroha_crypto::{Hash, HashOf, MerkleProof};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

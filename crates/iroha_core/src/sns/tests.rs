@@ -22,14 +22,15 @@ use iroha_data_model::{
     block::SignedBlock,
     domain::Domain,
     isi::{InstructionBox, Register, alias_setup::EnsureAlias},
-    metadata::Metadata,
-    nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+    nexus::{DataSpaceCatalog, DataSpaceMetadata},
     sns::{
         NameControllerV1, NameFrozenStateV1, NameRecordV1, NameSelectorV1, NameStatus,
         NameTombstoneStateV1,
     },
     transaction::TransactionBuilder,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 include!("../sns_core_tests.rs");
 #[test]
 fn checked_keypair_preserves_default_algorithm() {
@@ -699,6 +700,8 @@ fn active_dataspace_id_derives_from_dynamic_sns_alias() {
     );
 }
 mod active_dataspace_alias_tests {
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     include!("active_dataspace_alias_tests.rs");
 }
 #[test]

@@ -28,7 +28,6 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     block::BlockHeader,
-    metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
         PrivacyCompiledProfileSnapshotV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
@@ -37,6 +36,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_version::codec::EncodeVersioned;
 use sha2::{Digest as _, Sha256};
 use std::{

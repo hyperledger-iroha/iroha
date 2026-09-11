@@ -28,7 +28,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::settlement::{
     CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec, Quantity},
@@ -1488,15 +1490,16 @@ mod tests {
         },
         block::BlockHeader,
         common::Owned,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::data::oracle::FeedEventRecord,
         events::data::prelude::{AssetEvent, DataEvent},
         isi::SetAssetHoldingLimit,
-        metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
         oracle::{FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         sns::{NameControllerV1, NameRecordV1},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use nonzero_ext::nonzero;

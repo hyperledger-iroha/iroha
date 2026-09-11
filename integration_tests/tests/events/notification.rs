@@ -7,6 +7,8 @@ use iroha::data_model::{
     ValidationFail, events::pipeline::TransactionEventFilter, prelude::*, query::error::FindError,
 };
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::Duration;

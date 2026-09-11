@@ -248,7 +248,7 @@ pub enum VMError {
     /// AMX static analysis budget exceeded for the current dataspace.
     AmxBudgetExceeded {
         /// Dataspace whose slice exceeded the configured budget.
-        dataspace: iroha_data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
         /// Stage that exceeded the budget (e.g., commit).
         stage: iroha_data_model::errors::AmxStage,
         /// Estimated elapsed milliseconds for the stage.

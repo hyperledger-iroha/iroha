@@ -25,7 +25,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, NetworkId, Registrable, ValidationFail,
+    NetworkId, Registrable, ValidationFail,
     account::{Account, AccountAlias, AccountId, OpaqueAccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -40,16 +40,16 @@ use iroha_data_model::{
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
         VALIDATOR_SET_HASH_VERSION_V1,
     },
-    domain::{Domain, DomainId},
+    domain::Domain,
     events::{
         pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
     level::Level,
-    nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
+    nexus::{AxtPolicySnapshot, AxtRejectReason, UniversalAccountId},
     parameter::{Parameter, system::SumeragiNposParameters},
-    peer::{Peer, PeerId},
+    peer::Peer,
     permission::Permission,
     soranet::privacy_metrics::{
         SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
@@ -69,7 +69,11 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
 use iroha_torii_shared::configuration::Configuration;
@@ -1352,7 +1356,7 @@ pub(crate) fn bind_account_alias_for_test(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     world
         .account_aliases_mut_for_testing()
@@ -1406,7 +1410,7 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
     let controllers = vec![iroha_data_model::sns::NameControllerV1::account(
         &account_address,
     )];
-    let mut dataspace_metadata = iroha_data_model::metadata::Metadata::default();
+    let mut dataspace_metadata = iroha_model_base::metadata::Metadata::default();
     dataspace_metadata.insert(
         iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -1433,7 +1437,7 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     let next_height = app
         .state
@@ -1548,7 +1552,7 @@ pub(crate) fn bind_domain_name_for_test_with_status(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     record.status = status;
     tx.world_mut_for_testing()
@@ -1813,7 +1817,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         topo_block.clear();
         let peer_keypair =
             checked_torii_test_ed25519_keypair(0xb3, "derive Torii topology fixture peer key");
-        let peer_id = iroha_data_model::peer::PeerId::from(peer_keypair.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::from(peer_keypair.public_key().clone());
         topo_block.push(peer_id);
         topo_block.commit();
     }

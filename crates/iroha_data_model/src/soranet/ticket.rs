@@ -6,9 +6,10 @@
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
 use super::Digest32;
 
+use crate::account::AccountId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, metadata::Metadata};
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_model_base::metadata::Metadata;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 const LEAF_TAG_BLINDED_CID: &[u8] = b"soranet.ticket.body.blinded_cid.v1";
@@ -357,8 +358,9 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, domain::DomainId};
+    use crate::account::AccountId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::codec::{Decode, Encode};
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

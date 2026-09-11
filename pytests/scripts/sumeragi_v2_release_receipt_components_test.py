@@ -14,23 +14,23 @@ def test_run_writer_copies_declared_components_and_fails_closed(
     evidence = receipt.make_evidence(tmp_path)
     writer = receipt.fixture_writer(tmp_path)
     source_root = writer.parent.parent
-    checker = (
+    inventory = (
         source_root
         / "scripts"
         / "formal"
-        / "check_sumeragi_v2_proof_ledger.py"
+        / "sumeragi_v2_proof_ledger_source_inventory.py"
     )
     component_name = "sumeragi_v2_proof_ledger_source_seal_contracts.py"
-    checker_source = checker.read_text(encoding="utf-8")
-    assert checker_source.count("_CHECKER_COMPONENT_FILES = ()") == 1
-    checker.write_text(
-        checker_source.replace(
-            "_CHECKER_COMPONENT_FILES = ()",
-            f'_CHECKER_COMPONENT_FILES = ("{component_name}",)',
+    inventory_source = inventory.read_text(encoding="utf-8")
+    assert inventory_source.count('_CHECKER_COMPONENT_FILES = ("sumeragi_v2_proof_ledger_source_inventory.py",)') == 1
+    inventory.write_text(
+        inventory_source.replace(
+            '_CHECKER_COMPONENT_FILES = ("sumeragi_v2_proof_ledger_source_inventory.py",)',
+            f'_CHECKER_COMPONENT_FILES = ("sumeragi_v2_proof_ledger_source_inventory.py", "{component_name}")',
         ),
         encoding="utf-8",
     )
-    component = checker.with_name(component_name)
+    component = inventory.with_name(component_name)
     component.write_text("# isolated checker component\n", encoding="utf-8")
 
     result = receipt.run_writer(

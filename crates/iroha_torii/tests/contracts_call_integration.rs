@@ -17,10 +17,10 @@ use iroha_core::{
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
-    DomainId,
     asset::AssetDefinitionId,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::domain::DomainId;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -83,7 +83,7 @@ fn grant_contract_operator_permissions(
     Grant::account_permission(
         CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
         },
         authority.clone(),
@@ -391,7 +391,11 @@ fn contract_test_queue_and_app(
     state: &Arc<State>,
     kura: &Arc<Kura>,
     creds: &iroha_torii::test_utils::AuthorityCreds,
-) -> (Arc<Queue>, iroha_data_model::ChainId, ContractTestApp) {
+) -> (
+    Arc<Queue>,
+    iroha_model_base::chain::ChainId,
+    ContractTestApp,
+) {
     let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.common.chain = "chain".parse().expect("test chain ID");

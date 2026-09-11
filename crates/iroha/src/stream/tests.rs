@@ -265,7 +265,7 @@ async fn default_transport_bounds_single_frames_and_fragmented_messages() {
                     assert!(matches!(result, Ok(StreamFrame::Binary(bytes)) if bytes == expected));
                 } else {
                     assert_eq!(
-                        result.err().expect("oversized message must be rejected"),
+                        result.expect_err("oversized message must be rejected"),
                         Error::ResponseTooLarge {
                             maximum: MAXIMUM,
                             actual: Some(length)

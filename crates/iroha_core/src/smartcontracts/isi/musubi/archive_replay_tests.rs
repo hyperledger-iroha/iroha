@@ -631,7 +631,7 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
         world,
         kura,
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("archive-replay-test"),
+        iroha_model_base::chain::ChainId::from("archive-replay-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
     {
@@ -731,7 +731,7 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
 }
 fn package(name: &str) -> MusubiPackageIdV1 {
     MusubiPackageIdV1::new(
-        iroha_data_model::nexus::DataSpaceId::new(7),
+        iroha_model_base::topology::DataSpaceId::new(7),
         MusubiPackageScopeV1::DataspaceRoot,
         name.parse().expect("package name"),
     )
@@ -1040,7 +1040,7 @@ fn exact_release_query_fixture(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("exact-release-query-test"),
+        iroha_model_base::chain::ChainId::from("exact-release-query-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
     {
@@ -1271,7 +1271,7 @@ fn archive_location_replay_fixture(
         1,
         None,
         None,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     pin_record.approve(1, None);
     world.pin_manifests.insert(pin, pin_record);
@@ -1520,7 +1520,7 @@ fn archive_location_replay_state(world: World) -> State {
         world,
         kura,
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("retention-test"),
+        iroha_model_base::chain::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
     {
@@ -2498,7 +2498,7 @@ fn archive_retention_uses_cached_finalized_time_for_the_exact_snapshot() {
         World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("retention-finalized-time-test"),
+        iroha_model_base::chain::ChainId::from("retention-finalized-time-test"),
         iroha_data_model::NetworkId::from_genesis_hash(header_hash),
     );
     {

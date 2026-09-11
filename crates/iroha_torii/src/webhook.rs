@@ -2427,7 +2427,7 @@ fn validate_webhook_filter_value(
         "tx_hash" => validate_canonical_webhook_id::<
             iroha_crypto::HashOf<iroha_data_model::transaction::signed::SignedTransaction>,
         >(field, value, "a canonical transaction hash"),
-        "peer_id" => validate_canonical_webhook_id::<iroha_data_model::peer::PeerId>(
+        "peer_id" => validate_canonical_webhook_id::<iroha_model_base::peer::PeerId>(
             field,
             value,
             "a canonical peer ID",
@@ -2436,7 +2436,7 @@ fn validate_webhook_filter_value(
             let Some(literal) = value.as_str() else {
                 return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
             };
-            let Some(id) = iroha_data_model::domain::DomainId::parse_fully_qualified(literal).ok()
+            let Some(id) = iroha_model_base::domain::DomainId::parse_fully_qualified(literal).ok()
             else {
                 return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
             };

@@ -930,9 +930,11 @@ mod tests {
     use iroha::{
         config::Config,
         crypto::{Algorithm, KeyPair},
-        data_model::{metadata::Metadata, prelude::*},
+        data_model::prelude::*,
     };
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use norito::json::{self, JsonSerialize};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use std::fmt;

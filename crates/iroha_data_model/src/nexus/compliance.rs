@@ -1,14 +1,11 @@
 //! Lane compliance policy data structures shared across hosts and SDKs.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    domain::DomainId,
-    metadata::Metadata,
-    nexus::{DataSpaceId, LaneId, UniversalAccountId},
-};
+use crate::{account::AccountId, asset::AssetDefinitionId, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, LaneCommitmentId};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

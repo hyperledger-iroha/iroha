@@ -14,7 +14,8 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use iroha_data_model::block::consensus_v2 as wire;
+    use iroha_model_base::peer::PeerId;
     /// Test-only view of the pure staged reducer copy. Production callers must
     /// retain one of the sealed registry-and-adapter publication owners.
     struct PreparedBodyStageTransition<'a> {

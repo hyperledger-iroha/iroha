@@ -1181,7 +1181,8 @@ mod tests {
                 "unsupported profile {profile} unexpectedly decoded"
             );
         }
-        for emitter in ["unknown_emitter"] {
+        {
+            let emitter = "unknown_emitter";
             let json = format!(r#"{{"emitter":"{emitter}","identity":{{}}}}"#);
             assert!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).is_err(),

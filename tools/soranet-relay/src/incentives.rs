@@ -4,13 +4,11 @@
 //! SNNet-7 so the relay runtime can surface Norito-friendly `RelayEpochMetricsV1` payloads for the
 //! treasury pipeline. It deduplicates measurement flows, tracks the minimum confidence across
 //! samples, and packages the results into the canonical data-model structures.
-use iroha_data_model::{
-    metadata::Metadata,
-    soranet::{
-        incentives::{MeasurementId, RelayBandwidthProofV1},
-        prelude::{RelayComplianceStatusV1, RelayEpochMetricsV1, RelayId},
-    },
+use iroha_data_model::soranet::{
+    incentives::{MeasurementId, RelayBandwidthProofV1},
+    prelude::{RelayComplianceStatusV1, RelayEpochMetricsV1, RelayId},
 };
+use iroha_model_base::metadata::Metadata;
 use thiserror::Error;
 /// Default number of simultaneously retained incentive epochs.
 pub const INCENTIVE_DEFAULT_ACTIVE_EPOCHS: usize = 16;
@@ -354,7 +352,8 @@ impl RelayPerformanceAccumulator {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_data_model::{account::AccountId, metadata::Metadata};
+    use iroha_data_model::account::AccountId;
+    use iroha_model_base::metadata::Metadata;
     const RELAY: RelayId = [7_u8; 32];
     fn sample_account(seed: u8) -> AccountId {
         let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

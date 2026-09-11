@@ -7,9 +7,9 @@ form the first-release Iroha 3 data model, as implemented in the
 ## Scope and Foundations
 
 - Purpose: Provide canonical types for domain objects (domains, accounts, assets, NFTs, roles, permissions, peers), state-changing instructions (ISI), queries, triggers, transactions, blocks, and parameters.
-- Serialization: All public types derive Norito codecs (`norito::codec::{Encode, Decode}`) and schema (`iroha_schema::IntoSchema`). JSON is used selectively (e.g., for HTTP and `Json` payloads) behind feature flags.
+- Serialization: Wire records use Norito codecs and schema contracts, with manual implementations for validated or bounded representations. Canonical protocol JSON is mandatory, including without default features.
 - IVM note: Certain deserialization-time validations are disabled when targeting the Iroha Virtual Machine (IVM), since the host performs validation before invoking contracts (see crate docs in `src/lib.rs`).
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export`/`ffi_import` to avoid overhead when FFI is not needed.
+- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export` to avoid overhead when FFI is not needed.
 
 ## Core Traits and Helpers
 
@@ -23,20 +23,21 @@ form the first-release Iroha 3 data model, as implemented in the
 
 - `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names must arrive in their exact Unicode NFC spelling; alternate canonically equivalent spellings are rejected rather than rewritten. The special name `genesis` is reserved (checked case-insensitively).
 - `IdBox`: A sum-type envelope for any supported ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Useful for generic flows and Norito encoding as a single type.
-- `ChainId`: Opaque chain identifier used for replay protection in transactions.
+- `iroha_model_base::topology::{DataSpaceId, LaneId, ShardId}`: Numeric dataspace, lane and shard identities. Validation, codecs and applicable storage keys belong to the base owner; catalogs, lifecycle rules and ledger composition remain in the aggregate.
+- `iroha_model_base::chain::ChainId`: Exact, case-sensitive ASCII deployment label, bounded to 128 bytes and validated by constructors and codecs. Import it from its base owner. Genesis-derived `iroha_data_model::NetworkId` remains the exact lineage identity at ledger composition.
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
-- `DomainId`: `name` (e.g., `wonderland`).
+- `iroha_model_base::domain::DomainId`: exactly `name.dataspace` (e.g., `wonderland.paynet`), with one validated DNS label per component.
 - `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Strict parser inputs must be canonical I105; domain suffixes (`@domain`), account-alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values.
 - `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes. This is the public asset ID. On-chain asset aliases use `name#domain.dataspace` or `name#dataspace` and resolve only to this canonical Base58 asset ID.
 - `AssetId`: public asset identifier in canonical bare Base58 form. Asset aliases like `name#dataspace` or `name#domain.dataspace` resolve to `AssetId`. Internal ledger holdings may additionally expose split `asset + account + optional dataspace` fields where needed, but that composite shape is not the public `AssetId`.
-- `NftId`: `nft$domain` (e.g., `rose$garden`).
-- `PeerId`: `public_key` (peer equality is by public key).
+- `NftId`: `nft$domain.dataspace` (e.g., `rose$garden.paynet`).
+- `iroha_model_base::peer::PeerId`: canonical public-key identity; equality is by public key. Its wrapper, validation and codecs live in the base crate; the ledger `Peer` entity stays in the aggregate.
 
 ## Entities
 
 ### Domain
-- `DomainId { name: Name }` – unique name.
+- `iroha_model_base::domain::DomainId` owns private `name: Name` and `dataspace: Name` components. Construct it through `try_new` or `parse_fully_qualified`; read them through getters. Domain registration and `IdBox` conversion stay in the aggregate.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
@@ -82,7 +83,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `Permission { name: Ident, payload: Json }` – the `name` and payload schema must align with the active `ExecutorDataModel` (see below).
 
 ### Peers
-- `PeerId { public_key: PublicKey }`.
+- `iroha_model_base::peer::PeerId` wraps `PublicKey`; construct with `PeerId::new` and read with `public_key()`.
 - `Peer { address: SocketAddr, id: PeerId }` and parsable `public_key@address` string form.
 
 ### Cryptographic primitives (feature `sm`)
@@ -262,87 +263,44 @@ the first release does not decode superseded data-model layouts.
 
 ## Metadata
 
-- `Metadata(BTreeMap<Name, Json>)`: key/value store attached to multiple entities (`Domain`, `Account`, `AssetDefinition`, `Nft`, triggers, and transactions).
+- `iroha_model_base::metadata::Metadata` owns the `BTreeMap<Name, Json>` representation attached to domains, accounts, asset definitions, NFTs, triggers and transactions. Import it directly from the base crate; `HasMetadata` stays with aggregate ledger entities. The base owner also provides `metadata::Path`.
+- The binary representation retains its declared nominal identity and sequence-of-tuples layout. Decoding rejects duplicate keys and charges destination-tree allocations; encoding streams borrowed entries without a second collection.
 - API: `contains`, `iter`, `get`, `insert`, and (with `transparent_api`) `remove`.
 
 ## Features and Determinism
 
-- Features control optional APIs (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `http`, `fault_injection`).
+- The workspace requires `std`; protocol JSON is unconditional. The [crate manifest](../crates/iroha_data_model/Cargo.toml) owns the shipping application, cryptographic, HTTP, FFI and internal mutable-API feature selections. `ffi_import` is not a shipping feature.
 - Determinism: All serialization uses Norito encoding to be portable across hardware. IVM bytecode is an opaque byte blob; execution must not introduce non-deterministic reductions. The host validates transactions and supplies inputs to IVM deterministically.
 
 ### Transparent API (`transparent_api`)
 
 - Purpose: exposes full, mutable access to the `#[model]` structs/enums for internal components such as Torii, executors, and integration tests. Without it, those items are intentionally opaque so external SDKs only see safe constructors and encoded payloads.
 - Mechanics: the `iroha_data_model_derive::model` macro rewrites each public field with `#[cfg(feature = "transparent_api")] pub` and keeps a private copy for the default build. Enabling the feature flips those cfgs, so destructuring `Account`, `Domain`, `Asset`, etc. becomes legal outside their defining modules.
-- Surface detection: the crate exports a `TRANSPARENT_API: bool` constant (generated into either `transparent_api.rs` or `non_transparent_api.rs`). Downstream code can check this flag and branch when it needs to fall back to opaque helpers.
-- Enabling: add `features = ["transparent_api"]` to the dependency in `Cargo.toml`. Workspace crates that need the JSON projection (e.g., `iroha_torii`) forward the flag automatically, but third-party consumers should keep it off unless they control the deployment and accept the broader API surface.
+- Surface detection: the crate entry point owns one `TRANSPARENT_API: bool = cfg!(feature = "transparent_api")` declaration and one public export inventory.
+- Enabling: internal consumers that require mutable model access select `features = ["transparent_api"]` explicitly. The aggregate forwards this selection to the foundational owner. JSON codecs do not depend on it.
 
 ## Quick Examples
 
-Create a domain and account, define an asset, and build a transaction with instructions:
+Construct and round-trip metadata through its canonical owner:
 
 ```rust
-use iroha_data_model::prelude::*;
-use iroha_crypto::KeyPair;
-use iroha_primitives::numeric::Quantity;
+use iroha_model_base::{metadata::Metadata, name::Name};
+use iroha_primitives::json::Json;
 
-// Domain
-let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
-let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
-
-// Account
-let kp = KeyPair::random();
-let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.clone())
-    .with_metadata(Metadata::default());
-
-// Asset definition and an asset for the account
-let asset_def_id = AssetDefinitionId::new(
-    domain_id.clone(),
-    "usd".parse().unwrap(),
-);
-let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
-    .with_name("USD Coin".to_owned())
-    .with_metadata(Metadata::default());
-let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-let asset = Asset::new(asset_id.clone(), Quantity::from(100_u32));
-
-// Build a transaction with instructions (pseudo-ISI; exact ISI types live under `isi`)
-let chain_id: ChainId = "dev-chain".parse().unwrap();
-let tx = TransactionBuilder::new(chain_id, account_id.clone())
-    .with_instructions(vec![ /* Register/ Mint/ Transfer instructions here */ ])
-    .sign(kp.private_key());
+let mut metadata = Metadata::default();
+let key: Name = "tier".parse().unwrap();
+metadata.insert(key.clone(), Json::from(1_u32));
+let frame = norito::to_bytes(&metadata).unwrap();
+let decoded: Metadata = norito::decode_from_bytes(&frame).unwrap();
+assert_eq!(decoded, metadata);
+assert_eq!(decoded.get(&key), Some(&Json::from(1_u32)));
 ```
 
-Query accounts and assets with the DSL:
-
-```rust
-use iroha_data_model::prelude::*;
-
-let predicate = query::dsl::CompoundPredicate::build(|p| {
-    p.equals("metadata.tier", 1_u32)
-        .exists("metadata.display_name")
-});
-let selector = query::dsl::SelectorTuple::default();
-let q: QueryBox<QueryOutputBatchBox> =
-    QueryWithFilter::new(
-        Box::new(query::account::FindAccounts),
-        predicate,
-        selector,
-    ).into();
-// Encode and send via Torii; decode on server using the query registry
-```
-
-Use IVM smart contract bytecode:
-
-```rust
-use iroha_data_model::prelude::*;
-
-let bytecode = IvmBytecode::from_compiled(include_bytes!("contract.to").to_vec());
-let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone())
-    .with_bytecode(bytecode)
-    .sign(kp.private_key());
-```
+Ledger builders and typed query expressions are exercised in the maintained
+[transaction tests](../crates/iroha_data_model/src/transaction.rs) and
+[query DSL tests](../crates/iroha_data_model/src/query/dsl_fast.rs).
+The [Rust SDK](../crates/iroha/README.md) owns network operations and signing
+contexts.
 
 Asset-definition id / alias quick reference (CLI + Torii):
 

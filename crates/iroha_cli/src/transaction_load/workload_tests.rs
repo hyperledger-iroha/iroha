@@ -4,9 +4,9 @@ use super::*;
 use iroha::data_model::{
     account::AccountAlias,
     isi::SetKeyValueBox,
-    nexus::DataSpaceId,
     parameter::{CustomParameter, Parameter},
 };
+use iroha_model_base::topology::DataSpaceId;
 use std::sync::Mutex;
 
 #[derive(Default)]

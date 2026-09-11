@@ -1047,7 +1047,7 @@ async fn trusted_internal_account_handler_emits_exact_json_and_norito_projection
         "derive trusted internal account projection fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"trusted-internal-account"));
-    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         "tier".parse().expect("metadata key"),
         Json::new("regulated"),

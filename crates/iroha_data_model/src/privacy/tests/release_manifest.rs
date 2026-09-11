@@ -283,7 +283,7 @@ fn synthetic_valid_deployment(
         .collect::<Vec<_>>();
     let mut deployment = PrivacyExact12DeploymentQualificationV1 {
         version: PRIVACY_EXACT12_DEPLOYMENT_QUALIFICATION_VERSION_V1,
-        chain_id: crate::ChainId::from("synthetic-chain"),
+        chain_id: iroha_model_base::chain::ChainId::from("synthetic-chain"),
         network_id,
         genesis_hash: *network_id.as_bytes(),
         release_manifest_digest,
@@ -521,8 +521,7 @@ fn exact12_qualification_links_full_manifests_and_all_twelve_activations() {
 }
 
 /// Reuse the complete signed test evidence for the generated instruction fixture.
-
-pub(crate) fn generated_instruction_qualification() -> PrivacyExact12QualificationRecordV1 {
+pub fn generated_instruction_qualification() -> PrivacyExact12QualificationRecordV1 {
     let release_manifest = synthetic_valid_release_manifest();
     let deployment_qualification = synthetic_valid_deployment(release_manifest.manifest_digest);
     let qualification = PrivacyExact12QualificationRecordV1 {
@@ -553,7 +552,7 @@ fn qualified_capability_archive_accepts_complete_signed_evidence() {
         manifest
             .protocols
             .iter()
-            .all(|row| row.is_network_available())
+            .all(crate::privacy::PrivacyExact12CapabilityRowV1::is_network_available)
     );
     let archive = manifest
         .canonical_bytes()
@@ -674,7 +673,7 @@ fn deployment_rejects_chain_rollout_quorum_and_signature_mutations() {
     let deployment = synthetic_valid_deployment(release.manifest_digest);
 
     let mut other_chain = deployment.clone();
-    other_chain.chain_id = crate::ChainId::from("other-chain");
+    other_chain.chain_id = iroha_model_base::chain::ChainId::from("other-chain");
     assert_eq!(
         other_chain.validate(),
         Err(PrivacyExact12DeploymentQualificationValidationErrorV1::QualificationDigest)
@@ -750,4 +749,294 @@ fn release_and_deployment_json_roundtrip_and_reject_unknown_fields() {
         norito::json::from_json::<PrivacyExact12QualificationRecordV1>(&hostile_qualification)
             .is_err()
     );
+}
+
+fn resize_release_inventory<T: Clone>(rows: &mut Vec<T>, excess: bool) {
+    if excess {
+        rows.push(
+            rows.first()
+                .expect("the exact inventory is nonempty")
+                .clone(),
+        );
+    } else {
+        rows.pop().expect("the exact inventory is nonempty");
+    }
+}
+
+fn assert_release_inventory_count(
+    release: &PrivacyExact12ReleaseManifestV1,
+    excess: bool,
+    resize: fn(&mut PrivacyExact12ReleaseManifestV1, bool),
+    expected: PrivacyExact12ReleaseManifestValidationErrorV1,
+) {
+    let mut invalid = release.clone();
+    invalid.protocols[0].parameter_id = PrivacyParameterIdV1::new([0; 32]);
+    resize(&mut invalid, excess);
+    assert_eq!(invalid.validate(), Err(expected));
+}
+
+#[test]
+fn release_inventory_rejects_short_and_extra_rows_before_protocol_validation() {
+    let release = synthetic_valid_release_manifest();
+    assert_eq!(release.validate(), Ok(()));
+    for excess in [false, true] {
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.protocols, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::ProtocolCount,
+        );
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.stage_receipts, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::StageReceiptCount,
+        );
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.proof_artifacts, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::ProofArtifactCount,
+        );
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.sdk_packages, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::SdkPackageCount,
+        );
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.hardware_results, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::HardwareResultCount,
+        );
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.audits, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::AuditCount,
+        );
+        assert_release_inventory_count(
+            &release,
+            excess,
+            |manifest, extra| resize_release_inventory(&mut manifest.release_signatures, extra),
+            PrivacyExact12ReleaseManifestValidationErrorV1::ReleaseSignatureCount,
+        );
+    }
+}
+
+#[test]
+fn release_manifest_validation_preserves_phase_error_order() {
+    let release = synthetic_valid_release_manifest();
+    let mut invalid = release.clone();
+    invalid.version = 0;
+    invalid.source.source_tree_clean = false;
+    invalid.abi_version = 0;
+    invalid.protocols[0].parameter_id = PrivacyParameterIdV1::new([0; 32]);
+    invalid.stage_receipts[0].stage_ordinal = 1;
+    invalid.proof_artifacts[0].stage_artifact_ordinal = 1;
+    invalid.release_artifact_set_digest = PrivacyReleaseArtifactDigestV1::new([0; 32]);
+    invalid.manifest_digest = PrivacyExact12ReleaseManifestDigestV1::new([0; 32]);
+    invalid.release_signatures[0].signature = Signature::from_bytes(&[0xA5; 64]);
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::Version)
+    );
+    invalid.version = release.version;
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::SourceIdentity)
+    );
+    invalid.source.source_tree_clean = true;
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::AbiBinding)
+    );
+    invalid.abi_version = release.abi_version;
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::ProtocolBinding)
+    );
+    invalid.protocols[0] = release.protocols[0].clone();
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::StageReceipt)
+    );
+    invalid.stage_receipts[0] = release.stage_receipts[0];
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::ProofArtifact)
+    );
+    invalid.proof_artifacts[0] = release.proof_artifacts[0];
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::ArtifactSetDigest)
+    );
+    invalid.release_artifact_set_digest = release.release_artifact_set_digest;
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::ManifestDigest)
+    );
+    invalid.manifest_digest = release.manifest_digest;
+    assert_eq!(
+        invalid.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::ReleaseSignature)
+    );
+    invalid.release_signatures[0] = release.release_signatures[0].clone();
+    assert_eq!(invalid.validate(), Ok(()));
+}
+
+fn sign_release_approval(
+    approval: &mut PrivacyReleaseSignatureV1,
+    signer: &KeyPair,
+    manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
+) {
+    approval.signer = signer.public_key().clone();
+    approval.signature = release_manifest_test_signature(
+        signer,
+        &PrivacyReleaseSignatureV1::signing_bytes(approval.role, manifest_digest)
+            .expect("encode the role-bound release approval"),
+    );
+}
+
+fn sign_release_audit(audit: &mut PrivacyReleaseAuditV1, signer: &KeyPair) {
+    audit.auditor = signer.public_key().clone();
+    for disposition in &mut audit.accepted_medium_dispositions {
+        disposition.signature = release_manifest_test_signature(
+            signer,
+            &disposition
+                .signing_bytes()
+                .expect("encode the Medium disposition"),
+        );
+    }
+    audit.signature = release_manifest_test_signature(
+        signer,
+        &audit
+            .signing_bytes()
+            .expect("encode the audit report binding"),
+    );
+}
+
+fn rebind_synthetic_release_audit_bundle(manifest: &mut PrivacyExact12ReleaseManifestV1) {
+    manifest.audit_bundle_digest = manifest
+        .computed_audit_bundle_digest()
+        .expect("digest the changed audit evidence");
+    for binding in &mut manifest.protocols {
+        binding.security_claim.audit_bundle_digest = manifest.audit_bundle_digest;
+        binding.security_claim_digest = binding
+            .security_claim
+            .computed_digest()
+            .expect("digest the rebound security claim");
+    }
+    for receipt in &mut manifest.stage_receipts {
+        let protocol_index =
+            usize::from(receipt.stage_ordinal) / PRIVACY_EXACT12_RELEASE_STAGES_PER_PROTOCOL_V1;
+        receipt.security_claim_digest = manifest.protocols[protocol_index].security_claim_digest;
+    }
+    for artifact in &mut manifest.proof_artifacts {
+        let protocol_index = PrivacyProtocolIdV1::ALL
+            .iter()
+            .position(|protocol_id| *protocol_id == artifact.protocol_id)
+            .expect("the fixture uses a catalog protocol");
+        artifact.security_claim_digest = manifest.protocols[protocol_index].security_claim_digest;
+    }
+    assert_eq!(
+        manifest
+            .computed_release_artifact_set_digest()
+            .expect("redigest the artifact set"),
+        manifest.release_artifact_set_digest,
+        "audit changes do not change the normalized non-audit artifact set"
+    );
+    manifest.manifest_digest = manifest
+        .computed_manifest_digest()
+        .expect("digest the rebound release manifest");
+    for (index, approval) in manifest.release_signatures.iter_mut().enumerate() {
+        let signer = release_manifest_test_key(
+            u8::try_from(index + 0x50).expect("the fixture has a small closed role inventory"),
+        );
+        sign_release_approval(approval, &signer, manifest.manifest_digest);
+    }
+}
+
+fn assert_release_audit_signatures(audit: &PrivacyReleaseAuditV1) {
+    assert_eq!(
+        audit.signature.verify(
+            &audit.auditor,
+            &audit.signing_bytes().expect("encode the signed audit")
+        ),
+        Ok(())
+    );
+    for disposition in &audit.accepted_medium_dispositions {
+        assert_eq!(
+            disposition.signature.verify(
+                &audit.auditor,
+                &disposition
+                    .signing_bytes()
+                    .expect("encode the signed disposition")
+            ),
+            Ok(())
+        );
+    }
+}
+
+#[test]
+fn release_audits_require_independent_auditors_and_reports_with_valid_signatures() {
+    let release = synthetic_valid_release_manifest();
+    let mut duplicate_auditor = release.clone();
+    let shared_authority = release_manifest_test_key(0x40);
+    sign_release_audit(&mut duplicate_auditor.audits[1], &shared_authority);
+    rebind_synthetic_release_audit_bundle(&mut duplicate_auditor);
+    assert_release_audit_signatures(&duplicate_auditor.audits[1]);
+    assert_eq!(
+        duplicate_auditor.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::Audit)
+    );
+
+    let mut duplicate_report = release.clone();
+    duplicate_report.audits[1].report_digest = duplicate_report.audits[0].report_digest;
+    sign_release_audit(
+        &mut duplicate_report.audits[1],
+        &release_manifest_test_key(0x41),
+    );
+    rebind_synthetic_release_audit_bundle(&mut duplicate_report);
+    assert_release_audit_signatures(&duplicate_report.audits[1]);
+    assert_eq!(
+        duplicate_report.validate(),
+        Err(PrivacyExact12ReleaseManifestValidationErrorV1::Audit)
+    );
+
+    let mut independent = release;
+    sign_release_audit(&mut independent.audits[1], &release_manifest_test_key(0x60));
+    rebind_synthetic_release_audit_bundle(&mut independent);
+    assert_release_audit_signatures(&independent.audits[1]);
+    assert_eq!(independent.validate(), Ok(()));
+}
+
+#[test]
+fn release_approvals_require_independent_signers_with_valid_signatures() {
+    let release = synthetic_valid_release_manifest();
+    for (seed, expected) in [
+        (
+            0x40,
+            Err(PrivacyExact12ReleaseManifestValidationErrorV1::ReleaseSignature),
+        ),
+        (
+            0x51,
+            Err(PrivacyExact12ReleaseManifestValidationErrorV1::ReleaseSignature),
+        ),
+        (0x60, Ok(())),
+    ] {
+        let mut candidate = release.clone();
+        sign_release_approval(
+            &mut candidate.release_signatures[0],
+            &release_manifest_test_key(seed),
+            candidate.manifest_digest,
+        );
+        let approval = &candidate.release_signatures[0];
+        let bytes =
+            PrivacyReleaseSignatureV1::signing_bytes(approval.role, candidate.manifest_digest)
+                .expect("encode the role-bound approval");
+        assert_eq!(approval.signature.verify(&approval.signer, &bytes), Ok(()));
+        assert_eq!(candidate.validate(), expected);
+    }
 }

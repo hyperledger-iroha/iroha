@@ -744,6 +744,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_model_base::domain::DomainId;
 
     #[test]
     fn block_gas_component_fit_is_overflow_safe() {
@@ -763,6 +764,7 @@ mod tests {
         BallotAttemptId, GovernanceAttemptId, PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
     };
     use iroha_data_model::prelude::*;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
     use iroha_test_samples::gen_account_in;
     fn sample_account() -> AccountId {
@@ -1757,8 +1759,8 @@ mod tests {
             account::rekey::AccountAlias,
             isi::account_recovery::{FinalizeAccountRecovery, ReplaceAccountController},
             isi::alias_setup::CompareAndSetPrimaryAccountAlias,
-            nexus::DataSpaceId,
         };
+        use iroha_model_base::topology::DataSpaceId;
 
         let account = sample_account();
         let replacement = sample_account();

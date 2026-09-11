@@ -1,14 +1,12 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
 use super::{Account, AccountId};
-use crate::{
-    alias_setup::AccountAliasName,
-    domain::DomainId,
-    nexus::{DataSpaceCatalog, DataSpaceId},
-};
+use crate::{alias_setup::AccountAliasName, nexus::DataSpaceCatalog};
 use core::fmt;
 use iroha_crypto::PublicKey;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::error::ParseError;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
@@ -479,7 +477,7 @@ mod rekey_record_tests {
     fn alias() -> AccountAlias {
         AccountAlias::domainless(
             "wire".parse().expect("account alias label"),
-            crate::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
     }
 

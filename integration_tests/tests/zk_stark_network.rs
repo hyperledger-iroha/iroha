@@ -9,7 +9,6 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     isi::{Grant, InstructionBox},
-    metadata::Metadata,
     permission::Permission,
     proof::{
         ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
@@ -22,6 +21,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanSubmitGovernanceBallot,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
@@ -103,7 +103,7 @@ fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
 }
 fn derive_ballot_nullifier(
     domain_tag: &str,
-    chain_id: &iroha_data_model::ChainId,
+    chain_id: &iroha_model_base::chain::ChainId,
     election_id: &str,
     commit: &[u8; 32],
 ) -> [u8; 32] {

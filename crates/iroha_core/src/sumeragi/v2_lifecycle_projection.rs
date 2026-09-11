@@ -2135,7 +2135,7 @@ fn project_fetch(
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     manifest: Option<&wire::PayloadManifest>,
-    certified_sources: &[iroha_data_model::peer::PeerId],
+    certified_sources: &[iroha_model_base::peer::PeerId],
     certificate: Option<&wire::QuorumCertificate>,
 ) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
     if certificate.is_some_and(|certificate| certificate.phase == wire::GlobalPhase::Commit) {

@@ -2,8 +2,6 @@
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
-    nexus::DataSpaceId,
     nft::NftId,
     smart_contract::entrypoint::{
         ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
@@ -12,7 +10,9 @@ use iroha_data_model::{
         entrypoint_return_schema_hash_v1, entrypoint_value_subtree_range_v1,
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,

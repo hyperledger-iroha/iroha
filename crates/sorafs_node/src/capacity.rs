@@ -1,11 +1,9 @@
 //! Capacity declaration tracking and replication order scheduling for the embedded SoraFS node.
-use iroha_data_model::{
-    metadata::Metadata,
-    sorafs::{
-        capacity::{CapacityDeclarationRecord, ProviderId},
-        pin_registry::{ReplicationOrderRecord, ReplicationOrderStatus},
-    },
+use iroha_data_model::sorafs::{
+    capacity::{CapacityDeclarationRecord, ProviderId},
+    pin_registry::{ReplicationOrderRecord, ReplicationOrderStatus},
 };
+use iroha_model_base::metadata::Metadata;
 use norito::{
     core::DecodeLimits,
     decode_from_bytes_with_limits,

@@ -11,9 +11,10 @@
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
     da::commitment::{DaCommitmentBundle, DaCommitmentRecord},
-    nexus::{LaneId, MAX_ACTIVE_EXECUTION_LANES, ShardId},
+    nexus::MAX_ACTIVE_EXECUTION_LANES,
 };
 use iroha_logger::warn;
+use iroha_model_base::{topology::LaneId, topology::ShardId};
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
@@ -1220,12 +1221,10 @@ mod tests {
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{
-            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
-            LaneVisibility, ShardId,
-        },
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile, LaneVisibility},
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::NonZeroU32,

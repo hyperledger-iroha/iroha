@@ -10,6 +10,8 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroUsize, sync::Arc, thread, time::Duration};
 fn checked_random_queue_stress_keypair() -> KeyPair {

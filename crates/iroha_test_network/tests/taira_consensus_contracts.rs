@@ -7,9 +7,9 @@ use iroha_data_model::{
     Level,
     account::AccountId,
     isi::{InstructionBox, Log},
-    metadata::Metadata,
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{
     Network, NetworkPeer, init_instruction_registry, read_on_dedicated_thread,
 };

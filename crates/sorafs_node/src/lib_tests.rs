@@ -14,7 +14,6 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature as IrohaSignature
 use iroha_data_model::{
     block::BlockHeader,
     isi::{InstructionBox, sorafs::CompleteReplicationOrder},
-    metadata::Metadata,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
         moderation::{
@@ -41,6 +40,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics::global_or_default;
 use norito::to_bytes;
@@ -1297,15 +1297,15 @@ fn orderbook_forwarder_survives_restart_when_worker_and_provider_are_disabled() 
 #[test]
 fn reserve_forwarder_survives_restart_when_worker_and_provider_are_disabled() {
     use iroha_data_model::{
-        ChainId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         isi::sorafs::RegisterSorafsReserveAccount,
         sorafs::reserve::{
             RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyRecordV1,
             ReserveAuthorityPolicyV1, ReserveFinalizedCursorV1, ReserveProviderTermsV1,
         },
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
     let temp_dir = tempfile::tempdir().expect("create reserve forwarder temp dir");
     let data_dir = temp_dir.path().join("validator-state");
     let config = StorageConfig::builder()

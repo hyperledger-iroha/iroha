@@ -18,12 +18,10 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     world.domains.insert(authority_domain, domain);
     world.accounts.insert(
         authority.clone(),
-        iroha_data_model::account::AccountValue::new(
-            iroha_data_model::account::AccountDetails {
-                uaid: Some(authority_uaid),
-                ..iroha_data_model::account::AccountDetails::default()
-            },
-        ),
+        iroha_data_model::account::AccountValue::new(iroha_data_model::account::AccountDetails {
+            uaid: Some(authority_uaid),
+            ..iroha_data_model::account::AccountDetails::default()
+        }),
     );
     let mut manifests = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
     let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
@@ -467,8 +465,8 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
     use iroha_data_model::{
         block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         da::commitment::DaCommitmentBundle,
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
         Hash::prehashed([0xAB; Hash::LENGTH]),
     ));
@@ -561,8 +559,8 @@ fn lane_relay_envelopes_attach_manifest_roots() {
     use iroha_data_model::{
         block::consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         da::commitment::DaCommitmentBundle,
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let da_hash: Option<HashOf<DaCommitmentBundle>> = Some(HashOf::from_untyped_unchecked(
         Hash::prehashed([0xAB; Hash::LENGTH]),
     ));

@@ -24,9 +24,9 @@ use iroha_data_model::{
         PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
         PrivateSettlementSidecarAvailabilityV1,
     },
-    peer::PeerId,
     transaction::Executable,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
     PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
@@ -225,9 +225,9 @@ where
                 .or_insert_with(|| ExactPrivateSettlementQuorumViewV1 {
                     representative: response,
                     count: 0,
-                    authoritative_heights: Vec::with_capacity(usize::from(
+                    authoritative_heights: Vec::with_capacity(
                         PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
-                    )),
+                    ),
                 });
         entry.count = entry.count.saturating_add(1);
         entry.authoritative_heights.push(authoritative_height);
@@ -711,7 +711,7 @@ fn validate_leg_status_response_v1(
     response: &PrivateSettlementLegStatusResponseV1,
 ) -> Result<()> {
     if response.payload_digest != requested
-        || response.route.dataspace_id == iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+        || response.route.dataspace_id == iroha_model_base::topology::DataSpaceId::UNIVERSAL
         || response.stored_at_height == 0
         || response.lifecycle_height < response.stored_at_height
         || response.expiry_height <= response.stored_at_height
@@ -2974,13 +2974,14 @@ mod tests {
         SnapshotStore, base_url, client_with_base_url, respond_with, with_mock_http,
     };
     use iroha_data_model::{
-        nexus::{DataSpaceId, LaneId, PrivateSettlementLegCommitmentV1, PrivateSettlementRouteV1},
+        nexus::{PrivateSettlementLegCommitmentV1, PrivateSettlementRouteV1},
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
             PrivacyRecipientIdV1, PrivacyRootV1,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{
         num::NonZeroU64,
         sync::{Arc, Mutex},
@@ -3013,7 +3014,7 @@ mod tests {
     fn auditor_responder_must_be_unique_and_endpoint_roster_aligned() {
         let validators = (0_u8..4)
             .map(|index| {
-                iroha_data_model::peer::PeerId::from(
+                iroha_model_base::peer::PeerId::from(
                     iroha_crypto::KeyPair::from_seed(
                         vec![0x91_u8.saturating_add(index); 32],
                         Algorithm::BlsNormal,
@@ -3385,8 +3386,8 @@ mod tests {
         PrivateSettlementPhaseBodyV1,
     ) {
         let route = iroha_data_model::nexus::PrivateSettlementRouteV1 {
-            dataspace_id: iroha_data_model::nexus::DataSpaceId::new(31),
-            lane_id: iroha_data_model::nexus::LaneId::new(7),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(31),
+            lane_id: iroha_model_base::topology::LaneId::new(7),
             lane_incarnation: Hash::new(b"client-phase-incarnation"),
         };
         let keys = (0_u8..4)
@@ -3399,7 +3400,7 @@ mod tests {
             .collect::<Vec<_>>();
         let validators = keys
             .iter()
-            .map(|key| iroha_data_model::peer::PeerId::from(key.public_key().clone()))
+            .map(|key| iroha_model_base::peer::PeerId::from(key.public_key().clone()))
             .collect::<Vec<_>>();
         let authority = PrivateSettlementCommitteeAuthorityV1 {
             route,
@@ -3435,15 +3436,15 @@ mod tests {
     fn phase_votes_v1(
         authority: &PrivateSettlementCommitteeAuthorityV1,
         keys: &[iroha_crypto::KeyPair],
-        body: PrivateSettlementPhaseBodyV1,
+        body: &PrivateSettlementPhaseBodyV1,
         indexes: &[usize],
     ) -> Vec<PrivateSettlementPhaseVoteV1> {
-        let preimage = phase_signature_preimage_v1(&body).expect("phase preimage");
+        let preimage = phase_signature_preimage_v1(body).expect("phase preimage");
         indexes
             .iter()
             .map(|index| PrivateSettlementPhaseVoteV1 {
                 version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-                body,
+                body: *body,
                 signer: authority.validators[*index].clone(),
                 signature: Signature::try_new(keys[*index].private_key(), &preimage)
                     .expect("phase signature")
@@ -3517,7 +3518,7 @@ mod tests {
             .collect::<Vec<_>>();
         let validators = keys
             .iter()
-            .map(|key| iroha_data_model::peer::PeerId::from(key.public_key().clone()))
+            .map(|key| iroha_model_base::peer::PeerId::from(key.public_key().clone()))
             .collect::<Vec<_>>();
         let authority = PrivateSettlementCommitteeAuthorityV1 {
             route,
@@ -3599,12 +3600,9 @@ mod tests {
         delta
     }
 
-    fn finalization_fixture_v1(
+    fn finalization_manifest_v1(
         client: &Client,
-    ) -> (
-        PrivateSettlementPrepareBarrierV1,
-        Vec<PrivateSettlementPhaseCertificateV1>,
-    ) {
+    ) -> (AtomicPrivateSettlementV1, Vec<PrivateSettlementDeltaV1>) {
         let mut manifest = AtomicPrivateSettlementV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             network_id: client.network_id,
@@ -3663,6 +3661,16 @@ mod tests {
             .validate()
             .expect("finalization fixture manifest validates");
 
+        (manifest, deltas)
+    }
+
+    fn finalization_fixture_v1(
+        client: &Client,
+    ) -> (
+        PrivateSettlementPrepareBarrierV1,
+        Vec<PrivateSettlementPhaseCertificateV1>,
+    ) {
+        let (manifest, deltas) = finalization_manifest_v1(client);
         let authority_material = manifest
             .legs
             .iter()
@@ -3689,7 +3697,7 @@ mod tests {
                     &body,
                     ordinal,
                     authority,
-                    &phase_votes_v1(authority, keys, body, &[0, 1, 2]),
+                    &phase_votes_v1(authority, keys, &body, &[0, 1, 2]),
                 )
                 .expect("finalization fixture Prepare QC")
             })
@@ -3718,7 +3726,7 @@ mod tests {
                     &body,
                     ordinal,
                     authority,
-                    &phase_votes_v1(authority, keys, body, &[0, 1, 2]),
+                    &phase_votes_v1(authority, keys, &body, &[0, 1, 2]),
                 )
                 .expect("finalization fixture Commit QC")
             })
@@ -3873,7 +3881,7 @@ mod tests {
     #[test]
     fn client_phase_aggregation_requires_exact_three_distinct_valid_votes() {
         let (authority, keys, body) = phase_fixture_v1();
-        let exact = phase_votes_v1(&authority, &keys, body, &[0, 1, 3]);
+        let exact = phase_votes_v1(&authority, &keys, &body, &[0, 1, 3]);
         let certificate =
             aggregate_phase_votes_v1(&body, 0, &authority, &exact).expect("exact quorum");
         assert_eq!(certificate.signers_bitmap, 0b1011);
@@ -3884,7 +3892,7 @@ mod tests {
                 &body,
                 0,
                 &authority,
-                &phase_votes_v1(&authority, &keys, body, &[0, 1]),
+                &phase_votes_v1(&authority, &keys, &body, &[0, 1]),
             )
             .is_err()
         );
@@ -3893,19 +3901,19 @@ mod tests {
                 &body,
                 0,
                 &authority,
-                &phase_votes_v1(&authority, &keys, body, &[0, 1, 2, 3]),
+                &phase_votes_v1(&authority, &keys, &body, &[0, 1, 2, 3]),
             )
             .is_err()
         );
 
-        let mut duplicate = phase_votes_v1(&authority, &keys, body, &[0, 1, 2]);
+        let mut duplicate = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2]);
         duplicate[1] = duplicate[0].clone();
         assert!(aggregate_phase_votes_v1(&body, 0, &authority, &duplicate).is_err());
-        let mut malformed = phase_votes_v1(&authority, &keys, body, &[0, 1, 2]);
+        let mut malformed = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2]);
         malformed[2].signature[0] ^= 1;
         assert!(aggregate_phase_votes_v1(&body, 0, &authority, &malformed).is_err());
 
-        let all_four = phase_votes_v1(&authority, &keys, body, &[0, 1, 2, 3]);
+        let all_four = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2, 3]);
         let selected = canonical_phase_vote_quorum_v1(&all_four)
             .expect("four-endpoint fanout deterministically selects a quorum");
         assert_eq!(selected.len(), 3);
@@ -3913,7 +3921,7 @@ mod tests {
         assert_eq!(selected[1].signer, authority.validators[1]);
         assert_eq!(selected[2].signer, authority.validators[2]);
         assert!(
-            canonical_phase_vote_quorum_v1(&phase_votes_v1(&authority, &keys, body, &[0, 1],))
+            canonical_phase_vote_quorum_v1(&phase_votes_v1(&authority, &keys, &body, &[0, 1],))
                 .is_err()
         );
     }
@@ -3925,7 +3933,7 @@ mod tests {
             &prepare_body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, prepare_body, &[0, 1, 2]),
+            &phase_votes_v1(&authority, &keys, &prepare_body, &[0, 1, 2]),
         )
         .expect("Prepare QC");
         let payload_digest = Hash::new(b"client-recovered-phase-payload");
@@ -3950,7 +3958,7 @@ mod tests {
             &commit_body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, commit_body, &[0, 1, 2]),
+            &phase_votes_v1(&authority, &keys, &commit_body, &[0, 1, 2]),
         )
         .expect("Commit QC");
         let complete = PrivateSettlementPhaseCertificatesResponseV1 {
@@ -3996,14 +4004,14 @@ mod tests {
             &body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, body, &[0, 1, 2]),
+            &phase_votes_v1(&authority, &keys, &body, &[0, 1, 2]),
         )
         .expect("first exact quorum");
         let second = aggregate_phase_votes_v1(
             &body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, body, &[1, 2, 3]),
+            &phase_votes_v1(&authority, &keys, &body, &[1, 2, 3]),
         )
         .expect("second exact quorum");
         assert_ne!(first, second);

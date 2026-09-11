@@ -31,10 +31,10 @@ use iroha_data_model::{
         MergeCommitteeSignature,
     },
     nexus::LaneRelayEnvelope,
-    peer::PeerId,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::network::{
     NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteSourceUpdate, NetworkReplyRoutes,
     NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesPruneReceipt,
@@ -256,7 +256,8 @@ mod validator_pop_filter_tests {
     use super::filter_validators_from_trusted;
     use iroha_config::parameters::actual::TrustedPeers;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
-    use iroha_data_model::peer::{Peer, PeerId};
+    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::PeerId;
     use std::collections::BTreeMap;
 
     fn bls_key(seed: &[u8]) -> KeyPair {

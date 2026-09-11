@@ -23,7 +23,8 @@ fn applying_settings_persists_config_and_rebuilds_supervisor() {
         .path()
         .join(format!("mochi-data-{}", std::process::id()));
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &initial_root);
-    let mut app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let mut app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",
@@ -185,7 +186,8 @@ fn default_app_uses_four_peer_profile() {
         .path()
         .join(format!("mochi-data-{}", std::process::id()));
     let _data_guard = TestEnvGuard::set("MOCHI_DATA_ROOT", &data_root);
-    let app = test_app(super::parse_env_overrides().expect("parse fixture environment"));
+    let app =
+        test_app(super::cli_options::parse_env_overrides().expect("parse fixture environment"));
     assert!(
         app.supervisor.is_some(),
         "fixture bootstrap failed: {:?}; data_root={:?}; config_path={:?}",

@@ -2,10 +2,10 @@
 use iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1;
 use iroha_data_model::{
     account::AccountId,
-    domain::DomainId,
     isi::{InstructionBox, kaigi::JoinKaigi},
     kaigi::{KaigiId, KaigiParticipantCommitment},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use norito::core::DeserializePayload;
 use std::str::FromStr;

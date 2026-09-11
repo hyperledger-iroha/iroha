@@ -7,7 +7,8 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{AccountId, PeerId, nexus::LaneId};
+use iroha_data_model::AccountId;
+use iroha_model_base::{peer::PeerId, topology::LaneId};
 use std::{collections::BTreeMap, sync::Arc};
 
 fn keypairs() -> Vec<KeyPair> {

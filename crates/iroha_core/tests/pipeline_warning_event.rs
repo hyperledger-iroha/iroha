@@ -9,6 +9,8 @@ use iroha_core::{
     state::State,
 };
 use iroha_data_model::{events::EventBox, prelude::*};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use std::sync::Arc;
 // unused
 #[test]

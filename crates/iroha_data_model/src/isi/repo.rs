@@ -386,6 +386,7 @@ mod tests {
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use crate::repo::RepoGovernance;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::{codec::Encode, core::DecodeFromSlice};
     #[derive(Encode)]

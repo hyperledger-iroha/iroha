@@ -2258,7 +2258,6 @@ mod tests {
     use iroha_data_model::{
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
         privacy::{
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
@@ -2283,6 +2282,7 @@ mod tests {
             zk_ams_registry_record_digest_v1,
         },
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
     use p256::ecdsa::{
@@ -4459,7 +4459,7 @@ mod tests {
         let wrong_scope = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
             fixture.namespace,
             fixture.snapshot.state().asset_definition_id().clone(),
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::new(7)),
             fixture.snapshot.state().reserve_account().clone(),
         );
         let mut context = fixture.verification_context();
@@ -4830,7 +4830,7 @@ mod tests {
                         pool_id: fixture.statement.pool_id,
                         asset_definition_id: fixture.statement.asset_definition_id.clone(),
                         public_balance_scope: AssetBalanceScope::Dataspace(
-                            iroha_data_model::nexus::DataSpaceId::new(7),
+                            iroha_model_base::topology::DataSpaceId::new(7),
                         ),
                         reserve_account: fixture.reserve_account.clone(),
                         program_id: fixture.statement.program_id,

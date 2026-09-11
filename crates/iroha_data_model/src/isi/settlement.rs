@@ -3,8 +3,6 @@ use super::*;
 use crate::{
     NetworkId,
     block::BlockHeader,
-    metadata::Metadata,
-    nexus::DataSpaceId,
     oracle::{FeedConfigVersion, FeedEvent, FeedId, FeedSlot, ObservationValue},
     prelude::{AccountId, AssetDefinitionId},
 };
@@ -12,7 +10,9 @@ use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
 use iroha_data_model_derive::model;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -261,7 +261,7 @@ pub struct FxCorridorPolicy {
     /// Destination-currency asset definition.
     pub destination_asset_definition_id: AssetDefinitionId,
     /// Exact destination FI alias domains accepted for recipients.
-    pub allowed_destination_alias_domains: BTreeSet<crate::domain::DomainId>,
+    pub allowed_destination_alias_domains: BTreeSet<iroha_model_base::domain::DomainId>,
     /// Exact governed oracle feed whose latest event supplies the rate.
     pub oracle_feed_id: FeedId,
     /// Maximum consensus-time age accepted for the retained oracle event.
@@ -398,7 +398,6 @@ impl FxCorridorPolicyRegistry {
         self.usage.get(policy_id)
     }
     /// Convert the registry into the custom parameter accepted by `SetParameter`.
-
     #[must_use]
     pub fn into_custom_parameter(self) -> crate::parameter::CustomParameter {
         crate::parameter::CustomParameter::new(
@@ -412,7 +411,6 @@ impl FxCorridorPolicyRegistry {
     ///
     /// Returns a Norito error when a parameter with the registry identifier
     /// does not contain a valid [`FxCorridorPolicyRegistry`].
-
     pub fn from_custom_parameter(
         custom: &crate::parameter::CustomParameter,
     ) -> Result<Option<Self>, norito::Error> {
@@ -1004,8 +1002,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::{
         codec::{Decode, Encode},

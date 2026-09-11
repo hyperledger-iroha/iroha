@@ -1796,7 +1796,7 @@ mod routed_read_merge_regression_tests {
         payload.insert("manifests".to_owned(), Value::Array(rows));
         (
             RoutingDecision::new(
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 DataSpaceId::new(route_dataspace),
             ),
             Value::Object(payload),
@@ -1847,7 +1847,7 @@ mod routed_read_merge_regression_tests {
         assert_eq!(shard_query.limit, Some(1));
 
         let route = RoutingDecision::new(
-            iroha_data_model::nexus::LaneId::new(9),
+            iroha_model_base::topology::LaneId::new(9),
             DataSpaceId::new(42),
         );
         let route_query = space_directory_manifest_query_for_route(
@@ -2051,8 +2051,10 @@ mod routed_read_merge_regression_tests {
         let expected_uaid = test_manifest_uaid_literal();
         let mut payload =
             test_manifest_payload(vec![test_manifest_row(7, "Active", 1)], 1, false, "bounded");
-        payload.0 =
-            RoutingDecision::new(iroha_data_model::nexus::LaneId::new(8), DataSpaceId::new(8));
+        payload.0 = RoutingDecision::new(
+            iroha_model_base::topology::LaneId::new(8),
+            DataSpaceId::new(8),
+        );
         let response = merged_space_directory_manifests_response(
             vec![payload],
             0,

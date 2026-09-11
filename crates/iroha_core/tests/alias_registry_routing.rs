@@ -27,6 +27,9 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::parameter::CanSetParameters;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use std::{collections::BTreeSet, num::NonZeroU32, num::NonZeroU64, sync::Arc, time::Duration};

@@ -144,12 +144,12 @@ fn seed_domain_name_lease_tx(
 fn state_with_soracloud_permission(kura: &Arc<Kura>) -> Result<State, eyre::Report> {
     state_with_soracloud_permission_on_chain(
         kura,
-        iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
     )
 }
 fn state_with_soracloud_permission_on_chain(
     kura: &Arc<Kura>,
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
 ) -> Result<State, eyre::Report> {
     let world = World::with([], [], []);
     let query_handle = LiveQueryStore::start_test();
@@ -159,7 +159,7 @@ fn state_with_soracloud_permission_on_chain(
         .header();
     let mut state_block = state.block(block_header);
     let mut state_transaction = state_block.transaction();
-    let wonderland: iroha_data_model::domain::DomainId =
+    let wonderland: iroha_model_base::domain::DomainId =
         DomainId::try_new("wonderland", "universal")?;
     seed_domain_name_lease_tx(
         &mut state_transaction,
@@ -212,7 +212,7 @@ fn soracloud_permission_rejects_ungranted_taira_testnet_authority() -> Result<()
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission_on_chain(
         &kura,
-        iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+        iroha_model_base::chain::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
     )?;
     let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
         .as_ref()

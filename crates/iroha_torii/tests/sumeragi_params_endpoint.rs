@@ -43,7 +43,7 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
     let telemetry_handle =
         iroha_torii::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let torii = iroha_torii::Torii::new_with_handle(
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),

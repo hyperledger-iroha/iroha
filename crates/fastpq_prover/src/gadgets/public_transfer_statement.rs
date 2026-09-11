@@ -1015,7 +1015,8 @@ impl Write for ByteCounter {
 mod tests {
     use super::*;
     use crate::{TransitionBatch, gadgets::transfer, gadgets::transfer_row_binding};
-    use iroha_data_model::{DomainId, fastpq::TransferSmtWitness};
+    use iroha_data_model::fastpq::TransferSmtWitness;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 

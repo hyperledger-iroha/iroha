@@ -22,7 +22,8 @@ mod accounts_query_tests {
     async fn accounts_query_streams_without_sort() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain_id: iroha_model_base::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let exec_authority =
             checked_accounts_query_authority(0xB0, "derive accounts-query executor key");
         let exec_id = exec_authority.clone();
@@ -74,7 +75,7 @@ mod accounts_query_tests {
      {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("aliases", "universal").expect("valid domain");
         let exec_authority =
             checked_accounts_query_authority(0xB6, "derive accounts-query alias executor key");
@@ -88,7 +89,7 @@ mod accounts_query_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         );
         let state = Arc::new(State::new_for_testing(
             World::with(
@@ -251,7 +252,7 @@ mod accounts_query_tests {
     async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("aliases-list", "universal").expect("valid domain");
         let exec_authority =
             checked_accounts_query_authority(0xB8, "derive accounts-list alias executor key");
@@ -265,7 +266,7 @@ mod accounts_query_tests {
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                 domain_id.name().clone(),
             )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         );
         let state = Arc::new(State::new_for_testing(
             World::with(
@@ -385,7 +386,7 @@ mod accounts_query_tests {
     async fn accounts_query_aggregate_groups_by_primary_alias_domain() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("aggregate-aliases", "universal").expect("valid domain");
         let exec_authority =
             checked_accounts_query_authority(0xBA, "derive accounts-aggregate executor key");

@@ -17,15 +17,15 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
-    domain::DomainId,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
-        DataSpaceId, DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion,
-        UniversalAccountId,
+        DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion, UniversalAccountId,
     },
-    peer::PeerId,
     transaction::{Executable, signed::TransactionPayload},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::codec::Decode;
 use norito::json::{self, Value};
@@ -449,7 +449,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     ));
     let torii_rev = fixtures::ToriiHarness::new(
         &cfg_rev,
-        iroha_data_model::ChainId::from("test-chain-2"),
+        iroha_model_base::chain::ChainId::from("test-chain-2"),
         iroha_torii::test_utils::signed_query_network_id(),
         &kura_rev,
         &state_revoked,

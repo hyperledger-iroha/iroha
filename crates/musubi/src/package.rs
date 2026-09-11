@@ -2313,9 +2313,9 @@ mod tests {
             MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
             MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
         },
-        nexus::DataSpaceId,
         sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_musubi_service::{
         AuthenticatedMusubiPublicationRuntimeClientV1, InMemoryMusubiPublicationServiceJournalV1,
         MusubiProviderReadbackBackendV1, MusubiProviderReadbackRequestV1,
@@ -3568,13 +3568,11 @@ exports = []
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
     use super::{PackageError, PackageLayout, plan_package};
-    use iroha_data_model::{
-        musubi::{
-            MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
-            MusubiVerificationLockV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
+        MusubiVerificationLockV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     #[test]
     fn package_planning_fails_before_parsing_or_inspecting_the_root() {
         let package = MusubiPackageIdV1::new(

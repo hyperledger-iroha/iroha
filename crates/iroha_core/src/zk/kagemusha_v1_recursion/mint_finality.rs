@@ -418,7 +418,7 @@ fn validate_kagemusha_mint_finality_validator_keys_v1(
 pub fn derive_kagemusha_mint_finality_validator_keys_v1(
     seed: &[u8; 32],
     epoch: u64,
-    validator: iroha_data_model::peer::PeerId,
+    validator: iroha_model_base::peer::PeerId,
 ) -> Result<KagemushaMintFinalityValidatorKeysV1, KagemushaMintFinalityErrorV1> {
     let validator_bytes = validator.encode();
     let eq_secret = derive_nonzero_key_scalar::<Fq>(EQ_PARITY_TAG, seed, epoch, &validator_bytes)?;
@@ -441,7 +441,7 @@ pub struct KagemushaMintFinalitySignerV1 {
     network_id: iroha_data_model::NetworkId,
     epoch: u64,
     finality_epoch_id: [u8; 32],
-    validator: iroha_data_model::peer::PeerId,
+    validator: iroha_model_base::peer::PeerId,
 }
 
 /// Runtime authority for one node's exact epoch roster and local signing seed.
@@ -1314,8 +1314,8 @@ mod tests {
         NetworkId,
         block::BlockHeader,
         isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
 
     fn peer(seed: u8) -> PeerId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

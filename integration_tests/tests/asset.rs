@@ -13,6 +13,8 @@ use iroha::{
 };
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};

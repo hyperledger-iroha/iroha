@@ -1,10 +1,8 @@
 use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path};
 
 use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
-use iroha_data_model::{
-    block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
-    peer::PeerId,
-};
+use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use tempfile::TempDir;
 
 use super::*;

@@ -182,6 +182,7 @@ pub mod zk;
 #[cfg(feature = "zk-stark")]
 pub mod zk_stark;
 pub use block::InvalidGenesisError;
+use iroha_model_base::peer::PeerId;
 /// Encode one schema-bound public contract argument record using the canonical IVM ABI.
 pub use ivm::encode_argument_record_from_json;
 /// Pre-validate a genesis block against the expected genesis account prior to startup.
@@ -1394,11 +1395,11 @@ mod tests {
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::block::BlockHeader;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
-    use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
     use iroha_data_model::transaction::{TransactionBuilder, TransactionEntrypoint};
     use iroha_data_model::{Level, NetworkId, isi::Log};
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_p2p::{
         ClassifyTopic,
         network::message::{SubscriberRoute, Topic as NetworkTopic},

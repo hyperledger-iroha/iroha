@@ -9,7 +9,7 @@ use norito::{
 use std::fmt::Debug;
 
 /// Check a declared frame using its public value invariants after every decode.
-pub(crate) fn record_checked<T>(rows: &mut Vec<Value>, case: &str, value: &T, verify: impl Fn(&T))
+pub fn record_checked<T>(rows: &mut Vec<Value>, case: &str, value: &T, verify: impl Fn(&T))
 where
     T: norito::NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
@@ -82,7 +82,7 @@ where
 }
 
 /// Record a frame owner whose complete value supports direct equality checks.
-pub(crate) fn record_binary<T>(rows: &mut Vec<Value>, case: &str, value: &T)
+pub fn record_binary<T>(rows: &mut Vec<Value>, case: &str, value: &T)
 where
     T: norito::NoritoSchema + Debug + PartialEq + NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
@@ -92,7 +92,7 @@ where
 }
 
 /// Record a frame owner whose public contract also includes canonical JSON.
-pub(crate) fn record<T>(rows: &mut Vec<Value>, case: &str, value: &T)
+pub fn record<T>(rows: &mut Vec<Value>, case: &str, value: &T)
 where
     T: norito::NoritoSchema
         + Debug

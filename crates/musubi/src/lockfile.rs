@@ -18,8 +18,8 @@ use iroha_data_model::{
         MusubiReleaseIdV1, MusubiVerificationLockV1, MusubiVerificationNodeV1, MusubiVersionReqV1,
         MusubiVersionV1,
     },
-    nexus::DataSpaceId,
 };
+use iroha_model_base::topology::DataSpaceId;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,

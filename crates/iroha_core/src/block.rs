@@ -55,8 +55,6 @@ use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
-#[cfg(feature = "bls")]
-use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
@@ -80,16 +78,19 @@ use iroha_data_model::{
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLaneBinding},
     nexus::{
         AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry,
-        AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId,
-        LaneRelayEnvelope, LaneSettlementBufferPolicy, ProofBlob,
+        AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig, LaneRelayEnvelope,
+        LaneSettlementBufferPolicy, ProofBlob,
     },
-    peer::PeerId,
     transaction::{
         Executable, SignedTransaction, TransactionEntrypoint,
         error::{TransactionLimitError, TransactionRejectionReason},
         signed::TransactionResultInner,
     },
 };
+#[cfg(feature = "bls")]
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{numeric::Quantity, small::SmallVec};
@@ -351,12 +352,10 @@ mod overlay_error_tests {
     use super::*;
     use iroha_data_model::{
         ValidationFail,
-        nexus::{
-            AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason, DataSpaceId,
-            LaneId,
-        },
+        nexus::{AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason},
         transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     #[test]
     fn map_overlay_error_preserves_axt_context() {
         let ctx = AxtRejectContext {
@@ -2178,13 +2177,15 @@ mod prefetch_tests {
         Registrable,
         account::{Account, AccountAlias, AccountAliasDomain, AccountDetails, AccountValue},
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{InstructionBox, Log},
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata},
         role::RoleId,
     };
     use iroha_logger::Level;
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
     #[test]
@@ -2311,7 +2312,7 @@ mod prefetch_tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         world.smart_contract_state_mut_for_testing().insert(
             crate::sns::record_storage_key(&selector),
@@ -2370,7 +2371,7 @@ mod prefetch_tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         world.smart_contract_state_mut_for_testing().insert(
             crate::sns::record_storage_key(&selector),
@@ -4087,11 +4088,11 @@ pub(crate) mod valid {
     use crate::state::{StateBlock, StateTransaction, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
     use commit::CommittedBlock;
-    #[cfg(test)]
-    use iroha_data_model::ChainId;
     use iroha_data_model::events::pipeline::PipelineEventBox;
     use iroha_data_model::nexus::AxtPolicySnapshot;
     use iroha_logger::warn;
+    #[cfg(test)]
+    use iroha_model_base::chain::ChainId;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroUsize, time::Instant};
     #[derive(Clone, Copy)]
@@ -15902,16 +15903,14 @@ pub(crate) mod valid {
                 pin_intent::{DaPinIntent, DaPinIntentBundle},
                 types::{BlobDigest, StorageTicketId},
             },
-            domain::DomainId,
             isi::{InstructionBox, Log, error::Mismatch},
             merge::MergeQuorumCertificate,
-            metadata::Metadata,
             nexus::{
-                AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog, DataSpaceId,
-                DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+                AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog,
+                DataSpaceMetadata, LaneCatalog, LaneConfig,
             },
             parameter::{Parameter, Parameters, system::SumeragiNposParameters},
-            prelude::{Account, Domain, PeerId, Register},
+            prelude::{Account, Domain, Register},
             soracloud::{
                 SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
                 SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -15931,7 +15930,11 @@ pub(crate) mod valid {
             trigger::DataTriggerSequence,
         };
         use iroha_logger::Level;
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::metadata::Metadata;
         use iroha_model_base::name::Name;
+        use iroha_model_base::peer::PeerId;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use iroha_primitives::time::TimeSource;
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -22240,7 +22243,7 @@ pub(crate) mod valid {
                 world,
                 Arc::clone(&kura),
                 query,
-                iroha_data_model::ChainId::from("da-duplicate-ticket-test"),
+                iroha_model_base::chain::ChainId::from("da-duplicate-ticket-test"),
                 test_da_network_id(),
             );
             let _prev_hash =
@@ -22303,7 +22306,7 @@ pub(crate) mod valid {
                 world,
                 Arc::clone(&kura),
                 query,
-                iroha_data_model::ChainId::from("da-consensus-quota-test"),
+                iroha_model_base::chain::ChainId::from("da-consensus-quota-test"),
                 test_da_network_id(),
             );
             state.nexus.write().da.ingest_quota_max_count_per_account =
@@ -22405,7 +22408,7 @@ pub(crate) mod valid {
                 world,
                 Arc::clone(&kura),
                 query,
-                iroha_data_model::ChainId::from("da-replay-test"),
+                iroha_model_base::chain::ChainId::from("da-replay-test"),
                 test_da_network_id(),
             );
             let _prev_hash =
@@ -24725,10 +24728,10 @@ pub(crate) mod valid {
                     ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
                 },
                 parameter::{Parameter, system::SumeragiParameter},
-                peer::PeerId,
                 prelude::*,
             };
             use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+            use iroha_model_base::peer::PeerId;
             iroha_genesis::init_instruction_registry();
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
             let genesis_keypair = crate::block::checked_keypair();
@@ -24912,6 +24915,7 @@ mod commit {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+        use iroha_data_model::Registrable;
         use iroha_data_model::fastpq::{
             TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
             TransferTranscript,
@@ -24925,7 +24929,7 @@ mod commit {
             MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ManifestVersion, ProofBlob, RemoteSpendIntent,
             SpendOp, TouchManifest, UniversalAccountId,
         };
-        use iroha_data_model::{DomainId, Registrable};
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::time::TimeSource;
         use std::{collections::BTreeMap, time::Duration};
         const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -28559,6 +28563,9 @@ pub(crate) mod tests {
         },
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::{name::Name, state_path::StatePath};
     use iroha_primitives::json::Json;
     use iroha_primitives::time::TimeSource;
@@ -32340,7 +32347,7 @@ seiyaku DynamicTarget {
     fn verify_validator_signatures_accepts_bls_normal() {
         use crate::sumeragi::network_topology::Topology;
         use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::prelude::PeerId;
+        use iroha_model_base::peer::PeerId;
         // 3 BLS peers
         let kp0 = KeyPair::try_from_seed(b"seed0".to_vec(), Algorithm::BlsNormal)
             .expect("test BLS validator keypair should be valid");
@@ -32396,7 +32403,7 @@ fn committed_teu_by_lane_from_routes(
 #[cfg(test)]
 mod committed_teu_tests {
     use super::committed_teu_by_lane_from_routes;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     #[test]
     fn committed_teu_attribution_uses_supplied_routes_not_cached_hints() {
         let stale_hint_lane = LaneId::new(99);

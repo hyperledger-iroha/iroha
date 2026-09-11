@@ -11,9 +11,10 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetDefinitionId,
     block::consensus::{LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs},
-    nexus::{DataSpaceId, FeeDebitSource, LaneId},
+    nexus::FeeDebitSource,
     transaction::SignedTransaction,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(any(feature = "telemetry", test))]
 use iroha_primitives::bigint::BigInt;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -320,7 +321,7 @@ impl SettlementAccumulator {
 mod tests {
     use super::*;
     use iroha_crypto::Hash;
-    use iroha_data_model::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }

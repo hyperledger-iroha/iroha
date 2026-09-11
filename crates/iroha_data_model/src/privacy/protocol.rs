@@ -911,7 +911,7 @@ impl PrivacyOrchardPoolBootstrapV1 {
         }
         if matches!(
             self.public_balance_scope,
-            AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
         ) {
             return Err(PrivacyOrchardPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope);
         }
@@ -1505,7 +1505,9 @@ impl PrivacyProofManagedPoolBootstrapV1 {
                 }
                 if matches!(
                     bootstrap.public_balance_scope,
-                    AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL)
+                    AssetBalanceScope::Dataspace(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL
+                    )
                 ) {
                     return Err(
                         PrivacyProofManagedPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope,

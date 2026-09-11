@@ -289,8 +289,9 @@ pub enum AccountRecoveryPolicyError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Level, isi::Log, nexus::DataSpaceId};
+    use crate::{Level, isi::Log};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU64;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

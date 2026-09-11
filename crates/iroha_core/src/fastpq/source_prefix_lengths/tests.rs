@@ -9,7 +9,8 @@ use crate::fastpq::{
 use fastpq_prover::gadgets::public_transfer_statement::{
     PublicTransferLimits, TransferSmtBuildLimits,
 };
-use iroha_data_model::{DomainId, asset::AssetDefinitionId, fastpq::TransferSmtWitness};
+use iroha_data_model::{asset::AssetDefinitionId, fastpq::TransferSmtWitness};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::{bigint::BigInt, numeric::Numeric};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 

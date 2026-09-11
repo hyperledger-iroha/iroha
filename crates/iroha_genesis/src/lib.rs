@@ -15,7 +15,11 @@
     clippy::items_after_statements,
     clippy::clone_on_copy
 )]
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 mod bounded_manifest;
 #[cfg(test)]
 mod ivm_path_codec_tests;
@@ -104,7 +108,7 @@ fn deterministic_test_genesis_topology_entries() -> Vec<GenesisTopologyEntry> {
             let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
                 .expect("derive deterministic genesis fixture proof of possession");
             GenesisTopologyEntry::new(
-                iroha_data_model::peer::PeerId::new(validator.public_key().clone()),
+                iroha_model_base::peer::PeerId::new(validator.public_key().clone()),
                 pop,
             )
         })
@@ -123,7 +127,7 @@ fn deterministic_test_kagemusha_mint_finality_genesis_parameters()
 }
 #[cfg(test)]
 fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
-    mut validator_ids: Vec<iroha_data_model::peer::PeerId>,
+    mut validator_ids: Vec<iroha_model_base::peer::PeerId>,
 ) -> KagemushaMintFinalityGenesisParametersV1 {
     use iroha_data_model::isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
@@ -934,16 +938,17 @@ pub mod genesis_instructions_json {
             },
             register::RegisterBox,
         },
-        metadata::Metadata,
         nexus::{
-            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
-            UniversalAccountId,
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, UniversalAccountId,
         },
         parameter::Parameter,
         permission::Permission,
-        prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, RoleId},
+        prelude::{AccountId, AssetDefinitionId, AssetId, RoleId},
         role::NewRole,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Numeric;
     use norito::json::{self, Number, Parser, SeqVisitor, Value};
     use std::{collections::BTreeMap, str::FromStr};
@@ -1745,7 +1750,7 @@ pub mod genesis_instructions_json {
             }
         };
         let dataspace = match fields.remove("dataspace") {
-            Some(value) => iroha_data_model::nexus::DataSpaceId::new(u64::from(parse_u32(
+            Some(value) => iroha_model_base::topology::DataSpaceId::new(u64::from(parse_u32(
                 value,
                 "account alias dataspace",
             )?)),
@@ -2139,12 +2144,10 @@ pub mod genesis_instructions_json {
                 staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
             },
             level::Level,
-            metadata::Metadata,
             nexus::{
-                DataSpaceId, FeeSponsorAssetBudget, FeeSponsorEligibility,
-                FeeSponsorNativeInstructionSelector, FeeSponsorProgram, FeeSponsorProgramId,
-                FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
-                FeeSponsorRuleSelector, LaneId,
+                FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorNativeInstructionSelector,
+                FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, FeeSponsorRule,
+                FeeSponsorRuleEffect, FeeSponsorRuleSelector,
             },
             parameter::{Parameter, TransactionParameter},
             permission::Permission,
@@ -2158,6 +2161,10 @@ pub mod genesis_instructions_json {
             account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
             parameter::CanSetParameters,
         };
+        #[allow(unused_imports)]
+        use iroha_model_base::metadata::Metadata;
+        #[allow(unused_imports)]
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
         use norito::json::Map;
@@ -2728,7 +2735,7 @@ pub mod genesis_instructions_json {
             let expected_label = iroha_data_model::account::rekey::AccountAlias::new(
                 "admin1".parse().expect("alias label"),
                 Some("hbl".parse().expect("alias domain")),
-                iroha_data_model::nexus::DataSpaceId::new(10),
+                iroha_model_base::topology::DataSpaceId::new(10),
             );
             let register_json = format!(
                 r#"{{

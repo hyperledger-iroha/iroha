@@ -7,6 +7,7 @@ use iroha_core::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{block::BlockHeader, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, syscalls};
 use nonzero_ext::nonzero;

@@ -17,13 +17,13 @@ fn proof_digest_helper_is_domain_and_length_separated() {
         private_settlement_proof_digest_v1(&suffixed)
     );
 }
-use crate::domain::DomainId;
 use crate::privacy::{PrivacyEncryptionKeyV1, PrivacyRecipientIdV1};
 use crate::{
     account::{AccountController, MultisigMember, MultisigPolicy},
     block::BlockHeader,
 };
 use iroha_crypto::{Algorithm, HashOf, HybridKeyPair, KeyPair};
+use iroha_model_base::domain::DomainId;
 
 fn network(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
@@ -240,7 +240,7 @@ fn measured_delta(manifest: &AtomicPrivateSettlementV1, index: usize) -> Private
     }
 }
 
-pub(crate) fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
+pub fn measured_receipt(count: usize) -> PrivateSettlementReceiptV1 {
     let mut manifest = manifest(count);
     let deltas = (0..count)
         .map(|index| measured_delta(&manifest, index))
@@ -618,6 +618,29 @@ fn manifest_enforces_two_through_255_canonical_legs() {
     );
 }
 
+fn assert_audit_plaintext_redaction_and_roundtrip(plaintext: &PrivateSettlementAuditPlaintextV1) {
+    assert_eq!(
+        format!("{plaintext:?}"),
+        "PrivateSettlementAuditPlaintextV1(<redacted>)"
+    );
+    assert_eq!(
+        format!("{:?}", plaintext.outputs[0].view_key_authorization),
+        "PrivateSettlementAuditViewKeyAuthorizationV1(<redacted>)"
+    );
+    assert_eq!(
+        format!("{:?}", plaintext.payer_authorization),
+        "PrivateSettlementAuditPayerAuthorizationV1(<redacted>)"
+    );
+    assert_eq!(
+        format!("{:?}", plaintext.outputs[0].encryption_opening),
+        "PrivateSettlementAuditEncryptionOpeningV1(<redacted>)"
+    );
+    let encoded = norito::encode_canonical(plaintext).expect("audit plaintext encodes");
+    let decoded = norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(&encoded)
+        .expect("audit plaintext decodes canonically");
+    assert_eq!(decoded, *plaintext);
+}
+
 #[test]
 fn auditor_plaintext_is_fixed_balanced_bound_and_redacted() {
     let (manifest, plaintext) = audit_plaintext_fixture();
@@ -692,26 +715,7 @@ fn auditor_plaintext_is_fixed_balanced_bound_and_redacted() {
             .commitment()
             .expect("changed encryption opening commitment")
     );
-    assert_eq!(
-        format!("{plaintext:?}"),
-        "PrivateSettlementAuditPlaintextV1(<redacted>)"
-    );
-    assert_eq!(
-        format!("{:?}", plaintext.outputs[0].view_key_authorization),
-        "PrivateSettlementAuditViewKeyAuthorizationV1(<redacted>)"
-    );
-    assert_eq!(
-        format!("{:?}", plaintext.payer_authorization),
-        "PrivateSettlementAuditPayerAuthorizationV1(<redacted>)"
-    );
-    assert_eq!(
-        format!("{:?}", plaintext.outputs[0].encryption_opening),
-        "PrivateSettlementAuditEncryptionOpeningV1(<redacted>)"
-    );
-    let encoded = norito::encode_canonical(&plaintext).expect("audit plaintext encodes");
-    let decoded = norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(&encoded)
-        .expect("audit plaintext decodes canonically");
-    assert_eq!(decoded, plaintext);
+    assert_audit_plaintext_redaction_and_roundtrip(&plaintext);
 
     let mut unbalanced = plaintext.clone();
     unbalanced.outputs[0].note.value += 1;
@@ -869,86 +873,89 @@ fn confidential_canonical_error_path_scrubs_staged_bytes() {
     assert_eq!(drops_after, drops_before + 1);
 }
 
-#[test]
-fn auditor_plaintext_confidential_discard_scrubs_every_secret_field_idempotently() {
-    fn public_key_is_scrubbed(key: &PublicKey) -> bool {
-        key.try_to_bytes()
-            .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
-    }
+fn public_key_is_scrubbed(key: &PublicKey) -> bool {
+    key.try_to_bytes()
+        .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
+}
 
-    fn account_is_scrubbed(account: &AccountId) -> bool {
-        match account.controller() {
-            AccountController::Single(key) => public_key_is_scrubbed(key),
-            AccountController::Multisig(policy) => {
-                policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
-            }
+fn account_is_scrubbed(account: &AccountId) -> bool {
+    match account.controller() {
+        AccountController::Single(key) => public_key_is_scrubbed(key),
+        AccountController::Multisig(policy) => {
+            policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
         }
     }
+}
 
-    fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
-        !opening.active
-            && opening.value == 0
-            && opening.spending_authority == [0; 32]
-            && opening.rho == [0; 32]
-            && opening.blinding == [0; 32]
-            && opening.memo_digest == [0; 32]
-            && opening.dummy_domain.is_none()
-    }
+fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
+    !opening.active
+        && opening.value == 0
+        && opening.spending_authority == [0; 32]
+        && opening.rho == [0; 32]
+        && opening.blinding == [0; 32]
+        && opening.memo_digest == [0; 32]
+        && opening.dummy_domain.is_none()
+}
 
-    fn assert_secret_fields_are_scrubbed(plaintext: &PrivateSettlementAuditPlaintextV1) {
-        assert!(account_is_scrubbed(&plaintext.payer));
-        assert!(account_is_scrubbed(&plaintext.recipient));
-        assert!(account_is_scrubbed(&plaintext.sponsor));
-        assert_eq!(plaintext.asset_definition_id.aid_bytes, [0; 16]);
-        assert_eq!(plaintext.asset_binding_salt, [0; 32]);
-        assert_eq!(plaintext.amount, 0);
-        assert_eq!(plaintext.sponsor_reimbursement_amount, 0);
-        assert_eq!(plaintext.reimbursement_terms_salt, [0; 32]);
-        assert!(plaintext.memo.is_empty());
-        assert!(plaintext.policy_references.is_empty());
-        assert!(account_is_scrubbed(
-            &plaintext.payer_authorization.body.payer
-        ));
-        assert!(
-            plaintext
-                .payer_authorization
-                .body
-                .inputs
-                .iter()
-                .all(|input| {
-                    !input.active
-                        && input.note_spending_authority == [0; 32]
-                        && input.dummy_domain.is_none()
-                })
-        );
-        assert!(
-            plaintext
-                .payer_authorization
+fn assert_secret_fields_are_scrubbed(plaintext: &PrivateSettlementAuditPlaintextV1) {
+    assert!(account_is_scrubbed(&plaintext.payer));
+    assert!(account_is_scrubbed(&plaintext.recipient));
+    assert!(account_is_scrubbed(&plaintext.sponsor));
+    assert_eq!(plaintext.asset_definition_id.aid_bytes, [0; 16]);
+    assert_eq!(plaintext.asset_binding_salt, [0; 32]);
+    assert_eq!(plaintext.amount, 0);
+    assert_eq!(plaintext.sponsor_reimbursement_amount, 0);
+    assert_eq!(plaintext.reimbursement_terms_salt, [0; 32]);
+    assert!(plaintext.memo.is_empty());
+    assert!(plaintext.policy_references.is_empty());
+    assert!(account_is_scrubbed(
+        &plaintext.payer_authorization.body.payer
+    ));
+    assert!(
+        plaintext
+            .payer_authorization
+            .body
+            .inputs
+            .iter()
+            .all(|input| {
+                !input.active
+                    && input.note_spending_authority == [0; 32]
+                    && input.dummy_domain.is_none()
+            })
+    );
+    assert!(
+        plaintext
+            .payer_authorization
+            .signatures
+            .iter()
+            .all(|entry| public_key_is_scrubbed(&entry.signer)
+                && entry.signature.payload().is_empty())
+    );
+    assert!(plaintext.inputs.iter().all(note_opening_is_scrubbed));
+    assert!(plaintext.outputs.iter().all(|output| {
+        output.recipient_view_key == [0; 32]
+            && output.view_key_authorization.body.recipient_view_key == [0; 32]
+            && !output.view_key_authorization.body.output_active
+            && output.view_key_authorization.body.note_spending_authority == [0; 32]
+            && account_is_scrubbed(&output.view_key_authorization.body.authorized_account)
+            && output
+                .view_key_authorization
                 .signatures
                 .iter()
-                .all(|entry| public_key_is_scrubbed(&entry.signer)
-                    && entry.signature.payload().is_empty())
-        );
-        assert!(plaintext.inputs.iter().all(note_opening_is_scrubbed));
-        assert!(plaintext.outputs.iter().all(|output| {
-            output.recipient_view_key == [0; 32]
-                && output.view_key_authorization.body.recipient_view_key == [0; 32]
-                && !output.view_key_authorization.body.output_active
-                && output.view_key_authorization.body.note_spending_authority == [0; 32]
-                && account_is_scrubbed(&output.view_key_authorization.body.authorized_account)
-                && output
-                    .view_key_authorization
-                    .signatures
-                    .iter()
-                    .all(|entry| {
-                        public_key_is_scrubbed(&entry.signer)
-                            && entry.signature.payload().is_empty()
-                    })
-                && output.encryption_opening.ephemeral_secret == [0; 32]
-                && note_opening_is_scrubbed(&output.note)
-        }));
-    }
+                .all(|entry| {
+                    public_key_is_scrubbed(&entry.signer) && entry.signature.payload().is_empty()
+                })
+            && output.encryption_opening.ephemeral_secret == [0; 32]
+            && note_opening_is_scrubbed(&output.note)
+    }));
+}
 
+fn payer_input_is_scrubbed(input: &PrivateSettlementAuditPayerInputV1) -> bool {
+    !input.active && input.note_spending_authority == [0; 32] && input.dummy_domain.is_none()
+}
+
+#[test]
+fn auditor_plaintext_confidential_discard_scrubs_every_secret_field_idempotently() {
     let (_, mut plaintext) = audit_plaintext_fixture();
     let multisig_members = [0xB3, 0xB4]
         .map(|seed| {
@@ -1012,36 +1019,7 @@ fn auditor_plaintext_confidential_discard_scrubs_every_secret_field_idempotently
     assert_secret_fields_are_scrubbed(&plaintext);
 }
 
-#[test]
-fn restricted_child_owners_scrub_standalone_copies_idempotently() {
-    fn public_key_is_scrubbed(key: &PublicKey) -> bool {
-        key.try_to_bytes()
-            .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
-    }
-
-    fn account_is_scrubbed(account: &AccountId) -> bool {
-        match account.controller() {
-            AccountController::Single(key) => public_key_is_scrubbed(key),
-            AccountController::Multisig(policy) => {
-                policy.version() == 0 && policy.threshold() == 0 && policy.members().is_empty()
-            }
-        }
-    }
-
-    fn payer_input_is_scrubbed(input: &PrivateSettlementAuditPayerInputV1) -> bool {
-        !input.active && input.note_spending_authority == [0; 32] && input.dummy_domain.is_none()
-    }
-
-    fn note_opening_is_scrubbed(opening: &PrivateSettlementAuditNoteOpeningV1) -> bool {
-        !opening.active
-            && opening.value == 0
-            && opening.spending_authority == [0; 32]
-            && opening.rho == [0; 32]
-            && opening.blinding == [0; 32]
-            && opening.memo_digest == [0; 32]
-            && opening.dummy_domain.is_none()
-    }
-
+fn assert_confidential_child_drop_owners() {
     assert!(core::mem::needs_drop::<PrivateSettlementAuditPayerInputV1>());
     assert!(core::mem::needs_drop::<
         PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -1066,6 +1044,11 @@ fn restricted_child_owners_scrub_standalone_copies_idempotently() {
     >());
     assert!(core::mem::needs_drop::<PrivateSettlementAuditNoteOpeningV1>());
     assert!(core::mem::needs_drop::<PrivateSettlementAuditOutputV1>());
+}
+
+#[test]
+fn restricted_child_owners_scrub_standalone_copies_idempotently() {
+    assert_confidential_child_drop_owners();
 
     let (_, plaintext) = audit_plaintext_fixture();
 
@@ -2021,8 +2004,10 @@ fn audit_approval_acknowledgement_attestation_binds_request_view_and_responder()
     );
 }
 
-#[test]
-fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
+fn fixed_output_statement() -> (
+    PrivateSettlementProofStatementV1,
+    Vec<PrivacyEncryptedOutputV1>,
+) {
     let profile = PrivateSettlementProofProfileV1::IvmPrivateNoteFixed2In3Out;
     let output_commitments = vec![
         PrivacyCommitmentV1::new([9; 32]),
@@ -2072,20 +2057,26 @@ fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
         reimbursement_leg_ordinal: 0,
         expiry_height: 100,
     };
+    (statement, encrypted_outputs)
+}
+
+fn assert_fixed_output_commitment(
+    statement: &PrivateSettlementProofStatementV1,
+) -> PrivateSettlementProofStatementV1 {
     statement.validate().expect("statement shape is valid");
-    let statement_bytes = norito::encode_canonical(&statement).expect("statement encodes");
+    let statement_bytes = norito::encode_canonical(statement).expect("statement encodes");
     let decoded_statement =
         norito::decode_canonical::<PrivateSettlementProofStatementV1>(&statement_bytes)
             .expect("statement decodes");
-    assert_eq!(decoded_statement, statement);
+    assert_eq!(decoded_statement, *statement);
     assert_eq!(decoded_statement.new_root, PrivacyRootV1::new([6; 32]));
     assert_eq!(decoded_statement.new_epoch, 2);
     assert_eq!(decoded_statement.audit_input_commitment, [17; 32]);
-    let json_statement = norito::json::to_value(&statement).expect("statement JSON encodes");
+    let json_statement = norito::json::to_value(statement).expect("statement JSON encodes");
     assert_eq!(
         norito::json::from_value::<PrivateSettlementProofStatementV1>(json_statement.clone())
             .expect("statement JSON decodes"),
-        statement
+        *statement
     );
     for digest in [[0x22; 32], [0x23; 32]] {
         let mut raw_digest_statement = statement.clone();
@@ -2131,24 +2122,14 @@ fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
             .expect("substituted statement digest"),
         "the statement digest binds the exact input-opening commitment"
     );
-    let mut zero_successor = statement.clone();
-    zero_successor.new_root = PrivacyRootV1::new([0; 32]);
-    assert_eq!(
-        zero_successor.validate(),
-        Err(PrivateSettlementValidationError::ZeroCommitment)
-    );
-    let mut unchanged_successor = statement.clone();
-    unchanged_successor.new_root = unchanged_successor.old_root;
-    assert_eq!(
-        unchanged_successor.validate(),
-        Err(PrivateSettlementValidationError::InvalidEpoch)
-    );
-    let mut skipped_epoch = statement.clone();
-    skipped_epoch.new_epoch = 3;
-    assert_eq!(
-        skipped_epoch.validate(),
-        Err(PrivateSettlementValidationError::InvalidEpoch)
-    );
+    substituted_input_commitment
+}
+
+fn assert_fixed_output_delta(
+    statement: &PrivateSettlementProofStatementV1,
+    encrypted_outputs: &[PrivacyEncryptedOutputV1],
+    substituted_input_commitment: &PrivateSettlementProofStatementV1,
+) {
     let mut delta = PrivateSettlementDeltaV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         bundle_id: statement.bundle_id,
@@ -2162,16 +2143,16 @@ fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
         new_epoch: statement.new_epoch,
         nullifiers: statement.nullifiers.clone(),
         output_commitments: statement.output_commitments.clone(),
-        encrypted_outputs: encrypted_outputs.clone(),
+        encrypted_outputs: encrypted_outputs.to_vec(),
         statement_digest: statement.digest().expect("statement hashes"),
         proof_digest: hash(16),
         capsule_digest: statement.audit_capsule_digest,
         audit_policy_digest: statement.audit_policy_digest,
         audit_key_epoch: statement.audit_key_epoch,
     };
-    delta.validate_against(&statement).expect("delta aligns");
+    delta.validate_against(statement).expect("delta aligns");
     assert_eq!(
-        delta.validate_against(&substituted_input_commitment),
+        delta.validate_against(substituted_input_commitment),
         Err(PrivateSettlementValidationError::DeltaStatementMismatch)
     );
     let mut reused_statement_recipient = statement.clone();
@@ -2191,20 +2172,49 @@ fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
     let mut substituted_successor = delta.clone();
     substituted_successor.new_root = PrivacyRootV1::new([17; 32]);
     assert_eq!(
-        substituted_successor.validate_against(&statement),
+        substituted_successor.validate_against(statement),
         Err(PrivateSettlementValidationError::DeltaStatementMismatch)
     );
     let mut substituted_epoch = delta.clone();
     substituted_epoch.old_epoch = 2;
     substituted_epoch.new_epoch = 3;
     assert_eq!(
-        substituted_epoch.validate_against(&statement),
+        substituted_epoch.validate_against(statement),
         Err(PrivateSettlementValidationError::DeltaStatementMismatch)
     );
     delta.encrypted_outputs[2].ciphertext.pop();
     assert_eq!(
-        delta.validate_against(&statement),
+        delta.validate_against(statement),
         Err(PrivateSettlementValidationError::InvalidEncryptedOutput { index: 2 })
+    );
+}
+
+#[test]
+fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
+    let (statement, encrypted_outputs) = fixed_output_statement();
+    let substituted_input_commitment = assert_fixed_output_commitment(&statement);
+    let mut zero_successor = statement.clone();
+    zero_successor.new_root = PrivacyRootV1::new([0; 32]);
+    assert_eq!(
+        zero_successor.validate(),
+        Err(PrivateSettlementValidationError::ZeroCommitment)
+    );
+    let mut unchanged_successor = statement.clone();
+    unchanged_successor.new_root = unchanged_successor.old_root;
+    assert_eq!(
+        unchanged_successor.validate(),
+        Err(PrivateSettlementValidationError::InvalidEpoch)
+    );
+    let mut skipped_epoch = statement.clone();
+    skipped_epoch.new_epoch = 3;
+    assert_eq!(
+        skipped_epoch.validate(),
+        Err(PrivateSettlementValidationError::InvalidEpoch)
+    );
+    assert_fixed_output_delta(
+        &statement,
+        &encrypted_outputs,
+        &substituted_input_commitment,
     );
     let mut malformed_statement = statement;
     malformed_statement.encrypted_outputs[2].ciphertext.pop();
@@ -2212,4 +2222,136 @@ fn fixed_output_codec_rejects_variable_or_unbound_ciphertext() {
         malformed_statement.validate(),
         Err(PrivateSettlementValidationError::InvalidEncryptedOutput { index: 2 })
     );
+}
+
+#[test]
+fn receipt_rejects_each_independent_delta_manifest_mismatch() {
+    let baseline = measured_receipt(2);
+    baseline.validate_shape().expect("valid receipt fixture");
+    for coordinate in 0..7 {
+        let mut changed = baseline.clone();
+        let delta = &mut changed.legs[0].delta;
+        match coordinate {
+            0 => delta.bundle_id = hash(0xA9),
+            1 => delta.leg_ordinal = 1,
+            2 => delta.route = route(9),
+            3 => delta.pool_id = PrivacyPoolIdV1::new([0xA9; 32]),
+            4 => delta.asset_binding_commitment = hash(0xA9),
+            5 => delta.audit_policy_digest = hash(0xA9),
+            6 => delta.proof_digest = hash(0xA9),
+            _ => unreachable!(),
+        }
+        delta
+            .validate_public_shape()
+            .expect("delta remains independently well formed");
+        if coordinate < 6 {
+            // Keep every repeated digest internally coherent so each coordinate
+            // mismatch is detected independently of the delta-digest comparison.
+            // This is a shape-only fixture; these are not authenticated signatures.
+            changed.manifest.legs[0].delta_digest = delta.digest().unwrap();
+            let manifest_digest = changed.manifest.manifest_digest().unwrap();
+            for leg in &mut changed.legs {
+                let delta_digest = leg.delta.digest().unwrap();
+                for body in [&mut leg.prepare.body, &mut leg.commit.body] {
+                    body.manifest_digest = manifest_digest;
+                    body.delta_digest = delta_digest;
+                }
+            }
+            changed
+                .manifest
+                .validate()
+                .expect("manifest remains independently canonical");
+        }
+        assert_eq!(
+            changed.validate_shape(),
+            Err(PrivateSettlementValidationError::ReceiptBindingMismatch),
+            "coordinate {coordinate}"
+        );
+    }
+}
+
+#[test]
+fn audit_plaintext_requires_the_first_active_input_for_all_slot_combinations() {
+    let (_, baseline) = audit_plaintext_fixture();
+    baseline.validate().expect("valid one-active-input fixture");
+    let nullifiers = baseline
+        .payer_authorization
+        .body
+        .inputs
+        .iter()
+        .map(|input| input.nullifier)
+        .collect::<Vec<_>>();
+    let signer = KeyPair::from_seed(vec![0xB1; 32], Algorithm::Ed25519);
+    for first_active in [false, true] {
+        for second_active in [false, true] {
+            let mut changed = baseline.clone();
+            changed.inputs[0] = if first_active {
+                active_opening(0xD0, if second_active { 60 } else { 120 })
+            } else {
+                dummy_opening(0xD0)
+            };
+            changed.inputs[1] = if second_active {
+                active_opening(0xD1, if first_active { 60 } else { 120 })
+            } else {
+                dummy_opening(0xD1)
+            };
+            for input in &changed.inputs {
+                input
+                    .validate()
+                    .expect("each opening has valid active/dummy shape");
+            }
+            if first_active {
+                authorize_payer_inputs(&mut changed, &nullifiers, &signer);
+                assert_eq!(changed.validate(), Ok(()), "second active: {second_active}");
+            } else {
+                assert_eq!(
+                    changed.validate(),
+                    Err(PrivateSettlementValidationError::InvalidAuditPlaintext),
+                    "first inactive must fail before authorization or balance; second active: {second_active}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn audit_plaintext_checks_fixed_slot_lengths_before_indexing() {
+    let (_, baseline) = audit_plaintext_fixture();
+    for input_count in [0, 1] {
+        let mut changed = baseline.clone();
+        changed.inputs.truncate(input_count);
+        assert_eq!(
+            changed.validate(),
+            Err(PrivateSettlementValidationError::InvalidAuditPlaintext)
+        );
+    }
+    for output_count in [0, 1, 2] {
+        let mut changed = baseline.clone();
+        changed.outputs.truncate(output_count);
+        assert_eq!(
+            changed.validate(),
+            Err(PrivateSettlementValidationError::InvalidAuditPlaintext)
+        );
+    }
+}
+
+#[test]
+fn audit_output_authorizations_bind_every_role_and_nonzero_recipient_key() {
+    let (_, baseline) = audit_plaintext_fixture();
+    baseline.validate_output_authorizations().unwrap();
+    for index in 0..PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1 {
+        for invalid_key in [false, true] {
+            let mut changed = baseline.clone();
+            if invalid_key {
+                changed.outputs[index].recipient_view_key = [0; 32];
+            } else {
+                changed.outputs[index].role = baseline.outputs[(index + 1) % 3].role;
+            }
+            assert_eq!(
+                changed.validate_output_authorizations(),
+                Err(PrivateSettlementValidationError::InvalidAuditPlaintext),
+                "output {index}, invalid key: {invalid_key}"
+            );
+        }
+    }
 }

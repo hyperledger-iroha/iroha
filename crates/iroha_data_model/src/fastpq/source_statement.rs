@@ -8,12 +8,9 @@
 
 use std::num::NonZeroU64;
 
-use crate::{
-    NetworkId,
-    execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
-    nexus::{DataSpaceId, LaneId},
-};
+use crate::{NetworkId, execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1};
 use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize};
 
@@ -565,14 +562,14 @@ mod tests {
                 statement_index: i,
                 entry_index: i * 2,
                 entry_transcript_count: i + 2,
-                entry_hash: Hash::new([i as u8]),
+                entry_hash: Hash::new([u8::try_from(i).expect("fixture value fits u8")]),
                 execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
                 route: FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
                     lane_id: LaneId::new(2),
                     lane_incarnation: Hash::new(b"source lane incarnation"),
                 }),
                 dataspace_id: DataSpaceId::new(4),
-                statement_digest: [i as u8 + 9; 32],
+                statement_digest: [u8::try_from(i).expect("fixture value fits u8") + 9; 32],
             })
             .collect()
     }
@@ -688,7 +685,7 @@ mod tests {
             }
             // Sequential statement positions cannot hide a duplicate or reordered entry.
             for (index, leaf) in changed.iter_mut().enumerate() {
-                leaf.statement_index = index as u32;
+                leaf.statement_index = u32::try_from(index).expect("fixture value fits u32");
             }
             assert!(
                 build_fastpq_ordinary_source_statement_manifest_v1(
@@ -737,7 +734,9 @@ mod tests {
                 &leaves[index],
                 &leaves[index],
                 &manifest,
-                &tree.get_proof(index as u32).unwrap(),
+                &tree
+                    .get_proof(u32::try_from(index).expect("fixture value fits u32"))
+                    .unwrap(),
                 5,
                 3,
             ));
@@ -1226,6 +1225,43 @@ mod tests {
             let frame = norito::encode_canonical(&old).unwrap();
             assert!(
                 norito::decode_canonical::<FastpqOrdinarySourceStatementLeafV1>(&frame).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_membership_entry_range_is_half_open_without_overflow() {
+        let baseline = leaves()[0];
+        let baseline_manifest = build_test_manifest(baseline.source, 1, &[baseline], 1, 1).unwrap();
+        for (count, index, expected) in [
+            (0, 0, false),
+            (1, 0, true),
+            (1, 1, false),
+            (u32::MAX, u32::MAX - 1, true),
+            (u32::MAX, u32::MAX, false),
+        ] {
+            let mut leaf = baseline;
+            leaf.entry_index = index;
+            let tree: MerkleTree<_> =
+                [fastpq_ordinary_source_statement_leaf_hash_v1(&leaf).unwrap()]
+                    .into_iter()
+                    .collect();
+            let mut manifest = baseline_manifest;
+            // This verifier receives an already authenticated entry commitment; build
+            // the actual leaf root independently to isolate its index/count boundary.
+            manifest.executed_entry_count = count;
+            manifest.statement_root = Hash::from(tree.root().unwrap());
+            assert_eq!(
+                verify_fastpq_ordinary_source_statement_membership_v1(
+                    &leaf,
+                    &leaf,
+                    &manifest,
+                    &tree.get_proof(0).unwrap(),
+                    u32::MAX,
+                    1,
+                ),
+                expected,
+                "entry {index} of {count}"
             );
         }
     }

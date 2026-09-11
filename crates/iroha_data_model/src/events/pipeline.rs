@@ -3,12 +3,12 @@ pub use self::model::*;
 use crate::{
     block::{BlockHeader, consensus::ExecWitnessMsg},
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{boxed::Box, format, num::NonZeroU64, string::String, vec::Vec};
@@ -435,9 +435,10 @@ mod tests {
     use super::{super::EventFilter, *};
     use crate::{
         ValidationFail, block::consensus::LaneBlockCommitment, merge::MergeQuorumCertificate,
-        peer::PeerId, transaction::error::TransactionRejectionReason::*,
+        transaction::error::TransactionRejectionReason::*,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::peer::PeerId;
     use nonzero_ext::nonzero;
     use std::vec::Vec;
     impl BlockHeader {

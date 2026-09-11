@@ -15,7 +15,6 @@ use iroha_data_model::{
         SorafsRepairLedgerEventKind,
     },
     isi::error::{InstructionExecutionError, InvalidParameterError},
-    metadata::Metadata,
     musubi::{
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1,
         MusubiReplicationOrderArchiveBindingV1, MusubiReplicationOrderLocationReferenceV1,
@@ -68,6 +67,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,

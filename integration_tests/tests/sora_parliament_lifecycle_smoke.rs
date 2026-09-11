@@ -69,7 +69,6 @@ use iroha::{
                 consensus_metadata,
             },
         },
-        peer::PeerId,
         permission::Permission,
         prelude::{
             Account, AssetId, FeePaymentIntent, FindAssetById, FindAssets, FindBlocks, Grant,
@@ -118,6 +117,7 @@ use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
 use iroha_executor_data_model::permission::{
     governance::CanProposeContractDeployment, smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode as _;

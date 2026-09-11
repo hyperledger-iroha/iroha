@@ -9,13 +9,14 @@ use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
-    domain::{Domain, DomainId},
+    domain::Domain,
     soranet::vpn::VpnUsageVoucherBodyV1,
     transaction::{
         FeePaymentIntent, TransactionBuilder,
         signed::{SealedTransactionReveal, compute_sealed_transaction_commitment},
     },
 };
+use iroha_model_base::domain::DomainId;
 use norito::codec::Encode;
 use std::{collections::BTreeSet, sync::Arc};
 fn signed_app_headers_for_network(

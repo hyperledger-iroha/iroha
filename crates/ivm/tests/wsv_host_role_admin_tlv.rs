@@ -56,7 +56,7 @@ fn create_role_grant_and_revoke_affects_permissions() {
     );
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::new();
@@ -188,7 +188,7 @@ fn create_role_with_permissions_key_then_mint() {
     );
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
     let mut wsv = MockWorldStateView::new();

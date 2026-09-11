@@ -25,7 +25,8 @@ use super::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::block::consensus_v2 as wire;
+use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},

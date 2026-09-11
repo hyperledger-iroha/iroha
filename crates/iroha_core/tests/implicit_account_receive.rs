@@ -20,6 +20,7 @@ use iroha_data_model::{
     prelude::*,
     transaction::error::TransactionRejectionReason,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;

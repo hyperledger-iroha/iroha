@@ -4,6 +4,7 @@
 //! and that display formatting remains consistent.
 use iroha_crypto::KeyPair;
 use iroha_data_model::{account::address, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
     address::ChainDiscriminantGuard::enter(address::chain_discriminant())

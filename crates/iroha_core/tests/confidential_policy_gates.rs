@@ -21,6 +21,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::num::NonZeroU64;

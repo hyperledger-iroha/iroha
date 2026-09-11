@@ -48,7 +48,6 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
     prelude::NetworkId,
     privacy::{
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
@@ -62,6 +61,7 @@ use iroha_data_model::{
         signed::TransactionSignatureError,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};

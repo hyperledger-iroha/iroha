@@ -417,7 +417,7 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
             .iter()
             .zip(&fixture.verified.context().roster)
             .all(|(key, power)| {
-                iroha_data_model::peer::PeerId::new(key.public_key().clone()) == power.validator
+                iroha_model_base::peer::PeerId::new(key.public_key().clone()) == power.validator
             }),
         "recovered Apply fixture keys must exactly match the ordered authenticated roster"
     );

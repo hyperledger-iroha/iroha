@@ -15,7 +15,8 @@ use iroha_core::{
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
 };
-use iroha_data_model::nexus::{LaneId, LaneLifecycleStatusV1};
+use iroha_data_model::nexus::LaneLifecycleStatusV1;
+use iroha_model_base::topology::LaneId;
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
 use std::{collections::BTreeSet, sync::Arc};
 #[path = "fixtures.rs"]
@@ -71,7 +72,7 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     }
     let torii = fixtures::ToriiHarness::new_without_telemetry(
         &cfg,
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         &kura,
         &state,

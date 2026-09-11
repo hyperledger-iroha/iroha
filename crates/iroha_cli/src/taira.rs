@@ -18,12 +18,12 @@ use iroha::{
         asset::AssetDefinitionId,
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
-        metadata::Metadata,
         prelude::{SignedTransaction, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::Quantity;
@@ -3002,7 +3002,7 @@ fn exact_inrou_local_placement(
         .as_deref()
         .ok_or_else(|| "runtime manager snapshot is missing local_peer_id".to_owned())?;
     let canonical_peer_id = local_peer_id
-        .parse::<iroha::data_model::peer::PeerId>()
+        .parse::<iroha_model_base::peer::PeerId>()
         .map_err(|error| format!("runtime manager local_peer_id is invalid: {error}"))?;
     if canonical_peer_id.to_string() != local_peer_id {
         return Err("runtime manager local_peer_id is not canonical".to_owned());
@@ -3072,7 +3072,7 @@ fn exact_inrou_local_placement(
     }
     let replica_peer = replica
         .peer_id
-        .parse::<iroha::data_model::peer::PeerId>()
+        .parse::<iroha_model_base::peer::PeerId>()
         .map_err(|error| format!("local placement peer ID is invalid: {error}"))?;
     if replica_peer.to_string() != replica.peer_id {
         return Err("local placement peer ID is not canonical".to_owned());
@@ -9343,7 +9343,7 @@ mod tests {
                 observation: iroha_torii_shared::FeeQuoteObservation {
                     ledger_time_ms: 1,
                     next_block_height: 1,
-                    route_dataspace_id: iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                    route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 },
                 components: Vec::new(),
                 capacities: Vec::new(),

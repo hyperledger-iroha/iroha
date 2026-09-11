@@ -1,6 +1,7 @@
 //! Canonical identity validation and framed encoding for Python instruction codecs.
 
-use iroha_data_model::{account::AccountAddress, domain::DomainId};
+use iroha_data_model::account::AccountAddress;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use pyo3::{
     Bound, Py, PyResult, Python,

@@ -1755,17 +1755,17 @@ fn seed_authoritative_hosted_http_revision(
             .expect("hosted HTTP assignment peer id must be valid");
         world.public_lane_validators_mut_for_testing().insert(
             (
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 validator_account_id.clone(),
             ),
             iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator_account_id.clone(),
                 peer_id: validator_peer_id,
                 stake_account: validator_account_id.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_u64),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u64),
-                metadata: iroha_data_model::metadata::Metadata::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 status: iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Active,
                 activation_height: 1,
                 deactivation_height: None,
@@ -2010,15 +2010,18 @@ fn seed_hosted_http_public_lane_validator(
     tx.world_mut_for_testing()
         .public_lane_validators_mut_for_testing()
         .insert(
-            (iroha_data_model::nexus::LaneId::SINGLE, validator.clone()),
+            (
+                iroha_model_base::topology::LaneId::SINGLE,
+                validator.clone(),
+            ),
             iroha_data_model::nexus::PublicLaneValidatorRecord {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator.clone(),
                 peer_id: peer_id.clone(),
                 stake_account: validator.clone(),
                 total_stake: Quantity::from(1_u64),
                 self_stake: Quantity::from(1_u64),
-                metadata: iroha_data_model::metadata::Metadata::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                 activation_height: 1,
                 deactivation_height: None,

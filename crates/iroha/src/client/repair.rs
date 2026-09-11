@@ -420,7 +420,6 @@ mod tests {
                 SorafsRepairTaskActionV1, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
             },
         },
-        metadata::Metadata,
         sorafs::{
             capacity::ProviderId,
             moderation_ledger::{
@@ -431,6 +430,7 @@ mod tests {
         },
         transaction::{Executable, FeePaymentIntent, IvmBytecode, SignedTransaction},
     };
+    use iroha_model_base::metadata::Metadata;
     use std::{num::NonZeroU64, sync::Arc};
     fn sign_executable(client: &super::super::Client, executable: Executable) -> SignedTransaction {
         let gas_limit = executable

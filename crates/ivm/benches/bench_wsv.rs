@@ -2,13 +2,14 @@
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
 use ivm::{
     DurableStateSnapshot, MockWorldStateView, WsvHost,
     host::IVMHost,
-    mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable},
+    mock_wsv::{AccountId, AssetDefinitionId, Mintable},
     parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
 };
 use std::{

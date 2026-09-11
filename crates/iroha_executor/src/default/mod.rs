@@ -357,12 +357,13 @@ mod contract_deployment_bootstrap_tests {
         isi::smart_contract_code::{
             CancelSmartContractCodeUpload, RegisterSmartContractCode, UploadSmartContractCodeChunk,
         },
-        metadata::Metadata,
-        nexus::{DataSpaceId, UniversalAccountId},
+        nexus::UniversalAccountId,
         permission::Permission,
         prelude::Json,
         smart_contract::manifest::ContractManifest,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU64;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -1537,10 +1538,11 @@ mod core_authorization_dispatch_tests {
             },
             settlement::{FxCorridorOracleEvidence, SettleFxCorridor},
         },
-        nexus::DataSpaceId,
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
-        prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
+        prelude::{AccountId, AssetDefinitionId, Quantity, ValidationFail},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     #[derive(Debug)]
     struct TestExecutor {
         host: Iroha,
@@ -2521,7 +2523,8 @@ pub mod domain {
     use iroha_executor_data_model::permission::domain::{
         CanModifyDomainMetadata, CanUnregisterDomain,
     };
-    use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
+    use iroha_model_base::domain::DomainId;
+    use iroha_smart_contract::data_model::asset::AssetDefinitionId;
     /// Registers a domain only while applying genesis.
     ///
     /// Ordinary signed transactions must use the declarative `EnsureAlias` instruction so lease
@@ -2829,6 +2832,7 @@ pub mod account {
     use iroha_executor_data_model::permission::account::{
         CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
+    use iroha_model_base::metadata::Metadata;
     fn has_native_transfer_control_metadata(metadata: &Metadata) -> bool {
         metadata
             .get(iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY)
@@ -3614,6 +3618,7 @@ pub mod asset {
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
         CanTransferAsset, CanTransferAssetWithDefinition,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_smart_contract::data_model::isi::{
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
     };
@@ -3958,7 +3963,6 @@ pub mod asset {
                 asset::{AssetDefinitionId, AssetId},
                 block::BlockHeader,
                 bridge::BridgeReceipt,
-                domain::DomainId,
                 executor::Result as ExecResult,
                 isi::{
                     InstructionBox, RegisterPublicLaneValidator,
@@ -3966,9 +3970,6 @@ pub mod asset {
                     governance::RegisterCitizen,
                     repo::{RepoInstructionBox, RepoIsi},
                 },
-                metadata::Metadata,
-                nexus::LaneId,
-                peer::PeerId,
                 prelude::{Json, Quantity},
                 repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
             },
@@ -3976,7 +3977,11 @@ pub mod asset {
         };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::metadata::Metadata;
         use iroha_model_base::name::Name;
+        use iroha_model_base::peer::PeerId;
+        use iroha_model_base::topology::LaneId;
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
@@ -5025,7 +5030,6 @@ pub mod trigger {
         use crate::data_model::{
             account::AccountId,
             asset::{AssetDefinitionId, AssetId},
-            domain::DomainId,
             nexus::FeeSponsorProgramId,
         };
         use core::str::FromStr as _;
@@ -5059,6 +5063,8 @@ pub mod trigger {
                 CanIngestSoranetPrivacy, CanIssueSoranetVpnQuote, CanManageSoranetVpnQuoteIssuers,
             },
         };
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::topology::DataSpaceId;
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
@@ -5453,7 +5459,6 @@ mod sorafs_permission_tests {
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, UnregisterProviderOwner, UpsertProviderCredit,
         },
-        metadata::Metadata,
         permission::Permission as PermissionObject,
         prelude::{Quantity, ValidationFail},
         query::sorafs::prelude::{
@@ -5511,6 +5516,8 @@ mod sorafs_permission_tests {
         parameter::{CanSetHijiriParameters, CanSetParameters},
         sccp::CanManageSccpGovernance,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     const AUTHORITY_PUBLIC_KEY: &str =
         "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
     const OWNER_PUBLIC_KEY: &str =
@@ -5876,7 +5883,7 @@ mod sorafs_permission_tests {
             predecessor_policy_digest: None,
             challenge_voting_asset_id:
                 iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                    iroha_model_base::domain::DomainId::try_new("sora", "universal")
                         .expect("governance domain"),
                     "xor".parse().expect("governance asset name"),
                 ),
@@ -6169,11 +6176,11 @@ mod sorafs_permission_tests {
             sorafs::visit_raise_moderation_challenge,
         );
         assert_allowed_without_permission(
-            ExpireSorafsModerationChallenge::new(
-                "appeal-case".to_owned(),
-                "round-1".to_owned(),
-                "challenge-1".to_owned(),
-            ),
+            ExpireSorafsModerationChallenge {
+                case_id: "appeal-case".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-1".to_owned(),
+            },
             sorafs::visit_expire_moderation_challenge,
         );
         assert_allowed_without_permission(

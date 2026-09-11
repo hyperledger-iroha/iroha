@@ -49,7 +49,7 @@ use iroha_data_model::{
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{BlockHeader, SignedBlock, consensus::LaneBlockCommitment, decode_framed_signed_block},
-    domain::prelude::{Domain, DomainId},
+    domain::prelude::Domain,
     escrow::{
         AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
         hash_conditional_escrow_evidence_digest,
@@ -80,13 +80,12 @@ use iroha_data_model::{
         sorafs::{CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder},
         zk::{RegisterZkAsset, VerifyProof},
     },
-    metadata::Metadata,
     musubi::ArchiveId,
     nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, DataSpaceId, FeeSponsorProgram, FeeSponsorProgramId,
-        FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneId,
-        LaneLifecycleParameterV1, LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof,
-        LaneRelayEnvelope, compute_settlement_hash,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramRevision, LANE_PRIVACY_MAX_MERKLE_DEPTH_V1, LaneLifecycleParameterV1,
+        LaneLifecyclePlan, LaneLifecycleStatusV1, LanePrivacyProof, LaneRelayEnvelope,
+        compute_settlement_hash,
     },
     nft::NftId,
     parameter::Parameter,
@@ -147,7 +146,10 @@ use iroha_data_model::{
         action::{Action as TriggerAction, Repeats},
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{
     json::Json,
     numeric::{NumericSpec, Quantity, XorQuantity},

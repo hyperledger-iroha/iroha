@@ -12,7 +12,7 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{Burn, Transfer, Unregister},
     permission::{Permission, Permissions},
     sorafs::{
@@ -23,6 +23,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use nonzero_ext::nonzero;
 const NOW: u64 = 20_000;
@@ -275,7 +276,7 @@ fn reserve_custody_rejects_user_debits_but_allows_exact_approved_withdrawal() {
             Quantity::zero(),
             0,
             0,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         credit
             .apply_penalty(&slash_lien.clone().into_quantity(), 1)

@@ -254,11 +254,9 @@ mod tests {
     use crate::isi::test_support::{
         assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
-    use crate::{
-        domain::DomainId,
-        kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy},
-    };
+    use crate::kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn account(seed: u8) -> AccountId {
@@ -366,24 +364,24 @@ mod tests {
         let roster_root = Hash::new("kaigi-roster-root");
         assert_slice_roundtrip(CreateKaigi {
             call: new_kaigi(),
-            commitment: Some(commitment.clone()),
-            nullifier: Some(nullifier.clone()),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
             roster_root: Some(roster_root),
             proof: Some(vec![0x01, 0x02, 0x03]),
         });
         assert_slice_roundtrip(JoinKaigi {
             call_id: call_id.clone(),
             participant: account(5),
-            commitment: Some(commitment.clone()),
-            nullifier: Some(nullifier.clone()),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
             roster_root: Some(roster_root),
             proof: Some(vec![0x04, 0x05]),
         });
         assert_slice_roundtrip(LeaveKaigi {
             call_id: call_id.clone(),
             participant: account(5),
-            commitment: Some(commitment.clone()),
-            nullifier: Some(nullifier.clone()),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
             roster_root: Some(roster_root),
             proof: Some(vec![0x06, 0x07]),
         });

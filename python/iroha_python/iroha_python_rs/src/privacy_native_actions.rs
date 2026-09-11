@@ -73,8 +73,6 @@ use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetDefinitionId},
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
-    nexus::DataSpaceId,
     prelude::{AccountId, NetworkId},
     privacy::{
         AnonymousPgcKOutOfNStatementV1, BootleLanternAttributeValueV1,
@@ -99,6 +97,8 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_version::codec::EncodeVersioned;
 use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
 use rand_core_06::OsRng;

@@ -46,11 +46,12 @@ use iroha_data_model::{
         MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSignerProof,
         MergeLedgerEntry, MergeQuorumCertificate,
     },
-    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneLifecycleParameterV1},
-    peer::PeerId,
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneLifecycleParameterV1},
     transaction::{TransactionBuilder, TransactionResult, signed::TransactionResultInner},
     trigger::DataTriggerSequence,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use nonzero_ext::nonzero;
 use std::{

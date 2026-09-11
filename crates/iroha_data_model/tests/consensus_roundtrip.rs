@@ -23,9 +23,9 @@ use iroha_data_model::{
         KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
     DeserializePayload,
     codec::{Decode, DecodeAll, Encode},

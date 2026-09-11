@@ -12,9 +12,9 @@ mod taikai;
 pub use ingest::{handler_get_da_manifest, handler_post_da_ingest, ipa_commitment_from_chunks};
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_data_model::{
-    account::AccountId, da::ingest::DaIngestAdmissionPolicyV1, nexus::LaneId,
-    sorafs::pin_registry::StorageClass,
+    account::AccountId, da::ingest::DaIngestAdmissionPolicyV1, sorafs::pin_registry::StorageClass,
 };
+use iroha_model_base::topology::LaneId;
 pub use persistence::{DaReceiptLog, DaReceiptLogEntry, ReceiptInsertOutcome, ReplayCursorStore};
 pub(crate) use spool::{
     DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, DaSpooler,

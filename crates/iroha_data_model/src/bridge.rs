@@ -1,7 +1,8 @@
 //! Bridge-related data types for wrapped assets and receipts. Feature-gated behind `bridge`.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
+use crate::{NetworkId, proof::ProofBox};
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -750,7 +751,7 @@ pub struct BridgeFinalityAttestationBodyV1 {
     /// Exact genesis-derived network identity repeated for explicit signed routing identity.
     pub network_id: NetworkId,
     /// Canonical identity of the node which signs this body.
-    pub node_id: crate::peer::PeerId,
+    pub node_id: iroha_model_base::peer::PeerId,
     /// Hash of the canonical encoded `node_id`.
     pub node_fingerprint: iroha_crypto::Hash,
     /// Actual committed block hash at height one in the captured state snapshot.
@@ -1372,8 +1373,9 @@ fn verify_successor_bridge_finality_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block::consensus_v2 as wire, peer::PeerId};
+    use crate::block::consensus_v2 as wire;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;
     use std::num::NonZeroU64;
@@ -1706,7 +1708,9 @@ mod tests {
             successor_keys,
         }
     }
-    fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
+    fn successor_context(
+        parent: &V2Fixture,
+    ) -> (crate::block::BlockHeader, wire::HeightContext, Vec<Vec<u8>>) {
         let parent_artifact = &parent.proof.finality_artifact;
         let (
             epoch,
@@ -1787,6 +1791,12 @@ mod tests {
             da_layout: parent_artifact.height_context.da_layout,
             leader_seed,
         };
+        (header, context, validator_set_pops)
+    }
+    fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
+        let (header, context, validator_set_pops) = successor_context(parent);
+        let parent_artifact = &parent.proof.finality_artifact;
+        let height = context.height;
         let subject = wire::BlockSubject {
             parent_block_hash: Some(parent_artifact.block_hash),
             block_hash: header.hash(),

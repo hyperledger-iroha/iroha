@@ -510,7 +510,8 @@ mod output_recovery_tests {
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use iroha_data_model::block::consensus_v2 as wire;
+    use iroha_model_base::peer::PeerId;
 
     fn verified_fixture() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (0x91_u8..=0x94)

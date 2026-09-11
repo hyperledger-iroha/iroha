@@ -6,7 +6,7 @@ use iroha_core::{
     block::CommittedBlock, prelude::*, state::State, sumeragi::network_topology::Topology,
 };
 use iroha_crypto::Algorithm;
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use iroha_test_samples::gen_account_in;
 use std::sync::Arc;
 pub struct StateApplyBlocks {

@@ -402,7 +402,7 @@ fn resolve_permissioned_leader_peer(
         .cloned()
         .ok_or_else(|| eyre!("leader peer id not found in network peers"))
 }
-fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
+fn chain_epoch_seed(chain_id: &iroha_model_base::chain::ChainId) -> [u8; 32] {
     let chain = chain_id.clone().into_inner();
     let hash = iroha_crypto::Hash::new(chain.as_bytes());
     <[u8; 32]>::from(hash)

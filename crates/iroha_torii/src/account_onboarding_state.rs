@@ -243,8 +243,8 @@ mod tests {
         account::{Account, AccountId},
         alias_setup::AccountAliasName,
         block::{BlockHeader, builder::BlockBuilder},
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{num::NonZeroU64, sync::Arc};
 
     fn fixture_app(account_id: Option<&AccountId>) -> SharedAppState {

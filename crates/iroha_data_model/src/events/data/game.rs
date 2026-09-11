@@ -23,7 +23,7 @@ pub struct GameSessionEventV1 {
     pub session_id: Hash,
     /// Monotonic native state revision.
     pub revision: u64,
-    /// Stable phase index in the GamePhaseV1 declaration order.
+    /// Stable phase index in the `GamePhaseV1` declaration order.
     pub phase: u8,
     /// Committed checkpoint and forced-input history root.
     pub dispute_root: Hash,

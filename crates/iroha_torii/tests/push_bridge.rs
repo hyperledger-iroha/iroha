@@ -12,12 +12,14 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::peer::PeerId;
-use iroha_data_model::{ChainId, Registrable};
+use iroha_data_model::Registrable;
 use iroha_data_model::{
     account::{Account, AccountId},
-    domain::{Domain, DomainId},
+    domain::Domain,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot

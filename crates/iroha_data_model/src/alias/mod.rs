@@ -12,7 +12,8 @@ use std::vec::Vec;
 #[model]
 mod model {
     use super::*;
-    use crate::{account::AccountId, asset::AssetId, peer::PeerId};
+    use crate::{account::AccountId, asset::AssetId};
+    use iroha_model_base::peer::PeerId;
     /// Unique identifier assigned to an alias record in the Merkle store.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     pub struct AliasIndex(pub u64);
@@ -172,8 +173,9 @@ pub fn alias_frontier_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, domain::DomainId};
+    use crate::account::AccountId;
     use iroha_crypto::KeyPair;
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use std::str::FromStr;
     fn checked_random_keypair() -> KeyPair {

@@ -618,7 +618,8 @@ fn replace_policy_file_for_test(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{DataSpaceId, DataSpaceMetadata};
+    use iroha_data_model::nexus::DataSpaceMetadata;
+    use iroha_model_base::topology::DataSpaceId;
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),

@@ -21,10 +21,10 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::oracle::AggregateOracleFeed,
-    metadata::Metadata,
     oracle::FeedId,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{Quantity, XorQuantity};
 use norito::{
     decode_from_bytes,
@@ -63,7 +63,7 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 fn xor_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
-        iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+        iroha_model_base::domain::DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
 }
@@ -3009,10 +3009,10 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use core::convert::TryFrom;
     use iroha_crypto::Signature;
-    use iroha_data_model::{
-        da::prelude::{BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId},
-        nexus::LaneId,
+    use iroha_data_model::da::prelude::{
+        BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId,
     };
+    use iroha_model_base::topology::LaneId;
     use norito::{
         DeserializePayload,
         json::{Map as JsonMap, Value},
@@ -4477,8 +4477,8 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
 }
 #[test]
 fn address_convert_rejects_domain_suffix() {
-    let domain: iroha::data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("sora", "universal").expect("domain");
+    let domain: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("sora", "universal").expect("domain");
     let key_pair = fixture_key_pair(0xAB);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");

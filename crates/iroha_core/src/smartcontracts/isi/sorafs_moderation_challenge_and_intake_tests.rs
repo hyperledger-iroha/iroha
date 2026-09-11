@@ -321,11 +321,11 @@ fn pending_challenge_retains_challenger_until_permissionless_expiry_settles() {
     let expiry_authority = fixture.juror_id(0);
     fixture
         .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
-            ExpireSorafsModerationChallenge::new(
-                "case-1".to_owned(),
-                "round-1".to_owned(),
-                "challenge-retains-account".to_owned(),
-            )
+            ExpireSorafsModerationChallenge {
+                case_id: "case-1".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-retains-account".to_owned(),
+            }
             .execute(&expiry_authority, transaction)
         })
         .expect("permissionless expiry refunds the retained challenger");
@@ -367,7 +367,7 @@ fn pending_challenge_blocks_native_multisig_controller_rekey() {
                 &initial_signer,
                 MultisigInstructionBox::Register(MultisigRegister::with_account(
                     registration_seed,
-                    None::<iroha_data_model::domain::DomainId>,
+                    None::<iroha_model_base::domain::DomainId>,
                     spec,
                 )),
             )
@@ -709,21 +709,21 @@ fn unresolved_challenge_expires_permissionlessly_and_fails_open() {
         .unwrap();
     fixture
         .run(REVEAL_AT + 1, |transaction| {
-            ExpireSorafsModerationChallenge::new(
-                "case-1".to_owned(),
-                "round-1".to_owned(),
-                "challenge-unresolved".to_owned(),
-            )
+            ExpireSorafsModerationChallenge {
+                case_id: "case-1".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-unresolved".to_owned(),
+            }
             .execute(&juror, transaction)
         })
         .unwrap();
     fixture
         .run(REVEAL_AT + 2, |transaction| {
-            ExpireSorafsModerationChallenge::new(
-                "case-1".to_owned(),
-                "round-1".to_owned(),
-                "challenge-unresolved".to_owned(),
-            )
+            ExpireSorafsModerationChallenge {
+                case_id: "case-1".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-unresolved".to_owned(),
+            }
             .execute(&juror, transaction)
         })
         .unwrap();
@@ -735,11 +735,11 @@ fn unresolved_challenge_expires_permissionlessly_and_fails_open() {
         .unwrap();
     fixture
         .run(FINALIZE_AT + 1, |transaction| {
-            ExpireSorafsModerationChallenge::new(
-                "case-1".to_owned(),
-                "round-1".to_owned(),
-                "challenge-swept".to_owned(),
-            )
+            ExpireSorafsModerationChallenge {
+                case_id: "case-1".to_owned(),
+                round_id: "round-1".to_owned(),
+                challenge_id: "challenge-swept".to_owned(),
+            }
             .execute(&juror, transaction)
         })
         .unwrap();
@@ -1042,11 +1042,11 @@ fn retained_challenge_settlements_ignore_post_funding_issuer_and_account_control
         if decision == ModerationChallengeDecisionV1::Expired {
             fixture
                 .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
-                    ExpireSorafsModerationChallenge::new(
-                        "case-1".to_owned(),
-                        "round-1".to_owned(),
-                        challenge_id.clone(),
-                    )
+                    ExpireSorafsModerationChallenge {
+                        case_id: "case-1".to_owned(),
+                        round_id: "round-1".to_owned(),
+                        challenge_id: challenge_id.clone(),
+                    }
                     .execute(&manager, transaction)
                 })
                 .expect("retained expiry refund overrides ordinary account controls");

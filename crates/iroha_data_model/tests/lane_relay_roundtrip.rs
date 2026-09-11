@@ -7,11 +7,9 @@ use iroha_data_model::{
         consensus_v2::finality::V2FinalityArtifact,
     },
     da::commitment,
-    nexus::{
-        DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError,
-        compute_settlement_hash,
-    },
+    nexus::{LaneFinalityAuthorityV1, LaneRelayEnvelope, LaneRelayError, compute_settlement_hash},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
     DeserializePayload,
     codec::{DecodeAll as _, Encode as _},

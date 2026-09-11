@@ -12,6 +12,8 @@ use iroha::data_model::{
     transaction::error::TransactionRejectionReason,
 };
 use iroha_config::parameters::actual::LaneConfig;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use std::{
     io::{Read as _, Seek as _, SeekFrom},

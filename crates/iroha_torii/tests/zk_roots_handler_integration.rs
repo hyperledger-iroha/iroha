@@ -10,6 +10,7 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{NewAccount, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

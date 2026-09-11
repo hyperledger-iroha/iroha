@@ -14,6 +14,9 @@ use iroha_data_model::{
     block::{BlockHeader, SignedBlock, builder::BlockBuilder as ModelBlockBuilder},
     prelude::*,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{numeric::NumericSpec, time::TimeSource};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;

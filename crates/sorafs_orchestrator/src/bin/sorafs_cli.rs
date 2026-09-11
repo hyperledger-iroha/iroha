@@ -16,9 +16,7 @@ use iroha_data_model::{
     NetworkId,
     account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
-    id::ChainId,
     isi::sorafs::RegisterPinManifest,
-    metadata::Metadata,
     sorafs::{
         moderation::{
             AdversarialCorpusManifestV1, MODERATION_MODEL_MAX_INPUT_BYTES_V1,
@@ -37,6 +35,8 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy, WriteModeHint};
@@ -19688,12 +19688,10 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
-    use iroha_data_model::{
-        metadata::Metadata,
-        sorafs::pin_registry::{
-            ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1, PinManifestRecord,
-        },
+    use iroha_data_model::sorafs::pin_registry::{
+        ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1, PinManifestRecord,
     };
+    use iroha_model_base::metadata::Metadata;
     use norito::json::Map;
     use sorafs_car::{ChunkStore, por_json::sample_to_map};
     use sorafs_manifest::{

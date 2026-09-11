@@ -1,5 +1,5 @@
 //! Space Directory manifest representations and evaluation helpers.
-use super::DataSpaceId;
+use iroha_model_base::topology::DataSpaceId;
 
 use crate::asset::AssetDefinitionId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -202,7 +202,6 @@ impl From<ManifestVersion> for u16 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-
 pub struct AssetPermissionManifest {
     /// Schema version used to interpret the manifest.
     pub version: ManifestVersion,
@@ -1332,7 +1331,7 @@ pub enum DenyReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
 
     use norito::json::JsonDeserialize;

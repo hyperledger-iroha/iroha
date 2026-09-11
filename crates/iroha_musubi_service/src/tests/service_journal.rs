@@ -3,7 +3,6 @@ use super::*;
 use iroha::config::Config;
 use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
-    ChainId,
     account::{MultisigMember, MultisigPolicy},
     block::BlockHeader,
     musubi::{
@@ -14,12 +13,13 @@ use iroha_data_model::{
         MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
         musubi_provider_bundle_attestation_set_digest_v1,
     },
-    nexus::DataSpaceId,
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
         ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::topology::DataSpaceId;
 use norito::codec::Encode as _;
 use sorafs_car::{CarVerifier, CarWriter, FileEntry, compute_por_root};
 #[cfg(unix)]
@@ -1307,7 +1307,9 @@ fn client() -> (Client, KeyPair) {
         ),
         sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
         sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
-    }).build().expect("valid test client configuration");
+    })
+    .build()
+    .expect("valid test client configuration");
     (client, key_pair)
 }
 fn threshold_authorization_runtime(

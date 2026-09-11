@@ -8,7 +8,7 @@ fn complete_test_builder(builder: GenesisBuilder) -> GenesisBuilder {
 
 fn complete_test_builder_for_peers(
     builder: GenesisBuilder,
-    peers: Vec<iroha_data_model::peer::PeerId>,
+    peers: Vec<iroha_model_base::peer::PeerId>,
 ) -> GenesisBuilder {
     builder
         .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())

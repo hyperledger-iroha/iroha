@@ -32,7 +32,6 @@ use iroha::{
         asset::AssetDefinitionId,
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
         nexus::FeeSponsorProgramId,
-        peer::PeerId,
         prelude::SignedTransaction,
         soracloud::{
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
@@ -44,6 +43,7 @@ use iroha::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
     FeeQuoteResponse,
@@ -16977,7 +16977,7 @@ fn validate_applied_inrou_local_placement(
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("prepared Inrou local placement omits its peer ID"))?;
     let peer_id = peer_id_literal
-        .parse::<iroha::data_model::peer::PeerId>()
+        .parse::<iroha_model_base::peer::PeerId>()
         .wrap_err("prepared Inrou local placement peer ID is invalid")?;
     if peer_id.to_string() != peer_id_literal {
         return Err(eyre!(
@@ -17008,7 +17008,7 @@ fn validate_applied_inrou_local_placement(
     }
     let expected_peer_id = inventory.validator_clients[validator_index]
         .peer_id
-        .parse::<iroha::data_model::peer::PeerId>()
+        .parse::<iroha_model_base::peer::PeerId>()
         .wrap_err("inventory validator peer ID is invalid")?;
     if expected_peer_id != peer_id {
         return Err(eyre!(

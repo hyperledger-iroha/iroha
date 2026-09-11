@@ -18,13 +18,15 @@ use iroha_data_model::{
         InstructionBox,
         prelude::{Mint, Register, SetKeyValue, Transfer},
     },
-    metadata::Metadata,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
-        LaneSchedulerPolicy, LaneVisibility,
+        DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneSchedulerPolicy,
+        LaneVisibility,
     },
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{json::Json, time::TimeSource};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;

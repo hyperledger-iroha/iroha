@@ -18,10 +18,10 @@ use crate::{
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    DomainId,
     asset::id::AssetDefinitionId,
     fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use sha2::{Digest as _, Sha256};

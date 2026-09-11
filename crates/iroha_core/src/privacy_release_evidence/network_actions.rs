@@ -6,7 +6,6 @@
 //! verifier, and ledger paths as any externally constructed action.
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
-    metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
         OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyConsensusLimitsV1,
@@ -19,6 +18,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
+use iroha_model_base::metadata::Metadata;
 use sha2::{Digest as _, Sha256};
 use std::{num::NonZeroU32, time::Duration};
 mod retained;

@@ -1,6 +1,6 @@
 //! Shared fixtures for Kagami integration tests.
 use color_eyre::eyre::{Result, WrapErr, ensure};
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use std::{
     fs,
     path::{Path, PathBuf},

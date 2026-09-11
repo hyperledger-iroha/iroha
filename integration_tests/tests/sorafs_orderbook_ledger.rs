@@ -4,6 +4,8 @@
 //! policies, reserve funding, orders, matching and settlement use signed native instructions.
 //! Provider delivery, owner-governance transitions, partial fills and expiry remain separate tests.
 
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::sorafs_network::{prepare_transaction, submit_instruction};

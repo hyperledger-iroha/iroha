@@ -4,7 +4,7 @@ use iroha::{
     data_model::{
         asset::AssetDefinitionId,
         block::BlockHeader,
-        prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity},
+        prelude::{AccountId, AssetId, NetworkId, Quantity},
         transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
     },
     nexus_app::{
@@ -13,6 +13,8 @@ use iroha::{
         NexusToriiSubmitter, NexusTransferInput, NexusTransferReceipt, NexusWalletSignature,
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use std::{error::Error, num::NonZeroU32, time::Duration};
 #[derive(Clone)]
 struct DemoConnectTransport {

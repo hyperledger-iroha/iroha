@@ -57,7 +57,7 @@ impl core::fmt::Display for ConsensusFingerprint {
 ///
 /// Validators read this value from the finalized world state before building
 /// an epoch-boundary height context. The old roster then authenticates the
-/// complete next roster through the boundary context and its CommitQC.
+/// complete next roster through the boundary context and its `CommitQC`.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1"
@@ -2621,8 +2621,10 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_rejects_accountability_window_beyond_committed_capacity() {
-        let mut parameters = SumeragiNposParameters::default();
-        parameters.slashing_delay_blocks = 3_601;
+        let mut parameters = SumeragiNposParameters {
+            slashing_delay_blocks: 3_601,
+            ..SumeragiNposParameters::default()
+        };
         assert_eq!(
             parameters.validate(),
             Err(

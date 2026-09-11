@@ -4072,7 +4072,7 @@ mod tests {
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock},
             sorafs::{
@@ -4095,6 +4095,7 @@ mod tests {
             },
         },
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::{bigint::BigInt, json::Json, numeric::Quantity};
     use sorafs_manifest::{
         XorQuantity,

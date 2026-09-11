@@ -135,7 +135,7 @@ state_test! { sync generation_zero_lane_incarnations_do_not_require_final_networ
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"genesis-network-b")),
     );
     assert_ne!(network_a, network_b);
-    let chain = iroha_data_model::ChainId::from("generation-zero-incarnation-test");
+    let chain = iroha_model_base::chain::ChainId::from("generation-zero-incarnation-test");
     let state_a = State::new_with_chain_and_network_id_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),

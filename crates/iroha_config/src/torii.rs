@@ -387,7 +387,9 @@ impl From<&base::LaneRoutingPolicy> for NexusRoutingPolicyStatus {
                 .iter()
                 .map(|rule| NexusRoutingRuleStatus {
                     lane: rule.lane.as_u32(),
-                    dataspace_id: rule.dataspace.map(iroha_data_model::DataSpaceId::as_u64),
+                    dataspace_id: rule
+                        .dataspace
+                        .map(iroha_model_base::topology::DataSpaceId::as_u64),
                     matcher: NexusRoutingMatcherStatus {
                         account: rule.matcher.account.clone(),
                         instruction: rule.matcher.instruction.clone(),
@@ -412,12 +414,12 @@ mod status_tests {
     #[test]
     fn nexus_status_exports_optional_rule_dataspace() {
         let policy = base::LaneRoutingPolicy {
-            default_lane: iroha_data_model::LaneId::new(2),
-            default_dataspace: iroha_data_model::DataSpaceId::new(10),
+            default_lane: iroha_model_base::topology::LaneId::new(2),
+            default_dataspace: iroha_model_base::topology::DataSpaceId::new(10),
             rules: vec![
                 base::LaneRoutingRule {
-                    lane: iroha_data_model::LaneId::new(3),
-                    dataspace: Some(iroha_data_model::DataSpaceId::new(11)),
+                    lane: iroha_model_base::topology::LaneId::new(3),
+                    dataspace: Some(iroha_model_base::topology::DataSpaceId::new(11)),
                     matcher: base::LaneRoutingMatcher {
                         account: Some("alice".to_owned()),
                         instruction: Some("Register".to_owned()),
@@ -425,7 +427,7 @@ mod status_tests {
                     },
                 },
                 base::LaneRoutingRule {
-                    lane: iroha_data_model::LaneId::new(4),
+                    lane: iroha_model_base::topology::LaneId::new(4),
                     dataspace: None,
                     matcher: base::LaneRoutingMatcher::default(),
                 },

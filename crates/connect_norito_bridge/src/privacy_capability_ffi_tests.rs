@@ -1,7 +1,8 @@
 //! Native capability evidence rejection at the foreign-language trust boundary.
 
 use super::*;
-use iroha_data_model::{ChainId, privacy::*};
+use iroha_data_model::privacy::*;
+use iroha_model_base::chain::ChainId;
 
 fn unqualified_manifest() -> PrivacyExact12CapabilityManifestV1 {
     PrivacyCapabilitySnapshotV1 {

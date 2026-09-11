@@ -284,10 +284,10 @@ mod tests {
             transfer,
         },
     };
-    use iroha_data_model::{
-        DomainId,
-        fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
+    use iroha_data_model::fastpq::{
+        TransferDeltaTranscript, TransferSmtWitness, TransferTranscript,
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     fn fixture(

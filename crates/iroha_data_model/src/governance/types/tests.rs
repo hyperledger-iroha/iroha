@@ -209,9 +209,13 @@ fn contract_lifecycle_and_emergency_fingerprints_are_kind_separated() {
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("network id");
-    let address =
-        ContractAddress::derive(&network, &owner, 9, crate::nexus::DataSpaceId::UNIVERSAL)
-            .expect("contract address");
+    let address = ContractAddress::derive(
+        &network,
+        &owner,
+        9,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )
+    .expect("contract address");
     let lifecycle =
         ProposalKind::ContractLifecycleGovernance(ContractLifecycleGovernanceProposalV1 {
             proposal_operator: owner,
@@ -1382,8 +1386,7 @@ fn parliament_lifecycle_snapshots_roundtrip() {
         ballot
     );
 }
-#[test]
-fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
+fn policy_jury_ballot(body_instance_id: BodyInstanceId) -> ParliamentBallotCertificateBindingV1 {
     let tally = ParliamentAggregateTallyV1 {
         original_seats: 500,
         accepted_ballots: 334,
@@ -1391,10 +1394,53 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         nay: 100,
         abstain: 34,
     };
-    let proposal_content_id = ProposalContentId::new([0x61; 32]);
-    let governance_attempt_sequence = 0;
-    let governance_attempt_id =
-        GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
+    let ballot_attempt_sequence = 0;
+    let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
+    let release_beacon_session_id = BeaconSessionId::new([0x85; 32]);
+    let tle_key_session_id = TleKeySessionId::new([0x8E; 32]);
+    let release_height = 1_757;
+    let tle_session_id = TleSessionId::derive_v1(
+        ballot_attempt_id,
+        tle_key_session_id,
+        release_beacon_session_id,
+        release_height,
+    );
+    let opening_root = [0x7E; 32];
+    let outcome = ParliamentAggregateOutcomeV1::Approved;
+    ParliamentBallotCertificateBindingV1 {
+        ballot_attempt_id,
+        ballot_attempt_sequence,
+        tle_session_id,
+        tle_key_session_id,
+        registration_root: [0x81; 32],
+        dropout_root: [0x82; 32],
+        survivor_root: [0x83; 32],
+        corpus_root: [0x6D; 32],
+        no_recovery_root: [0x6E; 32],
+        timed_commitment_root: [0x84; 32],
+        release_beacon_session_id,
+        registered_at_height: 140,
+        registration_close_height: 641,
+        survivor_freeze_height: 1_141,
+        commitment_close_height: 1_157,
+        registration_closed_at_height: 641,
+        survivors_frozen_at_height: 1_141,
+        commitment_closed_at_height: 1_157,
+        max_ballot_retries: 3,
+        max_corpus_entries: 500,
+        release_height,
+        opening_deadline_height: 2_357,
+        release_pulse_id: BeaconPulseId::new([0x7D; 32]),
+        opening_height: release_height,
+        opening_root,
+        tally,
+        outcome,
+    }
+}
+
+fn policy_jury_body(
+    governance_attempt_id: GovernanceAttemptId,
+) -> ParliamentBodyCertificateBindingV1 {
     let election_attempt_sequence = 0;
     let election_attempt_id = BodyElectionAttemptId::derive_v1(
         governance_attempt_id,
@@ -1416,79 +1462,49 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
     .expect("canonical Policy Jury request");
     let roster_root = [0x68; 32];
     let body_instance_id = BodyInstanceId::derive_v1(election_attempt_id, roster_root);
-    let ballot_attempt_sequence = 0;
-    let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
-    let release_beacon_session_id = BeaconSessionId::new([0x85; 32]);
-    let tle_key_session_id = TleKeySessionId::new([0x8E; 32]);
-    let release_height = 1_757;
-    let tle_session_id = TleSessionId::derive_v1(
-        ballot_attempt_id,
-        tle_key_session_id,
-        release_beacon_session_id,
-        release_height,
-    );
+    let ballot = policy_jury_ballot(body_instance_id);
     let result_height = 1_800;
-    let opening_root = [0x7E; 32];
-    let outcome = ParliamentAggregateOutcomeV1::Approved;
     let result_root = parliament_ballot_result_root_v1(
         governance_attempt_id,
         body_instance_id,
-        ballot_attempt_id,
-        opening_root,
-        tally,
-        outcome,
+        ballot.ballot_attempt_id,
+        ballot.opening_root,
+        ballot.tally,
+        ballot.outcome,
         result_height,
     );
-    let certificate = GovernanceCertificateV1 {
+    ParliamentBodyCertificateBindingV1 {
+        body_instance_id,
+        election_attempt_id,
+        election_attempt_sequence,
+        sortition_request_id: sortition_request.id,
+        sortition_request,
+        body: ParliamentBody::PolicyJury,
+        original_seats: ballot.tally.original_seats,
+        beacon_session_id: BeaconSessionId::new([0x66; 32]),
+        beacon_pulse_id: BeaconPulseId::new([0x67; 32]),
+        roster_root,
+        assignment_root: [0x69; 32],
+        result_root,
+        result_height,
+        public_finding: None,
+        ballot: Some(ballot),
+    }
+}
+
+fn policy_jury_certificate() -> GovernanceCertificateV1 {
+    let proposal_content_id = ProposalContentId::new([0x61; 32]);
+    let governance_attempt_sequence = 0;
+    let governance_attempt_id =
+        GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
+    let body = policy_jury_body(governance_attempt_id);
+    let result_height = body.result_height;
+    GovernanceCertificateV1 {
         proposal_content_id,
         governance_attempt_id,
         governance_attempt_sequence,
         risk_tier: RiskTierV1::Standard,
-        body_bindings: vec![ParliamentBodyCertificateBindingV1 {
-            body_instance_id,
-            election_attempt_id,
-            election_attempt_sequence,
-            sortition_request_id: sortition_request.id,
-            sortition_request,
-            body: ParliamentBody::PolicyJury,
-            original_seats: tally.original_seats,
-            beacon_session_id: BeaconSessionId::new([0x66; 32]),
-            beacon_pulse_id: BeaconPulseId::new([0x67; 32]),
-            roster_root,
-            assignment_root: [0x69; 32],
-            result_root,
-            result_height,
-            public_finding: None,
-            ballot: Some(ParliamentBallotCertificateBindingV1 {
-                ballot_attempt_id,
-                ballot_attempt_sequence,
-                tle_session_id,
-                tle_key_session_id,
-                registration_root: [0x81; 32],
-                dropout_root: [0x82; 32],
-                survivor_root: [0x83; 32],
-                corpus_root: [0x6D; 32],
-                no_recovery_root: [0x6E; 32],
-                timed_commitment_root: [0x84; 32],
-                release_beacon_session_id,
-                registered_at_height: 140,
-                registration_close_height: 641,
-                survivor_freeze_height: 1_141,
-                commitment_close_height: 1_157,
-                registration_closed_at_height: 641,
-                survivors_frozen_at_height: 1_141,
-                commitment_closed_at_height: 1_157,
-                max_ballot_retries: 3,
-                max_corpus_entries: 500,
-                release_height,
-                opening_deadline_height: 2_357,
-                release_pulse_id: BeaconPulseId::new([0x7D; 32]),
-                opening_height: release_height,
-                opening_root,
-                tally,
-                outcome,
-            }),
-        }],
+        body_bindings: vec![body],
         policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         effect_preimage_hash: [0x6F; 32],
         expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
@@ -1498,17 +1514,165 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         }),
         certified_at_height: result_height,
         enact_at_height: result_height + 1,
-    };
-    let bytes = norito::to_bytes(&certificate).expect("encode GovernanceCertificateV1");
-    assert_eq!(
-        norito::decode_from_bytes::<GovernanceCertificateV1>(&bytes)
-            .expect("decode GovernanceCertificateV1"),
-        certificate
-    );
-    certificate
-        .validate()
-        .expect("wide Policy Jury approval is a complete structural certificate");
+    }
+}
 
+fn public_finding_body(
+    governance_attempt_id: GovernanceAttemptId,
+) -> ParliamentBodyCertificateBindingV1 {
+    let public_election_attempt_sequence = 0;
+    let public_election_attempt_id = BodyElectionAttemptId::derive_v1(
+        governance_attempt_id,
+        ParliamentBody::RulesCommittee,
+        public_election_attempt_sequence,
+    );
+    let public_request = SortitionRequestV1::try_new_canonical(
+        governance_attempt_id,
+        public_election_attempt_id,
+        ParliamentBody::RulesCommittee,
+        [0xB0; 32],
+        3,
+        3,
+        80,
+        81,
+        BeaconSessionId::new([0xB1; 32]),
+        None,
+    )
+    .expect("canonical public-finding request");
+    let public_roster_root = [0xB2; 32];
+    let public_body_instance_id =
+        BodyInstanceId::derive_v1(public_election_attempt_id, public_roster_root);
+    let public_result_root = [0xB3; 32];
+    let endorsing_assignments = vec![AssignmentId::new([0xB4; 32]), AssignmentId::new([0xB5; 32])];
+    let public_endorsement_root = parliament_public_finding_endorsement_root_v1(
+        governance_attempt_id,
+        public_body_instance_id,
+        public_result_root,
+        &endorsing_assignments,
+    );
+    ParliamentBodyCertificateBindingV1 {
+        body_instance_id: public_body_instance_id,
+        election_attempt_id: public_election_attempt_id,
+        election_attempt_sequence: public_election_attempt_sequence,
+        sortition_request_id: public_request.id,
+        sortition_request: public_request,
+        body: ParliamentBody::RulesCommittee,
+        original_seats: 3,
+        beacon_session_id: BeaconSessionId::new([0xB1; 32]),
+        beacon_pulse_id: BeaconPulseId::new([0xB6; 32]),
+        roster_root: public_roster_root,
+        assignment_root: [0xB7; 32],
+        result_root: public_result_root,
+        result_height: 90,
+        public_finding: Some(ParliamentPublicFindingCertificateBindingV1 {
+            endorsement_root: public_endorsement_root,
+            endorsing_assignments,
+            endorsements: 2,
+            quorum: 2,
+        }),
+        ballot: None,
+    }
+}
+
+fn confirmation_jury_ballot(
+    body_instance_id: BodyInstanceId,
+) -> ParliamentBallotCertificateBindingV1 {
+    let confirmation_ballot_attempt_sequence = 0;
+    let confirmation_ballot_attempt_id =
+        BallotAttemptId::derive_v1(body_instance_id, confirmation_ballot_attempt_sequence);
+    let confirmation_release_beacon_session_id = BeaconSessionId::new([0x8B; 32]);
+    let confirmation_tle_key_session_id = TleKeySessionId::new([0x8F; 32]);
+    let confirmation_release_height = 3_457;
+    ParliamentBallotCertificateBindingV1 {
+        ballot_attempt_id: confirmation_ballot_attempt_id,
+        ballot_attempt_sequence: confirmation_ballot_attempt_sequence,
+        tle_session_id: TleSessionId::derive_v1(
+            confirmation_ballot_attempt_id,
+            confirmation_tle_key_session_id,
+            confirmation_release_beacon_session_id,
+            confirmation_release_height,
+        ),
+        tle_key_session_id: confirmation_tle_key_session_id,
+        registration_root: [0x87; 32],
+        dropout_root: [0x88; 32],
+        survivor_root: [0x89; 32],
+        corpus_root: [0x7B; 32],
+        no_recovery_root: [0x7C; 32],
+        timed_commitment_root: [0x8A; 32],
+        release_beacon_session_id: confirmation_release_beacon_session_id,
+        registered_at_height: 1_840,
+        registration_close_height: 2_341,
+        survivor_freeze_height: 2_841,
+        commitment_close_height: 2_857,
+        registration_closed_at_height: 2_341,
+        survivors_frozen_at_height: 2_841,
+        commitment_closed_at_height: 2_857,
+        max_ballot_retries: 3,
+        max_corpus_entries: 500,
+        release_height: confirmation_release_height,
+        opening_deadline_height: 4_057,
+        release_pulse_id: BeaconPulseId::new([0x8C; 32]),
+        opening_height: confirmation_release_height,
+        opening_root: [0x8D; 32],
+        tally: ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 500,
+            aye: 300,
+            nay: 150,
+            abstain: 50,
+        },
+        outcome: ParliamentAggregateOutcomeV1::Approved,
+    }
+}
+
+fn confirmation_jury_body(
+    policy: &ParliamentBodyCertificateBindingV1,
+    governance_attempt_id: GovernanceAttemptId,
+) -> ParliamentBodyCertificateBindingV1 {
+    let mut confirmation = policy.clone();
+    confirmation.body = ParliamentBody::ConfirmationJury;
+    confirmation.election_attempt_sequence = 0;
+    confirmation.election_attempt_id = BodyElectionAttemptId::derive_v1(
+        governance_attempt_id,
+        ParliamentBody::ConfirmationJury,
+        confirmation.election_attempt_sequence,
+    );
+    confirmation.sortition_request = SortitionRequestV1::try_new_canonical(
+        governance_attempt_id,
+        confirmation.election_attempt_id,
+        ParliamentBody::ConfirmationJury,
+        [0x86; 32],
+        500,
+        500,
+        1_800,
+        1_802,
+        BeaconSessionId::new([0x66; 32]),
+        None,
+    )
+    .expect("canonical Confirmation Jury request");
+    confirmation.sortition_request_id = confirmation.sortition_request.id;
+    confirmation.beacon_pulse_id = BeaconPulseId::new([0x75; 32]);
+    confirmation.roster_root = [0x76; 32];
+    confirmation.body_instance_id =
+        BodyInstanceId::derive_v1(confirmation.election_attempt_id, confirmation.roster_root);
+    confirmation.assignment_root = [0x77; 32];
+    confirmation.result_root = [0x78; 32];
+    confirmation.result_height = 3_500;
+    confirmation.ballot = Some(confirmation_jury_ballot(confirmation.body_instance_id));
+    let confirmation_ballot = confirmation.ballot.expect("confirmation ballot");
+    confirmation.result_root = parliament_ballot_result_root_v1(
+        governance_attempt_id,
+        confirmation.body_instance_id,
+        confirmation_ballot.ballot_attempt_id,
+        confirmation_ballot.opening_root,
+        confirmation_ballot.tally,
+        confirmation_ballot.outcome,
+        confirmation.result_height,
+    );
+    confirmation
+}
+
+fn assert_governance_certificate_limits(certificate: &GovernanceCertificateV1) {
     let mut delayed_certificate = certificate.clone();
     delayed_certificate.certified_at_height += 1;
     delayed_certificate.enact_at_height += 1;
@@ -1570,7 +1734,17 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         ballot_predates_sortition.validate(),
         Err(GovernanceCertificateErrorV1::InvalidLifecycle)
     );
+}
 
+fn assert_governance_emergency_threshold(certificate: &GovernanceCertificateV1) {
+    let governance_attempt_id = certificate.governance_attempt_id;
+    let body = &certificate.body_bindings[0];
+    let body_instance_id = body.body_instance_id;
+    let ballot = body.ballot.expect("fixture ballot");
+    let ballot_attempt_id = ballot.ballot_attempt_id;
+    let opening_root = ballot.opening_root;
+    let outcome = ballot.outcome;
+    let result_height = body.result_height;
     let mut emergency = certificate.clone();
     emergency.risk_tier = RiskTierV1::Emergency;
     assert_eq!(
@@ -1628,7 +1802,9 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
     emergency
         .validate()
         .expect("exact two-thirds original-seat aye threshold must approve emergency hold");
+}
 
+fn assert_governance_commitment_window(certificate: &GovernanceCertificateV1) {
     let mut underprovisioned_commitment_window = certificate.clone();
     underprovisioned_commitment_window.body_bindings[0]
         .ballot
@@ -1669,63 +1845,13 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         completion_after_close.validate(),
         Err(GovernanceCertificateErrorV1::InvalidLifecycle)
     );
+}
 
+fn assert_governance_public_finding(certificate: &GovernanceCertificateV1) {
     let mut with_public_finding = certificate.clone();
-    let public_election_attempt_sequence = 0;
-    let public_election_attempt_id = BodyElectionAttemptId::derive_v1(
-        governance_attempt_id,
-        ParliamentBody::RulesCommittee,
-        public_election_attempt_sequence,
-    );
-    let public_request = SortitionRequestV1::try_new_canonical(
-        governance_attempt_id,
-        public_election_attempt_id,
-        ParliamentBody::RulesCommittee,
-        [0xB0; 32],
-        3,
-        3,
-        80,
-        81,
-        BeaconSessionId::new([0xB1; 32]),
-        None,
-    )
-    .expect("canonical public-finding request");
-    let public_roster_root = [0xB2; 32];
-    let public_body_instance_id =
-        BodyInstanceId::derive_v1(public_election_attempt_id, public_roster_root);
-    let public_result_root = [0xB3; 32];
-    let endorsing_assignments = vec![AssignmentId::new([0xB4; 32]), AssignmentId::new([0xB5; 32])];
-    let public_endorsement_root = parliament_public_finding_endorsement_root_v1(
-        governance_attempt_id,
-        public_body_instance_id,
-        public_result_root,
-        &endorsing_assignments,
-    );
-    with_public_finding.body_bindings.insert(
-        0,
-        ParliamentBodyCertificateBindingV1 {
-            body_instance_id: public_body_instance_id,
-            election_attempt_id: public_election_attempt_id,
-            election_attempt_sequence: public_election_attempt_sequence,
-            sortition_request_id: public_request.id,
-            sortition_request: public_request,
-            body: ParliamentBody::RulesCommittee,
-            original_seats: 3,
-            beacon_session_id: BeaconSessionId::new([0xB1; 32]),
-            beacon_pulse_id: BeaconPulseId::new([0xB6; 32]),
-            roster_root: public_roster_root,
-            assignment_root: [0xB7; 32],
-            result_root: public_result_root,
-            result_height: 90,
-            public_finding: Some(ParliamentPublicFindingCertificateBindingV1 {
-                endorsement_root: public_endorsement_root,
-                endorsing_assignments,
-                endorsements: 2,
-                quorum: 2,
-            }),
-            ballot: None,
-        },
-    );
+    with_public_finding
+        .body_bindings
+        .insert(0, public_finding_body(certificate.governance_attempt_id));
     with_public_finding
         .validate()
         .expect("public finding carries a self-contained exact quorum binding");
@@ -1759,13 +1885,15 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         missing_endorser.validate(),
         Err(GovernanceCertificateErrorV1::InvalidPublicFinding)
     );
+}
 
+fn assert_governance_execution_failure(certificate: &GovernanceCertificateV1) {
     let execution_failure_root =
-        parliament_execution_failure_root_v1(&certificate, certificate.enact_at_height);
+        parliament_execution_failure_root_v1(certificate, certificate.enact_at_height);
     assert_ne!(execution_failure_root, [0; 32]);
     assert_ne!(
         execution_failure_root,
-        parliament_execution_failure_root_v1(&certificate, certificate.enact_at_height + 1)
+        parliament_execution_failure_root_v1(certificate, certificate.enact_at_height + 1)
     );
     let mut different_certificate = certificate.clone();
     different_certificate.effect_preimage_hash[0] ^= 1;
@@ -1779,7 +1907,10 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         noncanonical_result.validate(),
         Err(GovernanceCertificateErrorV1::BallotResultRootMismatch)
     );
+}
 
+fn assert_governance_confirmation_jury(certificate: &GovernanceCertificateV1) {
+    let governance_attempt_id = certificate.governance_attempt_id;
     let mut narrow = certificate.clone();
     let policy = narrow
         .body_bindings
@@ -1807,93 +1938,7 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch)
     );
 
-    let mut confirmation = narrow.body_bindings[0].clone();
-    confirmation.body = ParliamentBody::ConfirmationJury;
-    confirmation.election_attempt_sequence = 0;
-    confirmation.election_attempt_id = BodyElectionAttemptId::derive_v1(
-        governance_attempt_id,
-        ParliamentBody::ConfirmationJury,
-        confirmation.election_attempt_sequence,
-    );
-    confirmation.sortition_request = SortitionRequestV1::try_new_canonical(
-        governance_attempt_id,
-        confirmation.election_attempt_id,
-        ParliamentBody::ConfirmationJury,
-        [0x86; 32],
-        500,
-        500,
-        1_800,
-        1_802,
-        BeaconSessionId::new([0x66; 32]),
-        None,
-    )
-    .expect("canonical Confirmation Jury request");
-    confirmation.sortition_request_id = confirmation.sortition_request.id;
-    confirmation.beacon_pulse_id = BeaconPulseId::new([0x75; 32]);
-    confirmation.roster_root = [0x76; 32];
-    confirmation.body_instance_id =
-        BodyInstanceId::derive_v1(confirmation.election_attempt_id, confirmation.roster_root);
-    confirmation.assignment_root = [0x77; 32];
-    confirmation.result_root = [0x78; 32];
-    confirmation.result_height = 3_500;
-    let confirmation_ballot_attempt_sequence = 0;
-    let confirmation_ballot_attempt_id = BallotAttemptId::derive_v1(
-        confirmation.body_instance_id,
-        confirmation_ballot_attempt_sequence,
-    );
-    let confirmation_release_beacon_session_id = BeaconSessionId::new([0x8B; 32]);
-    let confirmation_tle_key_session_id = TleKeySessionId::new([0x8F; 32]);
-    let confirmation_release_height = 3_457;
-    confirmation.ballot = Some(ParliamentBallotCertificateBindingV1 {
-        ballot_attempt_id: confirmation_ballot_attempt_id,
-        ballot_attempt_sequence: confirmation_ballot_attempt_sequence,
-        tle_session_id: TleSessionId::derive_v1(
-            confirmation_ballot_attempt_id,
-            confirmation_tle_key_session_id,
-            confirmation_release_beacon_session_id,
-            confirmation_release_height,
-        ),
-        tle_key_session_id: confirmation_tle_key_session_id,
-        registration_root: [0x87; 32],
-        dropout_root: [0x88; 32],
-        survivor_root: [0x89; 32],
-        corpus_root: [0x7B; 32],
-        no_recovery_root: [0x7C; 32],
-        timed_commitment_root: [0x8A; 32],
-        release_beacon_session_id: confirmation_release_beacon_session_id,
-        registered_at_height: 1_840,
-        registration_close_height: 2_341,
-        survivor_freeze_height: 2_841,
-        commitment_close_height: 2_857,
-        registration_closed_at_height: 2_341,
-        survivors_frozen_at_height: 2_841,
-        commitment_closed_at_height: 2_857,
-        max_ballot_retries: 3,
-        max_corpus_entries: 500,
-        release_height: confirmation_release_height,
-        opening_deadline_height: 4_057,
-        release_pulse_id: BeaconPulseId::new([0x8C; 32]),
-        opening_height: confirmation_release_height,
-        opening_root: [0x8D; 32],
-        tally: ParliamentAggregateTallyV1 {
-            original_seats: 500,
-            accepted_ballots: 500,
-            aye: 300,
-            nay: 150,
-            abstain: 50,
-        },
-        outcome: ParliamentAggregateOutcomeV1::Approved,
-    });
-    let confirmation_ballot = confirmation.ballot.expect("confirmation ballot");
-    confirmation.result_root = parliament_ballot_result_root_v1(
-        governance_attempt_id,
-        confirmation.body_instance_id,
-        confirmation_ballot.ballot_attempt_id,
-        confirmation_ballot.opening_root,
-        confirmation_ballot.tally,
-        confirmation_ballot.outcome,
-        confirmation.result_height,
-    );
+    let confirmation = confirmation_jury_body(&narrow.body_bindings[0], governance_attempt_id);
     let confirmation_result_height = confirmation.result_height;
     narrow.body_bindings.push(confirmation);
     narrow.certified_at_height = confirmation_result_height;
@@ -1902,6 +1947,10 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         .validate()
         .expect("narrow Policy Jury approval has a fresh Confirmation Jury result");
 
+    assert_confirmation_sortition_binding(&mut narrow);
+}
+
+fn assert_confirmation_sortition_binding(narrow: &mut GovernanceCertificateV1) {
     let mut delayed_initial_confirmation = narrow.clone();
     let confirmation = &mut delayed_initial_confirmation.body_bindings[1];
     let request = confirmation.sortition_request;
@@ -1950,6 +1999,29 @@ fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch),
         "Confirmation must use a fresh pulse id even when the session id differs"
     );
+}
+
+#[test]
+fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
+    let certificate = policy_jury_certificate();
+    let bytes = norito::to_bytes(&certificate).expect("encode GovernanceCertificateV1");
+    assert_eq!(
+        norito::decode_from_bytes::<GovernanceCertificateV1>(&bytes)
+            .expect("decode GovernanceCertificateV1"),
+        certificate
+    );
+    certificate
+        .validate()
+        .expect("wide Policy Jury approval is a complete structural certificate");
+    assert_certificate_coordinate_bindings(&certificate);
+    assert_certificate_lifecycle_boundaries(&certificate);
+
+    assert_governance_certificate_limits(&certificate);
+    assert_governance_emergency_threshold(&certificate);
+    assert_governance_commitment_window(&certificate);
+    assert_governance_public_finding(&certificate);
+    assert_governance_execution_failure(&certificate);
+    assert_governance_confirmation_jury(&certificate);
 }
 
 #[test]
@@ -2131,3 +2203,79 @@ fn private_ballot_failure_root_binds_the_derived_failure_identity() {
         parliament_ballot_failure_root_v1(attempt, ballot, kind, height + 1)
     );
 }
+
+fn assert_certificate_coordinate_bindings(certificate: &GovernanceCertificateV1) {
+    for coordinate in 0..5 {
+        let mut changed = certificate.clone();
+        let binding = &mut changed.body_bindings[0];
+        match coordinate {
+            0 => binding.sortition_request_id = SortitionRequestId::new([0xA1; 32]),
+            1 => {
+                binding.sortition_request.governance_attempt_id =
+                    GovernanceAttemptId::new([0xA2; 32]);
+                binding.sortition_request.id = binding.sortition_request.canonical_id();
+                binding.sortition_request_id = binding.sortition_request.id;
+            }
+            2 => binding.election_attempt_id = BodyElectionAttemptId::new([0xA3; 32]),
+            3 => binding.body = ParliamentBody::ReviewPanel,
+            4 => binding.beacon_session_id = BeaconSessionId::new([0xA4; 32]),
+            _ => unreachable!(),
+        }
+        binding
+            .sortition_request
+            .validate(None)
+            .expect("request remains independently canonical");
+        assert_eq!(
+            changed.validate(),
+            Err(GovernanceCertificateErrorV1::SortitionRequestMismatch),
+            "coordinate {coordinate} must fail before derived body identifiers or lifecycle checks"
+        );
+    }
+}
+
+fn assert_certificate_lifecycle_boundaries(certificate: &GovernanceCertificateV1) {
+    let pulse = certificate.body_bindings[0].sortition_request.pulse_height;
+    for registered in [0, pulse, pulse + 1] {
+        let mut changed = certificate.clone();
+        changed.body_bindings[0]
+            .ballot
+            .as_mut()
+            .unwrap()
+            .registered_at_height = registered;
+        let expected = if registered > pulse {
+            Ok(())
+        } else {
+            Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+        };
+        assert_eq!(
+            changed.validate(),
+            expected,
+            "registration height {registered}"
+        );
+    }
+    let mut changed = certificate.clone();
+    let original_seats = changed.body_bindings[0].original_seats;
+    changed.body_bindings[0]
+        .ballot
+        .as_mut()
+        .unwrap()
+        .max_corpus_entries = original_seats;
+    assert_eq!(changed.validate(), Ok(()));
+    changed.body_bindings[0]
+        .ballot
+        .as_mut()
+        .unwrap()
+        .max_corpus_entries -= 1;
+    assert_eq!(
+        changed.validate(),
+        Err(GovernanceCertificateErrorV1::InvalidLifecycle)
+    );
+    changed.body_bindings[0].election_attempt_id = BodyElectionAttemptId::new([0xA3; 32]);
+    assert_eq!(
+        changed.validate(),
+        Err(GovernanceCertificateErrorV1::SortitionRequestMismatch)
+    );
+}
+
+#[path = "tests/certificate_validation.rs"]
+mod certificate_validation;

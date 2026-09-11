@@ -54,7 +54,7 @@ impl Vote {
             {
                 Ok(Some(parts.auxiliary_payload))
             }
-            (true, false, None) | (false, false, None) => Ok(None),
+            (_, false, None) => Ok(None),
             _ => Err(ValidationError::InvalidKagemushaSignatureEnvelope),
         }
     }
@@ -110,7 +110,7 @@ impl QuorumCertificate {
         }
     }
     /// Borrow the ordinary BLS aggregate from either its raw representation or
-    /// the required KAGEMUSHA V1 CommitQC envelope.
+    /// the required KAGEMUSHA V1 `CommitQC` envelope.
     ///
     /// # Errors
     ///
@@ -124,7 +124,7 @@ impl QuorumCertificate {
             None => Ok(&self.aggregate_signature),
         }
     }
-    /// Borrow the canonical paired-Pasta CommitQC seal bundle payload when the certificate
+    /// Borrow the canonical paired-Pasta `CommitQC` seal bundle payload when the certificate
     /// commits a non-empty KAGEMUSHA V1 top-up root or an epoch-boundary roster rotation.
     ///
     /// # Errors
@@ -141,7 +141,7 @@ impl QuorumCertificate {
             {
                 Ok(Some(parts.auxiliary_payload))
             }
-            (true, false, None) | (false, false, None) => Ok(None),
+            (_, false, None) => Ok(None),
             _ => Err(ValidationError::InvalidKagemushaSignatureEnvelope),
         }
     }

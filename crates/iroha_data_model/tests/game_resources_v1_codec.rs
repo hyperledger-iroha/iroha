@@ -5,13 +5,13 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     events::data::game::GameSessionEventV1,
     game::*,
     isi::game::JoinGameSessionV1,
     nft::NftId,
     nft_market::{NftCustodyPurposeV1, NftCustodyRecordV1},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use norito::{
     codec::{Decode, Encode},
@@ -102,19 +102,19 @@ fn export_resource_admission_wire_fixtures() {
         released_to: Some(owner),
         ..native_open.clone()
     };
-    let join = JoinGameSessionV1::new(
+    let join = JoinGameSessionV1 {
         session_id,
-        key.public_key().clone(),
-        vec![1, 2, 3],
-        vec![clause.clone()],
-        None,
-        Hash::new(b"resource-codec-fixture-manifest"),
-        AssetDefinitionId::derive_from_components(
+        input_key: key.public_key().clone(),
+        application_data: vec![1, 2, 3],
+        resources: vec![clause.clone()],
+        invitation: None,
+        expected_manifest_hash: Hash::new(b"resource-codec-fixture-manifest"),
+        expected_asset_definition: AssetDefinitionId::derive_from_components(
             DomainId::try_new("equipment", "universal").unwrap(),
             "xor".parse().unwrap(),
         ),
-        Quantity::zero(),
-    );
+        expected_stake: Quantity::zero(),
+    };
     let event = GameSessionEventV1 {
         session_id,
         revision: 3,

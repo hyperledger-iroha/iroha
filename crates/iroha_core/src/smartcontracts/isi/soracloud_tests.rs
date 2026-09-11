@@ -63,11 +63,9 @@ use iroha_data_model::{
     confidential::ConfidentialStatus,
     domain::Domain,
     isi::{Grant, Mint},
-    metadata::Metadata,
     nexus::{
-        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-        LaneConfig, LaneId, LaneVisibility, PublicLaneStakeShare, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus,
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneCatalog, LaneConfig,
+        LaneVisibility, PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
     },
     permission::Permission,
     prelude::Register,
@@ -102,7 +100,9 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{
@@ -17695,7 +17695,7 @@ fn set_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<()
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission_on_chain(
         &kura,
-        iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+        iroha_model_base::chain::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
     )?;
     soracloud_transaction!(state, block_header, state_block, stx);
     Register::account(Account::new(BOB_ID.clone()))
@@ -17767,7 +17767,7 @@ fn clear_inrou_replica_runtime_state_rejects_non_assigned_validator() -> Result<
     let kura = Kura::blank_kura_for_testing();
     let state = state_with_soracloud_permission_on_chain(
         &kura,
-        iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+        iroha_model_base::chain::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
     )?;
     soracloud_transaction!(state, block_header, state_block, stx);
     Register::account(Account::new(BOB_ID.clone()))

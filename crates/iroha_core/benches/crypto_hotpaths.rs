@@ -4,9 +4,9 @@ use iroha_core::fastpq;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::AssetDefinitionId,
-    domain::DomainId,
     fastpq::{FastpqPublicInputs, TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use iroha_zkp_halo2::poseidon::{self, PoseidonByteHasher};

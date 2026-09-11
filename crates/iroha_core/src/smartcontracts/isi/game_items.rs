@@ -302,6 +302,7 @@ mod tests {
         isi::Register,
         nft::{Nft, NftId},
     };
+    use iroha_model_base::metadata::Metadata;
 
     fn reserve_fixture_item(
         st: &mut StateTransaction<'_, '_>,
@@ -338,7 +339,8 @@ mod tests {
     }
     #[test]
     fn maximum_canonical_native_nft_fits_a_settleable_admission() {
-        use iroha_data_model::domain::{Domain, DomainId};
+        use iroha_data_model::domain::Domain;
+        use iroha_model_base::domain::DomainId;
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());
@@ -362,7 +364,7 @@ mod tests {
     }
     #[test]
     fn multi_label_domains_cannot_create_ambiguous_native_nft_ids() {
-        use iroha_data_model::domain::DomainId;
+        use iroha_model_base::domain::DomainId;
         let (state, mut session, _) = payout_state(Quantity::zero());
         session.phase = GamePhaseV1::Lobby;
         let mut block = state.block(header());

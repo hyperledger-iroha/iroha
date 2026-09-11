@@ -33,11 +33,13 @@ pub mod isi {
         },
         asset::{ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy},
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
-        metadata::Metadata,
-        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, DataSpaceId, LaneVisibility},
+        nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, LaneVisibility},
     };
     use iroha_logger::prelude::*;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use std::{
         collections::{BTreeSet, btree_map::Entry},
         str::FromStr,
@@ -3348,6 +3350,7 @@ pub mod query {
             json::{PredicateJson, predicate_json_candidate_plan_for_execution},
         },
     };
+    use iroha_model_base::domain::DomainId;
     use norito::json::Value;
     use std::collections::BTreeSet;
     #[derive(Debug, Default)]
@@ -3614,7 +3617,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        ChainId, IntoKeyValue,
+        IntoKeyValue,
         account::{
             Account, AccountAddress, NewAccount, OpaqueAccountId,
             controller::{MultisigMember, MultisigPolicy},
@@ -3638,10 +3641,9 @@ mod tests {
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         },
-        metadata::Metadata,
         nexus::{
-            AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-            LaneConfig, LaneId, LaneVisibility, ManifestVersion, UniversalAccountId,
+            AssetPermissionManifest, DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig,
+            LaneVisibility, ManifestVersion, UniversalAccountId,
         },
         nft::{Nft, NftId},
         permission::Permission,
@@ -3660,7 +3662,12 @@ mod tests {
     use iroha_executor_data_model::permission::asset_definition::{
         AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{
         json::Json,
         numeric::{NumericSpec, Quantity},

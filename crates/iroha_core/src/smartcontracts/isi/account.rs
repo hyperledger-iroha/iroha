@@ -949,10 +949,10 @@ pub mod isi {
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
-            domain::DomainId,
             isi::error::InstructionExecutionError,
             prelude::{Account, AssetDefinition, Domain, Grant, Permission, Register},
         };
+        use iroha_model_base::domain::DomainId;
         use iroha_model_base::error::ParseError;
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -985,7 +985,7 @@ pub mod isi {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());
@@ -1012,7 +1012,7 @@ pub mod isi {
             let permission = Permission::from(
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                     ),
                 },
             );
@@ -1075,6 +1075,9 @@ pub mod query {
             json::PredicateJson,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    #[cfg(test)]
+    use iroha_model_base::metadata::Metadata;
     use norito::json::Value;
     use std::{collections::BTreeSet, sync::Arc};
     fn account_from_entry(
@@ -1174,7 +1177,7 @@ pub mod query {
     fn seed_manage_account_alias_dataspace_permission(
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
         authority: &AccountId,
-        dataspace: iroha_data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
     ) {
         state_transaction.world.add_account_permission(
             authority,
@@ -1197,7 +1200,7 @@ pub mod query {
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
         authority: &AccountId,
         domain: &DomainId,
-        dataspace: iroha_data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
     ) {
         seed_manage_account_alias_dataspace_permission(state_transaction, authority, dataspace);
         state_transaction.world.add_account_permission(
@@ -1260,7 +1263,7 @@ pub mod query {
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
         owner: &AccountId,
         alias: &str,
-        dataspace: iroha_data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
     ) {
         let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
         let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
@@ -2068,7 +2071,7 @@ pub mod query {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());
@@ -2108,7 +2111,7 @@ pub mod query {
         fn root_alias(label: &str) -> AccountAlias {
             AccountAlias::domainless(
                 label.parse().expect("account alias label"),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             )
         }
         fn alias_in_domain(label: &str, domain_id: &DomainId) -> AccountAlias {
@@ -2117,7 +2120,7 @@ pub mod query {
                 Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
                     domain_id.name().clone(),
                 )),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             )
         }
         #[test]
@@ -3345,7 +3348,7 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
-                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        id: iroha_model_base::topology::DataSpaceId::new(9),
                         alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
@@ -3363,13 +3366,13 @@ pub mod query {
                 &mut stx,
                 &ALICE_ID,
                 &linked_domain,
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             let (account_id, _) = gen_account_in("banka");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
                 Some(alias_domain(&linked_domain)),
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &account_id, &primary_label);
             let account = Account::new(account_id.clone())
@@ -3411,7 +3414,7 @@ pub mod query {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let dataspace = iroha_data_model::nexus::DataSpaceId::new(42);
+            let dataspace = iroha_model_base::topology::DataSpaceId::new(42);
             seed_dynamic_dataspace_name_lease(&mut stx, &ALICE_ID, "paynet", dataspace);
             let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
             seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
@@ -3444,7 +3447,7 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
-                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        id: iroha_model_base::topology::DataSpaceId::new(9),
                         alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
@@ -3462,13 +3465,13 @@ pub mod query {
                 &mut stx,
                 &ALICE_ID,
                 &linked_domain,
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             let (account_id, _) = gen_account_in("banka");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
                 Some(alias_domain(&linked_domain)),
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &account_id, &primary_label);
             let account = Account::new(account_id.clone())
@@ -3509,7 +3512,7 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
-                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        id: iroha_model_base::topology::DataSpaceId::new(9),
                         alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
@@ -3526,13 +3529,13 @@ pub mod query {
                 &mut stx,
                 &ALICE_ID,
                 &linked_domain,
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             let (account_id, _) = gen_account_in("banka");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
                 Some(alias_domain(&linked_domain)),
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &account_id, &primary_label);
             let account = Account::new(account_id.clone())
@@ -3567,7 +3570,7 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
-                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        id: iroha_model_base::topology::DataSpaceId::new(9),
                         alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
@@ -3580,13 +3583,13 @@ pub mod query {
             seed_manage_account_alias_dataspace_permission(
                 &mut stx,
                 &ALICE_ID,
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             let (account_id, _) = gen_account_in("wonderland");
             let root_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
                 None,
-                iroha_data_model::nexus::DataSpaceId::new(9),
+                iroha_model_base::topology::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &account_id, &root_label);
             Register::account(Account::new(account_id.clone()).with_label(Some(root_label)))

@@ -2068,7 +2068,7 @@ mod tests {
     use super::super::super::{FairV2IngressPushDisposition, InboundBlockMessage};
     use super::*;
     use iroha_crypto::{HashOf, KeyPair};
-    use iroha_data_model::peer::PeerId;
+    use iroha_model_base::peer::PeerId;
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
     enum Source {
         First,

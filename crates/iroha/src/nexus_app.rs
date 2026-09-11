@@ -10,9 +10,11 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
-    prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity, Transfer},
+    prelude::{AccountId, AssetId, NetworkId, Quantity, Transfer},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use std::{num::NonZeroU32, time::Duration};
 use thiserror::Error;
 use url::Url;

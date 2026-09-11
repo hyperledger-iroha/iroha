@@ -28,7 +28,6 @@ use iroha_data_model::{
             UpsertProviderCredit,
         },
     },
-    metadata::Metadata,
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
         MusubiArchiveLocationIdV1, MusubiArchiveRecordV1, MusubiContentDigestV1,
@@ -60,7 +59,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
-use iroha_model_base::name::Name;
+use iroha_model_base::{domain::DomainId, metadata::Metadata, name::Name};
 use iroha_primitives::{bigint::BigInt, json::Json};
 use nonzero_ext::nonzero;
 use norito::{json, to_bytes};

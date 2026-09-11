@@ -21,7 +21,8 @@ use crate::sumeragi::{
     v2_transport::{AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::block::consensus_v2 as wire;
+use iroha_model_base::peer::PeerId;
 
 struct ServeSchedulerFixture {
     verified: VerifiedHeightContext,
@@ -57,9 +58,7 @@ impl ServeSchedulerFixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("certified-serve-scheduler");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,

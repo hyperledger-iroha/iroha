@@ -7,13 +7,13 @@ use iroha::{
         account::{AccountId, address::ChainDiscriminantGuard},
         asset::AssetDefinitionId,
         nexus::FeeSponsorProgramId,
-        peer::PeerId,
         soracloud::SoraInrouPlacementTargetV1,
     },
 };
 use iroha_crypto::{
     Algorithm, Hash, PublicKey, ed25519_parse_signature, verify_signature_for_admission,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use sha2::{Digest as _, Sha256};

@@ -10,7 +10,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::ChainId;
+use iroha_model_base::chain::ChainId;
 use iroha_torii::{MaybeTelemetry, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _;

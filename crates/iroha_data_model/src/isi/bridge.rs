@@ -453,7 +453,7 @@ isi! {
     #[norito(deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1")]
     pub struct SubmitSccpTonBreakerObservationV1 {
-        /// Exact governed TonMainnet route revision being observed.
+        /// Exact governed `TonMainnet` route revision being observed.
         pub route_key: crate::bridge::SccpRouteKeyV1,
         /// Zero for absence, otherwise the complete prior observation digest.
         pub expected_prior_observation_digest: [u8; 32],
@@ -941,9 +941,9 @@ mod tests {
             BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeReceipt,
             BridgeTransparentProof, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
         },
-        nexus::LaneId,
         proof::ProofBox,
     };
+    use iroha_model_base::topology::LaneId;
     fn proof() -> BridgeProof {
         BridgeProof {
             range: BridgeProofRange {

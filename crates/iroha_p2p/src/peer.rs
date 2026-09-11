@@ -30,7 +30,7 @@ use iroha_crypto::soranet::{
 };
 #[cfg(test)]
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use message::*;
 use norito::{
     codec::{Decode, DecodeAll, Encode},
@@ -3214,7 +3214,7 @@ pub mod handles {
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         peer_addr: SocketAddr,
-        peer_id: iroha_data_model::prelude::PeerId,
+        peer_id: iroha_model_base::peer::PeerId,
         our_public_address: SocketAddr,
         key_pair: Arc<KeyPair>,
         connection_id: ConnectionId,
@@ -13774,7 +13774,7 @@ mod state {
     #[allow(clippy::struct_excessive_bools)]
     pub(super) struct Connecting {
         pub peer_addr: SocketAddr,
-        pub peer_id: iroha_data_model::prelude::PeerId,
+        pub peer_id: iroha_model_base::peer::PeerId,
         pub our_public_address: SocketAddr,
         pub key_pair: Arc<KeyPair>,
         pub connection_id: ConnectionId,
@@ -14251,7 +14251,7 @@ mod state {
     /// Peer that is being connected to.
     pub(super) struct ConnectedTo {
         our_public_address: SocketAddr,
-        expected_peer_id: iroha_data_model::prelude::PeerId,
+        expected_peer_id: iroha_model_base::peer::PeerId,
         key_pair: Arc<KeyPair>,
         connection: Connection,
         network_id: iroha_data_model::NetworkId,
@@ -14267,7 +14267,7 @@ mod state {
         #[cfg(test)]
         pub(super) fn for_transport_delegation_test(
             our_public_address: SocketAddr,
-            expected_peer_id: iroha_data_model::prelude::PeerId,
+            expected_peer_id: iroha_model_base::peer::PeerId,
             key_pair: Arc<KeyPair>,
             connection: Connection,
             network_id: iroha_data_model::NetworkId,
@@ -14587,7 +14587,7 @@ mod state {
     #[cfg(test)]
     pub(super) struct SendKeyInit<E: Enc> {
         pub(super) our_public_address: SocketAddr,
-        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
+        pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) key_pair: KeyPair,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
@@ -14603,7 +14603,7 @@ mod state {
     /// Peer that needs to send key.
     pub(super) struct SendKey<E: Enc> {
         pub(super) our_public_address: SocketAddr,
-        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
+        pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) key_pair: Arc<KeyPair>,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
@@ -14724,7 +14724,7 @@ mod state {
     /// Peer that needs to get key.
     pub struct GetKey<E: Enc> {
         pub(super) connection: Connection,
-        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
+        pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) cryptographer: Cryptographer<E>,
         pub(super) network_id: iroha_data_model::NetworkId,
         pub(super) soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
@@ -14815,7 +14815,7 @@ mod state {
                 .map_err(crate::Error::Keys)?;
             signature.verify(&remote_pub_key, &payload)?;
             if let Some(expected_peer_id) = expected_peer_id {
-                let found_peer_id = iroha_data_model::prelude::PeerId::from(remote_pub_key.clone());
+                let found_peer_id = iroha_model_base::peer::PeerId::from(remote_pub_key.clone());
                 if found_peer_id != expected_peer_id {
                     return Err(crate::Error::HandshakePeerMismatch {
                         expected: expected_peer_id,

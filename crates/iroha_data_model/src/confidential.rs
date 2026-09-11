@@ -31,7 +31,7 @@ pub const CONFIDENTIAL_MEMO_ML_KEM_768_CIPHERTEXT_BYTES_V1: usize = 1_088;
 pub const CONFIDENTIAL_MEMO_ML_KEM_1024_CIPHERTEXT_BYTES_V1: usize = 1_568;
 /// Exact XChaCha20-Poly1305 nonce length.
 pub const CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1: usize = 24;
-/// Exact Poly1305 authentication-tag length appended to XChaCha ciphertexts.
+/// Exact Poly1305 authentication-tag length appended to `XChaCha` ciphertexts.
 pub const CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1: usize = 16;
 /// Exact wrapped 32-byte memo-key plus Poly1305-tag length.
 pub const CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1: usize = 48;
@@ -225,7 +225,7 @@ impl ConfidentialMemoRecipientSlotV1 {
         &self.encapsulation
     }
 
-    /// Borrow the per-slot XChaCha nonce.
+    /// Borrow the per-slot `XChaCha` nonce.
     #[must_use]
     pub const fn wrap_nonce(&self) -> &[u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1] {
         &self.wrap_nonce
@@ -278,32 +278,16 @@ impl Default for ConfidentialMemoRecipientSlotV1 {
 
 /// The exact eight ordered recipient slots carried by a V1 confidential memo.
 ///
-/// JSON represents this fixed-cardinality value as the closed object
-/// `slot_0` through `slot_7`. A named object is intentional: Norito does not
-/// treat a variable-length JSON sequence as a candidate representation, so
-/// seven-slot, nine-slot, and unknown-field inputs all fail decoding.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    IntoSchema,
-    crate :: DeriveJsonSerialize,
-    crate :: DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
+/// Storage is a fixed array. JSON and schema expose the closed object `slot_0`
+/// through `slot_7`; missing, additional and duplicate keys are rejected.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, iroha_schema::TypeId)]
 pub struct ConfidentialMemoRecipientSlotsV1 {
-    slot_0: ConfidentialMemoRecipientSlotV1,
-    slot_1: ConfidentialMemoRecipientSlotV1,
-    slot_2: ConfidentialMemoRecipientSlotV1,
-    slot_3: ConfidentialMemoRecipientSlotV1,
-    slot_4: ConfidentialMemoRecipientSlotV1,
-    slot_5: ConfidentialMemoRecipientSlotV1,
-    slot_6: ConfidentialMemoRecipientSlotV1,
-    slot_7: ConfidentialMemoRecipientSlotV1,
+    slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
 }
+
+const MEMO_SLOT_KEYS: [&str; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] = [
+    "slot_0", "slot_1", "slot_2", "slot_3", "slot_4", "slot_5", "slot_6", "slot_7",
+];
 
 impl ConfidentialMemoRecipientSlotsV1 {
     /// Return the fixed V1 cardinality.
@@ -321,16 +305,10 @@ impl ConfidentialMemoRecipientSlotsV1 {
     /// Borrow the slot at `index`, if it is one of the exact eight positions.
     #[must_use]
     pub const fn get(&self, index: usize) -> Option<&ConfidentialMemoRecipientSlotV1> {
-        match index {
-            0 => Some(&self.slot_0),
-            1 => Some(&self.slot_1),
-            2 => Some(&self.slot_2),
-            3 => Some(&self.slot_3),
-            4 => Some(&self.slot_4),
-            5 => Some(&self.slot_5),
-            6 => Some(&self.slot_6),
-            7 => Some(&self.slot_7),
-            _ => None,
+        if index < self.slots.len() {
+            Some(&self.slots[index])
+        } else {
+            None
         }
     }
 
@@ -338,17 +316,7 @@ impl ConfidentialMemoRecipientSlotsV1 {
     pub fn iter(
         &self,
     ) -> impl ExactSizeIterator<Item = &ConfidentialMemoRecipientSlotV1> + DoubleEndedIterator {
-        [
-            &self.slot_0,
-            &self.slot_1,
-            &self.slot_2,
-            &self.slot_3,
-            &self.slot_4,
-            &self.slot_5,
-            &self.slot_6,
-            &self.slot_7,
-        ]
-        .into_iter()
+        self.slots.iter()
     }
 
     /// Consume the wrapper and recover the exact canonical slot array.
@@ -356,30 +324,11 @@ impl ConfidentialMemoRecipientSlotsV1 {
     pub fn into_array(
         self,
     ) -> [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] {
-        [
-            self.slot_0,
-            self.slot_1,
-            self.slot_2,
-            self.slot_3,
-            self.slot_4,
-            self.slot_5,
-            self.slot_6,
-            self.slot_7,
-        ]
+        self.slots
     }
 
     fn get_mut(&mut self, index: usize) -> Option<&mut ConfidentialMemoRecipientSlotV1> {
-        match index {
-            0 => Some(&mut self.slot_0),
-            1 => Some(&mut self.slot_1),
-            2 => Some(&mut self.slot_2),
-            3 => Some(&mut self.slot_3),
-            4 => Some(&mut self.slot_4),
-            5 => Some(&mut self.slot_5),
-            6 => Some(&mut self.slot_6),
-            7 => Some(&mut self.slot_7),
-            _ => None,
-        }
+        self.slots.get_mut(index)
     }
 }
 
@@ -389,26 +338,97 @@ impl From<[ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1
     fn from(
         slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
     ) -> Self {
-        let [
-            slot_0,
-            slot_1,
-            slot_2,
-            slot_3,
-            slot_4,
-            slot_5,
-            slot_6,
-            slot_7,
-        ] = slots;
-        Self {
-            slot_0,
-            slot_1,
-            slot_2,
-            slot_3,
-            slot_4,
-            slot_5,
-            slot_6,
-            slot_7,
+        Self { slots }
+    }
+}
+
+impl IntoSchema for ConfidentialMemoRecipientSlotsV1 {
+    fn type_name() -> String {
+        "ConfidentialMemoRecipientSlotsV1".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if !map.contains_key::<Self>() {
+            map.insert::<Self>(iroha_schema::Metadata::Struct(
+                iroha_schema::NamedFieldsMeta {
+                    declarations: MEMO_SLOT_KEYS
+                        .into_iter()
+                        .map(|name| iroha_schema::Declaration {
+                            name: name.to_owned(),
+                            ty: core::any::TypeId::of::<ConfidentialMemoRecipientSlotV1>(),
+                        })
+                        .collect(),
+                },
+            ));
+            ConfidentialMemoRecipientSlotV1::update_schema_map(map);
         }
+    }
+}
+
+impl norito::json::FastJsonWrite for ConfidentialMemoRecipientSlotsV1 {
+    fn write_json(&self, output: &mut String) {
+        norito::json::write_json_unbounded(self, output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        output.begin_container()?;
+        output.push('{')?;
+        for (index, (key, slot)) in MEMO_SLOT_KEYS.iter().zip(&self.slots).enumerate() {
+            if index != 0 {
+                output.push(',')?;
+            }
+            output.push('"')?;
+            output.push_str(key)?;
+            output.push_str("\":")?;
+            slot.write_json_to(output)?;
+        }
+        output.push('}')?;
+        output.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for ConfidentialMemoRecipientSlotsV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser.skip_ws();
+        parser.preflight_object_entries()?;
+        parser.expect(b'{')?;
+        parser.skip_ws();
+        let mut slots: [Option<ConfidentialMemoRecipientSlotV1>;
+            CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] = core::array::from_fn(|_| None);
+        if !parser.try_consume_char(b'}')? {
+            loop {
+                parser.skip_ws();
+                let key = parser.parse_key()?;
+                let Some(index) = MEMO_SLOT_KEYS.iter().position(|name| *name == key.as_str())
+                else {
+                    return Err(norito::json::Error::unknown_field(key.as_str()));
+                };
+                if slots[index].is_some() {
+                    return Err(norito::json::Error::duplicate_field(MEMO_SLOT_KEYS[index]));
+                }
+                slots[index] = Some(ConfidentialMemoRecipientSlotV1::json_deserialize(parser)?);
+                parser.skip_ws();
+                if parser.try_consume_char(b',')? {
+                    continue;
+                }
+                parser.expect(b'}')?;
+                break;
+            }
+        }
+        for (key, slot) in MEMO_SLOT_KEYS.into_iter().zip(&slots) {
+            if slot.is_none() {
+                return Err(norito::json::Error::missing_field(key));
+            }
+        }
+        Ok(Self {
+            slots: slots.map(|slot| slot.expect("all eight memo slots were checked")),
+        })
     }
 }
 
@@ -1164,6 +1184,7 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    mod memo_slots;
     use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};
     #[test]
@@ -1339,7 +1360,9 @@ mod tests {
         let mut legacy = vec![1];
         legacy.extend_from_slice(&[7; 32]);
         legacy.extend_from_slice(&[2; 24]);
-        legacy.push(CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1 as u8);
+        legacy.push(
+            u8::try_from(CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1).expect("fixture value fits u8"),
+        );
         legacy.extend_from_slice(&[3; CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1]);
         let err = ConfidentialMemoEnvelopeV1::decode_from_slice(&legacy)
             .expect_err("legacy X25519 memo wire must fail the V1 magic");

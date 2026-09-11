@@ -19,14 +19,12 @@ use crate::{
     },
     consensus::{MAX_LANE_CONSENSUS_VALIDATORS, VALIDATOR_SET_HASH_VERSION_V1},
     fastpq::TransferTranscriptBundle,
-    nexus::{
-        DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneRelayEnvelope,
-        MAX_ACTIVE_EXECUTION_LANES,
-    },
-    peer::PeerId,
+    nexus::{DataSpaceCatalog, LaneCatalog, LaneRelayEnvelope, MAX_ACTIVE_EXECUTION_LANES},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;
@@ -661,7 +659,7 @@ impl MergeLaneCommitteeRosterV1 {
         }
         if self.validators.len() < crate::block::consensus_v2::MIN_VALIDATORS_PER_HEIGHT
             || self.validators.len() > MAX_LANE_CONSENSUS_VALIDATORS
-            || (self.validators.len() - 1) % 3 != 0
+            || !(self.validators.len() - 1).is_multiple_of(3)
         {
             return Err(MergeLaneAuthorityCatalogError::InvalidValidatorCount {
                 actual: self.validators.len(),
@@ -1649,8 +1647,10 @@ mod tests {
             .collect();
         let lanes = LaneCatalog::new(std::num::NonZeroU32::new(lane_count).unwrap(), lanes)
             .expect("unique geometry fixture lanes");
-        let mut dataspace = crate::nexus::DataSpaceMetadata::default();
-        dataspace.fault_tolerance = faults;
+        let dataspace = crate::nexus::DataSpaceMetadata {
+            fault_tolerance: faults,
+            ..crate::nexus::DataSpaceMetadata::default()
+        };
         let dataspaces = DataSpaceCatalog::new(vec![dataspace]).expect("fixture dataspace");
         (lanes, dataspaces)
     }
@@ -1663,18 +1663,26 @@ mod tests {
         let per_lane = MERGE_AUTHORITY_BYTES_PER_LANE + 127 * MERGE_AUTHORITY_BYTES_PER_SEAT;
         let maximum_lanes = (MAX_MERGE_LEDGER_ENTRY_BYTES - fixed) / per_lane;
         assert_eq!(maximum_lanes, 190);
-        let (lanes, dataspaces) = authority_geometry_fixture(maximum_lanes as u32, 42);
+        let (lanes, dataspaces) = authority_geometry_fixture(
+            u32::try_from(maximum_lanes).expect("fixture value fits u32"),
+            42,
+        );
         assert_eq!(
             validate_merge_lane_authority_geometry(&lanes, &dataspaces),
             Ok(fixed + maximum_lanes * per_lane)
         );
-        let (too_many, _) = authority_geometry_fixture(maximum_lanes as u32 + 1, 42);
+        let (too_many, _) = authority_geometry_fixture(
+            u32::try_from(maximum_lanes).expect("fixture value fits u32") + 1,
+            42,
+        );
         assert!(matches!(
             validate_merge_lane_authority_geometry(&too_many, &dataspaces),
             Err(MergeLaneAuthorityGeometryError::EnvelopeTooLarge { .. })
         ));
-        let (all_small, small_dataspaces) =
-            authority_geometry_fixture(MAX_ACTIVE_EXECUTION_LANES as u32, 1);
+        let (all_small, small_dataspaces) = authority_geometry_fixture(
+            u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("fixture value fits u32"),
+            1,
+        );
         assert!(validate_merge_lane_authority_geometry(&all_small, &small_dataspaces).is_ok());
         for invalid_faults in [43, u32::MAX] {
             let (lanes, dataspaces) = authority_geometry_fixture(1, invalid_faults);
@@ -1769,7 +1777,7 @@ mod tests {
             entry
                 .lane_authority_catalog
                 .lane_roster_indices
-                .push(index as u16);
+                .push(u16::try_from(index).expect("fixture value fits u16"));
         }
         let (lanes, dataspaces) = authority_geometry_fixture(lane_count, 42);
         let reservation = validate_merge_lane_authority_geometry(&lanes, &dataspaces).unwrap();

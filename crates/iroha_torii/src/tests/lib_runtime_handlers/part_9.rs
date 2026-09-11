@@ -1103,17 +1103,17 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
         .then_some(2);
         world.public_lane_validators_mut_for_testing().insert(
             (
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 validator_account_id.clone(),
             ),
             iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: validator_account_id.clone(),
                 peer_id: peer_id.parse().expect("validator peer id"),
                 stake_account: validator_account_id,
                 total_stake: Quantity::from(1_u64),
                 self_stake: Quantity::from(1_u64),
-                metadata: iroha_data_model::metadata::Metadata::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 status,
                 activation_height: 1,
                 deactivation_height,
@@ -1472,7 +1472,7 @@ async fn telemetry_handlers_ok() {
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
     app.state.metrics().set_axt_proof_cache_state(
-        iroha_data_model::nexus::DataSpaceId::new(1),
+        iroha_model_base::topology::DataSpaceId::new(1),
         "miss",
         [0x11; 32],
         2,

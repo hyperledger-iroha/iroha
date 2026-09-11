@@ -3,7 +3,9 @@ use crate::{
     smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{WorldReadOnly, public_lane_validator_record_matches_key},
 };
-use iroha_data_model::{block::consensus_v2, nexus::LaneId, peer::PeerId};
+use iroha_data_model::block::consensus_v2;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
@@ -111,10 +113,11 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
-        metadata::Metadata,
-        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
-        prelude::PeerId,
+        nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
 
     fn checked_random_keypair() -> KeyPair {

@@ -19,6 +19,8 @@ pub mod isi {
         rwa::NewRwa,
         rwa::RwaEntry,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
     use iroha_telemetry::metrics;
     use std::collections::BTreeSet;
@@ -927,7 +929,7 @@ pub mod isi {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());
@@ -1417,6 +1419,7 @@ pub mod query {
         json::PredicateJson,
     };
     use iroha_data_model::rwa::RwaEntry;
+    use iroha_model_base::domain::DomainId;
     use norito::json::Value;
     use std::collections::BTreeSet;
     #[derive(Debug, Default, Clone)]
@@ -1780,6 +1783,7 @@ pub mod query {
         };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
         fn checked_keypair() -> KeyPair {
@@ -1794,7 +1798,7 @@ pub mod query {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) = checked_keypair().into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(NonZeroU64::new(1).unwrap());

@@ -24,11 +24,11 @@ use iroha_data_model::{
         MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS,
         MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, lane_drain_empty_unresolved_evidence_root,
     },
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::{TransactionAdmissionIntent, signed::TransactionEntrypoint},
 };
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
@@ -5692,12 +5692,12 @@ mod tests {
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        nexus::{DataSpaceId, LaneId},
         transaction::{
             FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
             signed::TransactionEntrypoint,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{
         collections::{BTreeMap, BTreeSet},
         time::{Duration, Instant},

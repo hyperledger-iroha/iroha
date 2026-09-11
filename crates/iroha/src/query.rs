@@ -727,12 +727,10 @@ mod query_errors_handling {
         http_default::{DefaultHttpTransport, RequestSnapshot},
     };
     use http::Response;
-    use iroha_data_model::{
-        ChainId,
-        query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse, SignedQuery,
-        },
+    use iroha_data_model::query::{
+        QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse, SignedQuery,
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_service_model::soranet::AnonymityPolicy;
     use iroha_service_model::soranet::RolloutPhase;
     use iroha_test_samples::gen_account_in;

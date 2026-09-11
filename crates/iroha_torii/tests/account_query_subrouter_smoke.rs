@@ -5,11 +5,8 @@ use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::state::World;
-use iroha_data_model::{
-    Registrable,
-    account::Account,
-    domain::{Domain, DomainId},
-};
+use iroha_data_model::{Registrable, account::Account, domain::Domain};
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -19,7 +16,7 @@ async fn account_query_subrouter_exposes_endpoints() {
     // Minimal Torii setup
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let account_id = ALICE_ID.clone();
-    let domain_id: iroha_data_model::domain::DomainId =
+    let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);

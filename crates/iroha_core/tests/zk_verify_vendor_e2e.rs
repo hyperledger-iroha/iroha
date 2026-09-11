@@ -29,6 +29,7 @@ use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
 };
 use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use ivm::{IVM, PointerType, host::IVMHost, syscalls as ivm_sys};
@@ -80,8 +81,8 @@ fn derive_ballot_nullifier(
 fn ballot_verify_then_vendor_bridge_gated_ok_when_flag_forced() {
     // Minimal state
     let authority: AccountId = ALICE_ID.clone();
-    let domain_id: iroha_data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let domain_id: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = iroha_core::state::World::with([domain], [account], Vec::<AssetDefinition>::new());

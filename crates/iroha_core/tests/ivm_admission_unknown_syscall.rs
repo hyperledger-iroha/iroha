@@ -10,6 +10,8 @@ use iroha_data_model::{
     prelude::*,
     transaction::{Executable, TransactionBuilder, error::TransactionRejectionReason},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use ivm::{ProgramMetadata, encoding, instruction};
 use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};

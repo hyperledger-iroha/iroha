@@ -36,7 +36,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -122,7 +125,7 @@ fn contract_address(
             .expect("canonical test network id"),
         authority,
         deploy_nonce,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("contract address")
 }

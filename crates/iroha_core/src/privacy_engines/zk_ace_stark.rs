@@ -3254,9 +3254,9 @@ mod tests {
         NetworkId,
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         zk::{derive_zk_ace_identity_commitment, derive_zk_ace_replay_nullifier},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use rand::{RngCore, SeedableRng as _, rngs::StdRng};
     use std::{collections::BTreeSet, str::FromStr as _, sync::OnceLock};

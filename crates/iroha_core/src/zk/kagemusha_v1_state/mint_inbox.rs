@@ -1060,7 +1060,8 @@ fn validate_receipt(
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::{block::BlockHeader, domain::DomainId};
+    use iroha_data_model::block::BlockHeader;
+    use iroha_model_base::domain::DomainId;
 
     // Deliberately nonauthorizing structural data for projection/accounting tests only.
     fn historical_receipt() -> AcceptedMintReceiptV1 {

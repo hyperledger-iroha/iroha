@@ -49,7 +49,7 @@ fn time_trigger_call_hashes_bind_transcripts_and_include_failed_invocations() {
         let mut trigger_block = state.world.triggers.block();
         let mut transaction = trigger_block.transaction();
         for (id, amount) in trigger_ids.iter().zip([10u32, 1000]) {
-            let mut metadata = iroha_data_model::metadata::Metadata::default();
+            let mut metadata = iroha_model_base::metadata::Metadata::default();
             metadata.insert(
                 "__registered_block_height".parse::<Name>().unwrap(),
                 Json::new(0u64),

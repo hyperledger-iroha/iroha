@@ -5,9 +5,10 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
             AccountAddress,
             rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
         },
-        nexus::{DataSpaceCatalog, DataSpaceId},
+        nexus::DataSpaceCatalog,
         sns::{NameControllerV1, NameRecordV1, NameStatus, NameTombstoneStateV1},
     };
+    use iroha_model_base::topology::DataSpaceId;
     let retired = checked_account_id();
     let active = checked_account_id();
     let unrelated = checked_account_id();

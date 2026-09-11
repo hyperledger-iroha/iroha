@@ -44,7 +44,6 @@ use iroha_data_model::{
         AssetBalanceScope,
         id::{AssetDefinitionId, AssetId},
     },
-    domain::DomainId,
     escrow::EscrowId,
     isi::{
         BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
@@ -59,6 +58,7 @@ use iroha_data_model::{
     },
     trigger::{Trigger, TriggerId},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::{name::Name, state_path::StatePath};
 use norito::json;
 use std::{
@@ -1497,7 +1497,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             )
         }
         DRK::Domain => {
-            let id = iroha_data_model::domain::DomainId::parse_fully_qualified(raw).ok()?;
+            let id = iroha_model_base::domain::DomainId::parse_fully_qualified(raw).ok()?;
             (
                 PointerType::DomainId,
                 ivm_abi::codec::encode_canonical_norito(&id).ok()?,
@@ -1546,14 +1546,14 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
         }
         DRK::DataSpaceId => {
             if let Some(raw_id) = parse_u64_literal(raw) {
-                let id = iroha_data_model::nexus::DataSpaceId::new(raw_id);
+                let id = iroha_model_base::topology::DataSpaceId::new(raw_id);
                 (
                     PointerType::DataSpaceId,
                     ivm_abi::codec::encode_canonical_norito(&id).ok()?,
                 )
             } else {
                 let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-                let value: iroha_data_model::nexus::DataSpaceId =
+                let value: iroha_model_base::topology::DataSpaceId =
                     ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
                 (
                     PointerType::DataSpaceId,
@@ -1711,10 +1711,8 @@ mod tests {
         pointer_abi::PointerType,
     };
     use indexmap::IndexSet;
-    use iroha_data_model::{
-        DomainId,
-        asset::{AssetBalanceScope, id::AssetDefinitionId},
-    };
+    use iroha_data_model::asset::{AssetBalanceScope, id::AssetDefinitionId};
+    use iroha_model_base::domain::DomainId;
     use ivm_abi::syscalls;
     use std::collections::{HashMap, HashSet};
     fn test_mode_compiler() -> Compiler {
@@ -1737,7 +1735,7 @@ mod tests {
     }
     fn sample_asset_handle() -> crate::axt::AssetHandle {
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         AssetHandle {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
                 0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
@@ -2111,7 +2109,7 @@ mod tests {
     #[test]
     fn axt_descriptor_literal_encoding_enforces_host_invariants() {
         use crate::axt::{AxtDescriptor, AxtTouchSpec};
-        use iroha_data_model::nexus::DataSpaceId;
+        use iroha_model_base::topology::DataSpaceId;
         fn literal(descriptor: &AxtDescriptor) -> String {
             let bytes = norito::to_bytes(descriptor).expect("encode AXT descriptor");
             format!("0x{}", hex::encode(bytes))
@@ -2198,7 +2196,7 @@ mod tests {
     #[test]
     fn capability_pointer_encoding_rejects_context_free_faults() {
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob};
-        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         fn literal<T: norito::NoritoSerialize>(value: &T) -> String {
             let bytes = norito::to_bytes(value).expect("encode capability literal");
             format!("0x{}", hex::encode(bytes))
@@ -4109,12 +4107,12 @@ kotoage fn main() authorize("CompilerFixture") {{
         let from_asset = iroha_data_model::asset::id::AssetId::with_scope(
             asset_definition.clone(),
             from.clone(),
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL),
         );
         let to_asset = iroha_data_model::asset::id::AssetId::with_scope(
             asset_definition.clone(),
             to.clone(),
-            AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL),
         );
         let src = format!(
             r#"
@@ -7454,7 +7452,7 @@ kotoage fn main() authorize("AssetAdmin") {{
             .expect("expected access_set_hints");
         let authority_asset = format!(
             "asset:{asset_literal}:$authority:dataspace:{}",
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL
         );
         let authority_detail = "account.detail:$authority:status".to_owned();
         assert!(hints.read_keys.contains(&AUTHORITY_ACCOUNT_KEY.to_owned()));
@@ -7511,7 +7509,7 @@ kotoage fn main() authorize("AssetAdmin") {{
     }
     #[test]
     fn manifest_access_set_hints_include_transfer_domain_literal() {
-        use iroha_data_model::domain::DomainId;
+        use iroha_model_base::domain::DomainId;
         let from_literal = sample_account_literal();
         let to = sample_account_id_alt();
         let to_literal = to.to_string();
@@ -7719,7 +7717,7 @@ kotoage fn main() authorize("AssetAdmin") {{
             &network_id,
             &sample_account_id(),
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
@@ -7828,7 +7826,7 @@ kotoage fn main() authorize("AssetAdmin") {{
     #[test]
     fn manifest_access_set_hints_include_static_peer_helpers() {
         let public_key = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
-        let peer = iroha_data_model::peer::PeerId::from(
+        let peer = iroha_model_base::peer::PeerId::from(
             public_key
                 .parse::<iroha_crypto::PublicKey>()
                 .expect("public key"),
@@ -8130,7 +8128,6 @@ seiyaku Test {{
     #[test]
     fn manifest_trigger_decl_lowers_structured_data_filters_for_core_families() {
         use iroha_data_model::{
-            DomainId,
             account::AccountId,
             asset::AssetId,
             events::{
@@ -8148,11 +8145,12 @@ seiyaku Test {{
                 },
             },
             nft::NftId,
-            peer::PeerId,
             role::RoleId,
             rwa::RwaId,
             trigger::TriggerId,
         };
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::peer::PeerId;
         let account_literal = sample_account_literal();
         let account = AccountId::parse_encoded(account_literal.as_str()).expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
@@ -15519,7 +15517,7 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::Domain, s) => {
-                    let id = iroha_data_model::domain::DomainId::parse_fully_qualified(s).map_err(
+                    let id = iroha_model_base::domain::DomainId::parse_fully_qualified(s).map_err(
                         |e| {
                             let err = format!("invalid DomainId literal `{s}`: {e}");
                             i18n::translate(self.lang, Message::SemanticError(&err))
@@ -15551,7 +15549,7 @@ impl Compiler {
                 }
                 DataKey(DataKind::DataSpaceId, s) => {
                     if let Some(raw) = parse_u64_literal(s) {
-                        let id = iroha_data_model::nexus::DataSpaceId::new(raw);
+                        let id = iroha_model_base::topology::DataSpaceId::new(raw);
                         (
                             PointerType::DataSpaceId as u16,
                             ivm_abi::codec::encode_canonical_norito(&id)
@@ -15566,7 +15564,7 @@ impl Compiler {
                             let err = format!("invalid DataSpaceId literal `{s}`: {e}");
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?;
-                        let value: iroha_data_model::nexus::DataSpaceId =
+                        let value: iroha_model_base::topology::DataSpaceId =
                             ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
                                 let err = format!(
                                     "invalid DataSpaceId literal `{s}`: cannot decode ({e})"
@@ -17462,10 +17460,10 @@ fn parse_dataspace_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
     temp: ir::Temp,
-) -> Option<iroha_data_model::nexus::DataSpaceId> {
+) -> Option<iroha_model_base::topology::DataSpaceId> {
     let raw = string_map.get(&(func_idx, temp))?;
     if let Some(raw_id) = parse_u64_literal(raw) {
-        return Some(iroha_data_model::nexus::DataSpaceId::new(raw_id));
+        return Some(iroha_model_base::topology::DataSpaceId::new(raw_id));
     }
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
     ivm_abi::codec::decode_canonical_norito(&bytes).ok()
@@ -17481,9 +17479,9 @@ fn public_key_from_json_value(value: &json::Value) -> Option<iroha_crypto::Publi
         .or_else(|| map.get("key"))?;
     public_key_from_json_value(value)
 }
-fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_data_model::peer::PeerId> {
+fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_model_base::peer::PeerId> {
     if let Some(peer_str) = value.as_str() {
-        if let Ok(peer_id) = peer_str.parse::<iroha_data_model::peer::PeerId>() {
+        if let Ok(peer_id) = peer_str.parse::<iroha_model_base::peer::PeerId>() {
             return Some(peer_id);
         }
         if let Ok(peer) = peer_str.parse::<iroha_data_model::peer::Peer>() {
@@ -17503,9 +17501,9 @@ fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_data_model::peer
         .get("public_key")
         .or_else(|| map.get("publicKey"))
         .or_else(|| map.get("key"))?;
-    public_key_from_json_value(key).map(iroha_data_model::peer::PeerId::from)
+    public_key_from_json_value(key).map(iroha_model_base::peer::PeerId::from)
 }
-fn peer_id_from_json_literal(raw: &str) -> Option<iroha_data_model::peer::PeerId> {
+fn peer_id_from_json_literal(raw: &str) -> Option<iroha_model_base::peer::PeerId> {
     let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
     peer_id_from_json_value(&value)
 }
@@ -17944,8 +17942,8 @@ fn parse_domain_temp(
     string_map: &HashMap<(usize, ir::Temp), String>,
     func_idx: usize,
     temp: ir::Temp,
-) -> Option<iroha_data_model::domain::DomainId> {
-    iroha_data_model::domain::DomainId::parse_fully_qualified(string_map.get(&(func_idx, temp))?)
+) -> Option<iroha_model_base::domain::DomainId> {
+    iroha_model_base::domain::DomainId::parse_fully_qualified(string_map.get(&(func_idx, temp))?)
         .ok()
 }
 fn parse_account_temp(
@@ -18240,7 +18238,7 @@ fn key_asset_for_account_hint(
 fn key_scoped_asset_for_account_hint(
     definition: &AssetDefinitionId,
     account: &AccountAccessHint,
-    dataspace: iroha_data_model::nexus::DataSpaceId,
+    dataspace: iroha_model_base::topology::DataSpaceId,
 ) -> String {
     match account {
         AccountAccessHint::Literal(account) => key_asset(&AssetId::with_scope(
@@ -18301,7 +18299,7 @@ fn key_asset_def_detail(id: &AssetDefinitionId, key: &Name) -> String {
 fn key_zk_asset(id: &AssetDefinitionId) -> String {
     format!("zk_asset:{id}")
 }
-fn key_peer(id: &iroha_data_model::peer::PeerId) -> String {
+fn key_peer(id: &iroha_model_base::peer::PeerId) -> String {
     format!("peer:{id}")
 }
 fn key_contract_manifest(code_hash: &iroha_crypto::Hash) -> String {
@@ -18418,7 +18416,7 @@ fn add_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn add_peer_rw(set: &mut AccessSets, id: &iroha_data_model::peer::PeerId) {
+fn add_peer_rw(set: &mut AccessSets, id: &iroha_model_base::peer::PeerId) {
     let key = key_peer(id);
     set.reads.insert(key.clone());
     set.writes.insert(key);
@@ -18499,7 +18497,7 @@ fn add_scoped_asset_rw_for_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
     account: &AccountAccessHint,
-    dataspace: iroha_data_model::nexus::DataSpaceId,
+    dataspace: iroha_model_base::topology::DataSpaceId,
 ) {
     set.reads.insert(ASSET_WILDCARD_KEY.to_string());
     set.writes.insert(ASSET_WILDCARD_KEY.to_string());
@@ -18549,7 +18547,7 @@ fn add_scoped_asset_rw_for_optional_account_hint(
     set: &mut AccessSets,
     definition: &AssetDefinitionId,
     account: Option<&AccountAccessHint>,
-    dataspace: iroha_data_model::nexus::DataSpaceId,
+    dataspace: iroha_model_base::topology::DataSpaceId,
 ) {
     if let Some(account) = account {
         add_scoped_asset_rw_for_account_hint(set, definition, account, dataspace);
@@ -18619,20 +18617,20 @@ fn add_soracloud_state_rw(set: &mut AccessSets, binding: &Name, state_key: &str)
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
-fn axt_dataspace_key(dsid: iroha_data_model::nexus::DataSpaceId) -> String {
+fn axt_dataspace_key(dsid: iroha_model_base::topology::DataSpaceId) -> String {
     format!("axt:dataspace:{}", dsid.as_u64())
 }
-fn add_axt_dataspace_r(set: &mut AccessSets, dsid: iroha_data_model::nexus::DataSpaceId) {
+fn add_axt_dataspace_r(set: &mut AccessSets, dsid: iroha_model_base::topology::DataSpaceId) {
     set.reads.insert(axt_dataspace_key(dsid));
 }
-fn add_axt_dataspace_rw(set: &mut AccessSets, dsid: iroha_data_model::nexus::DataSpaceId) {
+fn add_axt_dataspace_rw(set: &mut AccessSets, dsid: iroha_model_base::topology::DataSpaceId) {
     let key = axt_dataspace_key(dsid);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
 fn add_axt_touch_key_r(
     set: &mut AccessSets,
-    dsid: iroha_data_model::nexus::DataSpaceId,
+    dsid: iroha_model_base::topology::DataSpaceId,
     key: &str,
 ) {
     add_axt_dataspace_r(set, dsid);
@@ -18641,7 +18639,7 @@ fn add_axt_touch_key_r(
 }
 fn add_axt_touch_key_rw(
     set: &mut AccessSets,
-    dsid: iroha_data_model::nexus::DataSpaceId,
+    dsid: iroha_model_base::topology::DataSpaceId,
     key: &str,
 ) {
     add_axt_dataspace_rw(set, dsid);
@@ -18651,7 +18649,7 @@ fn add_axt_touch_key_rw(
 }
 fn add_axt_touch_manifest_access(
     set: &mut AccessSets,
-    dsid: iroha_data_model::nexus::DataSpaceId,
+    dsid: iroha_model_base::topology::DataSpaceId,
     manifest: &crate::axt::TouchManifest,
 ) {
     add_axt_dataspace_rw(set, dsid);

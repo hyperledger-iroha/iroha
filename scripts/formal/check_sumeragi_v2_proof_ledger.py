@@ -64,50 +64,6 @@ PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
 # explicit open-action tuple above prevents any future partial slice from being
 # promoted to a complete trace theorem.
 
-_CHECKER_COMPONENT_FILES = (
-    "sumeragi_v2_proof_ledger_async_contracts.py",
-    "sumeragi_v2_proof_ledger_contract_types.py",
-    "sumeragi_v2_proof_ledger_cross_tool_contracts.py",
-    "sumeragi_v2_proof_ledger_proof_inventory.py",
-    "sumeragi_v2_proof_ledger_serve_contracts.py",
-    "sumeragi_v2_proof_ledger_historical_contracts.py",
-    "sumeragi_v2_proof_ledger_quantitative_contracts.py",
-    "sumeragi_v2_proof_ledger_exact_property_contracts.py",
-    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
-    "sumeragi_v2_proof_ledger_proof_token_contracts.py",
-    "sumeragi_v2_proof_ledger_reviewed_rust_source_loader_contracts.py",
-    "sumeragi_v2_proof_ledger_source_seal_contracts.py",
-    "sumeragi_v2_proof_ledger_network_source_seal_contracts.py",
-    "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
-    "sumeragi_v2_proof_ledger_production_trace_contracts.py",
-    "sumeragi_v2_proof_ledger_production_trace_evidence_contracts.py",
-    "sumeragi_v2_proof_ledger_candidate_continuation_contracts.py",
-    "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
-    "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py",
-    "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
-    "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py",
-    "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
-    "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py",
-    "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
-    "sumeragi_v2_proof_ledger_direct_serve_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_production_recovery_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_production_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_lifecycle_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_source_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_support_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py",
-    "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
-    "sumeragi_v2_proof_ledger_release_inventory_contracts.py",
-    "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
-    "sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py",
-    "sumeragi_v2_proof_ledger_effect_capacity_contracts.py",
-    "sumeragi_v2_proof_ledger_leader_wire_contracts.py",
-    "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
-    "sumeragi_v2_proof_ledger_terminal_discharge_contracts.py",
-    "sumeragi_v2_proof_ledger_kura_native_amx_contracts.py",
-)
-
 
 def _execute_checker_component(filename: str) -> None:
     """Execute one reviewed contract component in the checker namespace."""
@@ -117,6 +73,8 @@ def _execute_checker_component(filename: str) -> None:
     source = path.read_text(encoding="utf-8")
     exec(compile(source, str(path), "exec"), globals())
 
+
+_execute_checker_component("sumeragi_v2_proof_ledger_source_inventory.py")
 
 _execute_checker_component("sumeragi_v2_proof_ledger_async_contracts.py")
 

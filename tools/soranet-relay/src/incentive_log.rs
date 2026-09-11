@@ -303,10 +303,8 @@ impl IncentiveLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        metadata::Metadata,
-        soranet::incentives::{RelayComplianceStatusV1, RelayEpochMetricsV1},
-    };
+    use iroha_data_model::soranet::incentives::{RelayComplianceStatusV1, RelayEpochMetricsV1};
+    use iroha_model_base::metadata::Metadata;
     use tempfile::TempDir;
     fn sample_metrics(epoch: u32) -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {

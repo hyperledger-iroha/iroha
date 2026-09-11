@@ -13,13 +13,11 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId},
-    domain::DomainId,
     events::{
         EventFilterBox,
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     isi::{ExecuteTrigger, InstructionBox, Register, SetKeyValue},
-    metadata::Metadata,
     nexus::FeeSponsorProgramId,
     nft::{Nft, NftId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
@@ -39,6 +37,8 @@ use iroha_data_model::{
         action::{Action, Repeats},
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::subscriptions as wire;
 use std::{
@@ -51,8 +51,10 @@ use std::{
 };
 use wire::{SubscriptionCancelMode, SubscriptionListParams, SubscriptionPlanListParams};
 
+type Responder = dyn Fn(&RequestSnapshot) -> eyre::Result<Response<Vec<u8>>> + Send + Sync;
+
 struct AsyncTransport {
-    responder: Box<dyn Fn(&RequestSnapshot) -> eyre::Result<Response<Vec<u8>>> + Send + Sync>,
+    responder: Box<Responder>,
     requests: Arc<Mutex<Vec<RequestSnapshot>>>,
     calls: Arc<AtomicUsize>,
     delay: Duration,
@@ -182,10 +184,10 @@ fn usage_intent() -> SubscriptionUsage {
 }
 fn framed(instructions: Vec<InstructionBox>) -> Vec<wire::SubscriptionInstructionDraft> {
     instructions
-        .iter()
+        .into_iter()
         .map(|instruction| {
             let (wire_id, bytes) =
-                iroha_data_model::isi::framed_instruction_payload(instruction).unwrap();
+                iroha_data_model::isi::framed_instruction_payload(&instruction).unwrap();
             wire::SubscriptionInstructionDraft {
                 wire_id: wire_id.to_owned(),
                 payload_hex: hex::encode(bytes),
@@ -295,7 +297,7 @@ fn action_response(
 }
 fn payload_response(client: &Client, instructions: Vec<InstructionBox>) -> (String, String) {
     let builder = TransactionBuilder::new(
-        client.network_id.clone(),
+        client.network_id,
         client.account.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -309,7 +311,8 @@ fn rewrite_payload_response(
     response: Response<Vec<u8>>,
     mutate: impl FnOnce(&mut TransactionPayload),
 ) -> Response<Vec<u8>> {
-    let mut body: norito::json::Value = norito::json::from_slice(response.body()).unwrap();
+    let bytes = response.into_body();
+    let mut body: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
     let fields = body.as_object_mut().unwrap();
     let bytes = STANDARD
         .decode(fields["transaction_payload_b64"].as_str().unwrap())
@@ -361,10 +364,10 @@ fn plan_response(
         signing_message_b64,
     }
 }
-fn respond(client: &Client, snapshot: &RequestSnapshot) -> eyre::Result<Response<Vec<u8>>> {
+fn respond(client: &Client, snapshot: &RequestSnapshot) -> Response<Vec<u8>> {
     let path = snapshot.url.path();
     if snapshot.method == Method::GET {
-        return Ok(match path {
+        return match path {
             "/v1/subscriptions/plans" => json(&wire::SubscriptionPlanListResponse {
                 items: Vec::new(),
                 total: Some(0),
@@ -383,14 +386,14 @@ fn respond(client: &Client, snapshot: &RequestSnapshot) -> eyre::Result<Response
                 invoice: None,
                 plan: None,
             }),
-        });
+        };
     }
     if path == "/v1/subscriptions/plans" {
         let request = norito::json::from_slice(&snapshot.body).unwrap();
-        return Ok(json(&plan_response(client, &request)));
+        return json(&plan_response(client, &request));
     }
     if path == "/v1/subscriptions" {
-        return Ok(json(&create_response(&client.account)));
+        return json(&create_response(&client.account));
     }
     if path.ends_with("/usage") {
         let request: wire::SubscriptionUsageRequest =
@@ -410,19 +413,19 @@ fn respond(client: &Client, snapshot: &RequestSnapshot) -> eyre::Result<Response
         });
         let (transaction_payload_b64, signing_message_b64) =
             payload_response(client, vec![instruction.into()]);
-        return Ok(json(&wire::SubscriptionUsageResponse {
+        return json(&wire::SubscriptionUsageResponse {
             submitted: false,
             subscription_id: id(),
             transaction_payload_b64,
             signing_message_b64,
-        }));
+        });
     }
     let request = norito::json::from_slice(&snapshot.body).unwrap();
-    Ok(json(&action_response(
+    json(&action_response(
         &client.account,
         path.rsplit('/').next().unwrap(),
         &request,
-    )))
+    ))
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -431,7 +434,7 @@ async fn all_eleven_operations_use_async_transport_and_exact_authority() {
     let responder_client = base.clone();
     let (client, requests, calls) = attach(
         base,
-        move |snapshot| respond(&responder_client, snapshot),
+        move |snapshot| Ok(respond(&responder_client, snapshot)),
         Duration::ZERO,
     );
     let account = client.account_client().unwrap();
@@ -734,7 +737,7 @@ async fn payload_drafts_reject_unrequested_fixed_transaction_fields() {
                 base,
                 move |snapshot| {
                     Ok(rewrite_payload_response(
-                        respond(&responder_client, snapshot)?,
+                        respond(&responder_client, snapshot),
                         |payload| match mutation {
                             "metadata" => {
                                 payload.metadata.insert(
@@ -828,7 +831,7 @@ async fn payload_drafts_preserve_all_quoted_charge_limits_for_review() {
         base,
         move |snapshot| {
             Ok(rewrite_payload_response(
-                respond(&responder_client, snapshot)?,
+                respond(&responder_client, snapshot),
                 |payload| payload.fee_payment = response_fee.clone(),
             ))
         },
@@ -928,7 +931,7 @@ fn blocking_subscription_contexts_reuse_async_dispatch_and_reject_nested_runtime
     let responder_client = base.clone();
     let (client, _, calls) = attach(
         base,
-        move |snapshot| respond(&responder_client, snapshot),
+        move |snapshot| Ok(respond(&responder_client, snapshot)),
         Duration::ZERO,
     );
     let account = blocking::AccountClient::from_client(client.account_client().unwrap()).unwrap();

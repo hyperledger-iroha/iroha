@@ -14,17 +14,20 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
-    ChainId, Metadata, NetworkId, Registrable,
+    NetworkId, Registrable,
     block::{
         BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
         consensus::SumeragiLanePayloadOwnership,
     },
-    nexus::{DataSpaceId, LaneId},
     prelude::{
-        Account, AccountId, AssetDefinition, BlockHeader, Domain, DomainId, HashOf, Level, Log,
+        Account, AccountId, AssetDefinition, BlockHeader, Domain, HashOf, Level, Log,
         SignedTransaction, TransactionBuilder,
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
 use std::sync::Arc;

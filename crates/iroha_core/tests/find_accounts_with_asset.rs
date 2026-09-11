@@ -8,6 +8,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::collections::BTreeSet;
 #[test]

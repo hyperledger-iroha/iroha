@@ -590,9 +590,9 @@ mod tests {
             MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
             MusubiReleaseMetadataV1, MusubiVerificationLockDigestV1,
         },
-        nexus::DataSpaceId,
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use norito::codec::Encode as _;
     use std::{
         cell::Cell,

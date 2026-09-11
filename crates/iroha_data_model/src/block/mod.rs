@@ -508,7 +508,7 @@ impl SignedBlock {
     #[cfg(feature = "transparent_api")]
     pub fn set_axt_transitioned_dataspaces(
         &mut self,
-        dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+        dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
     ) -> Result<(), SetLaneFinalityStatementsError> {
         let result = self
             .result
@@ -931,8 +931,8 @@ impl SignedBlock {
         ));
         let proof_policies = da_proof_policies.unwrap_or_else(|| {
             DaProofPolicyBundle::new(vec![DaProofPolicy {
-                lane_id: crate::nexus::LaneId::SINGLE,
-                dataspace_id: crate::nexus::DataSpaceId::UNIVERSAL,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
+                dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 alias: "default".to_string(),
                 proof_scheme: DaProofScheme::MerkleSha256,
             }])
@@ -1704,12 +1704,12 @@ mod tests {
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
-        nexus::{DataSpaceId, LaneId},
-        peer::PeerId,
         query::dsl::{HasProjection, PredicateMarker, SelectorMarker},
         sorafs::pin_registry::ManifestDigest,
         transaction::{TransactionBuilder, signed::TransactionEntrypoint},
     };
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
     fn checked_random_keypair() -> KeyPair {
@@ -2233,7 +2233,7 @@ mod tests {
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
-            axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+            axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
             lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         }
         let omitted_snapshot = BlockResultWithoutAxtPolicySnapshot {
@@ -2268,7 +2268,7 @@ mod tests {
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-            axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+            axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
         }
         let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
             time_triggers: Vec::new(),
@@ -2623,9 +2623,8 @@ mod tests {
     }
     #[test]
     fn genesis_defaults_confidential_digest() {
-        use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
-        };
+        use crate::{account::AccountId, transaction::signed::TransactionBuilder};
+        use iroha_model_base::domain::DomainId;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2949,9 +2948,8 @@ mod tests {
     }
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
-        use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
-        };
+        use crate::{account::AccountId, transaction::signed::TransactionBuilder};
+        use iroha_model_base::domain::DomainId;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3018,9 +3016,9 @@ mod tests {
     #[test]
     fn decode_versioned_signed_block_handles_genesis_like_payload() {
         use crate::{
-            account::AccountId, domain::DomainId, isi::InstructionBox,
-            transaction::signed::TransactionBuilder,
+            account::AccountId, isi::InstructionBox, transaction::signed::TransactionBuilder,
         };
+        use iroha_model_base::domain::DomainId;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3172,9 +3170,9 @@ mod tests {
     #[test]
     fn genesis_can_embed_da_commitments() {
         use crate::{
-            account::AccountId, domain::DomainId, isi::InstructionBox,
-            transaction::signed::TransactionBuilder,
+            account::AccountId, isi::InstructionBox, transaction::signed::TransactionBuilder,
         };
+        use iroha_model_base::domain::DomainId;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3207,11 +3205,11 @@ mod tests {
         use crate::{
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
-            domain::DomainId,
             isi::InstructionBox,
-            nexus::{DataSpaceId, LaneId},
             transaction::signed::TransactionBuilder,
         };
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3245,9 +3243,9 @@ mod tests {
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
             isi::InstructionBox,
-            nexus::{DataSpaceId, LaneId},
             transaction::signed::TransactionBuilder,
         };
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3356,10 +3354,10 @@ mod tests {
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
-            domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
         use iroha_crypto::Hash;
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::numeric::Quantity;
         use std::{collections::BTreeMap, num::NonZeroU64};
         fn fixture_account(_domain: &DomainId) -> AccountId {
@@ -3476,10 +3474,10 @@ mod tests {
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
         let binding = crate::nexus::AxtPolicyBinding {
-            dsid: crate::nexus::DataSpaceId::new(1),
+            dsid: iroha_model_base::topology::DataSpaceId::new(1),
             policy: crate::nexus::AxtPolicyEntry {
                 manifest_root: [0x42; 32],
-                target_lane: crate::nexus::LaneId::new(0),
+                target_lane: iroha_model_base::topology::LaneId::new(0),
                 active_handle_era: 1,
                 next_handle_counter: 1,
                 current_slot: 1,
@@ -3517,11 +3515,11 @@ mod tests {
         use crate::{
             account::AccountId,
             asset::id::AssetDefinitionId,
-            domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
             transaction::{TransactionResultInner, signed::TransactionBuilder},
         };
         use iroha_crypto::Hash;
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::numeric::Quantity;
         use std::{collections::BTreeMap, num::NonZeroU64};
         let keypair = checked_random_keypair();
@@ -3566,9 +3564,9 @@ mod tests {
         let binding = crate::nexus::AxtBinding::new([0x11; 32]);
         let axt_envelope = crate::nexus::AxtEnvelopeRecord {
             binding,
-            lane: crate::nexus::LaneId::new(2),
+            lane: iroha_model_base::topology::LaneId::new(2),
             descriptor: crate::nexus::AxtDescriptor {
-                dsids: vec![crate::DataSpaceId::new(9)],
+                dsids: vec![iroha_model_base::topology::DataSpaceId::new(9)],
                 touches: Vec::new(),
             },
             touches: Vec::new(),
@@ -3576,14 +3574,14 @@ mod tests {
             handles: Vec::new(),
             commit_height: 1,
         };
-        let dsid = crate::DataSpaceId::new(9);
+        let dsid = iroha_model_base::topology::DataSpaceId::new(9);
         let policy_snapshot = crate::nexus::AxtPolicySnapshot {
             version: 0,
             entries: vec![crate::nexus::AxtPolicyBinding {
                 dsid,
                 policy: crate::nexus::AxtPolicyEntry {
                     manifest_root: [0xAA; 32],
-                    target_lane: crate::nexus::LaneId::new(2),
+                    target_lane: iroha_model_base::topology::LaneId::new(2),
                     active_handle_era: 10,
                     next_handle_counter: 5,
                     current_slot: 7,
@@ -3625,7 +3623,6 @@ mod tests {
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
         use crate::{
             account::AccountId,
-            domain::DomainId,
             transaction::{
                 ExecutionStep,
                 signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
@@ -3633,6 +3630,7 @@ mod tests {
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
         use iroha_crypto::MerkleTree;
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::const_vec::ConstVec;
         use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
@@ -3898,10 +3896,10 @@ mod tests {
     fn proofs_for_entry_hash_matches_merkle_roots() {
         use crate::{
             account::AccountId,
-            domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
         use iroha_crypto::MerkleTree;
+        use iroha_model_base::domain::DomainId;
         use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -4036,7 +4034,6 @@ mod tests {
     fn proofs_for_time_trigger_use_extended_root() {
         use crate::{
             account::AccountId,
-            domain::DomainId,
             transaction::{
                 ExecutionStep,
                 signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
@@ -4044,6 +4041,7 @@ mod tests {
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
         use iroha_crypto::MerkleTree;
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::const_vec::ConstVec;
         use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
@@ -4112,10 +4110,10 @@ mod tests {
     fn proofs_for_entry_hash_missing_returns_none() {
         use crate::{
             account::AccountId,
-            domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
         use iroha_crypto::Hash;
+        use iroha_model_base::domain::DomainId;
         use std::num::NonZeroU64;
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -4147,9 +4145,10 @@ mod tests {
     #[test]
     fn canonical_wire_and_deframe_preserve_layout_flags() {
         use crate::{
-            account::AccountId, block::deframe_versioned_signed_block_bytes, domain::DomainId,
+            account::AccountId, block::deframe_versioned_signed_block_bytes,
             transaction::signed::TransactionBuilder,
         };
+        use iroha_model_base::domain::DomainId;
         let keypair = checked_random_keypair();
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -4174,9 +4173,8 @@ mod tests {
     }
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
-        use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
-        };
+        use crate::{account::AccountId, transaction::signed::TransactionBuilder};
+        use iroha_model_base::domain::DomainId;
         let keypair = checked_random_keypair();
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -4214,11 +4212,21 @@ mod tests {
         assert!(rest.is_empty());
     }
     #[cfg(feature = "transparent_api")]
+    fn sealed_alias_block_builder() -> crate::block::builder::BlockBuilder {
+        crate::block::builder::BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ))
+    }
+    #[cfg(feature = "transparent_api")]
     #[test]
     fn sealed_reveal_batch_outcome_aliases_are_unique_and_single_assignment() {
         use crate::{
             asset::{AssetDefinitionId, AssetId},
-            block::builder::BlockBuilder,
             events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferOutcome},
             transaction::{
                 FeePaymentIntent,
@@ -4249,7 +4257,8 @@ mod tests {
             leg_id: "sealed-alias-leg".to_owned(),
             asset: AssetId::new(
                 AssetDefinitionId::derive_from_components(
-                    crate::domain::DomainId::try_new("sealed", "universal").expect("domain id"),
+                    iroha_model_base::domain::DomainId::try_new("sealed", "universal")
+                        .expect("domain id"),
                     "coin".parse().expect("asset name"),
                 ),
                 authority.clone(),
@@ -4258,14 +4267,7 @@ mod tests {
             amount: Quantity::from(1_u32),
             status: AssetBatchTransferLegStatus::Applied,
         };
-        let mut builder = BlockBuilder::new(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
+        let mut builder = sealed_alias_block_builder();
         builder.push_sealed_transaction_reveal(first_reveal.clone());
         builder.push_result(Ok(DataTriggerSequence::default()));
         let mut positive = builder.build(BTreeSet::new());
@@ -4299,14 +4301,7 @@ mod tests {
             signed,
             [0x42; 32],
         );
-        let mut ambiguous_builder = BlockBuilder::new(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
+        let mut ambiguous_builder = sealed_alias_block_builder();
         ambiguous_builder.push_sealed_transaction_reveal(first_reveal);
         ambiguous_builder.push_result(Ok(DataTriggerSequence::default()));
         ambiguous_builder.push_sealed_transaction_reveal(second_reveal);

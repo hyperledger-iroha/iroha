@@ -9,9 +9,9 @@ use iroha_data_model::{
         MergeLedgerEntry, MergeQuorumCertificate,
     },
     nexus::{LaneCatalog, LaneConfig},
-    peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+use iroha_model_base::peer::PeerId;
 use iroha_zkp_halo2::poseidon;
 use norito::codec::{Decode, Encode};
 /// Domain separator applied to the merge-hint reduction payloads.
@@ -494,10 +494,11 @@ mod tests {
             confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         },
         nexus::{
-            DaManifestPolicy, DataSpaceId, LaneId, LaneLifecycleParameterV1, LaneSchedulerPolicy,
-            LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
+            DaManifestPolicy, LaneLifecycleParameterV1, LaneSchedulerPolicy,
+            LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU32, NonZeroU64},
@@ -509,7 +510,7 @@ mod tests {
         LaneSettlementBufferPolicy::new(
             iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("settlement", "universal")
+                iroha_model_base::domain::DomainId::try_new("settlement", "universal")
                     .expect("settlement domain"),
                 "xor".parse().expect("asset name"),
             ),
@@ -717,9 +718,9 @@ mod tests {
             consensus::VALIDATOR_SET_HASH_VERSION_V1,
             merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
         };
-        let lane_id = iroha_data_model::nexus::LaneId::new(1);
+        let lane_id = iroha_model_base::topology::LaneId::new(1);
         let lane_incarnation = Hash::new(b"merge-test-lane-incarnation");
-        let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(7);
+        let dataspace_id = iroha_model_base::topology::DataSpaceId::new(7);
         let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
             block_height: 9,
             lane_id,
@@ -807,9 +808,9 @@ mod tests {
         let digest_a = merge_qc_message_digest(&network_id, &candidate, 1, validator_set_hash);
         let digest_b = merge_qc_message_digest(&network_id, &candidate, 1, validator_set_hash);
         assert_eq!(digest_a, digest_b);
-        let shared_label_a: iroha_data_model::ChainId =
+        let shared_label_a: iroha_model_base::chain::ChainId =
             "shared-display-label".parse().expect("valid display label");
-        let shared_label_b: iroha_data_model::ChainId =
+        let shared_label_b: iroha_model_base::chain::ChainId =
             "shared-display-label".parse().expect("valid display label");
         assert_eq!(shared_label_a, shared_label_b);
         let foreign_network_id = NetworkId::from_genesis_hash(

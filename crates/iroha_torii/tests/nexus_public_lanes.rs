@@ -18,19 +18,20 @@ use iroha_data_model::{
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{
         Grant, RegisterPeerWithPop,
         consensus_keys::RegisterConsensusKey,
         staking::{BondPublicLaneStake, RegisterPublicLaneValidator},
     },
-    metadata::Metadata,
-    nexus::LaneId,
-    peer::PeerId,
     permission::Permission,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::{self, Value};
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
@@ -257,7 +258,7 @@ fn build_test_router(
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
     let torii = fixtures::ToriiHarness::new(
         &cfg,
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kura,
         &state,

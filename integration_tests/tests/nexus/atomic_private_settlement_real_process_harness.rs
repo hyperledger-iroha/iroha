@@ -2807,7 +2807,7 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     let client = client.client();
-    let domain = iroha::data_model::domain::DomainId::try_new("default", "universal")?;
+    let domain = iroha_model_base::domain::DomainId::try_new("default", "universal")?;
     let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair().private_key().clone());
     let mut root = Table::new();
     root.insert(

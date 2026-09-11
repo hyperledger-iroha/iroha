@@ -13,7 +13,7 @@ use iroha_data_model::{
     Registrable,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     events::data::governance::GovernanceSlashReason,
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
@@ -28,6 +28,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 use mv::storage::StorageReadOnly;

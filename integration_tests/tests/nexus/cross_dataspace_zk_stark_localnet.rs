@@ -15,7 +15,7 @@ use iroha::{
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         da::commitment::DaProofPolicyBundle,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -24,9 +24,7 @@ use iroha::{
             ActivatePublicLaneValidator, Grant, InstructionBox, Log, Mint, Register,
             RegisterPublicLaneValidator, zk::VerifyProof,
         },
-        metadata::Metadata,
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
-        peer::PeerId,
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneVisibility},
         permission::Permission,
         prelude::Quantity,
         proof::{
@@ -52,6 +50,10 @@ use iroha_data_model::{
         transaction::prelude::FindTransactions,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, read_on_dedicated_thread, unexecuted_genesis_factory_with_post_topology,
@@ -1725,10 +1727,8 @@ mod tests {
         DS1_ID_U64, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_MANIFEST_HASH, NEXUS_ALIAS, NEXUS_ID_U64,
         ProofId, STARK_BACKEND, decode_proof_record_payload, parse_proof_status_from_json,
     };
-    use iroha::data_model::{
-        nexus::DataSpaceId,
-        proof::{ProofRecord, ProofStatus},
-    };
+    use iroha::data_model::proof::{ProofRecord, ProofStatus};
+    use iroha_model_base::topology::DataSpaceId;
     fn sample_proof_id() -> ProofId {
         ProofId {
             backend: STARK_BACKEND.into(),

@@ -35,6 +35,7 @@ use crate::{
     prelude::*,
     query::{AnyQueryBox, QueryWithParams, SingularQueryBox},
 };
+use iroha_model_base::domain::DomainId;
 mod visit_instruction;
 mod visit_query;
 pub use visit_instruction::*;

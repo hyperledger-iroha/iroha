@@ -5365,7 +5365,7 @@ fn retired_trigger_alias_replacement(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::DomainId;
+    use iroha_model_base::domain::DomainId;
     #[test]
     fn mismatched_closers_preserve_all_parser_depth_views() {
         let depth = crate::source::MAX_NESTING_DEPTH - 1;

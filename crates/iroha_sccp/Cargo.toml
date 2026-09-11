@@ -12,6 +12,7 @@ workspace = true
 [features]
 dev-tools = []
 test-fixtures = [
+    "dep:iroha_model_base",
     "iroha_data_model/test-fixtures",
     "iroha_data_model/transparent_api",
 ]
@@ -22,6 +23,7 @@ path = "src/bin/sccp_release_evidence.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+iroha_model_base = { workspace = true, optional = true }
 blake3 = { workspace = true }
 blake2 = { version = "0.10.6", default-features = false }
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
@@ -33,6 +35,7 @@ iroha_crypto = { path = "../iroha_crypto", features = ["node-crypto"], default-f
 iroha_data_model = { path = "../iroha_data_model", default-features = false }
 
 [dev-dependencies]
+iroha_model_base = { workspace = true }
 # Unit-test builds compile the deterministic fixture module under `cfg(test)`.
 # Enable only the data-model construction surface that those test-only fixtures
 # require; downstream production users still receive the minimal dependency.

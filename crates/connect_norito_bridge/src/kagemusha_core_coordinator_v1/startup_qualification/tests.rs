@@ -121,7 +121,7 @@ fn wallet_context(qualification: &QualificationProjectionV1) -> ObservationWalle
         network_id: qualification.credential.network_id,
         lane_id: qualification.credential.lane_commitment,
         asset: AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("hardware", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("hardware", "universal").unwrap(),
             "cash".parse().unwrap(),
         ),
         asset_incarnation: AxtAssetIncarnationV1::try_from_bytes(
@@ -176,7 +176,7 @@ pub(in crate::kagemusha_core_coordinator_v1) fn enrollment_binding(
         ),
         runtime: KagemushaRetailEnrollmentRuntimeV1 {
             fi_id: "observation-fi".parse().unwrap(),
-            ledger_dataspace_id: iroha_data_model::nexus::DataSpaceId::new(10),
+            ledger_dataspace_id: iroha_model_base::topology::DataSpaceId::new(10),
             authentication_namespace: "observation-auth".parse().unwrap(),
             network_id: wallet.network_id,
             asset: wallet.asset,
@@ -904,7 +904,7 @@ fn signed_snapshot_cannot_choose_another_wallet_or_qualification_context() {
             }
             7 => {
                 state.asset = AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("hardware", "universal").unwrap(),
+                    iroha_model_base::domain::DomainId::try_new("hardware", "universal").unwrap(),
                     "other".parse().unwrap(),
                 )
             }
@@ -1567,7 +1567,7 @@ fn substituted_enrollment(
         1 => changed.owner.runtime.fi_id = "other-fi".parse().unwrap(),
         2 => {
             changed.owner.runtime.ledger_dataspace_id =
-                iroha_data_model::nexus::DataSpaceId::new(11)
+                iroha_model_base::topology::DataSpaceId::new(11)
         }
         3 => changed.owner.runtime.authentication_namespace = "other-auth".parse().unwrap(),
         4 => {
@@ -1577,7 +1577,7 @@ fn substituted_enrollment(
         }
         5 => {
             changed.owner.runtime.asset = AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("hardware", "universal").unwrap(),
+                iroha_model_base::domain::DomainId::try_new("hardware", "universal").unwrap(),
                 "other-cash".parse().unwrap(),
             )
         }

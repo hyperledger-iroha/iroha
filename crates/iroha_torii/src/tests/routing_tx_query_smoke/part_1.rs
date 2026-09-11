@@ -377,14 +377,17 @@ async fn account_transactions_get_filters_by_asset_id() {
         Algorithm::BlsNormal,
         "derive asset-filter setup block leader fixture key",
     );
-    let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+    let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader0.public_key().clone(),
+    )]);
     let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader0.private_key())
         .unpack(|_| {});
     let mut st_block0 = state.block(unverified0.header());
     let mut stx0 = st_block0.transaction();
-    let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let domain_id: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let kp_exec = checked_smoke_keypair(
         0x43,
         Algorithm::Ed25519,
@@ -441,7 +444,9 @@ async fn account_transactions_get_filters_by_asset_id() {
         Algorithm::BlsNormal,
         "derive asset-filter transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx_asset, tx_log])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -498,14 +503,17 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         Algorithm::BlsNormal,
         "derive recipient-filter setup block leader fixture key",
     );
-    let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+    let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader0.public_key().clone(),
+    )]);
     let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader0.private_key())
         .unpack(|_| {});
     let mut st_block0 = state.block(unverified0.header());
     let mut stx0 = st_block0.transaction();
-    let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let domain_id: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let kp_exec = checked_smoke_keypair(
         0x47,
         Algorithm::Ed25519,
@@ -587,7 +595,9 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
         Algorithm::BlsNormal,
         "derive recipient-filter transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![transfer_tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -718,7 +728,9 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         Algorithm::BlsNormal,
         "derive contract-activity setup block leader fixture key",
     );
-    let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+    let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader0.public_key().clone(),
+    )]);
     let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader0.private_key())
@@ -732,7 +744,7 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
     crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
     let (authority, keypair) = account_with_key();
     let network_id = *state.network_id_ref();
-    let mut metadata = dm::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         "contract_address".parse().unwrap(),
         dm::Json::new("irohac1fixturedlmmrouter"),
@@ -782,7 +794,9 @@ async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
         Algorithm::BlsNormal,
         "derive contract-activity transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -854,14 +868,17 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive sorted account-query setup block leader fixture key",
     );
-    let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+    let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader0.public_key().clone(),
+    )]);
     let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader0.private_key())
         .unpack(|_| {});
     let mut st_block0 = state.block(unverified0.header());
     let mut stx = st_block0.transaction();
-    let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let domain_id: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     // Execute with a placeholder authority; in this test we don't enforce on-chain permissions
     let kp_exec = checked_smoke_keypair(
         0x4E,
@@ -946,7 +963,9 @@ async fn handle_v1_account_transactions_returns_and_sorts() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive sorted account-query transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx_a, tx_b, tx_c])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1065,7 +1084,9 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
         Algorithm::BlsNormal,
         "derive fetch-size setup block leader fixture key",
     );
-    let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+    let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader0.public_key().clone(),
+    )]);
     let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader0.private_key())
@@ -1117,7 +1138,9 @@ async fn handle_v1_account_transactions_caps_total_with_fetch_size() {
         Algorithm::BlsNormal,
         "derive fetch-size transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(accepted)
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1192,7 +1215,9 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive mixed-filter setup block leader fixture key",
     );
-    let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+    let _topo0 = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader0.public_key().clone(),
+    )]);
     let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader0.private_key())
@@ -1256,7 +1281,9 @@ async fn multi_sort_and_mixed_eq_ne_filter() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive mixed-filter transaction block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1471,7 +1498,9 @@ async fn authority_and_timestamp_bounds_filter_local_and_handler() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive authority-bounds block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1586,7 +1615,9 @@ async fn or_union_matches_both_authority_or_timestamp() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive OR-union block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1665,7 +1696,8 @@ async fn typed_tx_predicate_matches_all_filter() {
         iroha_crypto::Algorithm::Ed25519,
         "derive tx-predicate all-filter account fixture key",
     );
-    let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let (_max_clock_drift, _tx_limits) = {
         let v = state.view();
@@ -1698,7 +1730,9 @@ async fn typed_tx_predicate_matches_all_filter() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive tx-predicate all-filter block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1781,7 +1815,8 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         iroha_crypto::Algorithm::Ed25519,
         "derive tx-predicate deep account C fixture key",
     );
-    let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let acc_b = dm::AccountId::new(kp_b.public_key().clone());
     let acc_c = dm::AccountId::new(kp_c.public_key().clone());
@@ -1845,7 +1880,9 @@ async fn typed_tx_predicate_handles_deep_boolean_and_large_sets() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive tx-predicate deep block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2, tx3, tx4])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -1958,7 +1995,8 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         iroha_crypto::Algorithm::Ed25519,
         "derive tx-predicate authority-set account C fixture key",
     );
-    let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let acc_b = dm::AccountId::new(kp_b.public_key().clone());
     let acc_c = dm::AccountId::new(kp_c.public_key().clone());
@@ -2007,7 +2045,9 @@ async fn typed_tx_predicate_handles_authority_equality_sets() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive tx-predicate authority-set block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = iroha_core::block::BlockBuilder::new(vec![tx1, tx2, tx3])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -2159,7 +2199,8 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         iroha_crypto::Algorithm::Ed25519,
         "derive tx-predicate entrypoint-hash account fixture key",
     );
-    let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let account_literal = acc_a.account().to_string();
     let (_max_clock_drift, _tx_limits) = {
@@ -2196,7 +2237,9 @@ async fn typed_tx_predicate_handles_entrypoint_hash_sets() {
         iroha_crypto::Algorithm::BlsNormal,
         "derive tx-predicate entrypoint-hash block leader fixture key",
     );
-    let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+    let _topo = Topology::new(vec![iroha_model_base::peer::PeerId::new(
+        leader.public_key().clone(),
+    )]);
     let unverified = BlockBuilder::new(vec![tx1, tx2])
         .chain(0, state.view().latest_block().as_deref())
         .sign(leader.private_key())
@@ -2375,7 +2418,8 @@ async fn typed_tx_predicate_handles_exists_is_null_entrypoint_and_result() {
         iroha_crypto::Algorithm::Ed25519,
         "derive tx-predicate nullability account fixture key",
     );
-    let _dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _dom: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let acc_a = dm::AccountId::new(kp_a.public_key().clone());
     let account_literal = acc_a.account().to_string();
     let (_max_clock_drift, _tx_limits) = {

@@ -76,6 +76,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
+        Path('actual_sorafs_gateway.rs'),
         Path('actual/kagemusha.rs'),
         Path('actual/tests.rs'),
     ),
@@ -92,6 +93,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/torii_tx_history.rs'),
         Path('user/sorafs_moderation_query_bound_tests.rs'),
         Path('user/governance_dag_head_mode_tests.rs'),
+        Path('user_validation_tests.rs'),
+    ),
+    Path('crates/iroha_config/src/parameters/user_validation_tests.rs'): (
         Path('user/zk_prover_report_retention_tests.rs'),
         Path('user/zk_attachment_retention_tests.rs'),
         Path('user/query_fanout_memory_tests.rs'),
@@ -100,6 +104,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/operator_signature_body_timeout_tests.rs'),
         Path('user/verified_source_ingress_tests.rs'),
         Path('user/iso_bridge_store_memory_tests.rs'),
+        Path('user_service_configuration_tests.rs'),
+    ),
+    Path('crates/iroha_config/src/parameters/user_service_configuration_tests.rs'): (
         Path('user/kura_and_snapshot_tests.rs'),
         Path('user/runtime_tail_tests.rs'),
     ),
@@ -107,7 +114,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('consensus_v2/messages.rs'),
         Path('consensus_v2_tests.rs'),
     ),
-    Path('crates/iroha_data_model/src/block/consensus_v2_tests.rs'): (Path('consensus_v2_json_tests.rs'),),
+    Path('crates/iroha_data_model/src/block/consensus_v2_tests.rs'): (
+        Path('consensus_v2_context_tests.rs'),
+        Path('consensus_v2_json_tests.rs'),
+    ),
     Path('crates/iroha_core/src/kura.rs'): (
         Path('kura/startup_finality_support.rs'),
         Path('kura/read_only_evidence.rs'),
@@ -204,6 +214,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/tests/11_roster_and_progress_sidecars.rs'),
         Path('kura/tests/12_sidecar_index_and_pruning.rs'),
         Path('kura/tests/13_manifests_and_fsync.rs'),
+        Path('kura/tests/14_pipeline_and_lane_frame_owners.rs'),
         Path('kura/tests/14b_sidecar_physical_resource_tests.rs'),
         Path('kura/tests/14c_authenticated_snapshot_resource_tests.rs'),
         Path('kura/tests/14_resource_evidence.rs'),
@@ -382,6 +393,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs'): (Path('v2_lifecycle_launch_tests.rs'),),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs'): (
+        Path('v2_lifecycle_source_test_helpers.rs'),
         Path('v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs'),
         Path('v2_lifecycle_launch_pending_kura_source_tests.rs'),
         Path('v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs'),
@@ -397,6 +409,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs'): (
         Path('v2_lifecycle_ledger_tests_durable_recovery_01.rs'),
         Path('v2_lifecycle_ledger_tests_durable_recovery_02.rs'),
+        Path('tests/v2_lifecycle_complete_tip_retained_body_cases.rs'),
         Path('v2_lifecycle_ledger_tests_frame_and_store.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (Path('tests/v2_lifecycle_projection_cases.rs'),),
@@ -432,6 +445,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_output.rs'),
         Path('v2_lifecycle_work_registry_live_validate_children.rs'),
         Path('v2_lifecycle_work_registry_recovered_wal.rs'),
+        Path('v2_lifecycle_control_continuation_registry.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery.rs'),
         Path('v2_lifecycle_work_registry_validate_execution.rs'),
         Path('v2_lifecycle_work_registry_validate_sidecar.rs'),
@@ -549,6 +563,8 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/empty_replay_resume_test.rs'),
         Path('tests/delayed_prepare_qc_cache_bounds.rs'),
         Path('tests/v2_core_terminal_transactionality.rs'),
+        Path('tests/four_reducer_network.rs'),
+        Path('tests/terminal_result_replay.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_effects.rs'): (
         Path('v2_effects_recovered_fetch_and_pipeline_types.rs'),
@@ -563,6 +579,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_effects_main_03.rs'),
         Path('tests/v2_effects_main_04.rs'),
         Path('tests/v2_effects_main_05.rs'),
+        Path('tests/v2_effects_protected_body_reseed.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
         Path('tests/v2_effects_certified_body_fence_supersession.rs'),
     ),
@@ -601,6 +618,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs'): (Path('v2_adapter_activation_context.rs'),),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_03.rs'): (
+        Path('v2_adapter_control_continuation.rs'),
         Path('v2_adapter_04_wal_recovery.rs'),
         Path('v2_adapter_04b_lifecycle_startup.rs'),
         Path('v2_adapter_05_direct_lifecycle.rs'),
@@ -626,8 +644,41 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_effects_highest_prepare_retention.rs'),
         Path('v2_effects_02_admission_handoffs.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery_decision_classifier_cases.rs'): (
+        Path('v2_adapter_canonical_decision_validate_completion_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_effects_certified_body_fence_supersession.rs'): (
+        Path('v2_effects_resolved_validate_owner_cases.rs'),
+        Path('v2_effects_terminal_sign_cold_owner_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_effects_resolved_validate_owner_cases.rs'): (
+        Path('v2_effects_active_prepare_decision_cold_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs'): (
+        Path('v2_lifecycle_protected_lock_reseed_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_completion_cases.rs'): (
+        Path('v2_lifecycle_scheduler_resolved_validate_cases.rs'),
+    ),
 }
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
+    Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs"): (
+        Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery_decision_classifier_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
+        Path("crates/iroha_core/src/sumeragi/tests/v2_effects_certified_body_fence_supersession.rs"),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_effects_resolved_validate_owner_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"): (
+        Path("crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"): (
+        Path("crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_completion_cases.rs"),
+    ),
+    Path("crates/iroha_config/src/parameters/user.rs"): (
+        Path("crates/iroha_config/src/parameters/user_validation_tests.rs"),
+        Path("crates/iroha_config/src/parameters/user_service_configuration_tests.rs"),
+    ),
     Path("crates/iroha_config/src/parameters/actual.rs"): (Path("crates/iroha_config/src/parameters/actual/tests.rs"),),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path(
@@ -682,9 +733,9 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-# Snapshot support tests remain a leaf, so the exact partition has 55 roots and 15 nested parents.
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 70
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 15
+# The complete config and lifecycle test closures retain 55 roots and 22 nested parents.
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 77
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 22
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 55
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS

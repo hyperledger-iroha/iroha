@@ -1,3 +1,3 @@
 iroha.openapi.cargo-lock.v1
-bytes=307451
-sha256_hex=4a69cc49357862aa147b2d6b1f8d3b0aed461279509e965fddc80cd1d1727239
+bytes=307760
+sha256_hex=6df90b42c9b3a51109aaa66f7b1fddcefe7f5e7af4126a37beb76b3c345ac71d

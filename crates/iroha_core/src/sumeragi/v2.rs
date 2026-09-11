@@ -98,7 +98,8 @@ use super::{
     },
 };
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey, Signature};
-use iroha_data_model::{account::AccountId, block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::{account::AccountId, block::consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -19110,6 +19111,7 @@ fn aggregate_core_shares(
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::peer::PeerId;
     include!("tests/v2_adapter_leader_wire_consumer.rs");
     include!("tests/v2_adapter_main_00.rs");
     include!("tests/v2_adapter_main_01.rs");

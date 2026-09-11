@@ -13,7 +13,7 @@ use iroha_data_model::{
     account::Account,
     block::BlockHeader,
     confidential::ConfidentialStatus,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         verifying_keys::RegisterVerifyingKey,
@@ -25,6 +25,7 @@ use iroha_data_model::{
     zk::BackendTag,
 };
 use iroha_executor_data_model::permission::governance::{CanEnactGovernance, CanManageParliament};
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;

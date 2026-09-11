@@ -1,7 +1,8 @@
 use iroha_crypto::{Hash, PublicKey};
+use iroha_model_base::domain::DomainId;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -42,8 +43,9 @@ fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
 fn nft_burn_asset_then_unregister_account_succeeds() {
     // Caller starts as alice; later we switch caller to bob for the burn.
     let alice_domain: DomainId =
-        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
-    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

@@ -113,10 +113,8 @@ impl FastIterComponentDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        peer::PeerId,
-        query::{domain::prelude::FindDomains, dsl::CompoundPredicate},
-    };
+    use iroha_data_model::query::{domain::prelude::FindDomains, dsl::CompoundPredicate};
+    use iroha_model_base::peer::PeerId;
     // Iterable components are embedded payloads; this fixture intentionally has no frame identity.
     #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
     struct PayloadOnlyComponent {

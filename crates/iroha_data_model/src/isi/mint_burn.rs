@@ -320,6 +320,7 @@ impl BurnBox {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, NumericOperationError};
     use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {

@@ -224,3 +224,46 @@ fn registry_preserves_bare_query_encoding_without_a_frame_serializer() {
         Err(norito::Error::LengthMismatch)
     ));
 }
+
+#[test]
+fn registry_entry_checks_all_type_and_wire_namespace_pairs() {
+    let registry =
+        QueryRegistry::new().register_with_id::<ErasedIterQuery<Domain>>("fixture.domain");
+    let entry = QueryRegistryEntry {
+        type_name: "left.type",
+        wire_id: "left.wire",
+        ctor: registry.entries[0].ctor,
+    };
+    for (type_name, wire_id, expected) in [
+        ("left.type", "other.wire", true),
+        ("other.type", "left.type", true),
+        ("left.wire", "other.wire", true),
+        ("other.type", "left.wire", true),
+        ("other.type", "other.wire", false),
+    ] {
+        let other = QueryRegistryEntry {
+            type_name,
+            wire_id,
+            ctor: entry.ctor,
+        };
+        assert_eq!(
+            entry.collides_with(&other),
+            expected,
+            "{type_name}/{wire_id}"
+        );
+        assert_eq!(
+            other.collides_with(&entry),
+            expected,
+            "collision must be symmetric"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "query registry key collision")]
+fn registry_rejects_previous_wire_id_equal_to_new_type_name() {
+    type AccountQuery = ErasedIterQuery<crate::account::Account>;
+    let _ = QueryRegistry::new()
+        .register_with_id::<ErasedIterQuery<Domain>>(std::any::type_name::<AccountQuery>())
+        .register_with_id::<AccountQuery>("fixture.account");
+}

@@ -5,10 +5,10 @@ use iroha_crypto::{KeyPair, MerkleTree};
 use iroha_data_model::{
     account::AccountId,
     block::{SignedBlock, decode_framed_signed_block},
-    domain::DomainId,
     isi::InstructionBox,
     transaction::signed::{SignedTransaction, TransactionBuilder},
 };
+use iroha_model_base::domain::DomainId;
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked signed-block roundtrip keypair")
 }

@@ -9,7 +9,6 @@ use iroha_data_model::isi::transfer::TransferBox;
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
-    metadata::Metadata,
     soranet::{
         Digest32, RelayId,
         incentives::{
@@ -18,6 +17,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
@@ -505,12 +505,12 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
-        metadata::Metadata,
         soranet::incentives::{
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::BigInt;
     fn quantity(value: u64) -> Quantity {
         Quantity::from(value)

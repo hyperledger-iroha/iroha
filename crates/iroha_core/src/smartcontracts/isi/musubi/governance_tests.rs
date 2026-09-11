@@ -549,7 +549,7 @@ fn package_pending_invitation_bound_is_enforced_before_mutation() {
     let mut transaction = block.transaction();
     let owner = account(31);
     let package = MusubiPackageIdV1::new(
-        iroha_data_model::nexus::DataSpaceId::new(7),
+        iroha_model_base::topology::DataSpaceId::new(7),
         MusubiPackageScopeV1::DataspaceRoot,
         "bounded-invites".parse().expect("package name"),
     );
@@ -1123,7 +1123,7 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         crate::sns::selector_for_dataspace_alias("sora").expect("dataspace alias selector");
     let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
         .expect("account address");
-    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         crate::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -1147,7 +1147,7 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         .insert(crate::sns::record_storage_key(&selector), record.encode());
     let binding = MusubiNamespaceBindingV1 {
         namespace: "sora".parse().expect("namespace"),
-        home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
         scope: MusubiPackageScopeV1::DataspaceRoot,
         generation: 1,
     };
@@ -1183,7 +1183,7 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         .expect("the live owner may replay an immutable older-generation binding");
     assert!(transaction.world.take_external_events().is_empty());
     let conflicting = MusubiNamespaceBindingV1 {
-        home_dataspace: iroha_data_model::nexus::DataSpaceId::new(8),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(8),
         ..binding
     };
     RegisterMusubiNamespaceBindingV1::new(conflicting, 1)
@@ -1199,7 +1199,7 @@ fn namespace_claim_uses_live_owner_generation_after_immutable_binding_registrati
     let delegate = account(42);
     let binding = MusubiNamespaceBindingV1 {
         namespace: "dex.universal".parse().expect("namespace"),
-        home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
         scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
         generation: 1,
     };
@@ -1254,13 +1254,13 @@ fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
     let bindings = [
         MusubiNamespaceBindingV1 {
             namespace: "universal".parse().expect("root namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::DataspaceRoot,
             generation: 1,
         },
         MusubiNamespaceBindingV1 {
             namespace: "dex.universal".parse().expect("domain namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
             generation: 1,
         },
@@ -1269,7 +1269,7 @@ fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
         validate_namespace_home_dataspace(binding, &world.view(), &catalog, 50)
             .expect("namespace alias and structural dataspace agree");
         let mismatched = MusubiNamespaceBindingV1 {
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+            home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
             ..binding.clone()
         };
         validate_namespace_home_dataspace(&mismatched, &world.view(), &catalog, 50)
@@ -1284,7 +1284,7 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
     let owner = account(43);
     let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
         .expect("account address");
-    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         crate::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -1309,13 +1309,13 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
     let bindings = [
         MusubiNamespaceBindingV1 {
             namespace: "universal".parse().expect("root namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::DataspaceRoot,
             generation: 1,
         },
         MusubiNamespaceBindingV1 {
             namespace: "dex.universal".parse().expect("domain namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
             generation: 1,
         },
@@ -1335,7 +1335,7 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
 fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
     let release = MusubiReleaseIdV1::new(
         MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
+            iroha_model_base::topology::DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
             "validation".parse().expect("package name"),
         ),

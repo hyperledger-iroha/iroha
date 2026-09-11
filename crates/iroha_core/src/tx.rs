@@ -52,6 +52,7 @@ use iroha_data_model::{
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
@@ -66,8 +67,8 @@ use std::{
 type StateTelemetry = crate::telemetry::StateTelemetry;
 #[cfg(not(feature = "telemetry"))]
 type StateTelemetry = ();
-type NexusDataSpaceId = iroha_data_model::nexus::DataSpaceId;
-type NexusLaneId = iroha_data_model::nexus::LaneId;
+type NexusDataSpaceId = iroha_model_base::topology::DataSpaceId;
+type NexusLaneId = iroha_model_base::topology::LaneId;
 /// Decode one canonical Norito-framed [`TransactionEntrypoint`] and return its identity.
 ///
 /// The identity is derived from the decoded signed intent rather than the transport frame. This
@@ -636,7 +637,7 @@ enum SignatureCheck {
 }
 #[cfg(feature = "telemetry")]
 #[allow(clippy::module_name_repetitions)]
-use iroha_data_model::metadata::Metadata as TelemetryMetadata;
+use iroha_model_base::metadata::Metadata as TelemetryMetadata;
 #[cfg(feature = "telemetry")]
 #[allow(clippy::module_name_repetitions)]
 use iroha_model_base::name::Name as TelemetryName;
@@ -4465,7 +4466,7 @@ fn extract_lane_authority_domains(
     authority: &AccountId,
     lane_alias: &str,
     now_ms: u64,
-) -> Result<Vec<iroha_data_model::domain::DomainId>, TransactionRejectionReason> {
+) -> Result<Vec<iroha_model_base::domain::DomainId>, TransactionRejectionReason> {
     extract_directory_authority_domains(world, authority, now_ms).map_err(|err| {
         reject_lane_policy(
             lane_alias,
@@ -4915,7 +4916,7 @@ impl FraudDisposition {
 /// Enforce the configured fraud monitoring policy against the transaction metadata.
 pub(crate) fn enforce_fraud_policy(
     config: &iroha_config::parameters::actual::FraudMonitoring,
-    metadata: &iroha_data_model::metadata::Metadata,
+    metadata: &iroha_model_base::metadata::Metadata,
     telemetry: Option<&StateTelemetry>,
     routing: &LaneAssignment<'_>,
 ) -> Result<(), TransactionRejectionReason> {
@@ -5441,7 +5442,7 @@ pub mod tests {
             BlockHeader, SignedBlock,
             consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
         },
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::{
             EventBox,
             data::{
@@ -5451,16 +5452,13 @@ pub mod tests {
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
         isi::{InstructionBox, Log, governance::ProposeRuntimeUpgradeProposal},
-        metadata::Metadata,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            AuditControls, DataSpaceCatalog, DataSpaceId as TestDataSpaceId, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-            LaneConfig, LaneId as TestLaneId, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, LaneStorageProfile, LaneVisibility, ManifestVersion,
-            ParticipantSelector,
+            AuditControls, DataSpaceCatalog, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
+            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LanePrivacyMerkleWitness,
+            LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile, LaneVisibility,
+            ManifestVersion, ParticipantSelector,
         },
-        peer::PeerId,
         permission::Permissions,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
@@ -5472,7 +5470,15 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::name::Name;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::{
+        topology::DataSpaceId as TestDataSpaceId, topology::LaneId as TestLaneId,
+    };
     use iroha_primitives::{
         const_vec::ConstVec,
         json::Json,
@@ -6205,7 +6211,7 @@ pub mod tests {
     }
     #[test]
     fn multisig_account_direct_signing_rejected_in_validation() {
-        use iroha_data_model::domain::DomainId;
+        use iroha_model_base::domain::DomainId;
         let chain: ChainId = "multisig-direct".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("multisig", "universal").unwrap();
         let signer1 = checked_random_tx_keypair();
@@ -6276,9 +6282,9 @@ pub mod tests {
     #[test]
     fn deactivated_contract_subject_remains_in_the_non_signing_index() {
         use iroha_data_model::{
-            domain::DomainId, isi::smart_contract_code::DeactivateContractInstance,
-            smart_contract::ContractAddress,
+            isi::smart_contract_code::DeactivateContractInstance, smart_contract::ContractAddress,
         };
+        use iroha_model_base::domain::DomainId;
         let chain: ChainId = "contract-subject-direct-sign".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("contracts", "universal").unwrap();
         let deployer_keypair = checked_random_tx_keypair();
@@ -6289,7 +6295,7 @@ pub mod tests {
                 .expect("canonical test network id"),
             &deployer,
             1,
-            iroha_data_model::nexus::DataSpaceId::new(0),
+            iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("derive contract address");
         let contract_subject = contract_address.subject_id();
@@ -6347,7 +6353,7 @@ pub mod tests {
     }
     #[test]
     fn multisig_signatory_role_does_not_block_direct_signing() {
-        use iroha_data_model::domain::DomainId;
+        use iroha_model_base::domain::DomainId;
         let chain: ChainId = "multisig-role-only".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (authority_id, keypair) = gen_account_in("wonderland");
@@ -6407,8 +6413,8 @@ pub mod tests {
     }
     #[test]
     fn multisig_signatory_role_can_submit_multisig_propose_envelope() {
-        use iroha_data_model::domain::DomainId;
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
+        use iroha_model_base::domain::DomainId;
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
@@ -6495,8 +6501,8 @@ pub mod tests {
     }
     #[test]
     fn lane_validator_gating_allows_multisig_propose_envelope_from_live_signer() {
-        use iroha_data_model::domain::DomainId;
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
+        use iroha_model_base::domain::DomainId;
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
@@ -8217,7 +8223,7 @@ pub mod tests {
             required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::High),
             ..Default::default()
         };
-        let metadata = iroha_data_model::metadata::Metadata::default();
+        let metadata = iroha_model_base::metadata::Metadata::default();
         let catalog = DataSpaceCatalog::default();
         let assignment = single_lane_assignment(&catalog);
         let result = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment);
@@ -10788,8 +10794,9 @@ pub mod tests {
     include!("tx_height_expiry_inline_tests.rs");
     #[test]
     fn sequence_not_increasing_is_rejected_by_state() {
-        use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
+        use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
         use iroha_logger::Level;
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
         use std::time::Duration;
@@ -10853,8 +10860,9 @@ pub mod tests {
     }
     #[test]
     fn sequence_increasing_is_accepted_by_state() {
-        use iroha_data_model::{isi::Log, metadata::Metadata, transaction::TransactionBuilder};
+        use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
         use iroha_logger::Level;
+        use iroha_model_base::metadata::Metadata;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
         use std::time::Duration;
