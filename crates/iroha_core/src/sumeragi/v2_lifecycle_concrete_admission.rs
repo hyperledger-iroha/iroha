@@ -3222,15 +3222,33 @@ mod tests {
                     .episode
                     .slot_universe
                     .insert(slot);
-                assert!(matches!(
-                    owner.settle_lifecycle_output_admission(
-                        fixture.output_pending(effect.clone(), 0xE4),
-                        |_, _| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
-                            panic!("partial terminal geometry cannot authorize service")
-                        },
-                    ),
-                    ProductionLifecycleOutputAdmissionSettlementV1::Failed { .. }
-                ));
+                for pending in [
+                    fixture.output_pending(effect.clone(), 0xE4),
+                    fixture.periodic_retransmit_output_pending(effect.clone(), 0xE5),
+                ] {
+                    let execution = pending.into_existing_execution();
+                    assert!(matches!(
+                        owner
+                            .registry
+                            .join_lifecycle_output(&owner.coordinator, &execution),
+                        Ok(LifecycleOutputRegistryJoinV1::Missing)
+                    ));
+                    // Invalid physical geometry grants no output-service authority.
+                    // The unchanged signed logical row may still terminal-stutter.
+                    assert!(matches!(
+                        owner.settle_lifecycle_output_admission(
+                            execution.into_pending(),
+                            |_, _| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
+                                panic!("partial terminal geometry cannot authorize service")
+                            },
+                        ),
+                        ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+                    ));
+                    assert_eq!(calls.get(), 1);
+                    assert!(owner.registry.registry().is_empty());
+                    assert_eq!(owner.coordinator.high_water(), 1);
+                    assert_eq!(std::fs::read(&ledger_path).unwrap(), terminal_bytes);
+                }
                 owner
                     .coordinator
                     .records
@@ -3246,7 +3264,7 @@ mod tests {
                     certificate.aggregate_signature.push(0xFF);
                     assert!(matches!(
                         owner.settle_lifecycle_output_admission(
-                            fixture.output_pending(AdapterEffect::Broadcast(message), 0xE5),
+                            fixture.output_pending(AdapterEffect::Broadcast(message), 0xE6),
                             |_, _| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
                                 panic!("changed signed source cannot rejoin a terminal row")
                             },

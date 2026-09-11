@@ -1,6 +1,7 @@
 """Offline checks for the early-gate runner; no Cargo or live inputs required."""
 
 import contextlib
+import errno
 import fcntl
 import hashlib
 import stat
@@ -959,6 +960,93 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             "sha256": hashlib.sha256(original_bytes).hexdigest(), "size": len(original_bytes),
             "cargo_artifact": row}])
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires native macOS fclonefileat")
+    def test_native_clone_preserves_bytes_after_source_write_and_replacement(self):
+        payload = bytes(range(256)) * 4096
+        executable, row, _ = self.artifact(payload=payload)
+        clone = gate.native_artifact_clone_function()
+        self.assertIsNotNone(clone)
+        cloned = []
+        def observe(*args):
+            result = clone(*args)
+            cloned.append(result)
+            return result
+        with patch.object(gate, "native_artifact_clone_function", return_value=observe):
+            copies = self.isolate({"iroha": row})
+        if cloned == [False]:
+            self.skipTest("fixture filesystem does not support native clones")
+        self.assertEqual(cloned, [True])
+        destination = Path(copies["iroha"])
+        self.assertNotEqual(executable.stat().st_ino, destination.stat().st_ino)
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o500)
+        self.assertEqual(destination.read_bytes(), payload)
+        with executable.open("r+b") as source:
+            source.write(b"MUTATED-SOURCE")
+            source.flush()
+            os.fsync(source.fileno())
+        self.assertEqual(destination.read_bytes(), payload)
+        replacement = executable.with_suffix(".next")
+        replacement.write_bytes(b"REPLACED-SOURCE")
+        os.replace(replacement, executable)
+        self.assertEqual(destination.read_bytes(), payload)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires native macOS fclonefileat")
+    def test_native_clone_accepts_owner_read_execute_source(self):
+        executable, row, _ = self.artifact()
+        payload = executable.read_bytes()
+        executable.chmod(0o500)
+        clone = gate.native_artifact_clone_function()
+        self.assertIsNotNone(clone)
+        cloned = []
+        def observe(*args):
+            result = clone(*args)
+            cloned.append(result)
+            return result
+        with patch.object(gate, "native_artifact_clone_function", return_value=observe):
+            copies = self.isolate({"iroha": row})
+        if cloned == [False]:
+            self.skipTest("fixture filesystem does not support native clones")
+        self.assertEqual(cloned, [True])
+        destination = Path(copies["iroha"])
+        self.assertEqual(destination.read_bytes(), payload)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o500)
+        self.assertNotEqual(executable.stat().st_ino, destination.stat().st_ino)
+
+    def test_unsupported_clone_streams_when_full_capacity_is_available(self):
+        executable, row, _ = self.artifact()
+        with patch.object(gate, "native_artifact_clone_function", return_value=lambda *args: False):
+            copies = self.isolate({"iroha": row})
+        destination = Path(copies["iroha"])
+        self.assertEqual(destination.read_bytes(), executable.read_bytes())
+        self.assertNotEqual(destination.stat().st_ino, executable.stat().st_ino)
+
+    def test_unsupported_clone_requires_capacity_for_all_remaining_full_copies(self):
+        executable, row, _ = self.artifact(payload=b"x" * 1024 * 1024)
+        other, other_row, _ = self.artifact("iroha3d", payload=b"y" * 1024 * 1024)
+        adequate = MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES + 64 * 1024 * 1024)
+        inadequate = MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES
+                               + executable.stat().st_size + other.stat().st_size - 1)
+        with patch.object(gate, "native_artifact_clone_function", return_value=lambda *args: False), \
+             patch.object(gate.shutil, "disk_usage", side_effect=[adequate, adequate, inadequate]):
+            with self.assertRaisesRegex(gate.CheckError, "working-space reserve"):
+                self.isolate({"iroha": row, "iroha3d": other_row})
+        self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha")))
+        self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha3d")))
+        self.assertNotIn("isolated native artifact", self.stdout.getvalue())
+        self.assert_profile_unlocked()
+
+    def test_clone_io_failure_never_streams_or_publishes(self):
+        _, row, _ = self.artifact()
+        def fail(*args):
+            raise OSError(errno.EIO, "fixture clone I/O failure")
+        with patch.object(gate, "native_artifact_clone_function", return_value=fail):
+            with self.assertRaisesRegex(gate.CheckError, "fixture clone I/O failure"):
+                self.isolate({"iroha": row})
+        self.assertFalse(any(self.target.glob("taira-native-artifacts-*/iroha")))
+        self.assertNotIn("isolated native artifact", self.stdout.getvalue())
+        self.assert_profile_unlocked()
+
     def test_strict_foreign_fingerprints_reject_without_retirement_or_publication(self):
         _, row, _ = self.artifact()
         directory = self.target / "debug" / ".fingerprint" / "iroha_cli-0123456789abcdef"
@@ -1044,7 +1132,8 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 active["changed"] = True
                 executable.write_bytes(b"x" * len(result))
             return result
-        with patch.object(self.contract, "stable_open_relative", side_effect=track_open), \
+        with patch.object(gate, "native_artifact_clone_function", return_value=None), \
+             patch.object(self.contract, "stable_open_relative", side_effect=track_open), \
              patch.object(gate.os, "read", side_effect=mutate_after_read):
             with self.assertRaisesRegex(gate.CheckError, "changed while"):
                 self.isolate({"iroha": row})
@@ -1073,7 +1162,8 @@ class NativeArtifactIsolationTests(unittest.TestCase):
     def test_capacity_reserve_failure_does_not_publish_or_create_copy_directory(self):
         executable, row, _ = self.artifact()
         space = MagicMock(free=gate.NETWORK_FIXTURE_FREE_BYTES + executable.stat().st_size - 1)
-        with patch.object(gate.shutil, "disk_usage", return_value=space):
+        with patch.object(gate, "native_artifact_clone_function", return_value=None), \
+             patch.object(gate.shutil, "disk_usage", return_value=space):
             with self.assertRaisesRegex(gate.CheckError, "working-space reserve"):
                 self.isolate({"iroha": row})
         self.assertEqual(list(self.target.glob("taira-native-artifacts-*")), [])

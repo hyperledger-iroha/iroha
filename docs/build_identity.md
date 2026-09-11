@@ -59,6 +59,14 @@ replacement cache. Use explicit Cargo command names; aliases can hide target
 selectors and are rejected. Direct Cargo remains outside this advisory wrapper
 guard, so authenticated preparation still owns its locks and immutable captures.
 
+Native release checks isolate executables with descriptor-bound APFS clones on
+macOS. Each clone has an independent inode and is verified and frozen before
+execution; later Cargo writes cannot change its contents. Unsupported clone
+filesystems use the streamed copy only when all remaining bytes fit above the
+working-space reserve. Cloning avoids allocating a second full set of native
+test binaries while preserving the same source and destination checks. Warm
+Cargo targets and completed attempt receipts remain retained.
+
 For PK2 release verification, the authenticated source/artifact corridor must
 supply its already validated source commit to both build-time variables. Run in
 that corridor's captured source checkout through its controlled Cargo invocation,

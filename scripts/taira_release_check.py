@@ -11,6 +11,10 @@ explicitly selected. This preference never changes Linux release compilation.
 Private test-executable copies are released after their last subprocess exits,
 including failed checks; their observations and test logs remain available.
 Native node/client snapshots remain retained for network and CLI capture consumers.
+On macOS, descriptor-bound copy-on-write clones avoid full duplicate allocation
+while retaining independent inodes and exact content/stat validation. Unsupported
+filesystems stream only when all remaining copies fit beside the working reserve;
+later Cargo writes can still allocate new blocks for changed cloned content.
 The default basic scope keeps deployment custody, authentication, application and
 startup admission checks plus real four-validator Applied transactions and restart.
 Full additionally executes advanced Core recovery and proof-production matrices.
@@ -26,6 +30,8 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -1036,6 +1042,39 @@ def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
         os.close(fd)
 
 
+def native_artifact_clone_function():
+    """Return macOS descriptor cloning, or None where this API is unavailable.
+
+    fclonefileat creates an absent destination atomically with independent inode
+    and copy-on-write contents. It never falls back internally to a full copy.
+    """
+    if sys.platform != "darwin":
+        return None
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        clone = library.fclonefileat
+    except AttributeError:
+        return None
+    clone.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    clone.restype = ctypes.c_int
+
+    def clone_descriptor(source: int, directory: int, name: str) -> bool:
+        if not name or name in {".", ".."} or "/" in name or "\x00" in name:
+            raise CheckError("native clone requires one exact destination basename")
+        # sys/clonefile.h: CLONE_NOFOLLOW | CLONE_NOOWNERCOPY. The source is
+        # already pinned; destination resolution is beneath a private dirfd.
+        if clone(source, directory, os.fsencode(name), 0x0001 | 0x0002) == 0:
+            return True
+        error = ctypes.get_errno()
+        if error in {errno.ENOTSUP, errno.EXDEV, errno.ENOSYS}:
+            return False
+        # EEXIST, EINVAL, ENOSPC and I/O errors are not permission to retry via
+        # a different copy mechanism. Atomic clone failure creates no file.
+        raise OSError(error, os.strerror(error), name)
+
+    return clone_descriptor
+
+
 def isolate_native_artifacts(root: Path, env: dict[str, str],
                              records: dict[str, dict[str, object]]) -> NativeArtifactCopies:
     """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
@@ -1071,7 +1110,13 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                         or info.st_nlink != 1 or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
                     raise CheckError("native Cargo artifact must be a bounded owner-held executable without hardlinks")
                 identities[selection] = stable_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
-            required = sum(info.size for info in identities.values()) + NETWORK_FIXTURE_FREE_BYTES
+            clone = native_artifact_clone_function()
+            remaining_bytes = sum(info.size for info in identities.values())
+            # Clones need metadata, not another logical-size data allocation.
+            # Preserve the working reserve and explicit metadata headroom; also
+            # recheck actual free bytes after every copy before publication.
+            clone_headroom = 64 * 1024 * 1024
+            required = NETWORK_FIXTURE_FREE_BYTES + (min(clone_headroom, remaining_bytes) if clone else remaining_bytes)
             if shutil.disk_usage(target).free < required:
                 raise CheckError("native artifact copies would consume the required working-space reserve")
             output = Path(tempfile.mkdtemp(prefix="taira-native-artifacts-", dir=target))
@@ -1081,25 +1126,47 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 destination = output / selection
                 digest, size = hashlib.sha256(), 0
                 with stable_open_relative(target, str(path.relative_to(target)), expected=expected) as source:
-                    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                    cloned = False
+                    if clone is not None:
+                        if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES + min(clone_headroom, remaining_bytes):
+                            raise CheckError("native artifact clones would consume the required working-space reserve")
+                        directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                        try:
+                            cloned = clone(source, directory_fd, selection)
+                        finally:
+                            os.close(directory_fd)
+                    if not cloned:
+                        # An unsupported filesystem may stream only after all
+                        # remaining full copies plus the working reserve fit.
+                        if shutil.disk_usage(target).free < remaining_bytes + NETWORK_FIXTURE_FREE_BYTES:
+                            raise CheckError("native artifact copies would consume the required working-space reserve")
+                        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                    else:
+                        fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
                     try:
-                        while block := os.read(source, 1024 * 1024):
+                        # Verify the actual clone's contents against the stable
+                        # source capture; a successful syscall alone is not evidence.
+                        reader = fd if cloned else source
+                        while block := os.read(reader, 1024 * 1024):
                             size += len(block)
                             if size > expected.size:
                                 raise CheckError("native artifact grew during descriptor copy")
                             digest.update(block)
-                            view = memoryview(block)
-                            while view:
-                                written = os.write(fd, view)
-                                if written <= 0:
-                                    raise CheckError("native artifact copy made no progress")
-                                view = view[written:]
+                            if not cloned:
+                                view = memoryview(block)
+                                while view:
+                                    written = os.write(fd, view)
+                                    if written <= 0:
+                                        raise CheckError("native artifact copy made no progress")
+                                    view = view[written:]
                         if size != expected.size or digest.hexdigest() != expected.sha256:
                             raise CheckError("native artifact changed during descriptor copy")
                         os.fchmod(fd, 0o500)
                         os.fsync(fd)
-                        opened, named = os.fstat(fd), destination.lstat()
+                        opened, named, origin = os.fstat(fd), destination.lstat(), os.fstat(source)
                         if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+                                or (opened.st_dev, opened.st_ino) == (origin.st_dev, origin.st_ino)
+                                or not stat.S_ISREG(opened.st_mode)
                                 or opened.st_size != expected.size or named.st_size != expected.size
                                 or named.st_uid != os.geteuid() or named.st_nlink != 1
                                 or stat.S_IMODE(named.st_mode) != 0o500):
@@ -1108,9 +1175,14 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                             named.st_mode, named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
                     finally:
                         os.close(fd)
+                remaining_bytes -= expected.size
+                if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES:
+                    raise CheckError("native artifact copies consumed the required working-space reserve")
                 copied[selection] = str(destination)
                 observations.append({"selection": selection, "path": str(destination),
                     "sha256": expected.sha256, "size": expected.size, "cargo_artifact": records[selection]})
+            if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES:
+                raise CheckError("native artifact copies consumed the required working-space reserve")
             for destination, expected_identity in published.items():
                 named = destination.lstat()
                 if expected_identity != (named.st_dev, named.st_ino, named.st_size, named.st_mode,
