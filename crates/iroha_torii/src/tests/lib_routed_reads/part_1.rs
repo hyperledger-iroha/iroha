@@ -1275,9 +1275,9 @@ async fn routed_contract_views_require_bound_caller() {
         ToriiReadEndpointV1::ContractViewBatchPost,
     ] {
         let body = if endpoint == ToriiReadEndpointV1::ContractViewPost {
-            norito::json!({"authority": authority.to_string(), "entrypoint": "view", "gas_limit": 1})
+            norito::json!({"authority": (authority.to_string()), "entrypoint": "view", "gas_limit": 1})
         } else {
-            norito::json!({"authority": authority.to_string(), "items": []})
+            norito::json!({"authority": (authority.to_string()), "items": []})
         };
         let body = norito::json::to_vec(&body).expect("request JSON");
         for (scope, expected) in [
@@ -1346,9 +1346,9 @@ async fn protected_contract_views_ignore_unsigned_public_upstream() {
         ToriiReadEndpointV1::ContractViewBatchPost,
     ] {
         let body = if endpoint == ToriiReadEndpointV1::ContractViewPost {
-            norito::json!({"authority": authority.to_string(), "entrypoint": "view", "gas_limit": 1})
+            norito::json!({"authority": (authority.to_string()), "entrypoint": "view", "gas_limit": 1})
         } else {
-            norito::json!({"authority": authority.to_string(), "items": []})
+            norito::json!({"authority": (authority.to_string()), "items": []})
         };
         let response = execute_torii_single_route_read_with_format(
             &app,

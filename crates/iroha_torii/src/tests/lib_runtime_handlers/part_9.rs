@@ -2278,9 +2278,9 @@ async fn contract_compute_routes_bind_authenticated_authority_before_work() {
             (&caller, StatusCode::BAD_REQUEST),
         ] {
             let body = if path.ends_with("/batch") {
-                norito::json!({"authority": authority.to_string(), "items": []})
+                norito::json!({"authority": (authority.to_string()), "items": []})
             } else {
-                norito::json!({"authority": authority.to_string(), "entrypoint": "view", "gas_limit": 1})
+                norito::json!({"authority": (authority.to_string()), "entrypoint": "view", "gas_limit": 1})
             };
             let body = norito::json::to_vec(&body).expect("request JSON");
             let uri = path.parse().expect("request URI");

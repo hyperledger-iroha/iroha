@@ -2296,7 +2296,7 @@ async fn torii_delegated_reads_reject_online_only_observers() {
         caller_account_id: Some(ALICE_ID.to_string()),
     };
     let body =
-        norito::json::to_vec(&norito::json!({"authority": ALICE_ID.to_string(), "items": []}))
+        norito::json::to_vec(&norito::json!({"authority": (ALICE_ID.to_string()), "items": []}))
             .expect("view body");
     let read = super::torii_read_request(
         ToriiReadEndpointV1::ContractViewBatchPost,

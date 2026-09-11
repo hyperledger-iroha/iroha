@@ -1018,7 +1018,7 @@ mod tests {
             (&caller, StatusCode::BAD_REQUEST),
         ] {
             let body =
-                json::to_vec(&norito::json!({"authority": authority.to_string(), "items": []}))
+                json::to_vec(&norito::json!({"authority": (authority.to_string()), "items": []}))
                     .expect("batch body");
             let route = route("POST", "/read", ADAPTER_CONTRACT_VIEW_BATCH_V1);
             let manifest = ToriiAppApiManifestV1 {
