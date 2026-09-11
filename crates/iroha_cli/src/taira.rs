@@ -13145,7 +13145,7 @@ mod tests {
     fn doctor_reports_bounded_mcp_application_error_codes() {
         let payload = norito::json!({
             "jsonrpc": "2.0", "id": 2,
-            "error": {"code": -32000_i64, "message": "do-not-forward-server-message",
+            "error": {"code": (-32000_i64), "message": "do-not-forward-server-message",
                 "data": {"error_code": "response_too_large", "private": "do-not-forward-data"}}
         });
         let error = mcp_tool_names(Some(&payload)).expect_err("MCP application error");
