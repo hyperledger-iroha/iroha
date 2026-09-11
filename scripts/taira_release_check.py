@@ -569,6 +569,15 @@ TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isol
     "tests_runtime_handlers::transaction_details_rejects_unsigned_and_broadened_queries",
 )),)
 
+TORII_UNIT_STAGES += (("contract read authority and delegated ingress", (
+    "tests_runtime_handlers::contract_route_mounts_authenticate_mutation_and_compute_before_decode",
+    "tests_runtime_handlers::contract_compute_routes_bind_authenticated_authority_before_work",
+    "tests_runtime_handlers::torii_delegated_reads_reject_online_only_observers",
+    "torii_routed_read_tests::routed_contract_views_require_bound_caller",
+    "torii_routed_read_tests::protected_contract_views_ignore_unsigned_public_upstream",
+    "app_api::tests::contract_view_dispatch_requires_bound_authenticated_authority",
+)),)
+
 CORE_STAGES += (("native storage and workload Initial executor admission", (
     "smartcontracts::isi::registry_dispatch_tests::every_soracloud_wire_instruction_has_a_reviewed_initial_disposition",
     "smartcontracts::isi::registry_dispatch_tests::every_sorafs_wire_instruction_has_a_reviewed_initial_disposition",

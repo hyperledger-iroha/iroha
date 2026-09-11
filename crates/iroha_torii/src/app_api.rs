@@ -529,14 +529,14 @@ async fn dispatch_app_api_route(
     uri: Uri,
     route: &ToriiAppApiRouteV1,
     source: AppApiRouteSource,
-    body: Option<Bytes>,
+    body: Option<(Bytes, crate::app_auth::VerifiedCanonicalRequest)>,
 ) -> Response {
     let mut response = match route.adapter.as_str() {
         ADAPTER_CONTRACT_VIEW_BATCH_V1 => {
             if method != Method::POST {
                 return StatusCode::METHOD_NOT_ALLOWED.into_response();
             }
-            let Some(body) = body else {
+            let Some((body, verified)) = body else {
                 return json_error(StatusCode::BAD_REQUEST, "app API POST body is required");
             };
             let request = match decode_json_body::<crate::routing::ContractViewBatchDto>(&body) {
@@ -545,6 +545,7 @@ async fn dispatch_app_api_route(
             };
             match super::handler_post_contract_view_batch(
                 State(app),
+                axum::Extension(verified),
                 headers,
                 ConnectInfo(remote),
                 request,
@@ -800,7 +801,7 @@ async fn dispatch_manifest_path(
     raw_path: String,
     manifest: ToriiAppApiManifestV1,
     source: AppApiRouteSource,
-    body: Option<Bytes>,
+    body: Option<(Bytes, crate::app_auth::VerifiedCanonicalRequest)>,
 ) -> Response {
     let Some(path) = normalize_dispatch_path(&raw_path) else {
         return json_error(StatusCode::BAD_REQUEST, "invalid app API route path");
@@ -876,6 +877,7 @@ pub(crate) async fn handle_get_app_api_cid_path(
 }
 pub(crate) async fn handle_post_app_api_cid_path(
     State(app): State<SharedAppState>,
+    axum::Extension(verified): axum::Extension<crate::app_auth::VerifiedCanonicalRequest>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -901,7 +903,7 @@ pub(crate) async fn handle_post_app_api_cid_path(
         raw_path,
         manifest,
         source,
-        Some(body),
+        Some((body, verified)),
     )
     .await
 }
@@ -946,6 +948,7 @@ pub(crate) async fn handle_get_app_api_active_path(
 }
 pub(crate) async fn handle_post_app_api_active_path(
     State(app): State<SharedAppState>,
+    axum::Extension(verified): axum::Extension<crate::app_auth::VerifiedCanonicalRequest>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -988,13 +991,67 @@ pub(crate) async fn handle_post_app_api_active_path(
         raw_path,
         manifest,
         source,
-        Some(body),
+        Some((body, verified)),
     )
     .await
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn contract_view_dispatch_requires_bound_authenticated_authority() {
+        use crate::tests_runtime_handlers::{
+            checked_torii_test_ed25519_keypair, mk_app_state_for_tests_with_world,
+            world_with_account,
+        };
+        let key = checked_torii_test_ed25519_keypair(0xb8, "dynamic contract view caller fixture");
+        let caller = iroha_data_model::account::AccountId::new(key.public_key().clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+        let verified = crate::app_auth::VerifiedCanonicalRequest {
+            account: caller.clone(),
+            signer: key.public_key().clone(),
+            verified_signers: vec![key.public_key().clone()],
+        };
+        for (authority, expected) in [
+            (&*iroha_test_samples::ALICE_ID, StatusCode::FORBIDDEN),
+            (&caller, StatusCode::BAD_REQUEST),
+        ] {
+            let body =
+                json::to_vec(&norito::json!({"authority": authority.to_string(), "items": []}))
+                    .expect("batch body");
+            let route = route("POST", "/read", ADAPTER_CONTRACT_VIEW_BATCH_V1);
+            let manifest = ToriiAppApiManifestV1 {
+                schema_version: APP_API_MANIFEST_SCHEMA_VERSION_V1,
+                app_id: "test".to_owned(),
+                content_cid: None,
+                manifest_digest_hex: None,
+                routes: vec![route],
+            };
+            let source = AppApiRouteSource {
+                app_id: "test".to_owned(),
+                content_cid: None,
+                service_id: None,
+            };
+            let response = dispatch_manifest_path(
+                app.clone(),
+                HeaderMap::new(),
+                SocketAddr::from(([127, 0, 0, 1], 0)),
+                Method::POST,
+                "/v1/app-api/active/read".parse().expect("URI"),
+                "read".to_owned(),
+                manifest,
+                source,
+                Some((Bytes::from(body), verified.clone())),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                expected,
+                "dynamic dispatch must preserve the authenticated caller before batch validation"
+            );
+        }
+    }
 
     fn route(method: &str, path: &str, adapter: &str) -> ToriiAppApiRouteV1 {
         ToriiAppApiRouteV1 {

@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **353 native regressions on macOS**: startup
+`--native-check-scope basic` runs **359 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **536-case** native census,
+Use `--native-check-scope full` to execute the full **542-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -30,6 +30,12 @@ authenticated. SDK checks still reject ambiguous JSON and missing or mismatched
 data-model and transaction-schema identities before sending transaction bytes.
 OpenAPI authentication metadata and MCP forwarding policy must agree with the
 route catalog. These checks reuse the existing SDK and Torii harnesses.
+
+Contract view and simulation requests must bind the execution authority to the
+authenticated caller before routing or VM work. Both scopes exercise the direct,
+dynamic and delegated view paths, reject forged callers from online-only
+observers, and prevent protected views from losing authentication through an
+unsigned HTTP upstream. These checks reuse the existing Torii unit harness.
 
 Both scopes compile the identical configuration, crypto, P2P, CLI, daemon, Core,
 proof, Torii and consensus harness graph plus native shipping binaries with six

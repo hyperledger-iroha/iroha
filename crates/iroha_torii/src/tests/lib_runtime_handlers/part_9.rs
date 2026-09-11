@@ -2190,7 +2190,12 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
     use tower::ServiceExt as _;
     let fixture = RuntimeApiRouterFixture::standard("contracts-aliases-router-test");
     let router = fixture.router.router();
-    for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
+    for path in [
+        "/v1/contracts/aliases",
+        "/v1/contracts/call/simulate",
+        "/v1/contracts/view",
+        "/v1/contracts/view/batch",
+    ] {
         let mut request = Request::builder()
             .method(Method::POST)
             .uri(path)
@@ -2226,6 +2231,82 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         .expect("public query response");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     fixture.shutdown().await;
+}
+#[tokio::test]
+async fn contract_compute_routes_bind_authenticated_authority_before_work() {
+    use axum::{
+        body::Body,
+        extract::ConnectInfo,
+        http::{Method, Request},
+        routing::post,
+    };
+    use tower::ServiceExt as _;
+    let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+    let key = checked_torii_test_ed25519_keypair(0xb4, "contract view caller fixture");
+    let caller = AccountId::new(key.public_key().clone());
+    let app = mk_app_state_for_tests_with_world(world_with_account(&caller));
+    let router = axum::Router::new()
+        .route(
+            "/v1/contracts/view",
+            post(super::handler_post_contract_view),
+        )
+        .route(
+            "/v1/contracts/view/batch",
+            post(super::handler_post_contract_view_batch),
+        )
+        .route(
+            "/v1/contracts/call/simulate",
+            post(super::handler_post_contract_call_simulate),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            super::CanonicalAccountBodyAuthState {
+                app: app.clone(),
+                max_body_bytes: 4096,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
+            },
+            super::enforce_canonical_account_body_authentication,
+        ))
+        .with_state(app);
+    for path in [
+        "/v1/contracts/view",
+        "/v1/contracts/view/batch",
+        "/v1/contracts/call/simulate",
+    ] {
+        for (authority, expected) in [
+            (&*ALICE_ID, StatusCode::FORBIDDEN),
+            (&caller, StatusCode::BAD_REQUEST),
+        ] {
+            let body = if path.ends_with("/batch") {
+                norito::json!({"authority": authority.to_string(), "items": []})
+            } else {
+                norito::json!({"authority": authority.to_string(), "entrypoint": "view", "gas_limit": 1})
+            };
+            let body = norito::json::to_vec(&body).expect("request JSON");
+            let uri = path.parse().expect("request URI");
+            let headers = signed_app_headers(&caller, &key, &Method::POST, &uri, &body);
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("signed view request");
+            request.headers_mut().extend(headers);
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("view response");
+            assert_eq!(
+                response.status(),
+                expected,
+                "{path}: foreign authority is rejected before target/VM validation; exact caller reaches ordinary request validation"
+            );
+        }
+    }
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]

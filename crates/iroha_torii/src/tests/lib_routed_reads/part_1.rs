@@ -1264,6 +1264,119 @@ async fn collect_torii_alias_json_payloads_returns_route_unavailable_when_only_u
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
+async fn routed_contract_views_require_bound_caller() {
+    let authority = routed_read_test_account(0xb5);
+    let other = routed_read_test_account(0xb6);
+    let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+        .expect("universal route");
+    for endpoint in [
+        ToriiReadEndpointV1::ContractViewPost,
+        ToriiReadEndpointV1::ContractViewBatchPost,
+    ] {
+        let body = if endpoint == ToriiReadEndpointV1::ContractViewPost {
+            norito::json!({"authority": authority.to_string(), "entrypoint": "view", "gas_limit": 1})
+        } else {
+            norito::json!({"authority": authority.to_string(), "items": []})
+        };
+        let body = norito::json::to_vec(&body).expect("request JSON");
+        for (scope, expected) in [
+            (
+                ToriiFanoutRouteScopeV1::VisibleAccount {
+                    caller_account_id: None,
+                },
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                ToriiFanoutRouteScopeV1::VisibleAccount {
+                    caller_account_id: Some(other.to_string()),
+                },
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                ToriiFanoutRouteScopeV1::AllDataspaces,
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                ToriiFanoutRouteScopeV1::TargetAccount {
+                    account_id: authority.to_string(),
+                    caller_account_id: Some(authority.to_string()),
+                },
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                ToriiFanoutRouteScopeV1::VisibleAccount {
+                    caller_account_id: Some(authority.to_string()),
+                },
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let response = execute_torii_read_request_locally(
+                &app,
+                torii_read_request(endpoint, scope, route, Vec::new(), None, body.clone()),
+                route,
+                "proxy",
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                expected,
+                "{endpoint:?}: only the exact ingress-authenticated caller reaches ordinary request validation"
+            );
+        }
+    }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn protected_contract_views_ignore_unsigned_public_upstream() {
+    let authority = routed_read_test_account(0xb7);
+    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
+    Arc::get_mut(&mut app)
+        .expect("unique app state")
+        .public_dataspace_upstreams = Arc::new(BTreeMap::from([(
+        DataSpaceId::UNIVERSAL,
+        "http://127.0.0.1:9".to_owned(),
+    )]));
+    let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+        .expect("universal route");
+    assert!(is_local_authoritative_for_route(app.as_ref(), route));
+    for endpoint in [
+        ToriiReadEndpointV1::ContractViewPost,
+        ToriiReadEndpointV1::ContractViewBatchPost,
+    ] {
+        let body = if endpoint == ToriiReadEndpointV1::ContractViewPost {
+            norito::json!({"authority": authority.to_string(), "entrypoint": "view", "gas_limit": 1})
+        } else {
+            norito::json!({"authority": authority.to_string(), "items": []})
+        };
+        let response = execute_torii_single_route_read_with_format(
+            &app,
+            route,
+            endpoint,
+            Vec::new(),
+            None,
+            norito::json::to_vec(&body).expect("request JSON"),
+            ToriiProxyResponseFormatV1::Json,
+            Some(&authority),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "exact caller must survive routing and reach local request validation"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local")
+        );
+    }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
 async fn execute_torii_read_request_locally_alias_resolve_rejects_invalid_proxy_body() {
     let authority = routed_read_test_account(0x81);
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));

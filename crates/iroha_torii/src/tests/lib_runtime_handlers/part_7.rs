@@ -3312,20 +3312,23 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 async fn incoming_read_proxy_response_for_route(
-    app: SharedAppState,
+    mut app: SharedAppState,
     route: RoutingDecision,
 ) -> Response {
     let ingress_peer_id = checked_torii_test_peer_id(
         0x67,
         "derive stale-route proxied read ingress peer fixture key",
     );
+    Arc::get_mut(&mut app)
+        .expect("stale-route fixture app must be uniquely owned")
+        .local_peer_id = Some(ingress_peer_id.clone());
     let request = ToriiProxyRequestV1 {
         schema_version: TORII_PROXY_REQUEST_VERSION_V1,
         request_id: Hash::new(b"incoming-read-proxy-stale-route"),
         deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
-        visited_peer_ids: vec![ingress_peer_id],
+        visited_peer_ids: vec![ingress_peer_id.clone()],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
             ToriiFanoutRouteScopeV1::AllDataspaces,
@@ -3341,7 +3344,7 @@ async fn incoming_read_proxy_response_for_route(
             Vec::new(),
         )),
     };
-    super::execute_incoming_torii_proxy_request(&app, request, None).await
+    super::execute_incoming_torii_proxy_request(&app, request, Some(ingress_peer_id)).await
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 async fn incoming_verified_query_proxy_response_for_route(
