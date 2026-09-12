@@ -223,6 +223,20 @@ there is no automatic rollback to earlier execution rules after candidate start.
 A successful update emits `next-deployment.json` for the next invocation. Confirm
 an application transaction as state-resolved Applied after installation.
 
+For an update that installed all four units and failed after starting the new
+daemon, retain the last completed deployment record and pass
+`--failed-start-reference /absolute/owner-private/taira/failed-start.json`.
+The reference uses schema `taira.failed-start-reference.v1`, a `plan` reference,
+and `records` references for `intent.json`, `before.json`,
+`checkpoint-stopped.json`, `start-intent.json`, and `failure.json`. Every reference
+contains the absolute public-record `path` and its `sha256`. Capture these public
+records from the failed guest operation without reading runtime credentials.
+The updater authenticates the installed failed release separately from the last
+completed health observation, stops the cohort, and retains the exact checkpoint
+and Kura prefix before installing the corrective candidate. Successful, rolled
+back, partial-install, or nested failed-recovery attempts are rejected by this
+specific recovery path. No failed deployment becomes accepted health evidence.
+
 Validate this controller without Cargo or network:
 
     python3 -B scripts/tests/taira_update_test.py

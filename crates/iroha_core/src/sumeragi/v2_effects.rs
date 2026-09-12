@@ -4465,6 +4465,15 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime.successor_activation_status_snapshot()
     }
 
+    /// Retain the sealed WAL Decision used only by CompleteTip activation.
+    pub(in crate::sumeragi) fn recovered_successor_decision_activation_authority(
+        &mut self,
+    ) -> Result<Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>, AdapterError>
+    {
+        self.runtime
+            .recovered_successor_decision_activation_authority()
+    }
+
     /// Snapshot one completed interrupted tip while pacemaker clocks stay unarmed.
     pub(in crate::sumeragi) fn pending_kura_activation_status_snapshot(
         &mut self,

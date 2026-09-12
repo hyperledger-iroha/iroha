@@ -1197,6 +1197,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             ".local_proposal_directive()",
             "local_proposal.exactly_matches(self.executor.context().id(), current_directive)",
             "ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch",
+            "recovered_successor_decision_activation_authority()",
             "let clock_activation = ProductionLifecycleLiveClockActivationPermitV1",
             "arm_live_clocks(clock_activation, now)",
             "successor_activation_status_snapshot()",
@@ -1811,9 +1812,9 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "self.ingress_ready.store(false, Ordering::Release)",
             "Arc::ptr_eq",
-            "retirement.authorizes_successor_status(&successor)",
+            "retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
             "self.block_ingress.open()",
-            "status::activate_recovered_complete_tip_v2_height(retirement, successor)",
+            "status::activate_recovered_complete_tip_v2_height_with_decision(",
             "self.ingress_ready.store(true, Ordering::Release)",
         ],
     );

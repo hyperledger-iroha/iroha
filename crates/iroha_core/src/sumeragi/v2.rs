@@ -9489,6 +9489,10 @@ impl SignatureAggregator for BlsNormalSignatureAggregator {
         }
     }
 }
+#[path = "v2_complete_tip_activation.rs"]
+mod complete_tip_activation;
+pub(crate) use complete_tip_activation::RecoveredSuccessorDecisionActivationAuthorityV1;
+
 /// Fatal or structurally invalid adapter input.
 #[derive(Debug, Error)]
 pub(crate) enum AdapterError {
@@ -9510,6 +9514,9 @@ pub(crate) enum AdapterError {
     /// Successor context is not anchored to the supplied durable parent.
     #[error("Sumeragi v2 height context does not match its durable parent artifact")]
     ParentContextMismatch,
+    /// CompleteTip's successor Decision is not an exact durable, unapplied WAL owner.
+    #[error("Sumeragi v2 recovered successor Decision is not ready for exact activation")]
+    RecoveredSuccessorDecisionActivationMismatch,
     /// Successor election inputs changed outside a certified epoch boundary or
     /// differ from the finalized next-epoch snapshot.
     #[error("Sumeragi v2 successor context violates the certified epoch transition")]
@@ -19127,6 +19134,8 @@ mod tests {
     include!("tests/v2_adapter_main_02.rs");
     include!("tests/v2_adapter_main_03.rs");
     include!("tests/v2_adapter_main_04.rs");
+    include!("tests/v2_adapter_complete_tip_decision_activation_cases.rs");
+    include!("tests/v2_adapter_complete_tip_decision_authority_cases.rs");
 
     /// Open one genuine recovered Decision Apply owner for cross-lineage tests.
     #[cfg(feature = "bls")]

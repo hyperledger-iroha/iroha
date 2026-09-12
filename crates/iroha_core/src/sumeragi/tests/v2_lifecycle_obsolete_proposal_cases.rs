@@ -205,6 +205,193 @@ fn obsolete_proposal_frontier(
     .expect("seal cryptographically verified installed-timeout frontier")
 }
 
+fn obsolete_proposal_decision(
+    verified: &VerifiedHeightContext,
+    keys: &[KeyPair],
+    proposal: &wire::Proposal,
+) -> wire::QuorumCertificate {
+    let mut decision = prepare_certificate(verified, keys, proposal.round, proposal.subject, false);
+    decision.phase = wire::GlobalPhase::Commit;
+    let preimage = wire::Vote {
+        round: decision.round,
+        proposal_round: decision.proposal_round,
+        phase: decision.phase,
+        subject: decision.subject,
+        execution_commitment: decision.execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = decision
+        .signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                keys[usize::try_from(*signer).expect("fixture Decision signer")].private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    decision.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate Decision signatures");
+    decision
+}
+
+impl super::super::ProductionLifecycleOwnerV1 {
+    /// Persist the exact signed Proposal cut retained by the PendingKura regression.
+    pub(in crate::sumeragi) fn persist_pending_kura_proposal_output_for_test(
+        verified: &VerifiedHeightContext,
+        proposal: wire::Proposal,
+        root: &Path,
+    ) -> LifecycleLedgerV1 {
+        verified
+            .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+            ))
+            .expect("authenticate pending Kura Proposal fixture");
+        let ledger = obsolete_proposal_ledger(
+            verified,
+            obsolete_proposal_pair(verified, proposal, 3, 7).into(),
+        );
+        let (store, _) = LifecycleLedgerStoreV1::open(root, ledger.context())
+            .expect("open pending Kura Proposal ledger");
+        store.persist(&ledger).expect("persist live Proposal cut");
+        ledger
+    }
+
+    /// Verify that cancellation changed only the retained Proposal's terminal state.
+    pub(in crate::sumeragi) fn assert_pending_kura_proposal_cancelled_for_test(
+        &self,
+        before: &LifecycleLedgerV1,
+    ) {
+        let after = self
+            .coordinator
+            .ledger_store
+            .as_ref()
+            .expect("pending Kura owner retains its ledger store")
+            .load()
+            .expect("reload durable Proposal cancellation");
+        assert_eq!(after.context(), before.context());
+        assert_eq!(after.high_water(), before.high_water());
+        assert_eq!(after.records().len(), before.records().len());
+        assert_eq!(after.records()[0], before.records()[0]);
+        let original = &before.records()[1];
+        let cancelled = &after.records()[1];
+        let expected = |terminal| {
+            LifecycleLedgerRecordV1::new(
+                original.key().unwrap(),
+                original.owner(),
+                original.ordinal(),
+                original.work_class().unwrap(),
+                original.stage().unwrap(),
+                terminal,
+                original.reconstruction_source(),
+                original.durable_payload().unwrap(),
+                self.coordinator.durable_records[&original.ordinal()]
+                    .replay_authority
+                    .clone(),
+                original.continuation().unwrap(),
+            )
+            .expect("reconstruct exact retained Proposal row")
+        };
+        assert_eq!(*original, expected(None));
+        assert_eq!(*cancelled, expected(Some(TerminalOutcome::Cancelled)));
+        assert!(!self.has_recovered_lifecycle_outputs());
+    }
+}
+
+#[test]
+fn cold_output_cancels_same_view_proposal_after_authenticated_decision_without_timeout() {
+    let (verified, keys) = verified_fixture();
+    let proposal = obsolete_proposal_signed(&verified, &keys, 0, 0xD1);
+    let decision = obsolete_proposal_decision(&verified, &keys, &proposal);
+    let frontier =
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_verified_decision_for_test(
+            &verified, &decision,
+        )
+        .expect("authenticate durable Decision frontier");
+    let ledger = obsolete_proposal_ledger(
+        &verified,
+        obsolete_proposal_pair(&verified, proposal, 3, 7).into(),
+    );
+    let before = ledger.clone();
+    let outputs = PreparedLifecycleOutputRecoveryV1::assemble_with_frontier(
+        &ledger,
+        &verified,
+        RecoveredWalStartupProjectionV1::None,
+        Some(frontier),
+    )
+    .expect("Decision retires its same-view Proposal before PendingKura recovery");
+    assert_eq!(ledger, before);
+    let output = outputs.entries.get(&7).expect("retain exact Proposal row");
+    assert_eq!(output.terminal_outcome(), TerminalOutcome::Cancelled);
+    assert!(!output.requires_output_service());
+    assert!(output.authenticates_settlement(&verified));
+}
+
+#[test]
+fn cold_decision_proposal_cancellation_preserves_authentication_boundaries() {
+    let (verified, keys) = verified_fixture();
+    let proposal = obsolete_proposal_signed(&verified, &keys, 0, 0xD2);
+    let decision = obsolete_proposal_decision(&verified, &keys, &proposal);
+    let frontier =
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_verified_decision_for_test(
+            &verified, &decision,
+        )
+        .expect("authenticate Decision frontier");
+    let ledger = obsolete_proposal_ledger(
+        &verified,
+        obsolete_proposal_pair(&verified, proposal.clone(), 3, 7).into(),
+    );
+    let mut forged_decision = decision;
+    forged_decision.aggregate_signature[0] ^= 1;
+    assert!(
+        crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_verified_decision_for_test(
+            &verified,
+            &forged_decision,
+        )
+        .is_none()
+    );
+    let mut foreign_height = proposal.round;
+    foreign_height.height += 1;
+    assert!(!frontier.proves_obsolete_proposal(foreign_height));
+    let mut foreign_context = proposal.round;
+    foreign_context.context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"foreign Decision cancellation context",
+    )));
+    assert!(!frontier.proves_obsolete_proposal(foreign_context));
+    let unqualified = crate::sumeragi::v2::LeaderWireRecoveryAuthority::from_replayed_adapter(
+        verified.context().id(),
+        verified.context().height,
+        [0; 32],
+        0,
+        true,
+    );
+    assert_obsolete_proposal_rejected(&ledger, &verified, Some(unqualified), 7);
+    let mut forged_proposal = proposal.clone();
+    forged_proposal.signature[0] ^= 1;
+    let forged = obsolete_proposal_ledger(
+        &verified,
+        obsolete_proposal_pair(&verified, forged_proposal, 3, 7).into(),
+    );
+    assert_obsolete_proposal_rejected(&forged, &verified, Some(frontier), 7);
+    let unlinked = obsolete_proposal_ledger(
+        &verified,
+        vec![direct_output_record(
+            &verified,
+            AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal),
+            )),
+            7,
+        )],
+    );
+    assert_obsolete_proposal_rejected(&unlinked, &verified, Some(frontier), 7);
+}
+
 fn assert_obsolete_proposal_rejected(
     ledger: &LifecycleLedgerV1,
     verified: &VerifiedHeightContext,

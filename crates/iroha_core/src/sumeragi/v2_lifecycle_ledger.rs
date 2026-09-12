@@ -2074,15 +2074,29 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     /// publication. This rejects observed copied, replaced, or foreign-context
     /// state at the owner-private quiescent boundary; it does not claim to
     /// defeat an actively replacing same-UID process between filesystem reads.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn authorizes_successor_status(
         &self,
         successor: &wire::SumeragiV2Status,
+    ) -> bool {
+        self.authorizes_successor_status_with_decision(successor, None)
+    }
+    /// Retain H as canonical parent while authenticating an unapplied H+1 Decision.
+    pub(in crate::sumeragi) fn authorizes_successor_status_with_decision(
+        &self,
+        successor: &wire::SumeragiV2Status,
+        decision: Option<&super::super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
     ) -> bool {
         self.authorizes_retained_successor()
             && self.successor_ledger.context().height() == successor.height
             && self.complete_tip.successor_context_id() == successor.height_context_id
             && self.complete_tip.predecessor().height().checked_add(1) == Some(successor.height)
-            && successor.last_committed_height == self.complete_tip.predecessor().height()
+            && match decision {
+                Some(decision) => self
+                    .complete_tip
+                    .authorizes_successor_decision_status(decision, successor),
+                None => successor.last_committed_height == self.complete_tip.predecessor().height(),
+            }
     }
     fn matches_successor_owner_ledger(
         &self,

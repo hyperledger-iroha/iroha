@@ -211,18 +211,30 @@ impl ProductionLifecycleCompleteTipRunnerActivationV1 {
     }
 
     /// Publish only through the still-sealed retired CompleteTip authority.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn open_and_publish(
         self,
         launched_ingress: &Arc<FairV2Ingress>,
         retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
         successor: wire::SumeragiV2Status,
     ) -> Result<ProductionLifecycleActivatedRunnerAuthorityV1, V2RunnerError> {
+        self.open_and_publish_with_decision(launched_ingress, retirement, successor, None)
+    }
+
+    /// Publish an exact CompleteTip successor with its optional sealed WAL Decision.
+    pub(in crate::sumeragi) fn open_and_publish_with_decision(
+        self,
+        launched_ingress: &Arc<FairV2Ingress>,
+        retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+        successor: wire::SumeragiV2Status,
+        decision: Option<super::super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
+    ) -> Result<ProductionLifecycleActivatedRunnerAuthorityV1, V2RunnerError> {
         self.ingress_ready.store(false, Ordering::Release);
         if !Arc::ptr_eq(&self.block_ingress, launched_ingress) {
             self.block_ingress.close();
             return Err(V2RunnerError::LifecycleActivationIngressMismatch);
         }
-        if !retirement.authorizes_successor_status(&successor) {
+        if !retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref()) {
             self.block_ingress.close();
             return Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid {
                 predecessor: retirement.predecessor(),
@@ -230,7 +242,9 @@ impl ProductionLifecycleCompleteTipRunnerActivationV1 {
         }
         self.block_ingress.open().map_err(ingress_capacity_error)?;
         if let Err(error) =
-            super::super::status::activate_recovered_complete_tip_v2_height(retirement, successor)
+            super::super::status::activate_recovered_complete_tip_v2_height_with_decision(
+                retirement, successor, decision,
+            )
         {
             self.block_ingress.close();
             return Err(error.into());

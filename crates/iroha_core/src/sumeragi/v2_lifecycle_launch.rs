@@ -2017,14 +2017,22 @@ impl ProductionLifecycleActivationPublicationV1 {
         self,
         ingress: &Arc<FairV2Ingress>,
         status: wire::SumeragiV2Status,
+        decision: Option<super::super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,
     ) -> Result<
         super::super::v2_runner::ProductionLifecycleActivatedRunnerAuthorityV1,
         ProductionLifecycleActivationErrorV1,
     > {
         let result = match self {
-            Self::Runner(runner) => runner.open_and_publish(ingress, status),
+            Self::Runner(runner) => {
+                if decision.is_some() {
+                    return Err(ProductionLifecycleActivationErrorV1::Status(
+                        super::super::v2::AdapterError::RecoveredSuccessorDecisionActivationMismatch,
+                    ));
+                }
+                runner.open_and_publish(ingress, status)
+            }
             Self::RecoveredCompleteTip { runner, retirement } => {
-                runner.open_and_publish(ingress, retirement, status)
+                runner.open_and_publish_with_decision(ingress, retirement, status, decision)
             }
         };
         result.map_err(|error| ProductionLifecycleActivationErrorV1::Runner(error.to_string()))
@@ -2223,6 +2231,16 @@ impl LaunchedProductionLifecycleV1 {
         if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) {
             return Err(ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch);
         }
+        let recovered_decision = if matches!(
+            publication,
+            ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { .. }
+        ) {
+            self.executor
+                .recovered_successor_decision_activation_authority()
+                .map_err(ProductionLifecycleActivationErrorV1::Status)?
+        } else {
+            None
+        };
         let clock_activation = ProductionLifecycleLiveClockActivationPermitV1 {
             _seal: ProductionLifecycleLiveClockActivationPermitSealV1,
         };
@@ -2241,8 +2259,11 @@ impl LaunchedProductionLifecycleV1 {
         self.services
             .activate_effect_completion_observer(observer)
             .map_err(ProductionLifecycleActivationErrorV1::CompletionObserver)?;
-        let runner_activation =
-            publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)?;
+        let runner_activation = publication.open_and_publish(
+            &self.leader_wire_ingress_binding.ingress,
+            status,
+            recovered_decision,
+        )?;
         activation.complete();
         Ok(ActivatedProductionLifecycleV1 {
             runner_activation,

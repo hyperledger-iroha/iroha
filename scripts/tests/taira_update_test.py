@@ -76,14 +76,53 @@ def fixture():
     return build,prior
 
 
-def plan_for(build=None, prior=None, value=None):
+def plan_for(build=None, prior=None, value=None, failed_start=None):
     global guest
     if build is None or prior is None:
         default_build,default_prior=fixture()
         build=default_build if build is None else build
         prior=default_prior if prior is None else prior
     guest=fresh_guest()
-    return runner.make_plan(build, deployment() if value is None else value, prior, guest, OPERATION)
+    return runner.make_plan(build, deployment() if value is None else value, prior, guest,
+                            OPERATION, failed_start)
+
+
+def failed_fixture(value=None, prior=None):
+    build, default_prior = fixture()
+    value = deployment() if value is None else value
+    prior = default_prior if prior is None else prior
+    failed = runner.make_plan(build, value, prior, fresh_guest(), 'update-' + '2' * 32)
+    before = [{'role': role, 'unit_stamp': [1, 2, 0o100600, 0, 0, 1, 3, 4, 5],
+               'config_stamp': [1, 4], 'state_root_identity': [1, 8], 'current_target': 'unchanged',
+               'public': {'commit': value['current']['commit'], 'network_id': value['network_id'],
+                          'height': 199}, 'systemd': {'InvocationID': 'e' * 32}}
+              for role in value['roles']]
+    checkpoints = [{'role': role, 'cohort_stopped': True, 'invocation_id': 'e' * 32,
+                    'checkpoint_height': 199, 'kura_tip': {'height': 200, 'hash': 'c' * 64},
+                    'selection': {'selector': 'b' * 64, 'pointer_stamp': [0] * 7 + [90_000]},
+                    'native_events': [{'time_us': 100,
+                                       'message': 'Successfully created a snapshot of state at_height=199'}],
+                    'proof_invocation_id': 'e' * 32}
+                   for role in value['roles']]
+    records = {'intent.json': failed, 'before.json': before, 'checkpoint-stopped.json': checkpoints,
+               'start-intent.json': {'units': [f'iroha3d-{role}.service' for role in value['roles']],
+                                    'automatic_old_binary_rollback_after_start': False},
+               'failure.json': {'error': 'native startup failure', 'new_start_attempted': True,
+                                'installed_units': value['roles']}}
+    return failed, records
+
+
+def write_failed_reference(directory, records):
+    directory = Path(directory).resolve()
+    directory.mkdir(exist_ok=True)
+    refs = {}
+    for name, value in records.items():
+        path = directory / name
+        raw = (json.dumps(value, sort_keys=True) + '\n').encode()
+        path.write_bytes(raw)
+        refs[name] = {'path': str(path), 'sha256': runner.sha(raw)}
+    return {'schema': 'taira.failed-start-reference.v1',
+            'plan': refs['intent.json'], 'records': refs}
 
 
 def local_inputs(directory):
@@ -104,6 +143,69 @@ def cli_argv(deployment_path,build_path,output):
 class CoordinatorTests(unittest.TestCase):
     def setUp(self):
         plan_for()
+
+    def test_cli_failed_start_uses_installed_units_without_promoting_failed_health(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value, build, descriptor, result = local_inputs(temporary)
+            prior = json.loads(Path(value['current']['local_plan']).read_bytes())
+            failed, records = failed_fixture(value, prior)
+            reference = write_failed_reference(descriptor.parent / 'failed', records)
+            reference_path = descriptor.parent / 'failed-reference.json'
+            reference_path.write_text(json.dumps(reference))
+            build['commit'] = 'c' * 40
+            result.write_text(json.dumps(build))
+            output = descriptor.parent / 'corrective.json'
+            with patch.object(sys, 'argv', cli_argv(descriptor, result, output) +
+                              ['--failed-start-reference', str(reference_path)]), \
+                 patch.object(runner.subprocess, 'check_output', return_value='optimizations\n'), \
+                 patch.object(runner.retry, 'validate_ssh', return_value=['approved']), \
+                 patch.object(runner.subprocess, 'run') as remote, \
+                 patch.object(runner, 'apply_plan') as apply, redirect_stdout(io.StringIO()):
+                runner.main()
+            remote.assert_not_called(); apply.assert_not_called()
+            plan = json.loads(output.read_bytes())
+            self.assertEqual(plan['deployment'], value)
+            self.assertEqual(plan['retained_predecessor'], failed['retained_predecessor'])
+            self.assertEqual(plan['failed_start']['installed']['commit'], failed['commit'])
+            self.assertEqual(plan['failed_start']['records'], reference['records'])
+            for previous, current in zip(failed['units'], plan['units'], strict=True):
+                self.assertEqual(current['before'], previous['after'])
+                self.assertEqual(current['before_sha256'], previous['after_sha256'])
+            self.assertNotIn('accepted_health', plan['failed_start'])
+            self.assertNotEqual(runner.release_name(plan), runner.release_name(failed))
+            with patch.object(sys, 'argv', cli_argv(descriptor, result, output) +
+                              ['--failed-start-reference', str(reference_path)]), \
+                 patch.object(runner.subprocess, 'check_output', return_value='optimizations\n'), \
+                 patch.object(runner.retry, 'validate_ssh', return_value=['approved']), \
+                 patch.object(runner.subprocess, 'run') as remote:
+                with self.assertRaises(FileExistsError): runner.main()
+            remote.assert_not_called()
+            self.assertEqual(plan, json.loads(output.read_bytes()))
+
+    def test_failed_start_planning_rejects_unproven_or_inconsistent_failure_lineage(self):
+        for failure in ('missing', 'digest', 'predecessor', 'unit', 'artifact', 'not_started',
+                        'partial_install', 'checkpoint', 'invocation', 'intent', 'same_operation', 'nested'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                build, prior = fixture()
+                build['commit'] = 'c' * 40
+                failed, records = failed_fixture()
+                if failure == 'predecessor': failed['retained_predecessor']['intent_sha256'] = 'd' * 64
+                if failure == 'unit': failed['units'][0]['before_sha256'] = 'd' * 64
+                if failure == 'artifact': failed['artifacts'][0]['package'] = 'wrong'
+                if failure == 'not_started': records['failure.json']['new_start_attempted'] = False
+                if failure == 'partial_install': records['failure.json']['installed_units'] = []
+                if failure == 'checkpoint': records['checkpoint-stopped.json'][0]['kura_tip']['height'] = 198
+                if failure == 'invocation': records['checkpoint-stopped.json'][0]['invocation_id'] = 'd' * 32
+                if failure == 'same_operation': failed['operation'] = OPERATION
+                if failure == 'nested': failed['failed_start'] = {}
+                reference = write_failed_reference(temporary, records)
+                if failure == 'missing': Path(reference['records']['failure.json']['path']).unlink()
+                if failure == 'digest': reference['records']['failure.json']['sha256'] = 'd' * 64
+                if failure == 'intent': reference['plan'] = dict(reference['plan'], sha256='d' * 64)
+                with patch.object(runner.subprocess, 'run') as remote:
+                    with self.assertRaises((RuntimeError, FileNotFoundError)):
+                        plan_for(build, prior, failed_start=reference)
+                remote.assert_not_called()
 
     def test_cli_plan_only_binds_the_completed_build_and_exact_predecessor_without_ssh(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -501,9 +603,91 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Strict restoration is not verified'):
                 guest.retained_attempt(plan)
 
-    def simulate(self, failure=None):
+    def test_guest_recovery_authenticates_failed_records_and_completed_baseline_independently(self):
+        for failure in (None, 'missing', 'digest', 'after.json', 'checkpoint-restored.json',
+                        'result.json', 'rollback.json', 'unit', 'artifact', 'health',
+                        'completion', 'strict', 'identity'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                build, prior = fixture()
+                build['commit'] = 'c' * 40
+                failed, records = failed_fixture()
+                root = Path(temporary).resolve()
+                reference = write_failed_reference(root / failed['operation'], records)
+                plan = plan_for(build, prior, failed_start=reference)
+                baseline = root / deployment()['current']['attempt_name']
+                baseline.mkdir()
+                baseline_records = {
+                    'intent.json': prior, 'after.json': records['before.json'],
+                    'checkpoint-stopped.json': [{'role': role} for role in guest.ROLES],
+                    'checkpoint-restored.json': [{'role': role, 'native_strict_checkpoint_verified': True}
+                                                 for role in guest.ROLES],
+                    'result.json': {'schema': 'taira.daemon-update.result.v1',
+                                    'runtime_update_complete': True, 'state_preserved': True,
+                                    'retained_native_snapshot_verified': True,
+                                    'commit': guest.PREDECESSOR['commit'], 'network_id': guest.NETWORK}}
+                if failure == 'completion': baseline_records['result.json']['runtime_update_complete'] = False
+                if failure == 'strict': baseline_records['checkpoint-restored.json'][0]['native_strict_checkpoint_verified'] = False
+                for name, row in baseline_records.items():
+                    (baseline / name).write_text(json.dumps(row))
+                failed_directory = root / failed['operation']
+                if failure in ('after.json', 'checkpoint-restored.json', 'result.json', 'rollback.json'):
+                    (failed_directory / failure).write_text('{}')
+                if failure == 'missing': (failed_directory / 'start-intent.json').unlink()
+                if failure == 'digest': (failed_directory / 'failure.json').write_text('{}')
+                if failure == 'unit': plan['units'][0]['before_sha256'] = 'd' * 64
+                if failure in ('health', 'identity'):
+                    if failure == 'health': records['before.json'][0]['public']['height'] = 198
+                    else: records['before.json'][0]['state_root_identity'] = [8, 8]
+                    rebound = write_failed_reference(failed_directory, records)
+                    plan['failed_start']['records'] = rebound['records']
+                contents = {str(path): path.read_bytes() for path in root.rglob('*.json')}
+                with patch.object(guest, 'BASE', root), \
+                     patch.object(guest, 'stamp', return_value=[0] * 6 + [2_000_000]), \
+                     patch.object(guest, 'native_digest', return_value=('d' if failure == 'artifact' else 'b') * 64), \
+                     patch.object(guest, 'record') as record, \
+                     patch.object(guest, 'stop_all') as stop:
+                    if failure:
+                        with self.assertRaises((RuntimeError, FileNotFoundError)):
+                            guest.retained_attempt(plan)
+                    else:
+                        retained = guest.retained_attempt(plan)
+                        self.assertEqual(retained, (records['before.json'], records['checkpoint-stopped.json']))
+                        self.assertEqual(guest.OLD, failed['commit'])
+                        self.assertEqual(retained[0][0]['public']['commit'], guest.PREDECESSOR['commit'])
+                        observation = copy.deepcopy(retained[0][0])
+                        observation['systemd']['InvocationID'] = 'f' * 32
+                        checkpoint = retained[1][0]
+                        with patch.object(guest, 'snapshot_selection', return_value=checkpoint['selection']) as selection, \
+                             patch.object(guest, 'snapshot_events', return_value=[]) as logs, \
+                             patch.object(guest, 'native_kura_tip', return_value={'height': 201, 'hash': 'd' * 64}), \
+                             patch.object(guest, 'native_kura_hash', return_value='c' * 64) as prefix:
+                            recovered = guest.checkpoint_barrier(observation, stopped=True, prior=checkpoint)
+                            self.assertTrue(recovered['reused_checkpoint_proof'])
+                            self.assertEqual(recovered['proof_invocation_id'], 'e' * 32)
+                            self.assertEqual(recovered['invocation_id'], 'f' * 32)
+                            self.assertEqual(recovered['kura_tip']['height'], 201)
+                            logs.assert_called_with(observation['role'], 'f' * 32)
+                            prefix.assert_called_with(observation['role'], 200)
+                            prefix.return_value = 'd' * 64
+                            with self.assertRaisesRegex(RuntimeError, 'prefix hash changed'):
+                                guest.checkpoint_barrier(observation, stopped=True, prior=checkpoint)
+                            prefix.return_value = 'c' * 64
+                            selection.return_value = dict(checkpoint['selection'], selector='d' * 64)
+                            with self.assertRaisesRegex(RuntimeError, 'selection changed'):
+                                guest.checkpoint_barrier(observation, stopped=True, prior=checkpoint)
+                    record.assert_not_called(); stop.assert_not_called()
+                self.assertEqual(contents, {str(path): path.read_bytes() for path in root.rglob('*.json')})
+
+    def simulate(self, failure=None, *, recovery=False):
         build, metadata = fixture()
-        plan = plan_for(build, metadata)
+        if recovery:
+            build['commit'] = 'c' * 40
+            _, failed_records = failed_fixture()
+            with tempfile.TemporaryDirectory() as temporary:
+                reference = write_failed_reference(temporary, failed_records)
+                plan = plan_for(build, metadata, failed_start=reference)
+        else:
+            plan = plan_for(build, metadata)
         events = []
         records = {}
         units = {row['role']: base64.b64decode(row['before']) for row in plan['units']}
@@ -527,7 +711,8 @@ class CoordinatorTests(unittest.TestCase):
             return {'role': row['role'], 'unit_stamp': [1, 2, 0o100600, 0, 0, 1, 3, 4, 5],
                     'config_stamp': [1, 4], 'config_sha256': 'same', 'state_root_identity': [1, 8],
                     'current_target': 'unchanged',
-                    'public': {'commit': plan['commit'] if after else guest.OLD,
+                    'executable': str(guest.DAEMON if after else guest.PREVIOUS_DAEMON),
+                    'public': {'commit': plan['commit'] if after else guest.PREDECESSOR['commit'],
                                'height': 200 if after else 199}}
 
         def observe(row, *, after=False):
@@ -554,6 +739,8 @@ class CoordinatorTests(unittest.TestCase):
             stack.enter_context(patch.object(guest, 'configure', side_effect=lambda value: self.assertEqual(value, plan)))
             stack.enter_context(patch.object(guest, 'BASE', Path(directory)))
             stack.enter_context(patch.object(guest, 'ATTEMPT', Path(directory) / 'attempt'))
+            if failure == 'attempt-exists':
+                guest.ATTEMPT.mkdir()
             stack.enter_context(patch.object(guest.os, 'geteuid', return_value=0))
             stack.enter_context(patch.object(guest, 'native_digest', return_value='b' * 64))
             stack.enter_context(patch.object(guest, 'stamp', return_value=[1, 2, 0o100755, 0, 0, 1, 2_000_000]))
@@ -570,16 +757,22 @@ class CoordinatorTests(unittest.TestCase):
             stack.enter_context(patch.object(guest, 'command', side_effect=native))
             stack.enter_context(patch.object(guest, 'native_private_command', side_effect=lambda *a, **k: events.append(k['name'])))
             stack.enter_context(patch.object(guest, 'observe', side_effect=observe))
-            prior = ([identity(row) for row in plan['units']], [{} for _ in guest.ROLES])
+            prior = ([identity(row) for row in plan['units']],
+                     failed_records['checkpoint-stopped.json'] if recovery else [{} for _ in guest.ROLES])
             stack.enter_context(patch.object(guest, 'retained_attempt', return_value=prior))
             stack.enter_context(patch.object(guest, 'retained_identity', side_effect=identity))
             paused = {'ActiveState': 'inactive', 'SubState': 'dead', 'MainPID': '0',
                       'ControlPID': '0', 'Job': '', 'InvocationID': 'f' * 32}
             stack.enter_context(patch.object(guest, 'systemd', return_value=paused))
             stack.enter_context(patch.object(guest, 'stop_all', side_effect=lambda: events.append('stop-all') or [{'unit': unit, 'systemd': paused} for unit in guest.UNITS]))
-            stack.enter_context(patch.object(guest, 'checkpoint_barrier', side_effect=lambda row, **kwargs:
-                {'role': row['role'], 'selection': 'selected', 'checkpoint_height': 199,
-                 'kura_tip': {'height': 199, 'hash': 'c' * 64}}))
+            def checkpoint(row, *, stopped, prior):
+                self.assertTrue(stopped)
+                self.assertEqual(row['systemd']['InvocationID'], 'f' * 32)
+                if recovery:
+                    self.assertEqual(prior, failed_records['checkpoint-stopped.json'][guest.ROLES.index(row['role'])])
+                return {'role': row['role'], 'selection': 'selected', 'checkpoint_height': 199,
+                        'kura_tip': {'height': 199, 'hash': 'c' * 64}}
+            stack.enter_context(patch.object(guest, 'checkpoint_barrier', side_effect=checkpoint))
             stack.enter_context(patch.object(guest, 'snapshot_selection', return_value='selected'))
             stack.enter_context(patch.object(guest, 'native_kura_tip', return_value={'height': 199, 'hash': 'c' * 64}))
             stack.enter_context(patch.object(guest, 'verify_restored_checkpoint', side_effect=lambda row, cp:
@@ -631,6 +824,39 @@ class CoordinatorTests(unittest.TestCase):
         self.assertNotIn('rollback-start', events)
         self.assertTrue(records['failure.json']['new_start_attempted'])
         self.assertNotIn('result.json', records)
+
+    def test_failed_start_recovery_keeps_historical_health_and_exact_rollback_boundary(self):
+        for failure in (None, 'partial-install', 'start', 'public-doctor'):
+            with self.subTest(failure=failure):
+                events, records, units, plan = self.simulate(failure, recovery=True)
+                for row in records['before.json']:
+                    self.assertEqual(row['public']['commit'], deployment()['current']['commit'])
+                    self.assertEqual(row['executable'], plan['failed_start']['installed']['daemon'])
+                    self.assertEqual(row['systemd']['InvocationID'], 'f' * 32)
+                if failure == 'partial-install':
+                    self.assertNotIn('start', events)
+                    self.assertFalse(records['rollback.json']['old_daemons_restarted'])
+                    self.assertFalse(records['failure.json']['new_start_attempted'])
+                    for row in plan['units']:
+                        self.assertEqual(units[row['role']], base64.b64decode(row['before']))
+                        self.assertEqual(guest.unit_command(units[row['role']])[0],
+                                         plan['failed_start']['installed']['daemon'])
+                else:
+                    self.assertIn('start', events)
+                    self.assertNotIn('rollback.json', records)
+                    for row in plan['units']:
+                        self.assertEqual(units[row['role']], base64.b64decode(row['after']))
+                if failure:
+                    self.assertNotIn('result.json', records)
+                else:
+                    self.assertTrue(records['result.json']['runtime_update_complete'])
+
+    def test_failed_start_recovery_cannot_repeat_an_existing_attempt(self):
+        events, records, units, plan = self.simulate('attempt-exists', recovery=True)
+        self.assertEqual(events, [])
+        self.assertEqual(records, {})
+        for row in plan['units']:
+            self.assertEqual(units[row['role']], base64.b64decode(row['before']))
 
     def test_deployment_metadata_and_route_are_explicit_and_closed(self):
         value=deployment()

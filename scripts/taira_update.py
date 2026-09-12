@@ -5,6 +5,8 @@ Requires completed maintained preparation and an owner-public deployment record.
 --plan-only contacts no host. The default command
 transfers the daemon and matching CLI via native cat/SSH and executes the reviewed guest
 controller. No secret files are read. Failed attempts are never overwritten.
+An explicit --failed-start-reference admits one failed startup after the completed
+deployment baseline; chained failed recoveries are rejected.
 """
 import argparse
 import fcntl
@@ -119,12 +121,35 @@ def validate_build(build, commit):
     return selected
 
 
-def make_plan(build, deployment, prior, guest, operation):
+def failed_start_inputs(reference, deployment, prior, guest, operation):
+    """Resolve only digest-bound public records; completed and installed remain distinct."""
+    need(set(reference) == {'schema', 'plan', 'records'}
+         and reference['schema'] == 'taira.failed-start-reference.v1'
+         and set(reference['records']) == set(guest.FAILED_START_RECORDS),
+         'failed-start reference fields differ')
+
+    def read_ref(ref):
+        need(set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str)
+             and Path(ref['path']).is_absolute()
+             and re.fullmatch('[0-9a-f]{64}', ref['sha256']),
+             'failed-start public record reference differs')
+        return retry.decode(retry.public_record(ref['path'], ref['sha256']))
+
+    failed = read_ref(reference['plan'])
+    records = {name: read_ref(ref) for name, ref in reference['records'].items()}
+    need(reference['plan']['sha256'] == reference['records']['intent.json']['sha256'],
+         'failed-start plan and installed intent bytes differ')
+    installed = guest.validate_failed_start_inputs(deployment, prior, failed, records, operation)
+    return dict(reference, installed=installed), failed
+
+
+def make_plan(build, deployment, prior, guest, operation, failed_start=None):
     commit = build['commit']
     artifacts = validate_build(build, commit)
     current = deployment['current']
     need(commit != current['commit'], 'candidate is already the current runtime')
     need(re.fullmatch('update-[0-9a-f]{32}', operation), 'invalid operation directory')
+    need(operation != current['attempt_name'], 'fresh operation directory required')
     need(prior.get('schema') == current['plan_schema'] and prior.get('commit') == current['commit']
          and prior.get('network_id') == deployment['network_id'], 'installed predecessor plan differs')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == deployment['renderer_sha256']
@@ -133,9 +158,15 @@ def make_plan(build, deployment, prior, guest, operation):
     value = {'schema':'taira.daemon-update.plan.v1', 'commit':commit,
              'network_id':deployment['network_id'], 'artifacts':artifacts,
              'operation':operation, 'deployment':deployment}
+    installed_plan = prior
+    if failed_start is not None:
+        value['failed_start'], installed_plan = failed_start_inputs(
+            failed_start, deployment, prior, guest, operation)
+        need(commit != value['failed_start']['installed']['commit'],
+             'candidate is already the failed-start runtime')
     guest.configure(value)
     units = []
-    for row in prior['units']:
+    for row in installed_plan['units']:
         raw = base64.b64decode(row['after'], validate=True)
         need(sha(raw) == row['after_sha256'], 'installed predecessor unit digest differs')
         after = guest.replace_daemon(raw, row['role'])
@@ -211,6 +242,16 @@ def apply_plan(args):
         need(sha(read_public(HERE / name)) == plan[field], 'reviewed coordinator source changed')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == plan['renderer_sha256'],
          'reviewed custody renderer changed')
+    if 'failed_start' in plan:
+        current = plan['deployment']['current']
+        prior = retry.decode(retry.public_record(current['local_plan'], current['local_plan_sha256']))
+        guest = module(HERE / 'taira_update_guest.py', 'runtime_update_recovery_validation')
+        reference = {key: value for key, value in plan['failed_start'].items() if key != 'installed'}
+        rebound = make_plan(json.loads(build_raw), plan['deployment'], prior, guest,
+                            plan['operation'], reference)
+        need(rebound['failed_start'] == plan['failed_start'] and rebound['units'] == plan['units']
+             and rebound['retained_predecessor'] == plan['retained_predecessor'],
+             'failed-start recovery plan differs from its public inputs')
     need(args.output.is_absolute() and args.output.parent.resolve() == args.output.parent
          and not args.output.exists(), 'fresh absolute local output required')
     argv = retry.validate_ssh(plan['deployment']['guest_ssh'])
@@ -259,6 +300,8 @@ def main():
     parser.add_argument('--prepared-result', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--plan-only', action='store_true', help='write the exact local plan without SSH')
+    parser.add_argument('--failed-start-reference', type=Path,
+                        help='digest-bound public records of an installed rollout that failed at startup')
     args = parser.parse_args()
     os.umask(0o077)
     need(subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip()
@@ -281,7 +324,9 @@ def main():
                                         deployment['current']['local_plan_sha256'])
         guest = module(HERE / 'taira_update_guest.py', 'runtime_update_guest')
         value = make_plan(retry.decode(build_raw), deployment, retry.decode(prior_raw), guest,
-                          'update-' + secrets.token_hex(16))
+                          'update-' + secrets.token_hex(16),
+                          retry.decode(read_public(args.failed_start_reference))
+                          if args.failed_start_reference is not None else None)
         value.update(build_result_path=str(args.prepared_result), build_result_sha256=sha(build_raw))
         raw = (json.dumps(value, sort_keys=True)+'\n').encode()
         if args.plan_only:

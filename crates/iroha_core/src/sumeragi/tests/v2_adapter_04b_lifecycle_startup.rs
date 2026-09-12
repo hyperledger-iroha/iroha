@@ -1350,6 +1350,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         (0xB4_u8, true, false, true, None),
         (0xB5_u8, true, false, false, Some(false)),
         (0xB6_u8, true, false, false, Some(true)),
+        (0xB7_u8, true, false, false, Some(true)),
     ] {
         let kura = Kura::blank_kura_for_testing();
         let storage_root = kura.sumeragi_v2_storage_root();
@@ -1550,29 +1551,90 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let wal_path = storage_root
                 .join("wal")
                 .join(format!("{:020}.wal", recovered_context.height));
+            let verified =
+                VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
+                    .expect("verify pending Kura lifecycle context");
+            let (local_validator, retained_proposal, wal_records) = if marker == 0xB7 {
+                // The real crash cut retains a live Proposal output after the
+                // same-view Decision and Kura write, without any installed TC.
+                let proposer = recovered_context.leader(round.view);
+                let mut proposal = wire::Proposal {
+                    round,
+                    proposer,
+                    subject,
+                    manifest: manifest.clone(),
+                    justification: wire::ProposalJustification::ParentCommit(
+                        wire::ParentCommitJustification { certificate: None },
+                    ),
+                    signature: Vec::new(),
+                };
+                let unsigned = proposal.clone();
+                proposal.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("pending Kura proposer")].private_key(),
+                    &proposal.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let ledger = super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::persist_pending_kura_proposal_output_for_test(
+                    &verified,
+                    proposal,
+                    &storage_root.join("lifecycle-v1").join(hex::encode(recovered_context.id().0.as_ref())),
+                );
+                let prepare_vote = wire::Vote {
+                    round,
+                    proposal_round: round,
+                    phase: wire::GlobalPhase::Prepare,
+                    subject,
+                    execution_commitment: semantic_commitment,
+                    signer: proposer,
+                    signature: Vec::new(),
+                };
+                let mut prepare = decision.clone();
+                prepare.phase = wire::GlobalPhase::Prepare;
+                authenticate_qc(&mut prepare, &keys);
+                let mut commit_vote = prepare_vote.clone();
+                commit_vote.phase = wire::GlobalPhase::Commit;
+                (
+                    proposer,
+                    Some(ledger),
+                    vec![
+                        WalRecordV2::ProposalIntent(unsigned),
+                        WalRecordV2::PrepareIntent(prepare_vote),
+                        WalRecordV2::LockAndCommit {
+                            prepare,
+                            vote: commit_vote,
+                        },
+                        WalRecordV2::Decision(decision.clone()),
+                    ],
+                )
+            } else {
+                (0, None, vec![WalRecordV2::Decision(decision.clone())])
+            };
             let authenticated = write_and_reopen_authenticated_wal_startup_at_path(
                 wal_path.clone(),
                 &recovered_context,
                 &proofs,
-                0,
+                local_validator,
                 [marker; 32],
-                vec![WalRecordV2::Decision(decision.clone())],
+                wal_records,
             )
             .bind_pending_kura_apply(expected)
             .unwrap_or_else(|(error, _startup)| panic!("bind exact pending Kura startup: {error}"))
             .authenticate_final_wal_startup_authority()
             .unwrap_or_else(|error| panic!("authenticate pending Kura WAL replay: {error}"));
-            let verified =
-                VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
-                    .expect("verify pending Kura lifecycle context");
             let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
                 kura.as_ref(),
                 &verified,
                 signature_policy.clone(),
                 genesis_account.clone(),
             );
-            let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
-                .expect("deterministic pending Kura Serve signer");
+            let local_signer = if retained_proposal.is_some() {
+                keys[usize::try_from(local_validator).expect("pending Kura local validator")]
+                    .clone()
+            } else {
+                KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+                    .expect("deterministic pending Kura Serve signer")
+            };
             let factory_inputs = authenticated
                 .bind_production_lifecycle_owner_factory_inputs_v1(
                     super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
@@ -1588,7 +1650,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     events_sender.clone(),
                 )
                 .unwrap_or_else(|error| panic!("bind pending Kura lifecycle inputs: {error}"));
-            let owner = authenticated
+            let mut owner = authenticated
                 .open_production_lifecycle_owner_v1(
                     &lifecycle_owner_config(),
                     4,
@@ -1596,6 +1658,23 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     recovered_body_store,
                 )
                 .unwrap_or_else(|error| panic!("open pending Kura lifecycle owner: {error}"));
+            if let Some(before) = retained_proposal {
+                assert!(owner.has_recovered_lifecycle_outputs());
+                let output_calls = std::cell::Cell::new(0);
+                assert_eq!(
+                    owner
+                        .settle_next_recovered_lifecycle_output(|_| {
+                            output_calls.set(output_calls.get() + 1);
+                            Err::<super::super::v2_lifecycle_coordinator::LifecycleOutputServiceDispositionV1, _>(
+                                "a decided Proposal cannot enter the output service",
+                            )
+                        })
+                        .expect("cancel retained Proposal from the actual Decision WAL"),
+                    super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed,
+                );
+                assert_eq!(output_calls.get(), 0);
+                owner.assert_pending_kura_proposal_cancelled_for_test(&before);
+            }
             exercise_pending_kura_production_lifecycle(
                 owner,
                 verified,

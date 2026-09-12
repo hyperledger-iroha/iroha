@@ -19,6 +19,8 @@ import time
 # One isolated remote process serves one explicit deployment and operation.
 SNAPSHOT_ARTIFACTS = {'snapshot.data', 'snapshot.sha256', 'snapshot.sig',
                       'snapshot.fast.norito', 'snapshot.merkle.json'}
+FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
+                      'start-intent.json', 'failure.json')
 BOUND = False
 
 
@@ -35,8 +37,9 @@ def configure(plan):
     GENESIS_MANIFEST = Path(deployment['genesis_manifest'])
     CONFIG_RELEASE = deployment['config_release']
     PREDECESSOR = deployment['current']
-    OLD = PREDECESSOR['commit']
-    PREVIOUS_DAEMON = Path(PREDECESSOR['daemon'])
+    installed = plan.get('failed_start', {}).get('installed', PREDECESSOR)
+    OLD = installed['commit']
+    PREVIOUS_DAEMON = Path(installed['daemon'])
     DAEMON = BASE / ('release-' + plan['commit'] + '-' + plan['operation']) / 'bin/iroha3d_taira'
     CLI = DAEMON.with_name('iroha')
     ATTEMPT = BASE / plan['operation']
@@ -55,6 +58,81 @@ ENV = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/root', 'LC_ALL': 'C'}
 def need(value, reason):
     if not value:
         raise RuntimeError(reason)
+
+
+def validate_failed_start_inputs(deployment, baseline, failed, records, operation):
+    """Authenticate public failed-start lineage without inventing a completed runtime."""
+    current = deployment['current']
+    roles = deployment['roles']
+    units = [f'iroha3d-{role}.service' for role in roles]
+    need(failed.get('schema') == 'taira.daemon-update.plan.v1'
+         and failed.get('deployment') == deployment
+         and failed.get('network_id') == deployment['network_id']
+         and failed.get('renderer_sha256') == deployment['renderer_sha256']
+         and 'failed_start' not in failed, 'failed-start baseline or plan differs')
+    commit, attempt = failed.get('commit', ''), failed.get('operation', '')
+    need(re.fullmatch('[0-9a-f]{40}', commit) and commit != current['commit']
+         and re.fullmatch('update-[0-9a-f]{32}', attempt) and attempt != operation
+         and attempt != current['attempt_name'], 'failed-start source or operation differs')
+    need(failed.get('retained_predecessor') == {
+        'attempt_name': current['attempt_name'],
+        'intent_sha256': hashlib.sha256(json.dumps(baseline, sort_keys=True,
+                                                   separators=(',', ':')).encode()).hexdigest()},
+        'failed-start completed predecessor proof differs')
+    artifacts = failed.get('artifacts', [])
+    need([row.get('name') for row in artifacts] == ['iroha3d_taira', 'iroha']
+         and all(row.get('package') == package
+                 and re.fullmatch('[0-9a-f]{64}', row.get('sha256', ''))
+                 and type(row.get('size')) is int and 1_000_000 < row['size'] < 1024 ** 3
+                 for row, package in zip(artifacts, ('irohad', 'iroha_cli'), strict=True)),
+         'failed-start artifact identities differ')
+    installed = {'commit': commit, 'attempt_name': attempt,
+                 'daemon': str(Path(deployment['runtime_root']) /
+                               ('release-' + commit + '-' + attempt) / 'bin/iroha3d_taira')}
+    need([row.get('role') for row in failed.get('units', [])] == roles
+         and [row.get('role') for row in baseline.get('units', [])] == roles,
+         'failed-start unit cohort differs')
+    for previous, row in zip(baseline['units'], failed['units'], strict=True):
+        before = base64.b64decode(row['before'], validate=True)
+        after = base64.b64decode(row['after'], validate=True)
+        old = current['daemon'].encode()
+        need(row['before'] == previous['after']
+             and row['before_sha256'] == previous['after_sha256']
+             and hashlib.sha256(before).hexdigest() == row['before_sha256']
+             and hashlib.sha256(after).hexdigest() == row['after_sha256']
+             and before.count(old) == 1
+             and before.replace(old, installed['daemon'].encode(), 1) == after
+             and unit_command(before) == [current['daemon'], '--config',
+                 str(Path(deployment['config_root']) / row['role'] / 'current/config/config.toml'), '--sora']
+             and unit_command(after)[0] == installed['daemon'],
+             'failed-start unit lineage differs')
+    need(set(records) == set(FAILED_START_RECORDS) and records['intent.json'] == failed,
+         'failed-start intent record differs')
+    need(records['start-intent.json'] == {
+        'units': units, 'automatic_old_binary_rollback_after_start': False},
+        'failed-start startup marker differs')
+    failure = records['failure.json']
+    need(set(failure) == {'error', 'new_start_attempted', 'installed_units'}
+         and isinstance(failure['error'], str) and failure['new_start_attempted'] is True
+         and failure['installed_units'] == roles, 'failed-start failure marker differs')
+    before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+    need([row.get('role') for row in before] == roles
+         and [row.get('role') for row in checkpoints] == roles,
+         'failed-start retained evidence lacks exact cohort')
+    for row, checkpoint in zip(before, checkpoints, strict=True):
+        need(row['public']['commit'] == current['commit']
+             and row['public']['network_id'] == deployment['network_id']
+             and type(row['public']['height']) is int and row['public']['height'] > 0
+             and checkpoint.get('cohort_stopped') is True
+             and checkpoint.get('invocation_id') == row['systemd']['InvocationID']
+             and re.fullmatch('[0-9a-f]{32}', checkpoint['invocation_id'])
+             and type(checkpoint.get('checkpoint_height')) is int
+             and checkpoint['checkpoint_height'] >= deployment['replay_floor']
+             and type(checkpoint['kura_tip']['height']) is int
+             and checkpoint['kura_tip']['height'] >= max(checkpoint['checkpoint_height'], row['public']['height'])
+             and re.fullmatch('[0-9a-f]{64}', checkpoint['kura_tip']['hash']),
+             'failed-start checkpoint or historical observation differs')
+    return installed
 
 
 def stamp(path, directory=False):
@@ -476,38 +554,45 @@ def wait_for_cohort(rows, before, *, after, commit, timeout=180):
     raise RuntimeError('cohort observation deadline: ' + str(latest))
 
 
+def retained_public_record(directory, name, digest=None):
+    """Read a bounded root-owned public receipt, optionally pinned by captured bytes."""
+    path = directory / name
+    before = stamp(path)
+    need(before[6] <= 8 * 1024 * 1024, 'retained public record exceeds bound')
+    raw = path.read_bytes()
+    need(before == stamp(path), 'retained public record changed during read')
+    if digest is not None:
+        need(re.fullmatch('[0-9a-f]{64}', digest)
+             and hashlib.sha256(raw).hexdigest() == digest, 'failed-start public record digest differs')
+    return json.loads(raw)
+
+
 def retained_attempt(plan):
-    """Use the exact installed predecessor public receipts; no previous runtime HTTP required."""
+    """Verify completion separately from an explicitly authenticated failed installation."""
     prior = plan['retained_predecessor']
     need(prior['attempt_name'] == PREDECESSOR['attempt_name'], 'installed predecessor required')
     directory = BASE / prior['attempt_name']
     stamp(directory, True)
 
     def public_record(name):
-        path = directory / name
-        before = stamp(path)
-        need(before[6] <= 8 * 1024 * 1024, 'retained public record exceeds bound')
-        value = json.loads(path.read_bytes())
-        need(before == stamp(path), 'retained public record changed during read')
-        return value
+        return retained_public_record(directory, name)
 
     intent = public_record('intent.json')
     digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     need(digest == prior['intent_sha256'], 'predecessor intent differs')
     need(intent.get('schema') == PREDECESSOR['plan_schema']
-         and intent['network_id'] == plan['network_id'] and intent['commit'] == OLD
-         and plan['commit'] != OLD, 'installed predecessor source or candidate differs')
+         and intent['network_id'] == plan['network_id'] and intent['commit'] == PREDECESSOR['commit']
+         and plan['commit'] not in (OLD, PREDECESSOR['commit']),
+         'installed predecessor source or candidate differs')
     need(tuple(row['role'] for row in intent['units']) == ROLES, 'predecessor plan lacks exact cohort')
-    for original, current in zip(intent['units'], plan['units'], strict=True):
-        need(original['after'] == current['before'] and original['after_sha256'] == current['before_sha256'],
-             'successor changed installed predecessor unit')
     before = public_record('after.json')
     checkpoints = public_record('checkpoint-stopped.json')
     restored = public_record('checkpoint-restored.json')
     need(tuple(row['role'] for row in before) == ROLES
          and tuple(row['role'] for row in checkpoints) == ROLES
          and tuple(row['role'] for row in restored) == ROLES, 'predecessor evidence lacks exact cohort')
-    need(all(row['public']['commit'] == OLD and row['public']['network_id'] == NETWORK for row in before),
+    need(all(row['public']['commit'] == PREDECESSOR['commit']
+             and row['public']['network_id'] == NETWORK for row in before),
          'installed predecessor runtime differs')
     need(all(row.get('native_strict_checkpoint_verified') is True for row in restored),
          'predecessor Strict restoration is not verified')
@@ -516,8 +601,51 @@ def retained_attempt(plan):
          and completed.get('runtime_update_complete') is True
          and completed.get('state_preserved') is True
          and completed.get('retained_native_snapshot_verified') is True
-         and completed.get('commit') == OLD and completed.get('network_id') == NETWORK,
+         and completed.get('commit') == PREDECESSOR['commit'] and completed.get('network_id') == NETWORK,
          'installed predecessor completion receipt differs')
+    installed_plan = intent
+    if 'failed_start' in plan:
+        reference = plan['failed_start']
+        need(set(reference) == {'schema', 'plan', 'records', 'installed'}
+             and reference['schema'] == 'taira.failed-start-reference.v1'
+             and set(reference['records']) == set(FAILED_START_RECORDS)
+             and set(reference['installed']) == {'commit', 'attempt_name', 'daemon'},
+             'failed-start reference fields differ')
+        attempt = reference['installed']['attempt_name']
+        need(re.fullmatch('update-[0-9a-f]{32}', attempt)
+             and attempt not in (prior['attempt_name'], plan['operation']),
+             'failed-start operation differs')
+        failed_directory = BASE / attempt
+        stamp(failed_directory, True)
+        for name in ('after.json', 'checkpoint-restored.json', 'result.json', 'rollback.json'):
+            need(not os.path.lexists(failed_directory / name),
+                 'failed-start attempt has a success or rollback marker: ' + name)
+        for ref in (reference['plan'], *reference['records'].values()):
+            need(set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str)
+                 and Path(ref['path']).is_absolute()
+                 and re.fullmatch('[0-9a-f]{64}', ref['sha256']),
+                 'failed-start public record reference differs')
+        need(reference['plan']['sha256'] == reference['records']['intent.json']['sha256'],
+             'failed-start plan and installed intent bytes differ')
+        records = {name: retained_public_record(failed_directory, name, ref['sha256'])
+                   for name, ref in reference['records'].items()}
+        installed_plan = records['intent.json']
+        installed = validate_failed_start_inputs(plan['deployment'], intent, installed_plan,
+                                                records, plan['operation'])
+        need(installed == reference['installed'] and installed['commit'] == OLD
+             and installed['daemon'] == str(PREVIOUS_DAEMON), 'failed-start installed identity differs')
+        for baseline, failed_before in zip(before, records['before.json'], strict=True):
+            compare_retained_identity(baseline, failed_before)
+            need(baseline['public'] == failed_before['public'],
+                 'failed-start historical health differs from completed predecessor')
+        for artifact, path in zip(installed_plan['artifacts'],
+                                  (PREVIOUS_DAEMON, PREVIOUS_DAEMON.with_name('iroha')), strict=True):
+            need(native_digest(path) == artifact['sha256'] and stamp(path)[6] == artifact['size'],
+                 'failed-start installed artifact differs')
+        before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
+    for original, current in zip(installed_plan['units'], plan['units'], strict=True):
+        need(original['after'] == current['before'] and original['after_sha256'] == current['before_sha256'],
+             'successor changed installed predecessor unit')
     return before, checkpoints
 
 
@@ -555,9 +683,15 @@ def apply(plan):
         after = base64.b64decode(row['after'], validate=True)
         need(replace_daemon(raw, row['role']) == after, 'unit changes exceed approved cmd[0]')
         snapshot = dict(retained[0][index])
-        compare_retained_identity(snapshot, retained_identity(row))
+        identity = retained_identity(row)
+        compare_retained_identity(snapshot, identity)
+        # Health stays the last completed observation. Unit metadata and the
+        # executable describe the installed release, which may have failed.
+        snapshot['unit_stamp'] = identity['unit_stamp']
+        if 'executable' in identity:
+            snapshot['executable'] = identity['executable']
         snapshot.pop('config_sha256', None)  # The exact retained metadata is checked; no private rehash.
-        need(snapshot['public']['commit'] == OLD, 'predecessor runtime differs')
+        need(snapshot['public']['commit'] == PREDECESSOR['commit'], 'predecessor runtime differs')
         before.append(snapshot)
         write_new(ATTEMPT / (row['role'] + '.before.service'), raw)
         write_new(ATTEMPT / (f'iroha3d-{row["role"]}.service'), after, snapshot['unit_stamp'][2] & 0o7777)

@@ -17535,6 +17535,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver.successor_activation_status()
     }
 
+    /// Retain the adapter's exact pending Decision for CompleteTip activation.
+    pub(in crate::sumeragi) fn recovered_successor_decision_activation_authority(
+        &mut self,
+    ) -> Result<Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>, AdapterError>
+    {
+        self.driver
+            .recovered_successor_decision_activation_authority()
+    }
+
     /// Snapshot an already-decided interrupted tip without arming successor clocks.
     pub(crate) fn pending_kura_activation_status_snapshot(
         &mut self,
