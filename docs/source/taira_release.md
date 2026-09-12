@@ -252,6 +252,10 @@ back, partial-install, or nested failed-recovery attempts are rejected by this
 specific recovery path. No failed deployment becomes accepted health evidence.
 Partial startup observations such as `after.json` remain diagnostic when a later
 check fails; only completion or rollback records exclude failed-start recovery.
+Probe failures identify the validator, endpoint and native exit code. Process
+observations include PID, invocation and restart count so an unavailable listener
+can be distinguished from a restarted worker without exposing response bodies,
+configuration or native error output.
 
 Validate this controller without Cargo or network:
 

@@ -571,6 +571,68 @@ class CoordinatorTests(unittest.TestCase):
                                       retained_tip=tip, timeout=5)
             self.assertEqual(now[0], 9)
 
+    def test_public_probe_errors_identify_role_endpoint_and_exit_without_native_content(self):
+        private = b'never expose this response, stderr or argv'
+        for route, code in (('/status', 7), ('/readyz', 22),
+                            ('/v1/accounts/faucet/puzzle', 28)):
+            with self.subTest(route=route, code=code), \
+                 patch.object(guest.subprocess, 'run', return_value=SimpleNamespace(
+                     returncode=code, stdout=private, stderr=private)):
+                with self.assertRaises(RuntimeError) as failure:
+                    guest.public_probe(2, route)
+                self.assertEqual(str(failure.exception),
+                                 f'public probe failed: role={guest.ROLES[2]} endpoint={route} curl_exit={code}')
+                self.assertNotIn(private.decode(), str(failure.exception))
+        with patch.object(guest.subprocess, 'run', side_effect=subprocess.TimeoutExpired(
+                ['curl', private.decode()], 10, output=private, stderr=private)):
+            with self.assertRaises(RuntimeError) as failure:
+                guest.public_probe(1, '/readyz')
+            self.assertEqual(str(failure.exception),
+                             f'public probe failed: role={guest.ROLES[1]} endpoint=/readyz timeout')
+        for response in (private, b'["never expose this response"]', b'\xffprivate'):
+            with self.subTest(response=response), \
+                 patch.object(guest, 'public_probe', return_value=response):
+                with self.assertRaises(RuntimeError) as failure:
+                    guest.public_get(0, '/status')
+                self.assertIn(f'role={guest.ROLES[0]} endpoint=/status', str(failure.exception))
+                self.assertNotIn('never expose', str(failure.exception))
+                self.assertNotIn('private', str(failure.exception))
+
+    def test_failed_http_observation_reports_process_restart_without_config_or_body(self):
+        old = {'ActiveState': 'active', 'SubState': 'running', 'ControlPID': '0',
+               'MainPID': '42', 'InvocationID': 'a' * 32, 'NRestarts': '0',
+               'Result': 'success', 'ExecMainStatus': '0'}
+        new = dict(old, MainPID='43', InvocationID='b' * 32, NRestarts='1',
+                   Result='exit-code', ExecMainStatus='1')
+        row = {'role': guest.ROLES[2], 'after': base64.b64encode(b'public unit').decode()}
+        argv = ['/fixed/daemon', '--config', '/owner-private/config.toml', '--sora']
+        private = b'never expose this diagnostic'
+        with patch.object(guest, 'systemd', side_effect=[old, new]), \
+             patch.object(guest, 'retained_identity', return_value={
+                 'role': row['role'], 'executable': argv[0]}), \
+             patch.object(guest, 'unit_command', return_value=argv), \
+             patch.object(Path, 'read_bytes', return_value='\0'.join(argv).encode()), \
+             patch.object(guest.os, 'readlink', return_value=argv[0]), \
+             patch.object(guest.subprocess, 'run', return_value=SimpleNamespace(
+                 returncode=7, stdout=private, stderr=private)):
+            with self.assertRaises(RuntimeError) as failure:
+                guest.observe(row, after=True)
+            message = str(failure.exception)
+            self.assertIn(f'role={row["role"]} endpoint=/status curl_exit=7', message)
+            self.assertIn('observed=ActiveState=active,SubState=running,MainPID=42', message)
+            self.assertIn('current=ActiveState=active,SubState=running,MainPID=43', message)
+            self.assertIn('NRestarts=1,Result=exit-code,ExecMainStatus=1', message)
+            self.assertNotIn(private.decode(), message)
+            self.assertNotIn(argv[2], message)
+        with patch.object(guest, 'systemd', return_value=dict(new, ActiveState='failed', SubState='failed')):
+            with self.assertRaisesRegex(RuntimeError, 'validator not running: taira-validator-3.*NRestarts=1'):
+                guest.observe(row, after=True)
+        summary = guest.process_summary(dict(new, Result='arbitrary diagnostic\nprivate token',
+                                             UnrequestedField=private.decode()))
+        self.assertIn('Result=invalid', summary)
+        self.assertNotIn('private', summary)
+        self.assertNotIn('UnrequestedField', summary)
+
     def test_cohort_target_is_highest_stopped_tip_and_rejects_conflicting_maximum(self):
         checkpoints = [{'role': role, 'kura_tip': {'height': height, 'hash': digest * 64}}
                        for role, height, digest in zip(guest.ROLES,

@@ -171,6 +171,13 @@ def record(name, value):
     write_new(ATTEMPT / name, (json.dumps(value, sort_keys=True) + '\n').encode())
 
 
+class NativeCommandFailure(RuntimeError):
+    """Expose a native exit code without copying stdout, stderr or argv."""
+    def __init__(self, label, exit_code):
+        self.exit_code = exit_code
+        super().__init__(f'native command failed: {label} (exit {exit_code})')
+
+
 def command(argv, *, timeout=60, name=None):
     # Output may contain native configuration diagnostics; retain it privately,
     # never include arbitrary stderr/config-related output in the public report.
@@ -180,7 +187,8 @@ def command(argv, *, timeout=60, name=None):
         write_new(ATTEMPT / (name + '.stdout'), result.stdout)
         write_new(ATTEMPT / (name + '.stderr'), result.stderr)
         record(name + '.result.json', {'exit_code': result.returncode})
-    need(result.returncode == 0, 'native command failed: ' + (name or Path(argv[0]).name))
+    if result.returncode != 0:
+        raise NativeCommandFailure(name or Path(argv[0]).name, result.returncode)
     return result.stdout
 
 
@@ -234,7 +242,7 @@ def replace_daemon(raw, role):
 def systemd(unit):
     names = ('LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlPID',
              'FragmentPath', 'DropInPaths', 'NeedDaemonReload', 'InvocationID', 'Job',
-             'Result', 'ExecMainCode', 'ExecMainStatus')
+             'Result', 'ExecMainCode', 'ExecMainStatus', 'NRestarts')
     raw = command(['/usr/bin/systemctl', 'show', '--all',
                    *['--property=' + name for name in names], unit], timeout=15)
     result = dict(line.split('=', 1) for line in raw.decode().splitlines())
@@ -246,21 +254,44 @@ def systemd(unit):
     return result
 
 
+def public_probe(index, route, *, name=None):
+    need(route in ('/status', '/v1/accounts/faucet/puzzle', '/readyz'),
+         'unexpected public probe route')
+    label = f'role={ROLES[index]} endpoint={route}'
+    accept = 'text/plain' if route == '/readyz' else 'application/json'
+    try:
+        return command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
+                        '-H', 'Accept: ' + accept, f'http://127.0.0.1:{PORTS[index]}{route}'],
+                       timeout=10, name=name)
+    except NativeCommandFailure as error:
+        raise RuntimeError(f'public probe failed: {label} curl_exit={error.exit_code}') from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f'public probe failed: {label} timeout') from None
+    except (RuntimeError, OSError):
+        raise RuntimeError(f'public probe failed: {label} native_probe_unavailable') from None
+
+
 def public_get(index, route):
-    raw = command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                   '-H', 'Accept: application/json', f'http://127.0.0.1:{PORTS[index]}{route}'], timeout=10)
-    need(len(raw) <= 2 * 1024 * 1024, 'public response exceeds bound')
-    return json.loads(raw)
+    raw = public_probe(index, route)
+    label = f'role={ROLES[index]} endpoint={route}'
+    need(len(raw) <= 2 * 1024 * 1024, 'public response exceeds bound: ' + label)
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise RuntimeError('public identity is not valid JSON: ' + label) from None
+    need(isinstance(value, dict), 'public identity is not an object: ' + label)
+    return value
 
 
 def public_identity(index):
     status = public_get(index, '/status')
     puzzle = public_get(index, '/v1/accounts/faucet/puzzle')
     need(puzzle.get('network_id') == NETWORK and puzzle.get('chain_discriminant') == 369,
-         'live NetworkId or Taira prefix changed')
+         f'live NetworkId or Taira prefix changed: role={ROLES[index]} endpoint=/v1/accounts/faucet/puzzle')
     build = status.get('build', {})
     height = status.get('blocks')
-    need(type(height) is int and height > 0, 'positive retained height missing')
+    need(isinstance(build, dict) and type(height) is int and height > 0,
+         f'public build identity or positive retained height missing: role={ROLES[index]} endpoint=/status')
     return {'network_id': puzzle['network_id'], 'height': height,
             'commit': build.get('git_commit_sha')}
 
@@ -286,10 +317,23 @@ def retained_identity(row, *, after=False):
             'current_target': os.readlink(selector), 'executable': expected_exe}
 
 
+def process_summary(props):
+    """Render only bounded systemd state fields, never native diagnostic text."""
+    fields = ('ActiveState', 'SubState', 'MainPID', 'InvocationID', 'NRestarts',
+              'Result', 'ExecMainStatus')
+    values = []
+    for key in fields:
+        value = props.get(key, 'unavailable')
+        safe = value if isinstance(value, str) and re.fullmatch('[A-Za-z0-9_-]{1,64}', value) else 'invalid'
+        values.append(key + '=' + safe)
+    return ','.join(values)
+
+
 def observe(row, *, after=False):
     props = systemd(f'iroha3d-{row["role"]}.service')
     need(props['ActiveState'] == 'active' and props['SubState'] == 'running'
-         and props['ControlPID'] == '0', 'validator not running: ' + row['role'])
+         and props['ControlPID'] == '0',
+         'validator not running: ' + row['role'] + ' ' + process_summary(props))
     pid = int(props['MainPID'])
     need(pid > 0, 'validator PID missing')
     identity = retained_identity(row, after=after)
@@ -298,9 +342,20 @@ def observe(row, *, after=False):
     need(actual == cmd, 'daemon argv differs: ' + row['role'])
     need(os.readlink(f'/proc/{pid}/exe') == identity['executable'],
          'daemon executable differs: ' + row['role'])
-    identity.update(systemd=props, public=public_identity(ROLES.index(row['role'])))
-    need(systemd(f'iroha3d-{row["role"]}.service') == props,
-         'validator changed during observation: ' + row['role'])
+    try:
+        public = public_identity(ROLES.index(row['role']))
+    except RuntimeError as error:
+        try:
+            current = systemd(f'iroha3d-{row["role"]}.service')
+        except (RuntimeError, OSError, subprocess.TimeoutExpired):
+            current = {}
+        raise RuntimeError(str(error) + '; observed=' + process_summary(props)
+                           + '; current=' + process_summary(current)) from None
+    identity.update(systemd=props, public=public)
+    current = systemd(f'iroha3d-{row["role"]}.service')
+    need(current == props,
+         'validator changed during observation: ' + row['role']
+         + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
     return identity
 
 
@@ -555,9 +610,13 @@ def verify_cohort_processes(observations, expected=None):
              and props['ControlPID'] == '0' and int(props['MainPID']) > 0
              and re.fullmatch('[0-9a-f]{32}', props['InvocationID'])
              and all(props[key] == original['systemd'][key]
-                     for key in ('MainPID', 'InvocationID'))
-             and systemd(f'iroha3d-{role}.service') == props,
-             'validator process changed across cohort verification: ' + role)
+                     for key in ('MainPID', 'InvocationID')),
+             'validator process changed across cohort verification: ' + role
+             + ' expected=' + process_summary(original['systemd'])
+             + '; observed=' + process_summary(props))
+        current = systemd(f'iroha3d-{role}.service')
+        need(current == props, 'validator process changed across cohort verification: ' + role
+             + ' observed=' + process_summary(props) + '; current=' + process_summary(current))
 
 
 def observe_cohort(rows, before, *, after, commit, retained_tip, expected_processes=None):
@@ -570,8 +629,7 @@ def observe_cohort(rows, before, *, after, commit, retained_tip, expected_proces
         require_retained_tip(new['role'], retained_tip)
     for row in rows:
         index = ROLES.index(row['role'])
-        command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                 '-H', 'Accept: text/plain', f'http://127.0.0.1:{PORTS[index]}/readyz'], timeout=10)
+        public_probe(index, '/readyz')
     verify_cohort_processes(observations, expected_processes)
     return observations
 
@@ -779,9 +837,7 @@ def apply(plan):
                     for row, checkpoint in zip(after, checkpoints, strict=True)]
         record('checkpoint-restored.json', restored)
         for index in range(4):
-            command(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '8',
-                     '-H', 'Accept: text/plain', f'http://127.0.0.1:{PORTS[index]}/readyz'],
-                    timeout=10, name=f'ready-{index+1}')
+            public_probe(index, '/readyz', name=f'ready-{index+1}')
         report = json.loads(command([CLI, 'taira', 'doctor',
                                      '--scope', 'basic', '--json', '--public-root', PUBLIC_ORIGIN],
                                     timeout=90, name='public-doctor'))
