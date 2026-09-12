@@ -444,6 +444,17 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_device_capabilities_v1
   connect_norito_kagemusha_device_execute_v1
   connect_norito_kagemusha_device_command_response_v1_verify
+  connect_norito_kagemusha_reserve_finality_hint_v1
+  connect_norito_kagemusha_reserve_finality_verify_v1
+  connect_norito_kagemusha_top_up_signed_request_validate_v1
+)
+
+RESERVE_FINALITY_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeHint
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate
 )
 
 REQUIRED_PROTOCOL_C_SYMBOLS=(
@@ -496,6 +507,13 @@ check_binary_symbols() {
       fail "$label is missing $symbol"
     fi
   done
+  if [[ "$nm_mode" == "elf" ]]; then
+    for symbol in "${RESERVE_FINALITY_JNI_SYMBOLS[@]}"; do
+      if ! grep -Fxq -- "$symbol" <<<"$symbols"; then
+        fail "$label is missing $symbol"
+      fi
+    done
+  fi
   for symbol in "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"; do
     if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
       fail "$label is missing $symbol"

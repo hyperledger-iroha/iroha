@@ -74,12 +74,19 @@ fn full_round(round: usize) -> bool {
 // six Option<Cell> entries per active job when equality copies are required. This clears owned
 // slots on success/error/unwind, not caller copies, field-operation temporaries or kernel memory.
 struct NativePoseidonBlockWitness<F: KagemushaPoseidonFieldV1> {
+    values: NativePoseidonBlockValues<F>,
+}
+
+// Only this private payload is Copy. The owning witness remains non-Copy and clears the
+// payload with zeroize's volatile default write and memory fence when it is dropped.
+#[derive(Clone, Copy)]
+struct NativePoseidonBlockValues<F: KagemushaPoseidonFieldV1> {
     endpoints: [[F; WIDTH]; 2 * MAX_LANES],
     state: [F; WIDTH],
 }
 
-impl<F: KagemushaPoseidonFieldV1> NativePoseidonBlockWitness<F> {
-    fn zeroed() -> Self {
+impl<F: KagemushaPoseidonFieldV1> Default for NativePoseidonBlockValues<F> {
+    fn default() -> Self {
         Self {
             endpoints: [[F::ZERO; WIDTH]; 2 * MAX_LANES],
             state: [F::ZERO; WIDTH],
@@ -87,18 +94,19 @@ impl<F: KagemushaPoseidonFieldV1> NativePoseidonBlockWitness<F> {
     }
 }
 
+impl<F: KagemushaPoseidonFieldV1> zeroize::DefaultIsZeroes for NativePoseidonBlockValues<F> {}
+
+impl<F: KagemushaPoseidonFieldV1> NativePoseidonBlockWitness<F> {
+    fn zeroed() -> Self {
+        Self {
+            values: NativePoseidonBlockValues::default(),
+        }
+    }
+}
+
 impl<F: KagemushaPoseidonFieldV1> Drop for NativePoseidonBlockWitness<F> {
     fn drop(&mut self) {
-        for value in self
-            .endpoints
-            .iter_mut()
-            .flatten()
-            .chain(self.state.iter_mut())
-        {
-            // SAFETY: exclusive initialized slots of the sealed Copy Pasta field implementations.
-            unsafe { std::ptr::write_volatile(value, F::ZERO) };
-        }
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+        zeroize::Zeroize::zeroize(&mut self.values);
         #[cfg(test)]
         BLOCK_WITNESS_CLEARS.with(|record| {
             let (count, all_zero) = record.get();
@@ -106,10 +114,11 @@ impl<F: KagemushaPoseidonFieldV1> Drop for NativePoseidonBlockWitness<F> {
                 count + 1,
                 all_zero
                     && self
+                        .values
                         .endpoints
                         .iter()
                         .flatten()
-                        .chain(self.state.iter())
+                        .chain(self.values.state.iter())
                         .all(|value| *value == F::ZERO),
             ));
         });
@@ -670,13 +679,13 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                         let job_index = block * self.lane_count + lane;
                         let job = self.jobs.get(job_index);
                         // The final unused lane still has the complete zero-input permutation.
-                        witness.state =
+                        witness.values.state =
                             job.map_or([F::ZERO; WIDTH], |job| job.input.map(|cell| *cell.value()));
-                        witness.endpoints[2 * lane] = witness.state;
+                        witness.values.endpoints[2 * lane] = witness.values.state;
                         for round in 0..=ROUNDS {
                             let row = block * PERMUTATION_ROWS + round;
                             for i in 0..WIDTH {
-                                let mut value = witness.state[i];
+                                let mut value = witness.values.state[i];
                                 if mutation
                                     == Some(NativePoseidonMutation::Trace {
                                         job: job_index,
@@ -697,12 +706,13 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                                 );
                             }
                             if round < ROUNDS {
-                                witness.state = self.spec.transition(witness.state, round);
+                                witness.values.state =
+                                    self.spec.transition(witness.values.state, round);
                             }
                         }
                         // Retain the computed endpoint, never the claimed job.output witness.
                         // Trace mutations affect assigned cells only, exactly as before.
-                        witness.endpoints[2 * lane + 1] = witness.state;
+                        witness.values.endpoints[2 * lane + 1] = witness.values.state;
                     }
                     for round in 0..PERMUTATION_ROWS {
                         let mut endpoint = None;
@@ -717,7 +727,8 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                         let mut value = F::ZERO;
                         if let Some((lane, output, column)) = endpoint {
                             let job_index = block * self.lane_count + lane;
-                            value = witness.endpoints[2 * lane + usize::from(output)][column];
+                            value =
+                                witness.values.endpoints[2 * lane + usize::from(output)][column];
                             if mutation
                                 == Some(NativePoseidonMutation::Bus {
                                     job: job_index,

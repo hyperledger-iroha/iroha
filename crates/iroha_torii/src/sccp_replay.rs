@@ -1278,12 +1278,11 @@ fn fetch_exact_three(
 }
 
 /// Settle every started replica worker before returning any creation or fetch failure.
-#[expect(
-    single_use_lifetimes,
-    reason = "a scoped handle inside impl Trait's associated type requires a named lifetime"
-)]
-fn join_replica_fetch_workers<'scope>(
-    workers: impl IntoIterator<
+fn join_replica_fetch_workers<'scope, Workers>(
+    workers: Workers,
+) -> Result<Vec<(File, usize)>, ToriiSccpReplayStartupErrorV1>
+where
+    Workers: IntoIterator<
         Item = std::io::Result<
             std::thread::ScopedJoinHandle<
                 'scope,
@@ -1291,7 +1290,7 @@ fn join_replica_fetch_workers<'scope>(
             >,
         >,
     >,
-) -> Result<Vec<(File, usize)>, ToriiSccpReplayStartupErrorV1> {
+{
     // Collect outcomes first: Result collection must not drop handles after an earlier error.
     workers
         .into_iter()

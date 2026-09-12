@@ -9,10 +9,19 @@ HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 PRIVACY_MODEL="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 HIJIRI_API="${ROOT_DIR}/crates/iroha_torii_shared/src/validation_fee_api.rs"
+RESERVE_FINALITY_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_reserve_finality_v1.rs"
 MODE="${1:-}"
 
 SELF_TESTS=(
+  --self-test-missing-top-up-binding-header
+  --self-test-missing-top-up-binding-rust
+  --self-test-bad-top-up-binding-width
+  --self-test-missing-top-up-binding-request
   --self-test-bad-abi
+  --self-test-missing-reserve-finality-header-symbol
+  --self-test-missing-reserve-finality-rust-symbol
+  --self-test-bad-reserve-finality-height-signature
+  --self-test-missing-reserve-finality-request-binding
   --self-test-missing-kagemusha-header-symbol
   --self-test-missing-kagemusha-rust-symbol
   --self-test-bad-kagemusha-signature
@@ -52,6 +61,7 @@ run_contract_check() {
   local parliament_rust="$5"
   local hijiri_api="$6"
   local private_settlement_rust="$7"
+  local reserve_finality_rust="$8"
 
   python3 - \
     "${rust_lib}" \
@@ -60,7 +70,8 @@ run_contract_check() {
     "${privacy_model}" \
     "${parliament_rust}" \
     "${hijiri_api}" \
-    "${private_settlement_rust}" <<'PY'
+    "${private_settlement_rust}" \
+    "${reserve_finality_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -72,6 +83,7 @@ privacy = Path(sys.argv[4]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[5]).read_text(encoding="utf-8")
 hijiri_api = Path(sys.argv[6]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[7]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[8]).read_text(encoding="utf-8")
 
 
 def require(pattern: str, text: str, label: str) -> None:
@@ -103,6 +115,9 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
+    "connect_norito_kagemusha_reserve_finality_hint_v1",
+    "connect_norito_kagemusha_reserve_finality_verify_v1",
+    "connect_norito_kagemusha_top_up_signed_request_validate_v1",
     "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
     "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
 }
@@ -604,6 +619,7 @@ make_negative_workspace() {
   cp "${RUST_LIB}" "${tmp}/lib.rs"
   cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
+  cp "${RESERVE_FINALITY_RUST}" "${tmp}/kagemusha_reserve_finality_v1.rs"
   cp "${PRIVACY_MODEL}" "${tmp}/privacy.rs"
   cp "${HIJIRI_API}" "${tmp}/validation_fee_api.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
@@ -621,7 +637,8 @@ expect_contract_rejection() {
       "${tmp}/privacy.rs" \
       "${tmp}/parliament_timed_ovn_ffi.rs" \
       "${tmp}/validation_fee_api.rs" \
-      "${tmp}/private_settlement_ffi.rs" 2>&1)"; then
+      "${tmp}/private_settlement_ffi.rs" \
+      "${tmp}/kagemusha_reserve_finality_v1.rs" 2>&1)"; then
     echo "[connect-norito-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -646,7 +663,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${PRIVACY_MODEL}" \
     "${PARLIAMENT_RUST}" \
     "${HIJIRI_API}" \
-    "${PRIVATE_SETTLEMENT_RUST}" >/dev/null
+    "${PRIVATE_SETTLEMENT_RUST}" \
+    "${RESERVE_FINALITY_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -654,6 +672,38 @@ if [[ "${MODE}" == --self-test-* ]]; then
   tmp_umbrella="${tmp}/NoritoBridge.h"
 
   case "${MODE}" in
+    --self-test-missing-reserve-finality-header-symbol)
+      replace_once "${tmp_header}" \
+        'connect_norito_kagemusha_reserve_finality_hint_v1' \
+        'removed_reserve_finality_hint_v1'
+      ;;
+    --self-test-missing-reserve-finality-rust-symbol)
+      replace_once "${tmp}/kagemusha_reserve_finality_v1.rs" \
+        'connect_norito_kagemusha_reserve_finality_verify_v1' \
+        'removed_reserve_finality_verify_v1'
+      ;;
+    --self-test-bad-reserve-finality-height-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_reserve_finality_verify_v1\s*\([^;]*?)uint64_t trusted_block_height' \
+        '\g<1>uint32_t trusted_block_height'
+      ;;
+    --self-test-missing-reserve-finality-request-binding)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_reserve_finality_verify_v1\s*\([^;]*?)const uint8_t\* expected_request,\s*unsigned long expected_request_len,\s*' \
+        '\g<1>'
+      ;;
+    --self-test-missing-top-up-binding-header)
+      replace_once "${tmp_header}" 'connect_norito_kagemusha_top_up_signed_request_validate_v1' 'removed_top_up_binding_v1'
+      ;;
+    --self-test-missing-top-up-binding-rust)
+      replace_once "${tmp}/kagemusha_reserve_finality_v1.rs" 'connect_norito_kagemusha_top_up_signed_request_validate_v1' 'removed_top_up_binding_v1'
+      ;;
+    --self-test-bad-top-up-binding-width)
+      replace_regex_once "${tmp_header}" '(connect_norito_kagemusha_top_up_signed_request_validate_v1\s*\([^;]*?)unsigned long signed_transaction_len' '\g<1>uint32_t signed_transaction_len'
+      ;;
+    --self-test-missing-top-up-binding-request)
+      replace_regex_once "${tmp_header}" '(connect_norito_kagemusha_top_up_signed_request_validate_v1\s*\([^;]*?),\s*const uint8_t \*expected_request_ptr, unsigned long expected_request_len' '\g<1>'
+      ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23" \
@@ -806,5 +856,6 @@ run_contract_check \
   "${PRIVACY_MODEL}" \
   "${PARLIAMENT_RUST}" \
   "${HIJIRI_API}" \
-  "${PRIVATE_SETTLEMENT_RUST}"
+  "${PRIVATE_SETTLEMENT_RUST}" \
+  "${RESERVE_FINALITY_RUST}"
 compile_header

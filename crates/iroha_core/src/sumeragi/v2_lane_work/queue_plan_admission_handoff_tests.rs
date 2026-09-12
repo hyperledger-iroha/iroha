@@ -298,9 +298,12 @@ fn queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_co
     );
     let future_certificate_hash = Hash::new(&future);
     assert_queue_plan_kura_source(&adapter, &future);
-    adapter
-        .refresh_merge_candidates(0)
-        .expect("defer durable Future");
+    assert_eq!(
+        adapter
+            .refresh_merge_candidates(0)
+            .expect("defer durable Future"),
+        MergeRefreshOutcome::Deferred
+    );
     assert!(adapter.drain_effects(usize::MAX).is_empty());
     assert_queue_plan_kura_source(&adapter, &future);
     {

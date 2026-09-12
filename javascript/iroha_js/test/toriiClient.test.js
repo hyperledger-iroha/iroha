@@ -22366,6 +22366,19 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
     draftIntent,
   };
   const cases = [
+    ...[0, 2].map((admissionIntent) => [
+      `rehashed admission intent ${admissionIntent}`,
+      (value) => {
+        const replacement = Buffer.alloc(4);
+        replacement.writeUInt32LE(admissionIntent);
+        Object.assign(value, draftWithReplacedTransactionField(draft, 7, replacement));
+      },
+      (error) => {
+        assert.match(error.message, /one canonical transaction payload/);
+        assert.match(error.cause?.message ?? "", /TransactionAdmissionIntent::QueuePlanSynced/);
+        return true;
+      },
+    ]),
     [
       "colluding Ordinary admission",
       (value) => {

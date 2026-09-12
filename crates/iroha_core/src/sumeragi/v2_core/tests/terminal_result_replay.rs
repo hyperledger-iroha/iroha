@@ -123,6 +123,159 @@ fn same_view_generation_change_can_replay_validation_into_current_commit_vote() 
     }] if *tag == current && vote.round() == round && vote.phase() == Phase::Commit));
 }
 
+#[test]
+fn historical_locked_validation_rejection_reports_once_live_and_after_replay() {
+    for cold in [false, true] {
+        let context = context();
+        let local = context.leader(1);
+        let subject = Subject::repeat(0xA8);
+        let round = Round::new(context.height(), 0);
+        let high = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+        let timeout = tc_with_high(&context, 0, high.clone(), &[1, 2, 3]);
+        let generation = Generation::new(12);
+        let mut reducer =
+            Reducer::new(context.clone(), Some(local), generation).expect("four-validator reducer");
+        let entry = only_persist(
+            reducer
+                .step(Event::TimeoutCertificateReceived {
+                    tag: reducer.current_tag(),
+                    certificate: timeout,
+                })
+                .expect("persist the timeout carrying the exact historical certificate"),
+        );
+        acknowledge(&mut reducer, &entry);
+        if cold {
+            reducer = Reducer::recover(context.clone(), Some(local), generation, [entry])
+                .expect("recover only the actual complete timeout frame");
+            reducer
+                .step(Event::ResumeAfterReplay {
+                    tag: reducer.current_tag(),
+                })
+                .expect("resume the retained historical body");
+        }
+        assert_eq!(reducer.current_tag().view(), 1);
+        assert_eq!(reducer.durable_state().locked(), Some(&high));
+        let tag = reducer.current_tag();
+        reducer
+            .step(Event::BodyAvailable {
+                tag,
+                round,
+                subject,
+            })
+            .expect("the historical locked body is available");
+        let stored = reducer
+            .step(Event::BodyStored {
+                tag,
+                round,
+                subject,
+            })
+            .expect("the exact retained body is durable");
+        assert!(
+            matches!(stored.effects(), [Effect::ValidateBody { round: actual, subject: body, .. }]
+            if *actual == round && *body == subject)
+        );
+        let durable_before = reducer.durable_state().clone();
+        let event = Event::ValidationCompleted {
+            tag,
+            round,
+            subject,
+            valid: false,
+        };
+        let rejected = reducer
+            .step(event.clone())
+            .expect("report the exact historical rejection");
+        assert_eq!(rejected.disposition(), StepDisposition::Applied);
+        assert!(
+            matches!(rejected.effects(), [Effect::ReportInvalidCertifiedBody {
+            subject: actual_subject, certificate,
+        }] if *actual_subject == subject && certificate == &high)
+        );
+        assert_eq!(reducer.body_state(round, subject), BodyState::Invalid);
+        assert_eq!(reducer.durable_state(), &durable_before);
+        assert!(reducer.pending_persistence_record().is_none());
+        assert!(reducer.awaiting_signature().is_none());
+        let duplicate = reducer.step(event).expect("duplicate outcome is inert");
+        assert_eq!(
+            duplicate.disposition(),
+            StepDisposition::Ignored(IgnoreReason::Duplicate)
+        );
+        assert!(duplicate.effects().is_empty());
+        assert_eq!(reducer.durable_state(), &durable_before);
+    }
+}
+
+#[test]
+fn historical_lock_cannot_report_an_uncertified_later_proposal_of_the_same_body() {
+    let context = context();
+    let local = context.leader(1);
+    let subject = Subject::repeat(0xA9);
+    let high = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let timeout = tc_with_high(&context, 0, high.clone(), &[1, 2, 3]);
+    let mut reducer = Reducer::new(context.clone(), Some(local), Generation::new(12))
+        .expect("four-validator reducer");
+    let entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: timeout.clone(),
+            })
+            .expect("persist the historical lock"),
+    );
+    acknowledge(&mut reducer, &entry);
+    let tag = reducer.current_tag();
+    let round = Round::new(context.height(), 1);
+    let received = reducer
+        .step(Event::ProposalReceived {
+            tag,
+            proposal: proposal(
+                &context,
+                1,
+                subject,
+                ProposalJustification::Timeout(timeout),
+            ),
+        })
+        .expect("the current leader reproposes the locked body in a different round");
+    assert!(received.effects().iter().any(|effect| matches!(effect,
+        Effect::FetchBody { round: actual, subject: body, .. } if *actual == round && *body == subject)));
+    reducer
+        .step(Event::BodyAvailable {
+            tag,
+            round,
+            subject,
+        })
+        .expect("the current ordinary body is available");
+    let stored = reducer
+        .step(Event::BodyStored {
+            tag,
+            round,
+            subject,
+        })
+        .expect("the current ordinary body reaches validation");
+    assert!(
+        matches!(stored.effects(), [Effect::ValidateBody { round: actual, subject: body, .. }]
+        if *actual == round && *body == subject)
+    );
+    let durable_before = reducer.durable_state().clone();
+    let rejected = reducer
+        .step(Event::ValidationCompleted {
+            tag,
+            round,
+            subject,
+            valid: false,
+        })
+        .expect("reject the uncertified current proposal");
+    assert_eq!(rejected.disposition(), StepDisposition::Applied);
+    assert!(
+        rejected.effects().is_empty(),
+        "a same-subject lock at another round cannot authorize this report"
+    );
+    assert_eq!(reducer.body_state(round, subject), BodyState::Invalid);
+    assert_eq!(reducer.durable_state(), &durable_before);
+    assert_eq!(reducer.durable_state().locked(), Some(&high));
+    assert!(reducer.pending_persistence_record().is_none());
+    assert!(reducer.awaiting_signature().is_none());
+}
+
 // A TC's authenticated lock survives the volatile pending-Prepare census.
 #[test]
 fn timeout_locked_prepare_rejection_reports_exact_certificate_once() {
@@ -132,12 +285,8 @@ fn timeout_locked_prepare_rejection_reports_exact_certificate_once() {
     let proposal_round = Round::new(context.height(), 1);
     let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
     let timeout = tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]);
-    let mut reducer = Reducer::new(
-        context.clone(),
-        Some(context.leader(1)),
-        Generation::new(0),
-    )
-    .expect("four-validator reducer");
+    let mut reducer = Reducer::new(context.clone(), Some(context.leader(1)), Generation::new(0))
+        .expect("four-validator reducer");
     let install = only_persist(
         reducer
             .step(Event::TimeoutCertificateReceived {
@@ -168,10 +317,18 @@ fn timeout_locked_prepare_rejection_reports_exact_certificate_once() {
             if *round == proposal_round && *actual == subject)));
     for round in [proposal_round, locked_round] {
         reducer
-            .step(Event::BodyAvailable { tag, round, subject })
+            .step(Event::BodyAvailable {
+                tag,
+                round,
+                subject,
+            })
             .expect("the exact body is available");
         let stored = reducer
-            .step(Event::BodyStored { tag, round, subject })
+            .step(Event::BodyStored {
+                tag,
+                round,
+                subject,
+            })
             .expect("the exact body becomes durable");
         assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
         let rejected = reducer
@@ -183,17 +340,31 @@ fn timeout_locked_prepare_rejection_reports_exact_certificate_once() {
             })
             .expect("deterministic body rejection");
         if round == locked_round {
-            assert_eq!(rejected.effects(), &[Effect::ReportInvalidCertifiedBody {
-                subject,
-                certificate: prepare.clone(),
-            }]);
+            assert_eq!(
+                rejected.effects(),
+                &[Effect::ReportInvalidCertifiedBody {
+                    subject,
+                    certificate: prepare.clone(),
+                }]
+            );
         } else {
-            assert!(rejected.effects().is_empty(), "a different proposal has no matching Prepare authority");
+            assert!(
+                rejected.effects().is_empty(),
+                "a different proposal has no matching Prepare authority"
+            );
         }
         let duplicate = reducer
-            .step(Event::ValidationCompleted { tag, round, subject, valid: false })
+            .step(Event::ValidationCompleted {
+                tag,
+                round,
+                subject,
+                valid: false,
+            })
             .expect("the terminal rejection is retained");
-        assert_eq!(duplicate.disposition(), StepDisposition::Ignored(IgnoreReason::Duplicate));
+        assert_eq!(
+            duplicate.disposition(),
+            StepDisposition::Ignored(IgnoreReason::Duplicate)
+        );
         assert!(duplicate.effects().is_empty());
     }
 }

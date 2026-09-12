@@ -3886,6 +3886,141 @@ mod app_api_transaction_signing_tests {
             other => panic!("expected conversion error, got {other:?}"),
         }
     }
+    const CONTRACT_CALL_RESPONSE_FIELDS: [&str; 15] = [
+        "ok", "submitted", "dataspace", "contract_address", "code_hash_hex", "abi_hash_hex",
+        "creation_time_ms", "transaction_ttl_ms", "tx_hash_hex", "pipeline_status",
+        "entrypoint_hash_hex", "transaction_payload_b64", "signing_message_b64", "entrypoint",
+        "operation_receipt",
+    ];
+    const OPERATION_RECEIPT_FIELDS: [&str; 15] = [
+        "operation_kind", "status", "transport", "dataspace", "contract_alias", "contract_address",
+        "code_hash_hex", "abi_hash_hex", "tx_hash_hex", "entrypoint", "entrypoint_hash_hex",
+        "gas_limit", "gas_used", "fee_payment", "payload_digest_hex",
+    ];
+    fn contract_call_response_fixture() -> ContractCallResponseDto {
+        let network = routing_test_network_id(0x34);
+        let authority = iroha_test_samples::ALICE_ID.clone();
+        let address = iroha_data_model::smart_contract::ContractAddress::derive(
+            &network, &authority, 7, DataSpaceId::UNIVERSAL,
+        ).expect("derive contract response fixture address");
+        let code_hash = Hash::new(b"contract response fixture code");
+        let code_hash_hex = hex::encode(code_hash.as_ref());
+        let abi_hash_hex = hex::encode(Hash::new(b"contract response fixture ABI").as_ref());
+        let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(), std::num::NonZeroU64::new(5_000),
+        );
+        let mut builder = TransactionBuilder::new(network, authority, fee_payment.clone())
+            .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address: address.clone(), expected_code_hash: code_hash,
+                    entrypoint: "ping".to_owned(), arguments: None,
+                },
+            ));
+        builder.set_creation_time(Duration::from_millis(42));
+        let draft = app_api_transaction_draft(&builder);
+        let receipt = contract_call_operation_receipt(ContractCallReceiptInput {
+            status: "pending_signature", dataspace: "0", contract_alias: None,
+            contract_address: &address, code_hash_hex: &code_hash_hex, abi_hash_hex: &abi_hash_hex,
+            tx_hash_hex: None, entrypoint: Some("ping".to_owned()), entrypoint_hash_hex: None,
+            gas_limit: 5_000, fee_payment, payload_digest_hex: &contract_payload_digest_hex(None),
+        });
+        ContractCallResponseDto {
+            ok: true, submitted: false, dataspace: "0".to_owned(), contract_address: Some(address),
+            code_hash_hex, abi_hash_hex, creation_time_ms: 42, transaction_ttl_ms: None,
+            tx_hash_hex: None, pipeline_status: None, entrypoint_hash_hex: None,
+            transaction_payload_b64: Some(draft.transaction_payload_b64),
+            signing_message_b64: Some(draft.signing_message_b64), entrypoint: Some("ping".to_owned()),
+            operation_receipt: receipt,
+        }
+    }
+    fn assert_exact_response_fields(value: &Value, fields: &[&str]) {
+        let object = value.as_object().expect("response JSON object");
+        assert_eq!(object.len(), fields.len());
+        for field in fields {
+            assert!(object.contains_key(*field), "missing response field {field}");
+        }
+    }
+    routing_test! { sync contract_call_prepare_response_serializes_required_null_fields
+        let response = contract_call_response_fixture();
+        let value = norito::json::to_value(&response).expect("serialize actual prepare DTO");
+        assert_exact_response_fields(&value, &CONTRACT_CALL_RESPONSE_FIELDS);
+        assert_exact_response_fields(&value["operation_receipt"], &OPERATION_RECEIPT_FIELDS);
+        assert_eq!(value["submitted"].as_bool(), Some(false));
+        for field in ["transaction_ttl_ms", "tx_hash_hex", "pipeline_status", "entrypoint_hash_hex"] {
+            assert!(value[field].is_null(), "prepare field {field} must be explicit null");
+        }
+        for field in ["contract_alias", "tx_hash_hex", "entrypoint_hash_hex", "gas_used"] {
+            assert!(value["operation_receipt"][field].is_null(), "receipt field {field} must be explicit null");
+        }
+        assert_eq!(value["transaction_payload_b64"].as_str(), response.transaction_payload_b64.as_deref());
+        assert_eq!(value["signing_message_b64"].as_str(), response.signing_message_b64.as_deref());
+        assert_eq!(value["operation_receipt"]["status"].as_str(), Some("pending_signature"));
+    }
+    routing_test! { sync contract_call_submitted_response_preserves_present_status_and_null_draft
+        let mut response = contract_call_response_fixture();
+        let tx_hash = hex::encode(Hash::new(b"submitted contract response fixture").as_ref());
+        response.submitted = true;
+        response.transaction_ttl_ms = Some(60_000);
+        response.tx_hash_hex = Some(tx_hash.clone());
+        response.entrypoint_hash_hex = Some(tx_hash.clone());
+        response.pipeline_status = Some(queued_pipeline_status_response(tx_hash.clone()));
+        response.transaction_payload_b64 = None;
+        response.signing_message_b64 = None;
+        response.operation_receipt.status = "submitted".to_owned();
+        response.operation_receipt.tx_hash_hex = Some(tx_hash.clone());
+        response.operation_receipt.entrypoint_hash_hex = Some(tx_hash.clone());
+        let value = norito::json::to_value(&response).expect("serialize actual submitted DTO");
+        assert_exact_response_fields(&value, &CONTRACT_CALL_RESPONSE_FIELDS);
+        assert_exact_response_fields(&value["operation_receipt"], &OPERATION_RECEIPT_FIELDS);
+        assert_eq!(value["submitted"].as_bool(), Some(true));
+        assert_eq!(value["transaction_ttl_ms"].as_u64(), Some(60_000));
+        assert_eq!(value["pipeline_status"], norito::json::to_value(
+            &queued_pipeline_status_response(tx_hash.clone())
+        ).expect("serialize queued status"));
+        for field in ["tx_hash_hex", "entrypoint_hash_hex"] {
+            assert_eq!(value[field].as_str(), Some(tx_hash.as_str()));
+            assert_eq!(value["operation_receipt"][field], value[field]);
+        }
+        for field in ["transaction_payload_b64", "signing_message_b64"] {
+            assert!(value[field].is_null(), "submitted field {field} must be explicit null");
+        }
+        let receipt: OperationReceiptDto = norito::json::from_value(value["operation_receipt"].clone())
+            .expect("decode present receipt fields");
+        assert_eq!(norito::json::to_value(&receipt).expect("re-encode receipt"), value["operation_receipt"]);
+    }
+    routing_test! { sync contract_operation_receipt_requires_closed_nullable_fields
+        let mut receipt = contract_call_response_fixture().operation_receipt;
+        receipt.contract_alias = None;
+        receipt.contract_address = None;
+        receipt.code_hash_hex = None;
+        receipt.abi_hash_hex = None;
+        receipt.tx_hash_hex = None;
+        receipt.entrypoint = None;
+        receipt.entrypoint_hash_hex = None;
+        receipt.gas_limit = None;
+        receipt.gas_used = None;
+        receipt.fee_payment = None;
+        let value = norito::json::to_value(&receipt).expect("serialize actual nullable receipt DTO");
+        assert_exact_response_fields(&value, &OPERATION_RECEIPT_FIELDS);
+        for field in &OPERATION_RECEIPT_FIELDS[4..14] {
+            assert!(value[*field].is_null(), "nullable receipt field {field} must be explicit null");
+        }
+        let decoded: OperationReceiptDto = norito::json::from_value(value.clone())
+            .expect("required nullable fields accept explicit null");
+        assert_eq!(norito::json::to_value(&decoded).expect("re-encode receipt"), value);
+        for field in OPERATION_RECEIPT_FIELDS {
+            let mut missing = value.clone();
+            assert!(missing.as_object_mut().expect("receipt object").remove(field).is_some());
+            let error = norito::json::from_value::<OperationReceiptDto>(missing)
+                .expect_err("missing receipt field must fail").to_string();
+            assert!(error.contains(field) && error.contains("missing field"), "{field}: {error}");
+        }
+        let mut unknown = value;
+        unknown.as_object_mut().expect("receipt object").insert("unsupported".to_owned(), Value::Null);
+        let error = norito::json::from_value::<OperationReceiptDto>(unknown)
+            .expect_err("unknown receipt field must fail").to_string();
+        assert!(error.contains("unsupported") && error.contains("unknown field"), "{error}");
+    }
     routing_test! { sync app_api_fixture_keypair_uses_checked_seed_derivation
         let seed = b"iroha:torii:routing:test:app-api-transaction-signing".to_vec();
         let key_pair = checked_app_api_fixture_keypair(
@@ -17537,7 +17672,11 @@ pub(crate) fn prepare_contract_call_request(
         normalized_payload.as_ref(),
     );
     let metadata = merge_contract_call_metadata(caller_metadata, system_metadata)?;
-    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+    // Match the clock used by Core admission; detached signatures retain their exact timestamp.
+    let creation_time_ms = match creation_time_ms {
+        Some(value) => value,
+        None => network_time_ms()?,
+    };
     let mut builder = dm::TransactionBuilder::new(
         *state.network_id_ref(),
         authority.clone().into(),
@@ -25016,6 +25155,8 @@ mod multisig_selector_tests {
         transaction.verify_signature().expect("retained signature verifies");
         assert_eq!(transaction, builder.clone().try_sign(key.private_key()).expect("exact expected signature"));
         assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        assert_eq!(transaction.creation_time(), Duration::from_millis(prepared.response.creation_time_ms));
+        assert_eq!(builder.payload().creation_time_ms, prepared.response.creation_time_ms);
         assert!(!prepared.response.submitted, "preparation cannot claim public admission");
         assert!(prepared.response.pipeline_status.is_none());
         assert_eq!(prepared.response.operation_receipt.fee_payment.as_ref(), Some(&builder.payload().fee_payment));
@@ -25147,6 +25288,93 @@ mod multisig_selector_tests {
         assert_eq!(response.headers()[axum::http::header::CONTENT_TYPE], "application/json");
         assert_eq!(decode_json_response(response).await, value);
         assert_eq!(queue.active_len(), 0, "preparation never admits a transaction");
+    }
+    routing_test! { async contract_call_default_time_matches_network_admission_with_strict_drift_and_ttl
+        use iroha_core::tx::AcceptedTransaction;
+        use iroha_primitives::time::TimeSource;
+
+        let keypair = checked_multisig_selector_keypair(
+            0x6c, "derive contract-call network-time fixture key",
+        );
+        let authority = dm::AccountId::new(keypair.public_key().clone());
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = build_state(World::with([], [account], []));
+        let address = derived_universal_contract_address(&authority, 1);
+        install_contract_instance(state.as_ref(), &authority, &keypair, &address);
+        let queue = build_queue();
+        let request = ContractCallDto {
+            authority,
+            public_key_hex: None,
+            signature_b64: None,
+            transaction_payload_b64: None,
+            contract_address: Some(address),
+            contract_alias: None,
+            entrypoint: "main".to_owned(),
+            payload: None,
+            metadata: Metadata::default(),
+            creation_time_ms: None,
+            transaction_ttl_ms: Some(60_000),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(), NonZeroU64::new(10_000),
+            ),
+        };
+        let before_ms = network_time_ms().expect("network time before preparation");
+        let prepared = prepare_contract_call_request(
+            queue.clone(), state.clone(), request,
+        ).expect("prepare with the admission clock");
+        assert!(prepared.transaction.is_none(), "unsigned request returns a draft");
+        let response = prepared.response;
+        let after_ms = network_time_ms().expect("network time after preparation");
+        assert!((before_ms..=after_ms).contains(&response.creation_time_ms));
+        let bytes = base64::engine::general_purpose::STANDARD.decode(
+            response.transaction_payload_b64.as_deref().expect("prepared payload"),
+        ).expect("canonical payload base64");
+        let builder = TransactionBuilder::decode_payload(&bytes).expect("prepared builder");
+        assert_eq!(builder.encode_payload(), bytes);
+        assert_eq!(builder.payload().creation_time_ms, response.creation_time_ms);
+        assert_eq!(builder.payload().admission_intent(),
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        let signing_message = base64::engine::general_purpose::STANDARD.decode(
+            response.signing_message_b64.as_deref().expect("signing message"),
+        ).expect("canonical signing message base64");
+        assert_eq!(signing_message, builder.payload_hash_bytes());
+
+        // Fix the envelope clock without changing the process-wide NTS service or policy.
+        let network_now = Duration::from_millis(response.creation_time_ms);
+        let clock = TimeSource::new_fixed(network_now);
+        let max_clock_drift = Duration::from_millis(1_000);
+        let limits = iroha_data_model::parameter::TransactionParameters::default();
+        let crypto = iroha_config::parameters::actual::Crypto::default();
+        let accept = |tx, source: &TimeSource| AcceptedTransaction::accept_with_time_source(
+            tx, state.network_id_ref(), max_clock_drift, limits, &crypto, source,
+        );
+        let signed = builder.clone().try_sign(keypair.private_key()).expect("sign exact draft");
+        let accepted = accept(signed.clone(), &clock).expect("network-time draft passes admission");
+        assert_eq!(accepted.external(), Some(&signed));
+        assert_eq!(accepted.creation_time(), network_now);
+        assert_eq!(signed.creation_time(), network_now);
+
+        // A wall clock ahead of admission by more than the governed drift recreates the
+        // rejected envelope without moving either global clock or weakening its checks.
+        let mut ahead = builder.clone();
+        ahead.set_creation_time(network_now + max_clock_drift + Duration::from_millis(1));
+        let ahead = ahead.try_sign(keypair.private_key()).expect("sign simulated wall-time draft");
+        assert_eq!(
+            accept(ahead, &clock).expect_err("one millisecond beyond the drift bound is rejected"),
+            AcceptTransactionFail::TransactionInTheFuture {
+                creation_time_ms: (network_now + max_clock_drift + Duration::from_millis(1)).as_millis(),
+                now_ms: network_now.as_millis(),
+                max_clock_drift_ms: max_clock_drift.as_millis(),
+            },
+        );
+        let mut boundary = builder;
+        boundary.set_creation_time(network_now + max_clock_drift);
+        accept(boundary.try_sign(keypair.private_key()).expect("sign drift-boundary draft"), &clock)
+            .expect("the exact permitted drift boundary remains accepted");
+        let expired_clock = TimeSource::new_fixed(network_now + Duration::from_millis(60_001));
+        assert!(matches!(accept(signed, &expired_clock),
+            Err(AcceptTransactionFail::TransactionExpired { .. })));
+        assert_eq!(queue.active_len(), 0, "envelope validation is not certified admission");
     }
     routing_test! { async contract_call_rejects_missing_target
         let authority =
@@ -30603,6 +30831,7 @@ pub struct ContractCallSimulateDto {
 }
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Public, normalized evidence for a contract operation.
+#[norito(deny_unknown_fields)]
 pub struct OperationReceiptDto {
     /// Operation category, for example `contract_call` or `contract_deploy`.
     pub operation_kind: String,
@@ -30613,34 +30842,34 @@ pub struct OperationReceiptDto {
     /// Dataspace targeted by the operation.
     pub dataspace: String,
     /// Optional contract alias used for the operation.
-    #[norito(default)]
+    #[norito(required)]
     pub contract_alias: Option<String>,
     /// Optional canonical contract address.
-    #[norito(default)]
+    #[norito(required)]
     pub contract_address: Option<String>,
     /// Optional code hash of the deployed or invoked artifact.
-    #[norito(default)]
+    #[norito(required)]
     pub code_hash_hex: Option<String>,
     /// Optional ABI hash of the deployed or invoked artifact.
-    #[norito(default)]
+    #[norito(required)]
     pub abi_hash_hex: Option<String>,
     /// Optional submitted transaction hash.
-    #[norito(default)]
+    #[norito(required)]
     pub tx_hash_hex: Option<String>,
     /// Optional contract entrypoint for calls.
-    #[norito(default)]
+    #[norito(required)]
     pub entrypoint: Option<String>,
     /// Optional transaction entrypoint hash.
-    #[norito(default)]
+    #[norito(required)]
     pub entrypoint_hash_hex: Option<String>,
     /// Optional gas limit attached to the operation.
-    #[norito(default)]
+    #[norito(required)]
     pub gas_limit: Option<u64>,
     /// Optional gas actually consumed when available.
-    #[norito(default)]
+    #[norito(required)]
     pub gas_used: Option<u64>,
     /// Exact signature-bound fee payment used by this transaction.
-    #[norito(default)]
+    #[norito(required)]
     pub fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
     /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
@@ -30663,7 +30892,7 @@ pub struct ContractCallResponseDto {
     pub abi_hash_hex: String,
     /// Creation timestamp used for the transaction payload.
     pub creation_time_ms: u64,
-    /// Optional transaction time-to-live in milliseconds embedded in the payload.
+    /// Optional request TTL override in milliseconds; otherwise the payload uses the builder default.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
     /// Hex-encoded transaction hash submitted to the queue.

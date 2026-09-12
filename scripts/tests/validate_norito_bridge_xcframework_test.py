@@ -332,6 +332,27 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
             self.validate()
 
+    def test_rejects_manifest_missing_top_up_request_binding(self) -> None:
+        self.payload["required_symbols"] = [symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+            if symbol != "connect_norito_kagemusha_top_up_signed_request_validate_v1"]
+        self.write_manifest()
+        with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+            self.validate()
+
+    def test_rejects_manifests_missing_either_reserve_finality_export(self) -> None:
+        for missing in (
+            "connect_norito_kagemusha_reserve_finality_hint_v1",
+            "connect_norito_kagemusha_reserve_finality_verify_v1",
+        ):
+            with self.subTest(missing=missing):
+                self.payload["required_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                    if symbol != missing
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
+
     def test_repository_provenance_rejects_dirty_source_without_allowance(self) -> None:
         self.payload["source_tree_dirty"] = True
         self.write_manifest()

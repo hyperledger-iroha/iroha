@@ -2728,3 +2728,53 @@ test("NexusAppClient rejects a delegated waiter that returns before Applied", as
     },
   );
 });
+
+test("NexusAppClient rejects valid multisig and non-Ed25519 approval accounts", async () => {
+  const vectors = JSON.parse(
+    readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"),
+  );
+  const multisigVector = vectors.cases.positive.find(
+    (vector) => vector.case_id === "addr-multisig-council-threshold3",
+  );
+  assert.ok(multisigVector);
+  const multisig = AccountAddress.fromI105(multisigVector.encodings.i105.string);
+  assert.deepEqual(
+    Buffer.from(multisig.canonicalBytes()),
+    Buffer.from(multisigVector.encodings.canonical_hex.replace(/^0x/u, ""), "hex"),
+  );
+  const secp256k1 = AccountAddress.fromAccount({
+    algorithm: "secp256k1",
+    publicKey: Buffer.from(
+      readFileSync(new URL("../../../fixtures/account/secp256k1_public_key.hex", import.meta.url), "utf8").trim(),
+      "hex",
+    ),
+  });
+  for (const [kind, address] of [["multisig", multisig], ["secp256k1", secp256k1]]) {
+    const accountId = address.toI105(fixtureChainDiscriminant);
+    assert.deepEqual(
+      Buffer.from(AccountAddress.fromI105(accountId).canonicalBytes()),
+      Buffer.from(address.canonicalBytes()),
+      `${kind}: native-admitted canonical account`,
+    );
+    let approvalCalls = 0;
+    const client = new NexusAppClient({
+      chainDiscriminant: fixtureChainDiscriminant,
+      connectTransport: {
+        awaitApproval() {
+          approvalCalls += 1;
+          return { accountId };
+        },
+      },
+    });
+    await assert.rejects(
+      () => client.awaitApproval({ sid: "controller-variants" }),
+      (error) => {
+        assert.ok(error instanceof NexusAppError, kind);
+        assert.equal(error.code, "missing_signing_public_key", kind);
+        assert.equal(error.message, "approved account must be a canonical single-key Ed25519 I105 account", kind);
+        return true;
+      },
+    );
+    assert.equal(approvalCalls, 1, kind);
+  }
+});

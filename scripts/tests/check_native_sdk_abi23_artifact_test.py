@@ -42,6 +42,9 @@ KAGEMUSHA_V1_C_SYMBOLS = {
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
+    "connect_norito_kagemusha_reserve_finality_hint_v1",
+    "connect_norito_kagemusha_reserve_finality_verify_v1",
+    "connect_norito_kagemusha_top_up_signed_request_validate_v1",
 }
 RETIRED_KAGEMUSHA_C_PREFIX = (
     "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
@@ -49,7 +52,7 @@ RETIRED_KAGEMUSHA_C_PREFIX = (
 
 
 def test_native_c_contracts_require_complete_kagemusha_v1() -> None:
-    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 25
+    assert len(KAGEMUSHA_V1_C_SYMBOLS) == 28
     for sdk in ("c-jni", "csharp"):
         required = [
             symbol for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -103,6 +106,23 @@ def test_coordinator_jni_requires_the_kotlin_sdk_owner() -> None:
     assert not any(retired in symbol for symbol in required)
 
 
+def test_reserve_finality_rejects_each_missing_kotlin_jni_endpoint() -> None:
+    required = MODULE.REQUIRED_SYMBOLS["c-jni"]
+    for method in ("nativeBridgeAbiVersion", "nativeHint", "nativeVerify"):
+        missing = "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_" + method
+        assert missing in required
+        library = types.SimpleNamespace(**{
+            symbol: object() for symbol in required if symbol != missing
+        })
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert str(error) == "native C ABI artifact is missing required symbols: " + missing
+            else:
+                raise AssertionError("native probe accepted missing reserve finality endpoint")
+
+
 def test_kagami_consumes_the_same_native_artifact_inventory() -> None:
     source = (REPO_ROOT / "crates/iroha_kagami/src/kagemusha.rs").read_text()
     declaration = re.search(
@@ -126,6 +146,8 @@ def test_native_c_probe_rejects_required_kagemusha_export() -> None:
             "connect_norito_kagemusha_core_coordinator_open_v1",
             "connect_norito_kagemusha_core_coordinator_invoke_v1",
             "connect_norito_kagemusha_device_command_response_v1_verify",
+            "connect_norito_kagemusha_reserve_finality_hint_v1",
+            "connect_norito_kagemusha_reserve_finality_verify_v1",
         ):
             library = types.SimpleNamespace(**{
                 symbol: object() for symbol in MODULE.REQUIRED_SYMBOLS[sdk]
@@ -207,3 +229,20 @@ def test_command_verifier_never_accepts_previous_c_or_jni_alias() -> None:
                 assert alias in str(error)
             else:
                 raise AssertionError(f"retired verifier alias was accepted: {sdk}: {alias}")
+
+
+def test_top_up_binding_requires_all_c_and_kotlin_endpoints() -> None:
+    expected = ["connect_norito_kagemusha_top_up_signed_request_validate_v1",
+        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion",
+        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate"]
+    required = MODULE.REQUIRED_SYMBOLS["c-jni"]
+    for missing in expected:
+        assert missing in required
+        library = types.SimpleNamespace(**{symbol: object() for symbol in required if symbol != missing})
+        with mock.patch.object(MODULE.ctypes, "CDLL", return_value=library):
+            try:
+                MODULE.probe_c_abi(Path("test-only-library"), required)
+            except MODULE.ArtifactContractError as error:
+                assert str(error) == "native C ABI artifact is missing required symbols: " + missing
+            else:
+                raise AssertionError("missing top-up binding endpoint accepted: " + missing)

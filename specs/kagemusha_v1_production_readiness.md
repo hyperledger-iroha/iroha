@@ -56,12 +56,14 @@ Core/Crypto/Axiom/curve and build/lock inputs remained unchanged throughout
 compilation and execution. These results do not qualify the
 existing MSM scratch lifecycle or any complete proof.
 
-A later 20-path implementation batch is applied after the validator source
+A later 24-path implementation batch is applied after the validator source
 capture. It adds ordered IPA phase commitments, bounded expression and
 retained-graph tiles, MSM scalar-encoding cleanup, Base assignments returning
 only actual cells, and monotone native Poseidon BUS emission. The graph helper
 caches advice tiles and retains one row of graph intermediates. The BUS retains
-one block of guarded endpoints and replays its original copy order.
+one block of guarded endpoints and replays its original copy order. The block uses
+the existing safe zeroization API; the cleanup regression covers both Pasta
+fields on normal return and unwind. These regressions remain unexecuted.
 
 The batch also includes a strict internal single-phase Assignment bridge and
 consuming completion into globally ordered receipts. Unknown witnesses,
@@ -74,9 +76,18 @@ all receipts. These primitives do not yet enforce concrete producer/key admissio
 or final-producer destruction before commitment. The consuming caller must also
 destroy the owner on an external synthesis unwind.
 
+The claim carrier RLC now emits one guarded logical row at a time and retains only
+cell metadata for its equality bindings. It preserves the full 4,090-value capacity,
+physical row order and sorted pack-copy order. The removed vector held at least
+26.4423 MiB of scalar payload; this is source accounting, not measured RSS. Eight
+new tests compare the frozen vector oracle and small seeded proofs in both Pasta
+fields, and exercise failure/unwind cleanup. They remain unexecuted. The legitimate
+standalone curve lock was generated from its complete manifest graph without
+changing dependencies or discarding development targets.
+
 The required full-proof and device limits remain unchanged. The complete stored
 prover, original instance-prefix integration and producer memory work remain
-incomplete. All 77 new regression tests are prepared, but compilation and
+incomplete. All 85 new regression tests are prepared, but compilation and
 execution await the shared build resource window. The earlier
 50 vendor and 16 Core executions above precede these changes and do not validate
 them. Formatting, source review and patch checks are not proof equivalence.

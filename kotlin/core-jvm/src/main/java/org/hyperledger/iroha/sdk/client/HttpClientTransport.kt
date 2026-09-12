@@ -1218,6 +1218,7 @@ class HttpClientTransport private constructor(
      *
      * The intent must contain the exact resolved invocation and complete final transaction
      * metadata. Torii may enrich fee charge maxima, but cannot select any other signed field.
+     * The canonical payload must already use QueuePlanSynced before signing material is returned.
      */
     fun prepareContractCall(
         authority: String,

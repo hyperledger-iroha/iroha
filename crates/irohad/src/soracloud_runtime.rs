@@ -2703,11 +2703,16 @@ fn soracloud_response_encoded_len_bound(
         }
     };
     let response_payload = norito_enum_newtype_encoded_len(response_fields)?;
-    norito_struct_encoded_len([
+    // Gas covers the complete frame written by Norito, including its header
+    // and the response type's archived payload alignment padding.
+    let framing = norito::core::Header::SIZE.checked_next_multiple_of(
+        norito::core::archived_payload_align::<SoracloudHostResponseEnvelopeV1>(),
+    )?;
+    framing.checked_add(norito_struct_encoded_len([
         exact_norito_encoded_len(&SORACLOUD_HOST_RESPONSE_VERSION_V1)?,
         exact_norito_encoded_len(&operation)?,
         response_payload,
-    ])
+    ])?)
 }
 struct SoracloudIvmHost {
     request: SoracloudOrderedMailboxExecutionRequest,
@@ -22315,28 +22320,7 @@ mod tests {
             );
         }
     }
-    fn encoded_soracloud_response_len(
-        operation: SoracloudHostOperationV1,
-        payload: SoracloudHostResponsePayloadV1,
-    ) -> usize {
-        norito::to_bytes(&SoracloudHostResponseEnvelopeV1 {
-            schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
-            operation,
-            payload,
-        })
-        .expect("encode Soracloud response fixture")
-        .len()
-    }
-    fn assert_soracloud_response_bound_matches(
-        operation: SoracloudHostOperationV1,
-        payload: SoracloudHostResponsePayloadV1,
-        shape: SoracloudResponseShape<'_>,
-    ) {
-        assert_eq!(
-            soracloud_response_encoded_len_bound(operation, shape),
-            Some(encoded_soracloud_response_len(operation, payload))
-        );
-    }
+    include!("soracloud_runtime/response_bounds_tests.rs");
     fn run_low_gas_soracloud_syscall(
         host: &mut SoracloudIvmHost,
         syscall: u32,
@@ -22528,153 +22512,6 @@ mod tests {
             "an unallocated HEAP response must fail provenance validation"
         );
         Ok(())
-    }
-    #[test]
-    fn soracloud_response_bounds_match_empty_response_shapes() {
-        let hash = Hash::new(b"empty-response-shape");
-        for (operation, payload, shape) in [
-            (
-                SoracloudHostOperationV1::ReadCommittedState,
-                SoracloudHostResponsePayloadV1::ReadCommittedState(
-                    SoracloudReadCommittedStateResponseV1 { entry: None },
-                ),
-                SoracloudResponseShape::ReadCommittedState(None),
-            ),
-            (
-                SoracloudHostOperationV1::EmitStateMutation,
-                SoracloudHostResponsePayloadV1::EmitStateMutation(
-                    SoracloudEmitStateMutationResponseV1 {
-                        mutation_commitment: hash,
-                    },
-                ),
-                SoracloudResponseShape::SingleHash,
-            ),
-            (
-                SoracloudHostOperationV1::EmitMailboxMessage,
-                SoracloudHostResponsePayloadV1::EmitMailboxMessage(
-                    SoracloudEmitMailboxMessageResponseV1 {
-                        message_id: hash,
-                        payload_commitment: hash,
-                    },
-                ),
-                SoracloudResponseShape::HashPair,
-            ),
-            (
-                SoracloudHostOperationV1::AppendJournal,
-                SoracloudHostResponsePayloadV1::AppendJournal(SoracloudAppendJournalResponseV1 {
-                    artifact_hash: hash,
-                }),
-                SoracloudResponseShape::SingleHash,
-            ),
-            (
-                SoracloudHostOperationV1::PublishCheckpoint,
-                SoracloudHostResponsePayloadV1::PublishCheckpoint(
-                    SoracloudPublishCheckpointResponseV1 {
-                        artifact_hash: hash,
-                    },
-                ),
-                SoracloudResponseShape::SingleHash,
-            ),
-            (
-                SoracloudHostOperationV1::ReadConfig,
-                SoracloudHostResponsePayloadV1::ReadConfig(SoracloudReadConfigResponseV1 {
-                    found: false,
-                    payload_bytes: Vec::new(),
-                }),
-                SoracloudResponseShape::FoundPayload { payload_bytes: 0 },
-            ),
-            (
-                SoracloudHostOperationV1::ReadSecretEnvelope,
-                SoracloudHostResponsePayloadV1::ReadSecretEnvelope(
-                    SoracloudReadSecretEnvelopeResponseV1 { envelope: None },
-                ),
-                SoracloudResponseShape::SecretEnvelope(None),
-            ),
-        ] {
-            assert_soracloud_response_bound_matches(operation, payload, shape);
-        }
-    }
-    #[test]
-    fn soracloud_response_bounds_match_maximal_host_response_shapes() {
-        let payload_bytes = vec![0xA5; SORACLOUD_HOST_VARIABLE_RESPONSE_MAX_BYTES];
-        assert_soracloud_response_bound_matches(
-            SoracloudHostOperationV1::ReadConfig,
-            SoracloudHostResponsePayloadV1::ReadConfig(SoracloudReadConfigResponseV1 {
-                found: true,
-                payload_bytes: payload_bytes.clone(),
-            }),
-            SoracloudResponseShape::FoundPayload {
-                payload_bytes: payload_bytes.len(),
-            },
-        );
-    }
-    #[test]
-    fn soracloud_response_bounds_match_adversarial_framing_boundaries() {
-        let payload = vec![0x5A; 16_384];
-        let entry = SoraServiceStateEntryV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-            service_name: "s".repeat(127).parse().expect("valid service name"),
-            service_version: "v".repeat(128),
-            binding_name: "b".repeat(16_383).parse().expect("valid binding name"),
-            state_key: format!("/{}", "k".repeat(16_383)),
-            encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::FheCiphertext,
-            payload: payload.clone(),
-            payload_bytes: NonZeroU64::new(
-                u64::try_from(payload.len()).expect("payload length fits u64"),
-            )
-            .expect("non-zero payload"),
-            payload_commitment: Hash::new(&payload),
-            fhe_public_key_digest: Some(Hash::new(b"public-key")),
-            fhe_residual_multiple_bound: Some(u128::MAX),
-            fhe_bound_mode: Some(
-                iroha_data_model::soracloud::BfvCiphertextBoundModeV1::BoundedNoise,
-            ),
-            last_update_sequence: u64::MAX,
-            governance_tx_hash: Hash::new(b"governance"),
-            source_action: SoraServiceLifecycleActionV1::FheJobRun,
-        };
-        assert_soracloud_response_bound_matches(
-            SoracloudHostOperationV1::ReadCommittedState,
-            SoracloudHostResponsePayloadV1::ReadCommittedState(
-                SoracloudReadCommittedStateResponseV1 {
-                    entry: Some(entry.clone()),
-                },
-            ),
-            SoracloudResponseShape::ReadCommittedState(Some(&entry)),
-        );
-        let envelope = SecretEnvelopeV1 {
-            schema_version: SECRET_ENVELOPE_VERSION_V1,
-            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
-            key_id: "k".repeat(128),
-            key_version: std::num::NonZeroU32::new(u32::MAX).expect("non-zero key version"),
-            nonce: vec![0x11; 127],
-            ciphertext: vec![0x22; 128],
-            commitment: Hash::new(vec![0x22; 128]),
-            aad_digest: Some(Hash::new(b"aad")),
-        };
-        assert_soracloud_response_bound_matches(
-            SoracloudHostOperationV1::ReadSecretEnvelope,
-            SoracloudHostResponsePayloadV1::ReadSecretEnvelope(
-                SoracloudReadSecretEnvelopeResponseV1 {
-                    envelope: Some(envelope.clone()),
-                },
-            ),
-            SoracloudResponseShape::SecretEnvelope(Some(&envelope)),
-        );
-    }
-    #[test]
-    fn soracloud_response_bound_overflow_fails_closed() {
-        assert_eq!(norito_byte_vec_encoded_len(usize::MAX), None);
-        assert_eq!(norito_struct_encoded_len([usize::MAX]), None);
-        assert_eq!(
-            soracloud_response_encoded_len_bound(
-                SoracloudHostOperationV1::ReadConfig,
-                SoracloudResponseShape::FoundPayload {
-                    payload_bytes: usize::MAX,
-                },
-            ),
-            None
-        );
     }
     #[test]
     fn prepared_runtime_cache_uses_dedicated_idle_capacity() {

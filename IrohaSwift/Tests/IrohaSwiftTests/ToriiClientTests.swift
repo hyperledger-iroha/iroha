@@ -17916,8 +17916,20 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             )
         }
 
-        for boundKind in ["", "Range", "Take", "all", "prefix", "range ", " take"] {
-            XCTAssertThrowsError(try decode(boundKind: boundKind))
+        for boundKind in ["", "range", "Range", "Take", "all", "prefix", "range ", " take"] {
+            XCTAssertThrowsError(try decode(boundKind: boundKind)) { error in
+                if boundKind == "range" {
+                    guard case DecodingError.dataCorrupted(let context) = error else {
+                        XCTFail("Expected dataCorrupted for retired bound_kind, got \(error)")
+                        return
+                    }
+                    XCTAssertEqual(context.codingPath.last?.stringValue, "bound_kind")
+                    XCTAssertEqual(
+                        context.debugDescription,
+                        "dynamic access hint bound_kind must be take or page"
+                    )
+                }
+            }
             XCTAssertThrowsError(
                 try JSONEncoder().encode(
                     ToriiContractDynamicAccessHint(
@@ -17927,7 +17939,19 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                         maxKeys: 1
                     )
                 )
-            )
+            ) { error in
+                if boundKind == "range" {
+                    guard case EncodingError.invalidValue(_, let context) = error else {
+                        XCTFail("Expected invalidValue for retired bound_kind, got \(error)")
+                        return
+                    }
+                    XCTAssertEqual(
+                        context.debugDescription,
+                        "dynamic access hint must use a canonical state declaration, "
+                            + "StateMap key type, take/page bound, and max_keys in 1...64"
+                    )
+                }
+            }
         }
         for maxKeys in [-1, 0, 65, 4_294_967_296] {
             XCTAssertThrowsError(try decode(maxKeys: maxKeys))

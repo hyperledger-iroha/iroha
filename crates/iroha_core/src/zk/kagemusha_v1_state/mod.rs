@@ -3892,9 +3892,6 @@ where
         guard_verifier: G,
     ) -> Result<Self, KagemushaStateErrorV1> {
         validate_guard_bytes(&anchor.guard_bundle)?;
-        guard_verifier
-            .verify_durability_anchor(&anchor.statement, &anchor.guard_bundle)
-            .map_err(KagemushaStateErrorV1::GuardRejected)?;
         if snapshot.version != KAGEMUSHA_STATE_VERSION_V1
             || anchor.statement.version != KAGEMUSHA_STATE_VERSION_V1
         {
@@ -3953,6 +3950,8 @@ where
             &credential_floor_release,
             expected_enrollment,
         )?;
+        // Publication retains the original checkpoint CAS certificate in the anchor. It is
+        // authenticated as that exact transaction, not as a separate historical-anchor seal.
         guard_verifier
             .verify_recovery_checkpoint_cas(
                 &snapshot

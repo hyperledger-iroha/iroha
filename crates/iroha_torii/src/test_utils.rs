@@ -110,6 +110,14 @@ pub fn apply_queued_in_one_block(
             )
         })
         .collect();
+    apply_accepted_fixture_block(state, chain_id, expected_height, accepted)
+}
+fn apply_accepted_fixture_block(
+    state: &Arc<State>,
+    chain_id: &ChainId,
+    expected_height: u64,
+    accepted: Vec<(AcceptedTransaction<'static>, RoutingDecision, RoutingPlan)>,
+) -> usize {
     let applied = accepted.len();
     // Synthetic Torii states do not all install the production lane-manifest snapshot. Preserve
     // every explicit test registry, including registries that intentionally omit lane zero, but

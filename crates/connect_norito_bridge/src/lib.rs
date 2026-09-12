@@ -159,6 +159,12 @@ pub use kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_validate_storage_path_v1,
 };
 mod kagemusha_device_bridge_v1;
+mod kagemusha_reserve_finality_v1;
+pub use kagemusha_reserve_finality_v1::{
+    connect_norito_kagemusha_reserve_finality_hint_v1,
+    connect_norito_kagemusha_reserve_finality_verify_v1,
+    connect_norito_kagemusha_top_up_signed_request_validate_v1,
+};
 #[cfg(any(test, feature = "dev-tools"))]
 mod kagemusha_sender_release_evidence;
 #[cfg(feature = "dev-tools")]

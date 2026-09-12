@@ -737,6 +737,18 @@ impl LocalProposalState {
         self.non_empty_retry = Some(owner);
         self.candidate_work_wait = None;
     }
+    /// Recheck a moving merge frontier without changing ordinary retry or proposal ownership.
+    fn defer_merge_frontier(&mut self, owner: LocalProposalOwner, now: Instant) {
+        let started_at = self
+            .candidate_work_wait
+            .filter(|wait| wait.owner == owner)
+            .map_or(now, |wait| wait.started_at);
+        self.candidate_work_wait = Some(CandidateWorkWait {
+            owner,
+            started_at,
+            next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
+        });
+    }
     /// Retire an armed recovery retry which completed assembly without finding
     /// any publishable work. A later retry must cross a fresh bounded
     /// observation window instead of re-running full assembly every runner
@@ -1516,7 +1528,12 @@ fn schedule_local_proposal(
         // attachments so the same producer turn can carry the newly certified entry;
         // waiting for `CandidateWorkProvider::prepare` would miss it until a later
         // turn, which may already be fenced by timeout/view-change control work.
-        lane_work.refresh_merge_candidates(directive.tag().view())?;
+        if lane_work.refresh_merge_candidates(directive.tag().view())?
+            == super::v2_lane_work::MergeRefreshOutcome::Deferred
+        {
+            proposal_state.defer_merge_frontier(owner, Instant::now());
+            return Ok(());
+        }
         let queue_plan_admissions =
             lane_work.reconcile_pending_queue_plan_admissions(directive.tag().view())?;
         let attachments = candidate_attachments(

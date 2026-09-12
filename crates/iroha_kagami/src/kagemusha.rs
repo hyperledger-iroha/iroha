@@ -52,7 +52,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 56] = [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
     "connect_norito_kagemusha_v1_payment_request_validate",
@@ -80,6 +80,9 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
+    "connect_norito_kagemusha_reserve_finality_hint_v1",
+    "connect_norito_kagemusha_reserve_finality_verify_v1",
+    "connect_norito_kagemusha_top_up_signed_request_validate_v1",
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -100,6 +103,11 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 48] = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeOpenV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeInvokeV1",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeHint",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeVerify",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeBridgeAbiVersion",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTopUpSubmissionJniV1_nativeValidate",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 ];
 

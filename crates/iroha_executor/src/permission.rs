@@ -201,6 +201,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanManageSorafsPopRegistry},
     iroha_executor_data_model::permission::sorafs::{CanOperateSorafsPopIssuer},
     iroha_executor_data_model::permission::sorafs::{CanUpsertSorafsProviderCredit},
+    iroha_executor_data_model::permission::sorafs::{CanManageSorafsStreamTokenCustody},
     iroha_executor_data_model::permission::soranet::{CanManageSoranetVpnQuoteIssuers},
     iroha_executor_data_model::permission::soranet::{CanIssueSoranetVpnQuote},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
@@ -854,8 +855,9 @@ mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanSetSorafsPricing,
-        CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry, CanUpsertSorafsProviderCredit,
+        CanManageSorafsPopRegistry, CanManageSorafsStreamTokenCustody, CanOperateSorafsPopIssuer,
+        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
+        CanUpsertSorafsProviderCredit,
     };
     impl_owned_permission!(
         CanBindSorafsAlias,
@@ -870,6 +872,7 @@ mod sorafs {
         CanSetSorafsPricing,
         CanSetSorafsReservePolicy,
         CanUpsertSorafsProviderCredit,
+        CanManageSorafsStreamTokenCustody,
     );
 }
 mod soranet {
@@ -2920,3 +2923,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "stream_token_custody_permission_tests.rs"]
+mod stream_token_custody_permission_tests;

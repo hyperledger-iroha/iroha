@@ -21,7 +21,7 @@ use halo2_base::{
 
 const K: u32 = 9;
 const USABLE: usize = (1 << K) - 9;
-const SOURCE_ID: &str = "native-monotone-poseidon-test";
+const SOURCE_ID: &str = halo2_base::EXTERNAL_CELL_TYPE_ID;
 #[allow(clippy::too_many_arguments)]
 fn reference_synthesize<F: KagemushaPoseidonFieldV1>(
     jobs: &PastaNativePoseidonJobsV1<F>,
@@ -590,17 +590,32 @@ fn missing_source_stays_an_error_and_block_payload_is_fixed_and_cleared() {
     }
     assert_eq!(std::mem::size_of::<NativePoseidonBlockWitness<Fp>>(), 480);
     assert_eq!(std::mem::size_of::<NativePoseidonBlockWitness<Fq>>(), 480);
-    for panic in [false, true] {
-        BLOCK_WITNESS_CLEARS.with(|value| value.set((0, true)));
-        let result = std::panic::catch_unwind(|| {
-            let mut block = NativePoseidonBlockWitness::<Fq>::zeroed();
-            block.endpoints.fill([Fq::ONE; WIDTH]);
-            block.state.fill(Fq::ONE);
-            assert!(!panic, "injected block unwind");
-        });
-        assert_eq!(result.is_err(), panic);
-        assert_eq!(BLOCK_WITNESS_CLEARS.with(|value| value.get()), (1, true));
+    macro_rules! check_clear {
+        ($field:ty) => {
+            for panic in [false, true] {
+                BLOCK_WITNESS_CLEARS.with(|value| value.set((0, true)));
+                let result = std::panic::catch_unwind(|| {
+                    let mut block = NativePoseidonBlockWitness::<$field>::zeroed();
+                    assert!(
+                        block
+                            .values
+                            .endpoints
+                            .iter()
+                            .flatten()
+                            .all(|v| *v == <$field>::ZERO)
+                    );
+                    assert!(block.values.state.iter().all(|v| *v == <$field>::ZERO));
+                    block.values.endpoints.fill([<$field>::ONE; WIDTH]);
+                    block.values.state.fill(<$field>::ONE);
+                    assert!(!panic, "injected block unwind");
+                });
+                assert_eq!(result.is_err(), panic);
+                assert_eq!(BLOCK_WITNESS_CLEARS.with(|value| value.get()), (1, true));
+            }
+        };
     }
+    check_clear!(Fp);
+    check_clear!(Fq);
 }
 
 #[test]
