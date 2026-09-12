@@ -2026,7 +2026,11 @@ fn pending_identity(
     projection.extend_from_slice(PENDING_INGRESS_IDENTITY_DOMAIN);
     append_field(&mut projection, &context_id.encode());
     projection.extend_from_slice(&height.to_le_bytes());
-    super::super::fair_v2_ingress_append_source_identity(&mut projection, source);
+    super::super::fair_v2_ingress_append_source_identity(
+        &mut projection,
+        source,
+        &mut super::super::fair_v2_ingress_append_peer_identity,
+    );
     super::super::fair_v2_ingress_append_peer_identity(
         &mut projection,
         &occurrence.wire_key.origin,
