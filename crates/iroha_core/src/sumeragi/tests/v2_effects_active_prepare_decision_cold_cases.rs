@@ -373,14 +373,18 @@ fn active_prepare_body_survives_decision_crash_fixture(
         assert_eq!(child, next);
         ordinal = child_ordinal;
     }
-    finish_current_decision_validate_and_reopen(fixture, ordinal);
+    finish_current_decision_validate_and_reopen(fixture, ordinal, false);
 }
 
-fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, ordinal: u128) {
+fn finish_current_decision_validate_and_reopen(
+    mut fixture: ReadyBodyFixture,
+    ordinal: u128,
+    decision_reconciled: bool,
+) {
     fixture
         .transport
         .executor
-        .assert_cold_decision_protection_for_test(fixture.transport.subject, false);
+        .assert_decision_protection_for_test(fixture.transport.subject, decision_reconciled, false);
     assert_eq!(fixture.owner.dispatch_completion_for_test(
         &mut fixture.services, &mut fixture.transport.executor, 0,
     ).expect("queue the single real recovered Validate"),
@@ -432,7 +436,7 @@ fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, or
     fixture
         .transport
         .executor
-        .assert_cold_decision_protection_for_test(fixture.transport.subject, true);
+        .assert_decision_protection_for_test(fixture.transport.subject, true, true);
     let settled_validate = fixture.planner_io.lifecycle_validate_io_snapshot();
     assert_eq!(settled_validate.command_depth(), 0);
     assert_eq!(settled_validate.physical_admissions(), 0);
@@ -815,7 +819,7 @@ fn recover_stale_prepare_decision_crash_fixture(
             [&(fixture.transport.round, fixture.transport.subject)],
         &fixture.transport.body,
     );
-    finish_current_decision_validate_and_reopen(fixture, validate);
+    finish_current_decision_validate_and_reopen(fixture, validate, true);
 }
 
 // Published Store/Validate markers must retain their sole physical lineage
@@ -894,6 +898,12 @@ fn step_recovered_periodic_timer(
         let outputs = executor
             .settle_pending_lifecycle_output_admissions(owner, services)
             .expect("settle the prior turn's lifecycle output through its owner");
+        assert!(
+            !services
+                .retry_pending_exact_output()
+                .expect("release newly admitted and terminal-duplicate timer output"),
+            "the accepting fixture transport must release the complete timer output"
+        );
         if outputs.requires_outer_executor_yield() {
             continue;
         }
