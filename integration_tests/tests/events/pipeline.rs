@@ -12,6 +12,8 @@ use iroha::data_model::{
     transaction::error::TransactionRejectionReason,
 };
 use iroha_config::parameters::actual::LaneConfig;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use std::{
     io::{Read as _, Seek as _, SeekFrom},
@@ -50,8 +52,9 @@ async fn test_with_instruction_and_status(
     let mut events = tokio::time::timeout(
         event_timeout,
         client
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .wrap_err_with(|| format!("{context}: timed out opening pipeline event stream"))??;
@@ -85,7 +88,7 @@ async fn test_with_instruction_and_status(
     })
     .await
     .wrap_err_with(|| format!("{context}: timed out waiting for pipeline events"))??;
-    events.close().await;
+    events.close().await?;
     Ok(())
 }
 #[allow(clippy::too_many_lines)]
@@ -93,7 +96,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let client = network.client();
     // When: submit a simple transaction to ensure a new non-genesis block is committed
     let kura_domain: DomainId = DomainId::try_new("kura-test", "universal")?;
-    let register = domain_setup_instruction(&kura_domain, &client.client().account)?;
+    let register = domain_setup_instruction(&kura_domain, client.client().account())?;
     let tx = {
         let account = client.account_client();
         account
@@ -110,8 +113,9 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let mut events = tokio::time::timeout(
         event_timeout,
         client
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .wrap_err(
@@ -145,7 +149,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         }
     })
     .await?;
-    events.close().await;
+    events.close().await?;
     // And wait until the peer reports at least 2 non-empty blocks (genesis + our tx)
     let peer = network.peer();
     peer.once_block_with(BlockHeight::predicate_non_empty(2))
@@ -250,7 +254,7 @@ async fn pipeline_event_scenarios() -> Result<()> {
         return Ok(());
     };
     let domain = DomainId::try_new("looking-glass", "universal")?;
-    let register = domain_setup_instruction(&domain, &network.client().client().account)?;
+    let register = domain_setup_instruction(&domain, network.client().client().account())?;
     test_with_instruction_and_status(
         stringify!(transaction_with_ok_instruction_should_be_committed),
         &network,

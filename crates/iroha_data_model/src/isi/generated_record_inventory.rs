@@ -5,7 +5,7 @@ use crate::{
     account::Account,
     asset::AssetDefinitionId,
     asset::{Asset, AssetDefinition},
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{Burn, Grant, Mint, Register, RemoveKeyValue, Revoke, SetKeyValue, Transfer, Unregister},
     nft::{Nft, NftId},
     peer::Peer,
@@ -14,6 +14,7 @@ use crate::{
     rwa::Rwa,
     trigger::Trigger,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 
 macro_rules! record {
@@ -1179,11 +1180,6 @@ record!(
     "iroha_data_model::isi::sorafs::RegisterProviderOwner"
 );
 record!(
-    sorafs_register_sorafs_citizen_bond,
-    crate::isi::sorafs::RegisterSorafsCitizenBond,
-    "iroha_data_model::isi::sorafs::RegisterSorafsCitizenBond"
-);
-record!(
     sorafs_register_sorafs_moderation_juror_eligibility,
     crate::isi::sorafs::RegisterSorafsModerationJurorEligibility,
     "iroha_data_model::isi::sorafs::RegisterSorafsModerationJurorEligibility"
@@ -1197,11 +1193,6 @@ record!(
     sorafs_repay_sorafs_reserve_credit,
     crate::isi::sorafs::RepaySorafsReserveCredit,
     "iroha_data_model::isi::sorafs::RepaySorafsReserveCredit"
-);
-record!(
-    sorafs_request_sorafs_citizen_bond_exit,
-    crate::isi::sorafs::RequestSorafsCitizenBondExit,
-    "iroha_data_model::isi::sorafs::RequestSorafsCitizenBondExit"
 );
 record!(
     sorafs_request_sorafs_reserve_movement,
@@ -1232,11 +1223,6 @@ record!(
     sorafs_revoke_provider_ingest_completion_authority,
     crate::isi::sorafs::RevokeProviderIngestCompletionAuthority,
     "iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority"
-);
-record!(
-    sorafs_rotate_sorafs_citizen_bond_authorization,
-    crate::isi::sorafs::RotateSorafsCitizenBondAuthorization,
-    "iroha_data_model::isi::sorafs::RotateSorafsCitizenBondAuthorization"
 );
 record!(
     sorafs_set_pricing_schedule,

@@ -1,3 +1,31 @@
+/// Run a deliberate canonical-transition panic in its own test process.
+/// Clearing the process-global transition poison after `catch_unwind` cannot
+/// protect unrelated parallel prunes from acquiring the gate before that reset.
+fn run_prune_crash_test_in_subprocess() -> bool {
+    const CHILD_TEST: &str = "IROHA_KURA_PRUNE_CRASH_CHILD_TEST";
+    let current_thread = std::thread::current();
+    let test_name = current_thread.name().expect("named prune test thread");
+    if let Some(child_test) = std::env::var_os(CHILD_TEST) {
+        assert_eq!(child_test, test_name, "run only the selected crash fixture");
+        return false;
+    }
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("current Core test executable"),
+    )
+    .args(["--exact", test_name, "--test-threads=1", "--nocapture"])
+    .env(CHILD_TEST, test_name)
+    .output()
+    .expect("run isolated canonical-prune crash fixture");
+    assert!(
+        output.status.success(),
+        "isolated prune fixture {test_name} failed: {}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    true
+}
+
 fn unsealed_prune_capacity_fixture() -> KuraPruneCapacityAdmissionV3 {
     KuraPruneCapacityAdmissionV3 {
         source_physical_bytes: 0,

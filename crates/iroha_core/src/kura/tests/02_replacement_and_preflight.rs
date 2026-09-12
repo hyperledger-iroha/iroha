@@ -2,11 +2,7 @@
 fn partial_stage_discard_recovers_committed_replacement_before_returning() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement_hash = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
@@ -94,11 +90,7 @@ fn partial_stage_discard_recovers_committed_replacement_before_returning() {
 fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let original = DummyBlocks::new().next();
         let original_hash = original.hash();
         kura.store_block(Arc::clone(&original))
@@ -235,11 +227,7 @@ fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable
 fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     let (expected, artifact, expected_header) = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let (blocks, payloads) = store_retained_archive_chain(&kura);
         let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
         let expected_header = blocks[1].header();
@@ -658,11 +646,7 @@ fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra()
 fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
     {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let (blocks, _) = store_retained_archive_chain(&kura);
         let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
         let _receipt = kura
@@ -690,11 +674,7 @@ fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
 fn rooted_finality_reader_rejects_deleted_archive_even_while_body_is_inline() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let (blocks, _) = store_retained_archive_chain(&kura);
         let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
         let _receipt = kura
@@ -1165,6 +1145,8 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
         );
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::RetiredKuraRetainedBlockRecordV2Fixture")]
 #[derive(Encode)]
 struct RetiredKuraRetainedBlockRecordV2Fixture {
     format_version: u16,
@@ -1442,9 +1424,7 @@ fn pruning_across_durable_v2_finality_is_atomic_and_rejected() {
 #[test]
 fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
     let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("init Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let block = DummyBlocks::new().next();
     let block_hash = block.hash();
     kura.store_block(Arc::clone(&block))
@@ -1490,9 +1470,7 @@ fn startup_rejects_prune_intent_crossing_durable_v2_finality_before_mutation() {
 #[test]
 fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
     let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("init Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
         .expect("store canonical block");
@@ -1517,9 +1495,7 @@ fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
 #[test]
 fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
     let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("init Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let mut generator = DummyBlocks::new();
     let blocks = vec![generator.next(), generator.next()];
     for block in &blocks {
@@ -1548,9 +1524,7 @@ fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
 #[test]
 fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
     let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("init Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let mut generator = DummyBlocks::new();
     let blocks = vec![generator.next(), generator.next()];
     for block in &blocks {
@@ -1901,9 +1875,7 @@ fn lane_segment_reconciliation_provisions_and_retires_storage() {
         LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
     let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_lane_config)
-            .expect("init kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&kura_cfg, &initial_lane_config);
     let lane1_entry = initial_lane_config
         .entry(LaneId::from(1))
         .expect("lane 1 entry");
@@ -2038,6 +2010,38 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
     ]);
     let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (stale_config_lane.id, 0)]);
     let configured_lineage_root = Hash::new(b"snapshot restore configured lineage");
+    let baseline = kura
+        .lane_geometry_journal_state_for_test()
+        .expect("read configured catalog baseline")
+        .0
+        .expect("configured catalog baseline");
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        configured.primary(),
+        primary_incarnation,
+        baseline,
+    )
+    .expect("authenticate the configured primary before secondary publication");
+    kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
+        &RuntimeLaneConfig::default(),
+        &configured,
+        &BTreeMap::from([(LaneId::SINGLE, primary_incarnation)]),
+        &configured_incarnations,
+        &BTreeMap::from([(LaneId::SINGLE, 0)]),
+        &configured_activations,
+        Hash::new(b"snapshot restore primary lineage"),
+        configured_lineage_root,
+        &BTreeSet::new(),
+        0,
+    )
+    .expect("publish the initial configured secondary lane");
+    kura.mark_lane_geometry_catalog_published_with_lineage_root(
+        &configured,
+        &configured_incarnations,
+        &configured_activations,
+        configured_lineage_root,
+        Some(baseline),
+    )
+    .expect("retain the initial configured geometry authority");
     let restored_incarnations = BTreeMap::from([
         (LaneId::SINGLE, primary_incarnation),
         (restored_lane.id, restored_incarnation),
@@ -2501,7 +2505,9 @@ fn new_block_store(dir: &TempDir) -> BlockStore {
     BlockStore::new(&blocks_dir)
 }
 fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
-    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(path.to_path_buf()),
+    KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(path.to_path_buf()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
         debug_output_new_blocks: false,
@@ -2509,6 +2515,7 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }

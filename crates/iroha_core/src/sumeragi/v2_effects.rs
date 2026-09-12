@@ -158,8 +158,8 @@ use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
     merge::MergeLedgerEntry,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 #[cfg(test)]
 use norito::codec::Encode as _;
 use std::{
@@ -513,13 +513,13 @@ pub(in crate::sumeragi) struct ReleasedLifecycleValidatedMarkerSealPermitV1 {
 }
 
 /// Durable resolution of one lifecycle-owned Validate row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum LifecycleValidateRetryResolutionV1 {
     /// A certified newer view retired an unprotected missing-sidecar row.
     Cancelled,
     /// The row terminalized without a successor and may authenticate a later
     /// current-Decision standalone Apply.
-    AdvancedNoSuccessor,
+    AdvancedNoSuccessor(Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>),
     /// The row published an adjacent Sign, report, or Apply successor.
     AdvancedToSuccessor,
 }
@@ -1746,6 +1746,10 @@ pub(crate) trait V2EffectServices {
     /// repeated task identifier requests an idempotent retry of the same
     /// durable operation.
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error>;
+    /// Retry one exact deferred Apply without consuming its executor owner on
+    /// backpressure. `false` retains the task until bounded worker capacity is
+    /// available; a conflicting command or disconnected worker is an error.
+    fn try_enqueue_apply(&mut self, task: ApplyTask) -> Result<bool, Self::Error>;
     /// Observe a reducer-authorized view installation and its authenticated
     /// durable-lock projection for timer/status and ingress recovery wiring.
     fn entered_view(
@@ -2040,17 +2044,6 @@ pub(crate) trait EffectRuntime {
         ))
     }
 
-    /// Return whether the exact source-only Decision WAL Apply seal remains
-    /// available for a lifecycle Validate-to-Apply join. Synthetic runtimes
-    /// cannot mint this affine authority and retain the closed default.
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        _tag: EventTag,
-        _decision: DurableDecision,
-    ) -> bool {
-        false
-    }
-
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -2238,6 +2231,13 @@ pub(crate) trait EffectRuntime {
     /// lifecycle replay row never treats an opaque runtime statement as
     /// independently durable authority.
     fn durable_body_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        Ok(None)
+    }
+    /// Return the full durable current Prepare before its body is validated.
+    /// This authority permits body work, and grants no vote or voting lock.
+    fn current_prepare_authority_certificate(
         &self,
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         Ok(None)
@@ -2434,16 +2434,6 @@ impl EffectRuntime for SerializedV2Runtime {
             Ok(prepared) => Ok(prepared.commit()),
             Err((marker, error)) => Err((marker, error.to_string())),
         }
-    }
-
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision: DurableDecision,
-    ) -> bool {
-        SerializedV2Runtime::has_exact_pending_live_decision_apply(
-            self, tag, decision.0, decision.1, decision.2, decision.3,
-        )
     }
 
     fn can_admit_network_message_with_ingress_ownership(
@@ -2657,6 +2647,12 @@ impl EffectRuntime for SerializedV2Runtime {
         &self,
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         self.replayed_body_authority_certificate()
+            .map_err(|error| error.to_string())
+    }
+    fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        SerializedV2Runtime::current_prepare_authority_certificate(self)
             .map_err(|error| error.to_string())
     }
     fn reserve_body_available(
@@ -2905,6 +2901,15 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// a standalone lifecycle-owned Apply row.
     pending_released_lifecycle_validate_apply:
         Option<super::v2::DeferredReleasedLifecycleValidatedMarkerV1>,
+    /// Cold terminal results have no previous-process runtime owner. Retain
+    /// their authenticated result until this height's durable Decision cleanup.
+    cold_resolved_validate_outcomes: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+    >,
+    /// One exact current occurrence waiting to replay a real terminal outcome.
+    pending_resolved_validate_replay:
+        Option<super::v2_lifecycle_coordinator::PendingResolvedValidateReplayV1>,
     #[cfg(test)]
     last_recovered_validate_retry_trace_root: Option<Hash>,
     #[cfg(test)]
@@ -3240,7 +3245,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_with_body_store(
         mut runtime: SerializedV2Runtime,
-        body_store: V2BodyStore,
+        mut body_store: V2BodyStore,
         mut recovered_validate_retry_census: RecoveredDurableValidateRetryCensusV1,
         mut pending_kura_apply_replay: Option<
             &mut super::v2::PreparedRecoveredPendingKuraApplyReplayV1,
@@ -3269,6 +3274,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         let recovered_bodies = body_store
             .recovery_catalog()
             .map_err(|error| EffectExecutorError::BodyStore(error.to_string()))?;
+        let cold_terminal_results = body_store.take_recovered_terminal_results();
         let recovered_validations = body_store.validated_recovery_catalog();
         let recovered_rejections = body_store.rejected_recovery_catalog();
         let retired_recovered_rejections = body_store.retired_rejected_recovery_catalog();
@@ -3335,6 +3341,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             retired_recovered_rejections,
         )?;
         recovered_validate_retry_census.install_into_executor(&mut executor)?;
+        executor.install_cold_resolved_validate_outcomes(cold_terminal_results)?;
         construction.complete();
         Ok((executor, body_store))
     }
@@ -3705,7 +3712,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
         batch: &RetainedEffectBatch,
     ) -> bool {
-        attestation.mode() == LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+        attestation.mode().retains_apply_suffix()
             && self
                 .pending_lifecycle_output_admissions
                 .values()
@@ -3743,7 +3750,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             Some(attestation) => {
                 self.lifecycle_decision_apply_successor_census_is_exact(attestation)
                     && match attestation.mode() {
-                        LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => self
+                        LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+                        | LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. } => self
                             .retained_effect_batch
                             .as_ref()
                             .is_some_and(|batch| {
@@ -3788,10 +3796,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        if matches!(
-            attestation.mode(),
-            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-        ) {
+        if !attestation.mode().retains_apply_suffix() {
             return Ok(false);
         }
         let remains_exact =
@@ -3816,10 +3821,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
     ) -> Result<bool, EffectExecutorError> {
         self.ensure_open()?;
-        if !matches!(
-            attestation.mode(),
-            LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
-        ) {
+        if !attestation.mode().retains_apply_suffix() {
             return Ok(false);
         }
         let census_is_exact = self.lifecycle_decision_apply_successor_census_is_exact(attestation);
@@ -4129,7 +4131,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 || !(validate_retry_authority_is_exact
                     || (live_apply_owner_already_exact && validate_retry_authority_is_absent))
                 || runtime_decision != Some(decision)
-                || self.protected_decision != Some(decision)
+                // A cold Ready Validate can finish before the first Runtime
+                // turn. Its exact durable Decision is authenticated above;
+                // the cleanup below must establish protection on that first
+                // publication as well as preserve an existing exact owner.
+                || self
+                    .protected_decision
+                    .is_some_and(|protected| protected != decision)
                 || (self.live_lifecycle_decision_apply.is_some() && !live_apply_owner_already_exact)
             {
                 Err(EffectExecutorError::Contract(
@@ -4634,11 +4642,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Rebuild an ownerless cold Apply executor's Decision protection from its
     /// real reopened runtime without selecting a new Runtime turn.
     ///
-    /// Production has already crossed this reconciliation before a synchronous
-    /// Ready Validate-to-Apply publication. Focused reopen tests use this seam
-    /// instead of manufacturing a later periodic Apply with a different
-    /// pending-effect identity, and name whether their exact cut already owns
-    /// the preliminary queued-successor fence.
+    /// Focused tests of an already-reconciled cut use this seam instead of
+    /// manufacturing a periodic Apply with a different pending-effect
+    /// identity. Cold Ready Validate may publish before any Runtime turn;
+    /// that path establishes protection in live Apply reconciliation itself.
+    /// Callers name whether their exact cut already owns the preliminary
+    /// queued-successor fence.
     #[cfg(test)]
     pub(in crate::sumeragi) fn reconcile_reopened_decision_for_lifecycle_apply_lineage_test<
         S: V2EffectServices,
@@ -4882,7 +4891,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.pending_runner_decision_cleanup.is_none()
             && self.live_lifecycle_decision_apply.is_none()
             && self.live_lifecycle_validate_successor.is_none()
-            && self.pending_released_lifecycle_validate_apply.is_none()
+            && (self.pending_released_lifecycle_validate_apply.is_none()
+                && self.pending_resolved_validate_replay.is_none())
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
             && !self.runtime.has_dormant_remote_proposal_replay()
@@ -5222,7 +5232,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn decision_apply_dispatch_barrier_is_occupied(&self) -> bool {
         self.pending_runner_decision_cleanup.is_some()
             || !self.pending_durable_validate_admissions.is_empty()
-            || self.pending_released_lifecycle_validate_apply.is_some()
+            || (self.pending_released_lifecycle_validate_apply.is_some()
+                || self.pending_resolved_validate_replay.is_some())
             || self.pending_live_wal_sign_admission.is_some()
             || !self.pending_lifecycle_output_admissions.is_empty()
     }
@@ -5705,6 +5716,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             published_lifecycle_store_retry_markers: BTreeMap::new(),
             published_lifecycle_validate_retry_markers: BTreeMap::new(),
             pending_released_lifecycle_validate_apply: None,
+            pending_resolved_validate_replay: None,
+            cold_resolved_validate_outcomes: BTreeMap::new(),
             #[cfg(test)]
             last_recovered_validate_retry_trace_root: None,
             #[cfg(test)]
@@ -6300,12 +6313,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // handoff may remove its marker.
         self.durable_validate_retry_seals.retain(|key, seal| {
             seal.lifecycle_ordinal().is_some()
+                || matches!(
+                    seal.lifecycle_state(),
+                    DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_)
+                )
                 || !superseded_keys.contains(key)
                 || Some(*key) == highest_prepare_body
         });
         self.published_lifecycle_validate_retry_markers
             .retain(|key, marker| {
                 marker.owns_live_lifecycle_row()
+                    || marker.resolved_outcome.is_some()
                     || !superseded_keys.contains(key)
                     || Some(*key) == highest_prepare_body
             });
@@ -7354,6 +7372,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
                 _ => None,
             };
+            if preterminal_body_stage_incumbent.is_some()
+                && let AdapterEffect::ValidateBody { round, subject, .. } = effect
+                && retained_validate_retry_seals
+                    .get(&(*round, *subject))
+                    .is_some_and(|seal| {
+                        matches!(
+                            seal.lifecycle_state(),
+                            DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_)
+                        )
+                    })
+            {
+                // A resolved row has no active physical stage. Reject overlap
+                // before adoption so a stronger incumbent cannot change the
+                // incoming authority used to qualify resolved replay.
+                return Err(EffectExecutorError::Contract(
+                    "resolved Validate retained an active body-stage lineage".to_owned(),
+                ));
+            }
             if let Some(incumbent) = preterminal_body_stage_incumbent {
                 if stored_replay_adopted && incumbent.owner() != evidence.owner() {
                     return Err(EffectExecutorError::Contract(
@@ -7479,9 +7515,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Store retry lost its durable receipt".to_owned(),
                     )
                 })?;
-                marker
-                    .project_store_retry(receipt, effect, evidence)
-                    .map_err(EffectExecutorError::Contract)?;
+                let replay_resolved_store = marker.resolved_outcome.is_some()
+                    && current_protected_body_occurrence(effect, evidence, frontier)
+                        .map_err(EffectExecutorError::Contract)?;
+                if replay_resolved_store {
+                    marker
+                        .project_resolved_store_retry(receipt, effect, evidence)
+                        .map_err(EffectExecutorError::Contract)?;
+                } else {
+                    marker
+                        .project_store_retry(receipt, effect, evidence)
+                        .map_err(EffectExecutorError::Contract)?;
+                }
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "published lifecycle Store retry omitted its candidate identity".to_owned(),
@@ -7525,11 +7570,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Store retry failed candidate refinement".to_owned(),
                     )
                 })?;
-                retain_effect.push(false);
+                // No new Store task is created: dispatch reuses the exact
+                // durable receipt and queues this incarnation's BodyStored.
+                retain_effect.push(replay_resolved_store);
                 continue;
             }
             if let AdapterEffect::ValidateBody {
-                tag,
+                tag: _,
                 round,
                 subject,
             } = effect
@@ -7538,23 +7585,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .cloned()
             {
                 // The direct lifecycle Validate remains the sole physical
-                // operation while its row is live or a same/stale retry merely
-                // rediscovers its terminal marker. One closed exception exists:
-                // an ordinal-free older marker plus the exact cached successful
-                // receipt may redispatch a strictly newer Commit refinement so
-                // normal lifecycle admission can mint the missing Apply child.
+                // operation. A resolved terminal result can replay under the
+                // exact current protected certificate to select its next child;
+                // the original Validate row and outcome remain immutable.
                 let projected = marker
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;
                 let key = (*round, *subject);
-                let readmit_protected_decision = frontier.decision.is_some_and(|decision| {
-                    self.runtime
-                        .has_exact_pending_live_decision_apply(*tag, decision)
-                        && self.validated_bodies.get(&key).is_some_and(|validated| {
-                            marker
-                                .is_unbound_exact_decision_upgrade(&projected, decision, validated)
-                        })
-                });
+                let readmit_protected_body = marker.resolved_outcome.is_some()
+                    && current_protected_body_occurrence(effect, evidence, frontier)
+                        .map_err(EffectExecutorError::Contract)?;
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "published lifecycle Validate retry omitted its candidate identity"
@@ -7600,7 +7640,27 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
                 retained_published_validate_retry_markers.insert(key, projected);
-                retain_effect.push(readmit_protected_decision);
+                retain_effect.push(readmit_protected_body);
+                continue;
+            }
+            if let AdapterEffect::ValidateBody { round, subject, .. } = effect
+                && self
+                    .cold_resolved_validate_outcomes
+                    .contains_key(&(*round, *subject))
+            {
+                let key = (*round, *subject);
+                if retained_validate_retry_seals.contains_key(&key)
+                    || retained_published_validate_retry_markers.contains_key(&key)
+                    || self.pending_durable_validate_admissions.contains_key(&key)
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "cold terminal result overlaps an executable retry owner".to_owned(),
+                    ));
+                }
+                retain_effect.push(
+                    current_protected_body_occurrence(effect, evidence, frontier)
+                        .map_err(EffectExecutorError::Contract)?,
+                );
                 continue;
             }
             if let AdapterEffect::ValidateBody { round, subject, .. } = effect
@@ -7612,21 +7672,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;
                 let key = (*round, *subject);
-                let readmit_protected_prepare = frontier.decision.is_none()
-                    && frontier.lock_is_authoritative
-                    && frontier.locked_body == Some(key)
-                    && seal.is_unbound_live_ordinary_to_prepare_upgrade(&projected);
-                if readmit_protected_prepare {
-                    // The old row is terminal and cannot emit the newer
-                    // view's ValidationCompleted callback. Retire only this
-                    // volatile tombstone; the current reducer owner falls
-                    // through to the ordinary protected-lock reseed below.
-                    let removed = retained_validate_retry_seals.remove(&key);
-                    debug_assert_eq!(removed, Some(seal));
+                let readmit_resolved = seal
+                    .permits_resolved_readmission(effect, evidence, frontier)
+                    .map_err(EffectExecutorError::Contract)?;
+                if readmit_resolved {
+                    if self.pending_durable_validate_admissions.contains_key(&key) {
+                        return Err(EffectExecutorError::Contract(
+                            "resolved Validate retained a pending admission owner".to_owned(),
+                        ));
+                    }
+                    // Keep the immutable terminal result. The current owned
+                    // occurrence will replay that result through the registry
+                    // join; it must never re-admit the historical Validate key.
+                    retained_validate_retry_seals.insert(key, projected.seal);
+                    retain_effect.push(true);
+                    continue;
                 } else {
-                    // A live row, cold owner, or same/stale/Commit retry still
-                    // owns the sole physical Validate lifecycle and therefore
-                    // coalesces without redispatch.
+                    // Pending and bound rows retain the sole executable owner.
+                    // Unprotected or stale occurrences cannot reopen a resolved
+                    // terminal and remain inert after exact projection.
                     #[cfg(test)]
                     {
                         recovered_validate_retry_trace_root =
@@ -10185,12 +10249,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ///
     /// The complete matching owner set is preflighted before callbacks. Work
     /// identifiers are reused verbatim, and deferred entries are removed only
-    /// after every enqueue succeeds.
+    /// after every enqueue succeeds. `None` means the worker was full: the exact
+    /// Apply owners and the caller's completed-sidecar notification must remain
+    /// ready for another bounded scheduler turn.
     pub(crate) fn retry_deferred_merge_sidecar<S: V2EffectServices>(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
         services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
+    ) -> Result<Option<usize>, EffectExecutorError> {
         self.ensure_open()?;
         let work_ids = self
             .deferred_merge_work
@@ -10213,8 +10279,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .collect::<Result<Vec<_>, EffectExecutorError>>()
             .map_err(|error| self.close(error, services))?;
         for task in plans {
-            if let Err(error) = services.enqueue_apply(task) {
-                return Err(self.close(service_error(error), services));
+            match services.try_enqueue_apply(task) {
+                Ok(true) => {}
+                Ok(false) => return Ok(None),
+                Err(error) => return Err(self.close(service_error(error), services)),
             }
         }
         for work_id in &work_ids {
@@ -10224,7 +10292,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.publish_status(services)
                 .map_err(|error| self.close(error, services))?;
         }
-        Ok(work_ids.len())
+        Ok(Some(work_ids.len()))
     }
     /// Fail closed when a decided Apply references a uniquely invalid merge entry.
     ///
@@ -11324,7 +11392,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .len()
                 .saturating_add(usize::from(
                     self.pending_released_lifecycle_validate_apply.is_some(),
-                )),
+                ))
+                .saturating_add(usize::from(self.pending_resolved_validate_replay.is_some())),
             pending_outputs: self.pending_lifecycle_output_admissions.len(),
             deferred_application_merge_work,
             pending_applications: self.pending_applications.len(),
@@ -11404,6 +11473,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         &self,
         key: (wire::ConsensusRound, wire::BlockSubject),
     ) -> Option<Option<u128>> {
+        if self.cold_resolved_validate_outcomes.contains_key(&key) {
+            return (!self.durable_validate_retry_seals.contains_key(&key)
+                && !self
+                    .published_lifecycle_validate_retry_markers
+                    .contains_key(&key))
+            .then_some(None);
+        }
         match (
             self.durable_validate_retry_seals.get(&key),
             self.published_lifecycle_validate_retry_markers.get(&key),
@@ -11721,8 +11797,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 round,
                 subject,
             } => {
-                validated_apply_successor =
-                    self.validate_body(tag, round, subject, ownership, services)?;
+                validated_apply_successor = self.validate_body(tag, round, subject, ownership)?;
                 Ok(())
             }
             AdapterEffect::Apply {
@@ -14426,6 +14501,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.durable_validate_retry_seals.retain(|key, seal| {
             seal.lifecycle_ordinal().is_some() || (!drain_decision_body && *key == decision_body)
         });
+        self.cold_resolved_validate_outcomes
+            .retain(|key, _| !drain_decision_body && *key == decision_body);
         self.published_lifecycle_validate_retry_markers
             .retain(|key, marker| {
                 marker.owns_live_lifecycle_row() || (!drain_decision_body && *key == decision_body)
@@ -15093,19 +15170,23 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
         });
         // Retry authorities own no service work. Ordinal-bound entries still
-        // represent live registry rows and survive view cleanup; among
-        // resolved tombstones, only the exact protected body or cleanup-only
-        // durable high can still emit a legitimate duplicate. Active published
-        // Store markers remain executable lifecycle rows and are retired only
-        // by their atomic Store-to-Validate handoff.
+        // represent live registry rows and survive view cleanup. Actual terminal
+        // results also survive: a later verified QC may name their immutable key
+        // again. They grant no execution owner. Active published Store markers
+        // retire only through their atomic Store-to-Validate handoff.
         self.durable_validate_retry_seals.retain(|key, seal| {
             seal.lifecycle_ordinal().is_some()
+                || matches!(
+                    seal.lifecycle_state(),
+                    DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_)
+                )
                 || Some(*key) == protected_body
                 || Some(*key) == highest_prepare_body
         });
         self.published_lifecycle_validate_retry_markers
             .retain(|key, marker| {
                 marker.owns_live_lifecycle_row()
+                    || marker.resolved_outcome.is_some()
                     || Some(*key) == protected_body
                     || Some(*key) == highest_prepare_body
             });
@@ -15712,6 +15793,7 @@ mod tests {
     include!("tests/v2_effects_main_03.rs");
     include!("tests/v2_effects_main_04.rs");
     include!("tests/v2_effects_main_05.rs");
+    include!("tests/v2_effects_protected_body_reseed.rs");
     include!("tests/v2_effects_03_locked_body_and_sidecar.rs");
     include!("tests/v2_effects_certified_body_fence_supersession.rs");
 }

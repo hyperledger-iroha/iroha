@@ -4,11 +4,10 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    blocking::Client,
+    client::Client,
     data_model::{
         asset::AssetBalanceScope,
-        metadata::Metadata,
-        prelude::{AssetDefinitionId, DomainId, QueryBuilderExt},
+        prelude::{AssetDefinitionId, QueryBuilderExt},
         privacy::{
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCompiledProfileResultV1,
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
@@ -22,6 +21,8 @@ use iroha_core::privacy_profiles::{
     CompiledPrivacyProfileErrorV1, compiled_privacy_profile_snapshot_result_v1,
     compiled_privacy_profile_v1,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use std::{
@@ -134,8 +135,9 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
     else {
         return Ok(());
     };
-    let mut client = network.client();
-    client.add_transaction_nonce = true;
+    let mut client_builder = network.client().client().to_builder();
+    client_builder.add_transaction_nonce = true;
+    let client = client_builder.build()?;
 
     let row = client
         .get_privacy_capabilities()
@@ -173,7 +175,7 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
     let genesis_hash = canonical_genesis_hash(&client)?;
     let build_error = match build_signed_zk_ace_privacy_transfer_v1(
         ZkAcePrivacyActionTransactionContextV1 {
-            network_id: client.network_id,
+            network_id: *client.network_id(),
             authority: ALICE_ID.clone(),
             creation_time,
             time_to_live: Some(Duration::from_secs(3_600)),

@@ -23,6 +23,9 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
@@ -320,7 +323,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
                 .under_authority(account_id);
             let mut events = timeout(
                 network.sync_timeout(),
-                test_client.client().listen_for_events([filter]),
+                test_client.account_client().events().subscribe([filter]),
             )
             .await
             .wrap_err("Timed out opening ExecuteTrigger event stream")??;
@@ -343,7 +346,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
                 Ok(())
             }
             .await;
-            events.close().await;
+            events.close().await?;
             result
         },
     ))
@@ -1274,8 +1277,9 @@ async fn trigger_burn_repetitions() -> Result<()> {
         let mut events = timeout(
             network.sync_timeout(),
             test_client
-                .client()
-                .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+                .account_client()
+                .events()
+                .subscribe([TransactionEventFilter::default().for_hash(hash)]),
         )
         .await
         .wrap_err("timed out opening pipeline event stream")??;
@@ -1317,7 +1321,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
         })
         .await
         .wrap_err("timed out waiting for trigger rejection")??;
-        events.close().await;
+        events.close().await?;
         Ok(())
     })
     .await

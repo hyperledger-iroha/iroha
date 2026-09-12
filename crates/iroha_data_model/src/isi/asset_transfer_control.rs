@@ -34,10 +34,7 @@ isi! {
     /// settlements, and KAGEMUSHA reserve movements. It is evaluated independently for each
     /// concrete routed balance bucket. The limit may be set below the current balance; a
     /// zero limit therefore closes inbound credit without altering existing funds.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::asset_transfer_control::SetAssetHoldingLimit")]
     pub struct SetAssetHoldingLimit {
         /// Controlled account.
@@ -311,6 +308,7 @@ mod tests {
     use crate::asset::AssetTransferControlWindow;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked asset-transfer-control fixture keypair");
@@ -399,7 +397,7 @@ mod tests {
             SetAssetHoldingLimit::new(account(0x94), asset_definition(), Some(25_u32.into())),
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn structured_json_availability_decodes_exact_cas_instruction() {
         use crate::isi::InstructionBox;
@@ -432,7 +430,7 @@ mod tests {
                 .expect_err("non-canonical availability JSON must be rejected");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn structured_json_holding_limit_decodes_to_native_instruction() {
         use crate::isi::InstructionBox;

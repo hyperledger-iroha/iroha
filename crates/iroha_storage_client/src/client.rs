@@ -347,16 +347,16 @@ fn build_sorafs_gateway_fetch_config(
     let telemetry_region = options
         .telemetry_region
         .clone()
-        .or_else(|| Some(client.chain.to_string()));
+        .or_else(|| Some(client.chain().to_string()));
     let mut config = OrchestratorConfig {
         telemetry_region,
         ..OrchestratorConfig::default()
     }
-    .with_rollout_phase(client.rollout_phase);
+    .with_rollout_phase(client.rollout_phase());
     let phase_default_policy = config.anonymity_policy;
-    if client.default_anonymity_policy != phase_default_policy {
-        config.anonymity_policy = client.default_anonymity_policy;
-        config.anonymity_policy_override = Some(client.default_anonymity_policy);
+    if client.default_anonymity_policy() != phase_default_policy {
+        config.anonymity_policy = client.default_anonymity_policy();
+        config.anonymity_policy_override = Some(client.default_anonymity_policy());
     }
     config.write_mode = options.write_mode_hint.unwrap_or(WriteModeHint::ReadOnly);
     if let Some(budget) = options.retry_budget {
@@ -391,7 +391,7 @@ fn build_sorafs_gateway_fetch_config(
         let telemetry_label = derive_scoreboard_telemetry_label(
             scoreboard.telemetry_source_label.as_deref(),
             options,
-            &client.chain.to_string(),
+            &client.chain().to_string(),
         );
         config.scoreboard.persist_metadata = Some(ensure_scoreboard_metadata(
             scoreboard.metadata.clone(),
@@ -486,8 +486,9 @@ mod tests {
     use iroha::{
         config::{Config, DEFAULT_TORII_REQUEST_TIMEOUT},
         crypto::{Algorithm, Hash, HashOf, KeyPair},
-        data_model::{NetworkId, account::AccountId, block::BlockHeader, prelude::ChainId},
+        data_model::{NetworkId, account::AccountId, block::BlockHeader},
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_service_model::soranet::RolloutPhase;
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use std::time::Duration;
@@ -649,7 +650,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
         );
-        Client::new(Config {
+        Client::builder(Config {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id,
             account,
@@ -665,5 +666,7 @@ mod tests {
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: RolloutPhase::Canary,
         })
+        .build()
+        .expect("valid test client configuration")
     }
 }

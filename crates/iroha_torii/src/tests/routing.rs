@@ -22,9 +22,9 @@ mod tests {
             EventBox,
             pipeline::{BlockEvent, BlockStatus},
         },
-        metadata::Metadata,
         sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_telemetry::metrics::Metrics;
     use std::{
         io::Cursor,
@@ -45,9 +45,9 @@ mod tests {
                 },
             },
             consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            nexus::{DataSpaceId, LaneId},
-            peer::PeerId,
         };
+        use iroha_model_base::peer::PeerId;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         let block_signer = checked_routing_fixture_keypair(
             0xe2,
             Algorithm::Ed25519,
@@ -182,6 +182,7 @@ mod tests {
             TelemetryProfile::Full,
         );
         let error = super::handle_status(
+            &crate::build_identity_test_fixture::build_identity().status(),
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             ActualLaneRoutingPolicy::default(),
@@ -216,6 +217,7 @@ mod tests {
             }],
         };
         let response = super::handle_status(
+            &crate::build_identity_test_fixture::build_identity().status(),
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             policy,
@@ -232,6 +234,15 @@ mod tests {
             .to_bytes();
         let payload: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status payload");
+        assert_eq!(
+            payload.get("build"),
+            Some(
+                &norito::json::to_value(
+                    &crate::build_identity_test_fixture::build_identity().status()
+                )
+                .expect("encode owning executable status")
+            )
+        );
         let rules = payload
             .get("nexus")
             .and_then(|nexus| nexus.get("routing_policy"))
@@ -588,8 +599,12 @@ mod tests {
     #[tokio::test]
     async fn status_accept_header_returns_codec_norito() {
         let telemetry = MaybeTelemetry::for_tests();
-        let expected = telemetry.metrics().await.status_snapshot();
+        let expected = telemetry
+            .metrics()
+            .await
+            .status_snapshot(&crate::build_identity_test_fixture::build_identity().status());
         let response = super::handle_status(
+            &crate::build_identity_test_fixture::build_identity().status(),
             &telemetry,
             Some(axum::http::HeaderValue::from_static(
                 crate::utils::NORITO_MIME_TYPE,
@@ -612,6 +627,10 @@ mod tests {
             .expect("collect body")
             .to_bytes();
         let decoded: Status = norito::decode_from_bytes(&body).expect("decode Norito status");
+        assert_eq!(
+            norito::json::to_value(&decoded.build).expect("encode decoded executable status"),
+            norito::json::to_value(&expected.build).expect("encode expected executable status"),
+        );
         assert_eq!(decoded.blocks, expected.blocks);
         assert_eq!(decoded.blocks_non_empty, expected.blocks_non_empty);
     }
@@ -805,6 +824,8 @@ pub mod profiling {
     use pprof::protos::Message;
     use std::num::{NonZeroU16, NonZeroU64};
     /// Query params used to configure profile gathering
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_torii::routing::profiling::ProfileParams")]
     #[allow(clippy::unsafe_derive_deserialize)]
     #[derive(
         crate::json_macros::JsonSerialize,
@@ -901,9 +922,9 @@ mod event_stream_tests {
             },
             stream::{EventMessage, EventSubscriptionRequest},
         },
-        nexus::{DataSpaceId, LaneId},
         transaction::SignedTransaction,
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::{decode_from_bytes, to_bytes};
     use std::{io::ErrorKind, sync::Arc};
     use tokio::{net::TcpListener, sync::Mutex};

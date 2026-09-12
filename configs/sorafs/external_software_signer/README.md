@@ -1,8 +1,9 @@
 # SoraFS external software signer V1
 
-This package runs one isolated signing role per Unix service identity. It is
-software-key-qualified. Iroha exposes no hardware-specific signer mode; the
-public provider boundary remains process- and backend-neutral.
+This package runs one isolated software signing role per Unix service identity
+for the roles listed below. Stream-token and release-manifest signing require
+the opaque hardware operation boundary and independent custody/completion
+evidence; this package rejects those roles.
 
 Private keys exist only inside a mode-0700 state directory as a
 ChaCha20-Poly1305 envelope and, while serving, as runtime memory. The 32-byte
@@ -32,7 +33,7 @@ The supplied systemd template uses:
 - `/etc/sorafs/signers/%i.binding.norito` for the non-secret reviewed binding;
 - the systemd encrypted credential named `wrapping-key` for runtime decryption.
 
-The macOS package supplies four native-role and seven opt-in typed-role
+The macOS package supplies four native-role and six opt-in typed-role
 LaunchDaemons plus the fixed
 `sorafs-external-software-signer-launchd-v1` launcher. Before loading a job,
 an independent administrator creates its named pipe beneath the
@@ -58,7 +59,6 @@ binding basename, algorithm, and administration boundary are:
 | `potr-provider` | `software://sorafs/potr-provider/primary` | ML-DSA-65 | independently administered PoTR provider host |
 | `billing` | `software://sorafs/billing/primary` | Ed25519 | billing statement publisher host |
 | `evidence-viewer` | `software://sorafs/evidence-viewer/primary` | Ed25519 | evidence-viewer host |
-| `stream-token` | `software://sorafs/stream-token/primary` | Ed25519 | stream-token issuer host |
 | `pop-credentials` | `software://sorafs/pop-credentials/primary` | Ed25519 | PoP enrollment issuer host |
 
 The binding at `<instance>.binding.norito` fixes the service, client, and
@@ -74,7 +74,7 @@ instances on the corresponding service host, for example
 On macOS, install and bootstrap only the matching checked plist. Merely shipping
 these opt-in assets does not activate them. On a Taira validator, explicitly
 enable only `proof-outcome`, `repair`, `reserve`, and `orderbook`;
-none of the seven typed roles is auto-launched on a validator.
+none of the six typed roles is auto-launched on a validator.
 Promotion uses the same supported binary and receipt protocol, but must run on a
 separately administered L2 promotion host with its own inherited credential
 descriptor; it has no
@@ -104,7 +104,7 @@ sorafs_external_software_signer provision \
 Use the SHA-256 digest of the exact reviewed policy bytes; the example value is
 only syntax. A promotion binding always rejects ML-DSA. Native proof-outcome,
 repair, reserve/rent, and orderbook roles admit Ed25519 or ML-DSA-65.
-Governance DAG, PoTR gateway, billing, evidence viewer, stream-token, and PoP
+Governance DAG, PoTR gateway, billing, evidence viewer, and PoP
 credentials require Ed25519; PoTR provider requires ML-DSA-65. Each typed
 binding also requires its role-specific provisioning argument described above;
 an omitted, extra, or cross-role identity is rejected.

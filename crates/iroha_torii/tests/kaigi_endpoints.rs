@@ -20,11 +20,13 @@ use iroha_data_model::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
-    metadata::Metadata,
-    peer::PeerId,
-    prelude::{AccountId, DomainId, Name},
+    prelude::AccountId,
     sns::{NameControllerV1, NameRecordV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{json::Json, time::TimeSource};
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use tower::ServiceExt;
@@ -44,7 +46,7 @@ fn seed_relay_primary_alias(
     let alias = AccountAlias::new(
         Name::from_str("relay").expect("relay alias label"),
         Some(AccountAliasDomain::new(domain_id.name().clone())),
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
     let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog)
@@ -194,6 +196,7 @@ fn build_app() -> (
         time_source,
         false,
     )
+    .expect("test telemetry resource registration")
     .0;
     let operator_key_pair = cfg.common.key_pair.clone();
     let da_receipt_signer = operator_key_pair.clone();
@@ -210,9 +213,12 @@ fn build_app() -> (
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::from_profile(
-            Some(telemetry_handle),
-            iroha_config::parameters::actual::TelemetryProfile::Operator,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::from_profile(
+                Some(telemetry_handle),
+                iroha_config::parameters::actual::TelemetryProfile::Operator,
+            ),
         ),
     )
     .expect("valid Torii Kaigi fixture");
@@ -708,3 +714,6 @@ async fn kaigi_sse_rejects_invalid_relay_filter() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     app.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

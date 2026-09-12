@@ -13,6 +13,7 @@ use crate::{
     },
 };
 use iroha_data_model::smart_contract::manifest::{ContractManifest, ManifestProvenance};
+use iroha_model_base::state_path::StatePath;
 use iroha_telemetry::metrics;
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
@@ -72,6 +73,11 @@ pub mod isi {
         smart_contract::CanRegisterSmartContractCode,
         trigger::CanRegisterGlobalDataTrigger,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
+    use iroha_model_base::topology::LaneId;
     use std::{
         collections::{BTreeMap, BTreeSet},
         str::FromStr,
@@ -130,7 +136,6 @@ pub mod isi {
             error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
             governance as gov, nexus, smart_contract_code as scode, verifying_keys,
         },
-        name::Name,
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim,
@@ -168,6 +173,7 @@ pub mod isi {
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
         },
     };
+    use iroha_model_base::name::Name;
     /// Exact governance purpose carried by a one-shot retained movement capability.
     pub(in crate::smartcontracts::isi) enum VerifiedGovernanceNumericPurpose {
         LockSlash {
@@ -12178,7 +12184,7 @@ pub mod isi {
         })
     }
     fn sccp_local_sora_network_for_chain_id(
-        chain_id: &iroha_data_model::ChainId,
+        chain_id: &iroha_model_base::chain::ChainId,
     ) -> Option<iroha_data_model::bridge::SccpNetworkV1> {
         crate::state::sccp_local_sora_network_for_chain_id(chain_id)
     }
@@ -12290,7 +12296,8 @@ pub mod isi {
         proof: &iroha_data_model::bridge::BridgeProof,
         destination_proof: &iroha_data_model::bridge::BridgeSccpDestinationProofV1,
         parsed: iroha_sccp::SccpParsedDestinationProofV1,
-        state_transaction: &StateTransaction<'_, '_>,
+        proof_size: usize,
+        state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<ValidatedSccpOutboundProofV1, Error> {
         let bundle = parsed.bundle();
         if iroha_sccp::sccp_message_source_domain(&bundle.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
@@ -12392,10 +12399,37 @@ pub mod isi {
             ));
         }
         validate_sccp_bridge_proof_range(proof, parsed.finality().finality_artifact.height)?;
+        let route = route.clone();
+        // Reserve two full Taira-roster passes before validating proof-controlled keys:
+        // one for key/hash reconstruction, one for worst-case signer PoP/aggregation.
+        // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
+        // The one-proof transaction cap prevents this conservative reservation from
+        // crowding out another legitimate proof.
+        let (bn254_pairing_checks, bls12_381_pairing_checks) = match parsed.crypto_work() {
+            iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bn254Pairing => (1, 0),
+            iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bls12381Pairing => (0, 1),
+        };
+        state_transaction.register_sccp_proof(
+            proof_size,
+            crate::state::SccpVerifierWorkV1 {
+                bls_aggregate_checks: 1,
+                bls_signer_contributions: u64::try_from(
+                    iroha_sccp::SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1,
+                )
+                .ok()
+                .and_then(|value| value.checked_mul(2))
+                .ok_or_else(|| {
+                    invalid_bridge_proof("SCCP Taira validator work bound overflows u64")
+                })?,
+                bn254_pairing_checks,
+                bls12_381_pairing_checks,
+                ..crate::state::SccpVerifierWorkV1::default()
+            },
+        )?;
         let trusted_finality = validate_sccp_finality_against_state(&parsed, state_transaction)?;
         let artifact = iroha_sccp::verify_parsed_sccp_destination_proof_v1(
             parsed,
-            route,
+            &route,
             &trusted_finality,
         )
         .ok_or_else(|| {
@@ -12426,9 +12460,7 @@ pub mod isi {
     struct ValidatedSccpNativeBridgeMessageV1 {
         admission: iroha_sccp::ValidatedSccpNativeInboundMessageV1,
         settlement: SccpInboundSettlementV1,
-        replay_accumulator_id: iroha_data_model::bridge::SccpReplayAccumulatorIdV1,
-        replay_domain: iroha_data_model::bridge::SccpReplayDomainV1,
-        replay_record: iroha_data_model::bridge::SccpReplayRecordV1,
+        replay_mutation: crate::state::PreparedSccpReplayMutationV1,
     }
     fn parse_sccp_taira_recipient_v1(recipient_literal: &str) -> Result<AccountId, Error> {
         let recipient_address = iroha_data_model::account::AccountAddress::parse_encoded(
@@ -12473,6 +12505,7 @@ pub mod isi {
         proof: &iroha_data_model::bridge::BridgeProof,
         native: &iroha_data_model::bridge::BridgeNativeProtocolProofV1,
         decoded: iroha_sccp::SccpNativeInboundMessageProofV1,
+        replay_witness: &iroha_data_model::bridge::SccpSparseMerkleWitnessV1,
         proof_size: usize,
         verifier_work: crate::state::SccpVerifierWorkV1,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -12618,6 +12651,47 @@ pub mod isi {
                 )?;
             (SccpInboundSettlementV1::Transfer(prepared), recipient)
         };
+        let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
+            source_network: decoded.source.lane.source,
+            target_network: decoded.source.lane.target,
+            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: route.route_key.revision,
+            route_configuration_hash: route.route_configuration_hash,
+            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
+        };
+        let replay_accumulator_id =
+            iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
+                route.route_key.clone(),
+                &replay_domain,
+            )
+            .map_err(|_| {
+                invalid_bridge_proof(
+                    "SCCP replay accumulator identity differs from the authenticated route domain",
+                )
+            })?;
+        let canonical_payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
+            .map_err(|_| {
+                invalid_bridge_proof("SCCP native payload could not be re-encoded canonically")
+            })?;
+        let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
+            operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
+            replay_id: decoded.source.message_id,
+            payload_sha256: sha2::Sha256::digest(canonical_payload_bytes).into(),
+            amount: transfer.amount,
+            principal: iroha_data_model::bridge::SccpReplayPrincipalV1::SoraAccount(
+                replay_principal,
+            ),
+            auxiliary_identity_sha256: sha2::Sha256::digest(decoded.source.source_event_digest)
+                .into(),
+        };
+        // The proof verifier authenticates these exact decoded replay fields. Prepare their
+        // governed witness before charging source cryptography, and publish only after success.
+        let replay_mutation = state_transaction.prepare_sccp_replay_leaf(
+            replay_accumulator_id,
+            &replay_domain,
+            &replay_record,
+            replay_witness,
+        )?;
         // Ledger-domain failures are completely determined before this reservation. From this
         // point onward, rejected source proofs intentionally consume their deterministic work
         // allowance so repeated invalid cryptography cannot bypass transaction quotas.
@@ -12652,46 +12726,10 @@ pub mod isi {
                 validated.source_finality.height
             )));
         }
-        let replay_domain = iroha_data_model::bridge::SccpReplayDomainV1 {
-            source_network: decoded.source.lane.source,
-            target_network: decoded.source.lane.target,
-            boundary: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            route_revision: route.route_key.revision,
-            route_configuration_hash: route.route_configuration_hash,
-            actor: iroha_data_model::bridge::SccpReplayActorV1::Route,
-        };
-        let replay_accumulator_id =
-            iroha_data_model::bridge::SccpReplayAccumulatorIdV1::from_domain(
-                route.route_key.clone(),
-                &replay_domain,
-            )
-            .map_err(|_| {
-                invalid_bridge_proof(
-                    "SCCP replay accumulator identity differs from the authenticated route domain",
-                )
-            })?;
-        let canonical_payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&decoded.payload)
-            .map_err(|_| {
-                invalid_bridge_proof(
-                    "verified SCCP native payload could not be re-encoded canonically",
-                )
-            })?;
-        let replay_record = iroha_data_model::bridge::SccpReplayRecordV1 {
-            operation: iroha_data_model::bridge::SccpReplayBoundaryV1::SoraInboundRelease,
-            replay_id: validated.message_id,
-            payload_sha256: sha2::Sha256::digest(canonical_payload_bytes).into(),
-            amount: transfer.amount,
-            principal: iroha_data_model::bridge::SccpReplayPrincipalV1::SoraAccount(
-                replay_principal,
-            ),
-            auxiliary_identity_sha256: sha2::Sha256::digest(validated.source_event_digest).into(),
-        };
         Ok(ValidatedSccpNativeBridgeMessageV1 {
             admission: validated,
             settlement,
-            replay_accumulator_id,
-            replay_domain,
-            replay_record,
+            replay_mutation,
         })
     }
     fn sccp_bsc_native_verifier_work(
@@ -12831,6 +12869,7 @@ pub mod isi {
     }
     fn encode_and_validate_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
+        replay_witness: Option<&iroha_data_model::bridge::SccpSparseMerkleWitnessV1>,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<ValidatedBridgeProof, Error> {
         let zk_cfg = &state_transaction.zk;
@@ -12934,36 +12973,11 @@ pub mod isi {
                             "SCCP destination proof or its embedded message/finality bundle is non-canonical or internally inconsistent",
                         )
                     })?;
-                // Reserve two full Taira-roster passes before validating proof-controlled keys:
-                // one for key/hash reconstruction, one for worst-case signer PoP/aggregation.
-                // Bounded parsing exposes the replay key, so exact replay consumes no verifier work.
-                // The one-proof transaction cap prevents this conservative reservation from
-                // crowding out another legitimate proof.
-                let (bn254_pairing_checks, bls12_381_pairing_checks) = match parsed.crypto_work() {
-                    iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bn254Pairing => (1, 0),
-                    iroha_sccp::SccpDestinationProofCryptoWorkV1::Groth16Bls12381Pairing => (0, 1),
-                };
-                state_transaction.register_sccp_proof(
-                    proof_size,
-                    crate::state::SccpVerifierWorkV1 {
-                        bls_aggregate_checks: 1,
-                        bls_signer_contributions: u64::try_from(
-                            iroha_sccp::SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1,
-                        )
-                        .ok()
-                        .and_then(|value| value.checked_mul(2))
-                        .ok_or_else(|| {
-                            invalid_bridge_proof("SCCP Taira validator work bound overflows u64")
-                        })?,
-                        bn254_pairing_checks,
-                        bls12_381_pairing_checks,
-                        ..crate::state::SccpVerifierWorkV1::default()
-                    },
-                )?;
                 let validated_proof = validate_sccp_destination_bridge_proof(
                     proof,
                     destination,
                     parsed,
+                    proof_size,
                     state_transaction,
                 )?;
                 (Some(validated_proof), None)
@@ -12982,6 +12996,7 @@ pub mod isi {
                     proof,
                     native,
                     decoded,
+                    replay_witness.expect("native SCCP witness was required before validation"),
                     proof_size,
                     work,
                     state_transaction,
@@ -13220,7 +13235,11 @@ pub mod isi {
                 ));
             }
             let current_height = state_transaction._curr_block.height.get();
-            let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
+            let validated = encode_and_validate_bridge_proof(
+                &self.proof,
+                self.replay_witness.as_ref(),
+                state_transaction,
+            )?;
             let proof_size = validated.size_bytes;
             let outbound_proof = validated.outbound_proof;
             let native_message = validated.native_message;
@@ -13360,24 +13379,9 @@ pub mod isi {
                 ));
             }
             ensure_unique_proof(state_transaction, &pid)?;
-            let replay_mutation = native_message
-                .as_ref()
-                .map(|native| {
-                    state_transaction.prepare_sccp_replay_leaf(
-                        native.replay_accumulator_id.clone(),
-                        &native.replay_domain,
-                        &native.replay_record,
-                        self.replay_witness
-                            .as_ref()
-                            .expect("native SCCP witness was required before validation"),
-                    )
-                })
-                .transpose()?;
             if let Some(native) = native_message {
                 execute_sccp_inbound_settlement(native.settlement, authority, state_transaction)?;
-            }
-            if let Some(replay_mutation) = replay_mutation {
-                state_transaction.apply_sccp_replay_leaf(replay_mutation)?;
+                state_transaction.apply_sccp_replay_leaf(native.replay_mutation)?;
             }
             let height = current_height;
             let call_hash_opt: Option<[u8; 32]> = state_transaction
@@ -13490,7 +13494,7 @@ pub mod isi {
             })
     }
     fn derive_sccp_bridge_receipt_projection(
-        lane: iroha_data_model::nexus::LaneId,
+        lane: iroha_model_base::topology::LaneId,
         proof_hash: [u8; 32],
         message: &iroha_sccp::SccpPayloadV1,
         message_id: [u8; 32],
@@ -13516,7 +13520,7 @@ pub mod isi {
         }
     }
     fn derive_bridge_receipt_projection(
-        lane: iroha_data_model::nexus::LaneId,
+        lane: iroha_model_base::topology::LaneId,
         proof_hash: [u8; 32],
         proof: &iroha_data_model::bridge::BridgeProof,
     ) -> Result<iroha_data_model::bridge::BridgeReceipt, Error> {
@@ -13562,7 +13566,7 @@ pub mod isi {
     fn validate_bridge_receipt_lane_matches_transaction(
         receipt: &iroha_data_model::bridge::BridgeReceipt,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<iroha_data_model::nexus::LaneId, Error> {
+    ) -> Result<iroha_model_base::topology::LaneId, Error> {
         let Some(current_lane_id) = state_transaction.current_lane_id else {
             return Err(invalid_bridge_receipt(
                 "bridge receipt requires an active transaction lane",
@@ -19006,7 +19010,7 @@ pub mod isi {
     }
     fn fee_sponsor_asset_scope(
         definition: &AssetDefinition,
-        dataspace: iroha_data_model::nexus::DataSpaceId,
+        dataspace: iroha_model_base::topology::DataSpaceId,
     ) -> AssetBalanceScope {
         match definition.balance_scope_policy() {
             AssetBalancePolicy::Global => AssetBalanceScope::Global,
@@ -19152,12 +19156,6 @@ pub mod isi {
             };
             let program_id = self.program_id().clone();
             ensure_fee_sponsor_program_owner(authority, &program_id, state_transaction)?;
-            if *self.activate_at_height() < state_transaction.block_height() {
-                return Err(invalid_fee_sponsor_program(format!(
-                    "fee sponsor revision activation height cannot precede executing block height {}",
-                    state_transaction.block_height()
-                )));
-            }
             let mut program = state_transaction
                 .world
                 .fee_sponsor_programs
@@ -19390,17 +19388,9 @@ pub mod isi {
                     "closed fee sponsor program cannot enroll beneficiaries",
                 ));
             }
-            if state_transaction
-                .world
-                .accounts
-                .get(self.beneficiary())
-                .is_none()
-            {
-                return Err(invalid_fee_sponsor_program(format!(
-                    "unknown fee sponsor beneficiary `{}`",
-                    self.beneficiary()
-                )));
-            }
+            // Eligibility binds an exact account identity, not account existence. An
+            // authorized sponsor may fund that identity's first self-registration
+            // transaction; enrollment itself creates no account or execution authority.
             let key = FeeSponsorEnrollmentKey {
                 program_id,
                 beneficiary: self.beneficiary().clone(),
@@ -19503,7 +19493,7 @@ pub mod isi {
             }
             let dataspace = state_transaction
                 .current_dataspace_id
-                .unwrap_or(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+                .unwrap_or(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
             let source = AssetId::with_scope(
                 self.asset_definition_id().clone(),
                 program_id.sponsor.clone(),
@@ -19626,7 +19616,7 @@ pub mod isi {
             vault.balance = remaining;
             let dataspace = state_transaction
                 .current_dataspace_id
-                .unwrap_or(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+                .unwrap_or(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
             let source = AssetId::with_scope(
                 self.asset_definition_id().clone(),
                 state_transaction
@@ -21144,12 +21134,9 @@ pub mod isi {
                 Grant, Revoke, consensus_keys, error::AssetTransferAdmissionError,
                 nexus::SetLaneRelayEmergencyValidators, verifying_keys,
             },
-            metadata::Metadata,
-            name,
             nexus::{
-                DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
-                DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-                LaneCatalog, LaneConfig, LaneId,
+                DataSpaceCatalog, DataSpaceMetadata, DomainEndorsement, DomainEndorsementPolicy,
+                DomainEndorsementScope, DomainEndorsementSignature, LaneCatalog, LaneConfig,
             },
             permission::Permission,
             privacy::PrivacyProtocolIdV1,
@@ -21164,9 +21151,8 @@ pub mod isi {
         use iroha_data_model::{
             account::{NewAccount, rekey::AccountAlias},
             asset::{
-                ASSET_TRANSFER_CONTROL_METADATA_KEY, Asset, AssetDefinition, AssetDefinitionId,
-                AssetId, AssetTransferControlStoreV1, AssetTransferControlWindow,
-                AssetTransferLimit,
+                ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetDefinition, AssetDefinitionId, AssetId,
+                AssetTransferControlStoreV1, AssetTransferControlWindow, AssetTransferLimit,
             },
             isi::asset_transfer_control::{SetAssetTransferBlacklist, SetAssetTransferControl},
             nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
@@ -21184,6 +21170,12 @@ pub mod isi {
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
+        #[allow(unused_imports)]
+        use iroha_model_base::metadata::Metadata;
+        #[allow(unused_imports)]
+        use iroha_model_base::name;
+        #[allow(unused_imports)]
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use rand::{SeedableRng as _, rngs::StdRng};
         use std::{
             collections::{BTreeMap, BTreeSet},
@@ -22308,7 +22300,11 @@ pub mod isi {
                 .parliament_attempts
                 .get(&fixture.governance_attempt_id)
                 .expect("retained Parliament attempt");
-            let mut candidates = vec![parliament_test_account(0xE1), parliament_test_account(0xE2)];
+            let mut candidates = vec![
+                parliament_test_account(0xE1),
+                parliament_test_account(0xE2),
+                parliament_test_account(0xE3),
+            ];
             candidates.sort_unstable();
             let request_height = state_transaction.block_height();
             let request = canonical_confirmation_sortition_request_v1(
@@ -22328,7 +22324,7 @@ pub mod isi {
                 )
             );
             assert_eq!(request.body, ParliamentBody::ConfirmationJury);
-            assert_eq!(request.candidate_count, 2);
+            assert_eq!(request.candidate_count, 3);
             assert_eq!(
                 request.candidate_root,
                 parliament_candidate_root_v1(
@@ -22381,7 +22377,7 @@ pub mod isi {
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             state_transaction.sccp_registry = registry;
             state_transaction.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
 
             let current = native.trust_anchor;
             let next = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
@@ -22856,7 +22852,7 @@ pub mod isi {
                         vec![0xD8_u8.wrapping_add(index); 32],
                         Algorithm::Ed25519,
                     );
-                    iroha_data_model::peer::PeerId::new(keypair.public_key().clone())
+                    iroha_model_base::peer::PeerId::new(keypair.public_key().clone())
                 })
                 .collect::<Vec<_>>();
             let threshold_session = ThresholdBlsSession::<TleReleasePurpose>::new(
@@ -23671,7 +23667,7 @@ pub mod isi {
             *state_transaction.world.sccp_registry.get_mut() = registry.to_wire();
             state_transaction.sccp_registry = registry;
             state_transaction.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             ActiveSccpGovernanceFixture {
                 lane_id,
                 route_key,
@@ -23760,7 +23756,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (fixture, sccp, next) = {
                 let mut seed = state_block.transaction();
                 let sccp = install_active_sccp_governance_fixture(&mut seed);
@@ -24661,7 +24657,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (fixture, sccp, certified_next) = {
                 let mut seed = state_block.transaction();
                 let sccp = install_active_sccp_governance_fixture(&mut seed);
@@ -24755,7 +24751,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (fixture, sccp, registry_before) = {
                 let mut seed = state_block.transaction();
                 let sccp = install_active_sccp_governance_fixture(&mut seed);
@@ -24867,7 +24863,7 @@ pub mod isi {
             );
             let mut state_block = state.block(block.as_ref().header());
             state_block.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let mut transaction = state_block.transaction();
             let sccp = install_active_sccp_governance_fixture(&mut transaction);
             let (proposal_kind, _) =
@@ -24934,7 +24930,7 @@ pub mod isi {
             }
         }
         fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
-            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x51; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
+            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
             record
         }
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -25011,7 +25007,7 @@ pub mod isi {
             };
         }
         macro_rules! proof_verification_fixture {
-            ($state:ident, $block:ident, $exec:ident) => {
+            ($state:ident, $block:ident) => {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let $state = State::new(World::default(), kura, query_handle);
@@ -25024,7 +25020,6 @@ pub mod isi {
                     0,
                 );
                 let mut $block = $state.block(header);
-                let $exec = Executor::default();
             };
         }
         macro_rules! sccp_message {
@@ -25221,7 +25216,7 @@ pub mod isi {
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
             let roster_hash =
@@ -25356,7 +25351,7 @@ pub mod isi {
             validator_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let ordered_roster = validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
             let authorization_roster_hash =
@@ -25367,7 +25362,7 @@ pub mod isi {
                 .sort_by(|left, right| left.public_key().cmp(right.public_key()));
             let successor_roster = successor_validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             let successor_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&successor_roster);
@@ -25463,7 +25458,7 @@ pub mod isi {
             let validator_keys = (0..4).map(|_| checked_keypair()).collect::<Vec<_>>();
             let ordered_roster = validator_keys
                 .iter()
-                .map(|key| crate::PeerId::new(key.public_key().clone()))
+                .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = ordered_roster.clone();
             let roster_hash =
@@ -25524,7 +25519,7 @@ pub mod isi {
             );
 
             let successor_roster = (0..4)
-                .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
+                .map(|_| iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone()))
                 .collect::<Vec<_>>();
             *state_transaction.commit_topology.get_mut() = successor_roster;
             let stale_roster_error =
@@ -25540,7 +25535,7 @@ pub mod isi {
             );
 
             let seven_peer_roster = (0..7)
-                .map(|_| crate::PeerId::new(checked_keypair().public_key().clone()))
+                .map(|_| iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone()))
                 .collect::<Vec<_>>();
             let seven_peer_roster_hash =
                 crate::beacon::global_threshold_beacon_roster_hash_v1(&seven_peer_roster);
@@ -25730,7 +25725,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("replayed Hijiri revision must fail");
             assert!(
-                replay_error.to_string().contains("expected Hijiri parameter revision 3"),
+                format!("{replay_error:?}").contains("expected Hijiri parameter revision 3"),
                 "unexpected replay rejection: {replay_error}"
             );
 
@@ -26208,7 +26203,7 @@ pub mod isi {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let (_, source_identity, native_trust_anchor) =
                 iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
             let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
@@ -26266,7 +26261,7 @@ pub mod isi {
         world_test!(registered_staged_tron_route_cannot_be_removed {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let registry = test_staged_tron_registry();
             let key = registry.lanes[0].routes[0].key();
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(registry)
@@ -26290,7 +26285,7 @@ pub mod isi {
         world_test!(never_used_staged_evm_route_remains_removable {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                 iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
                 iroha_data_model::bridge::SccpRouteActivationV1::Staged,
@@ -26319,7 +26314,7 @@ pub mod isi {
         world_test!(staged_evm_route_with_liability_cannot_be_removed {
             blank_state_transaction!(state, block, state_block, stx);
             stx.chain_id =
-                iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
                 iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
                 iroha_data_model::bridge::SccpRouteActivationV1::Staged,
@@ -27138,7 +27133,7 @@ pub mod isi {
                     );
                 assert_err!(
                     format!("{error:?}"),
-                    "exact JSON integer maximum",
+                    "not a canonical certificate-only Parliament record",
                     "unexpected inexact runtime-height rejection: {error:?}"
                 );
             }
@@ -27785,7 +27780,7 @@ pub mod isi {
             let error = super::add_plain_tally_weight_v1(&mut tally, 0, 1)
                 .expect_err("category overflow must reject");
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "category tally exceeds the exact u128 domain"
             );
             assert_eq!(tally, [u128::MAX, 0, 0]);
@@ -27799,13 +27794,13 @@ pub mod isi {
                 super::MAX_STANDALONE_PLAIN_BALLOTS_V1 + 1,
             )
             .expect_err("a larger PLAIN corpus must reject");
-            assert_contains!(error.to_string(), "ballot corpus exceeds");
+            assert_contains!(format!("{error:?}"), "ballot corpus exceeds");
 
             let amount = Quantity::from(100_u64);
             for (step, maximum) in [(0, 1), (1, 0)] {
                 let error = super::plain_ballot_weight(&amount, 100, step, maximum)
                     .expect_err("zero conviction parameters must reject");
-                assert_contains!(error.to_string(), "conviction parameters must be non-zero");
+                assert_contains!(format!("{error:?}"), "conviction parameters must be non-zero");
             }
         });
         world_test!(plain_ballot_rejects_invalid_direction_before_state_mutation {
@@ -28180,7 +28175,7 @@ pub mod isi {
         fn new_dummy_block_at_height(height: NonZeroU64) -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =
                 checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
-            let peer_id = crate::PeerId::new(leader_public_key);
+            let peer_id = iroha_model_base::peer::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
                 h.set_height(height);
@@ -28191,6 +28186,35 @@ pub mod isi {
         }
         fn new_dummy_block() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+        /// Seed retained block bytes alongside the authoritative committed hash projection.
+        fn seed_committed_world_test_block(state: &State) -> [u8; 32] {
+            let hashes = state.block_hashes.view();
+            let height = NonZeroU64::new(hashes.len() as u64 + 1).expect("fixture height");
+            let parent = hashes.iter().last().copied();
+            drop(hashes);
+            let (public_key, private_key) =
+                checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
+            let topology =
+                crate::sumeragi::network_topology::Topology::new(vec![crate::PeerId::new(
+                    public_key,
+                )]);
+            let block = ValidBlock::new_dummy_and_modify_header(&private_key, |header| {
+                header.set_height(height);
+                header.set_prev_block_hash(parent);
+            })
+            .commit(&topology)
+            .unpack(|_| {})
+            .expect("commit fixture block");
+            let hash = block.as_ref().hash();
+            state
+                .kura()
+                .store_block(Arc::new(block.as_ref().clone()))
+                .expect("retain fixture block bytes");
+            let mut hashes = state.block_hashes.block();
+            hashes.push_for_tests(hash);
+            hashes.commit_for_tests();
+            *hash.as_ref()
         }
         world_test!(confidential_policy_transition_rejects_return_to_transparent_mode {
             for current_mode in [
@@ -28276,11 +28300,11 @@ pub mod isi {
                 .expect("a new registry id may select the same unshield verifier commitment");
             let cleared = ensure_committed_unshield_binding_is_preserved(Some(&state), None)
                 .expect_err("committed assets must retain an unshield verifier");
-            assert_contains!(cleared.to_string(), "cannot be cleared");
+            assert_contains!(format!("{cleared:?}"), "cannot be cleared");
             let replaced =
                 ensure_committed_unshield_binding_is_preserved(Some(&state), Some(&changed))
                     .expect_err("committed assets must retain the verifier commitment");
-            assert_contains!(replaced.to_string(), "commitment cannot change");
+            assert_contains!(format!("{replaced:?}"), "commitment cannot change");
             state.commitments.clear();
             ensure_committed_unshield_binding_is_preserved(Some(&state), None)
                 .expect("an empty commitment tree does not strand funds");
@@ -28288,7 +28312,7 @@ pub mod isi {
             state.vk_unshield = None;
             let corrupted = ensure_committed_unshield_binding_is_preserved(Some(&state), None)
                 .expect_err("persisted committed state without redemption must fail closed");
-            assert_contains!(corrupted .to_string(), "commitments exist without a bound unshield verifier");
+            assert_contains!(format!("{corrupted:?}"), "commitments exist without a bound unshield verifier");
         });
         world_test!(register_zk_asset_requires_owner_or_exact_scoped_grant {
             let state = blank_test_state();
@@ -28699,7 +28723,7 @@ pub mod isi {
                         [0x37; 32],
                     )
                     .expect("foreign-profile context"),
-                    "no active exact governed reverse lane",
+                    "does not match exact context profile",
                 ),
                 (
                     SccpOutboundMessageContextV1::new(
@@ -29398,8 +29422,11 @@ pub mod isi {
             let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
             let kura = Kura::blank_kura_for_testing();
             let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
-            let state =
-                State::new_for_testing(World::default(), kura, LiveQueryStore::start_test());
+            let state = State::new_with_chain_and_network_id_for_testing(
+                World::default(), kura, LiveQueryStore::start_test(),
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+                finality.finality_artifact.height_context.network_id,
+            );
             let mut state_block = state.block(finality.block_header.clone());
             let exact_sender = exact_sccp_fixture_sender(&fixture);
             let exact_key = crate::bridge::test_sccp_outbound_message_key(&fixture.bundle.payload);
@@ -29432,6 +29459,17 @@ pub mod isi {
                 .expect_execute(&exact_sender, &mut setup, "record exact finalized SCCP payload");
                 setup.apply();
             }
+            state_block.commit_world_overlay_for_testing()
+                .expect("retain the world projection of the authenticated outbound block");
+            let mut state_block = state.block(BlockHeader::new(
+                NonZeroU64::new(finality.finality_artifact.height + 1).expect("successor height"),
+                Some(finality.block_header.hash()),
+                None,
+                None,
+                u64::try_from(finality.block_header.creation_time().as_millis())
+                    .expect("fixture time fits u64") + 1,
+                0,
+            ));
             {
                 let mut setup = state_block.transaction();
                 enable_sccp_recording_for_test(&mut setup, LaneId::SINGLE);
@@ -29550,7 +29588,7 @@ pub mod isi {
             let terminal_state = sccp_outbound_mutation_snapshot(&replay, &exact_sender);
             let error = SubmitBridgeProof::new(proof)
                 .expect_execute_err(&ALICE_ID, &mut replay, "a consumed pending message must reject the exact destination proof");
-            assert_err!(format!("{error:?}"), "no pending authoritative payload", "unexpected consumed-message rejection: {error:?}");
+            assert_err!(format!("{error:?}"), "already been accepted", "unexpected consumed-message rejection: {error:?}");
             assert_eq!(
                 sccp_outbound_mutation_snapshot(&replay, &exact_sender),
                 terminal_state,
@@ -30428,7 +30466,14 @@ seiyaku GovernanceLifecycle {
                 total_xor_after_haircut: "0.000076".parse().expect("valid settlement quantity"),
                 total_xor_variance: "0".parse().expect("valid settlement quantity"),
                 swap_metadata: None,
-                receipts: Vec::new(),
+                receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
+                    source_id: [0xAA; 32],
+                    local_amount: "0.000001".parse().expect("receipt local amount"),
+                    xor_due: "0.000076".parse().expect("receipt XOR due"),
+                    xor_after_haircut: "0.000076".parse().expect("receipt XOR after haircut"),
+                    xor_variance: Quantity::zero(),
+                    timestamp_ms: 0,
+                }],
                 nexus_fee_receipts: Vec::new(),
                 native_amx_receipts: Vec::new(),
             };
@@ -30834,7 +30879,7 @@ seiyaku GovernanceLifecycle {
                     let error =
                         ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &circuit_id)
                             .expect_err("reserved privacy circuit id must fail");
-                    assert_contains!(error .to_string(), "reserved privacy protocol label", "unexpected reservation error for {circuit_id:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "reserved privacy protocol label", "unexpected reservation error for {circuit_id:?}: {error}");
                     assert!(normalize_halo2_circuit_id(&circuit_id).is_none());
                     assert!(normalize_stark_fri_circuit_id("stark/fri", &circuit_id).is_none());
                     assert!(!circuit_id_matches("halo2/ipa", &circuit_id, &circuit_id));
@@ -30846,7 +30891,7 @@ seiyaku GovernanceLifecycle {
                         Some(&envelope),
                     )
                     .expect_err("VerifyProof admission must reject privacy circuit labels");
-                    assert_contains!(error .to_string(), "reserved privacy protocol label", "unexpected VerifyProof error for {circuit_id:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "reserved privacy protocol label", "unexpected VerifyProof error for {circuit_id:?}: {error}");
                 }
                 for malformed_alias in [
                     format!(" {label}"),
@@ -30856,7 +30901,7 @@ seiyaku GovernanceLifecycle {
                     let error =
                         ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &malformed_alias)
                             .expect_err("non-portable privacy alias must fail");
-                    assert_contains!(error.to_string(), "bounded portable identifier", "unexpected shape error for {malformed_alias:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "bounded portable identifier", "unexpected shape error for {malformed_alias:?}: {error}");
                     assert!(normalize_halo2_circuit_id(&malformed_alias).is_none());
                     assert!(
                         normalize_stark_fri_circuit_id("stark/fri", &malformed_alias).is_none()
@@ -30874,13 +30919,13 @@ seiyaku GovernanceLifecycle {
                         Some(&envelope),
                     )
                     .expect_err("VerifyProof must reject non-portable privacy aliases");
-                    assert_contains!(error.to_string(), "bounded portable identifier", "unexpected VerifyProof shape error for {malformed_alias:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "bounded portable identifier", "unexpected VerifyProof shape error for {malformed_alias:?}: {error}");
                 }
                 for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
                     let error =
                         ensure_open_verify_circuit_id_is_admitted_v1("halo2/ipa", &near_miss)
                             .expect_err("unregistered Halo2 circuit must fail");
-                    assert_contains!(error.to_string(), "production circuit registry", "unexpected closed-registry error for {near_miss:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "production circuit registry", "unexpected closed-registry error for {near_miss:?}: {error}");
                     assert!(normalize_halo2_circuit_id(&near_miss).is_some());
                     assert!(normalize_stark_fri_circuit_id("stark/fri", &near_miss).is_some());
                     assert!(!circuit_id_matches("halo2/ipa", &near_miss, &near_miss));
@@ -30892,7 +30937,7 @@ seiyaku GovernanceLifecycle {
                         Some(&envelope),
                     )
                     .expect_err("VerifyProof must reject unregistered Halo2 circuit ids");
-                    assert_contains!(error.to_string(), "production circuit registry", "unexpected VerifyProof registry error for {near_miss:?}: {error}");
+                    assert_contains!(format!("{error:?}"), "production circuit registry", "unexpected VerifyProof registry error for {near_miss:?}: {error}");
                 }
             }
             for protocol in PrivacyProtocolIdV1::ALL {
@@ -30901,15 +30946,7 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(register_domain_requires_active_sns_lease_for_non_genesis_owner {
             let state = blank_state();
-            {
-                let mut block_hashes = state.block_hashes.block();
-                block_hashes.push_for_tests(
-                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                        Hash::prehashed([0x51; Hash::LENGTH]),
-                    ),
-                );
-                block_hashes.commit_for_tests();
-            }
+            seed_committed_world_test_block(&state);
             let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -30917,7 +30954,7 @@ seiyaku GovernanceLifecycle {
             let domain_id: DomainId = DomainId::try_new("leased", "world").expect("domain");
             let err = Register::domain(Domain::new(domain_id))
                 .expect_execute_err(&authority, &mut stx, "missing lease must fail");
-            assert_contains!(err.to_string(), "active SNS domain-name lease", "unexpected error: {err}");
+            assert_contains!(format!("{err:?}"), "active SNS domain-name lease", "unexpected error: {err}");
         });
         world_test!(register_domain_in_empty_state_does_not_require_sns_lease {
             let state = blank_state();
@@ -30970,7 +31007,7 @@ seiyaku GovernanceLifecycle {
                     "domain registration must reject native Kaigi metadata",
                 );
                 assert_contains!(
-                    error.to_string(),
+                    format!("{error:?}"),
                     "reserved for native Kaigi state",
                     "unexpected error: {error}"
                 );
@@ -31036,15 +31073,7 @@ seiyaku GovernanceLifecycle {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &authority, &domain_id);
             let state = State::new(world, kura, query_handle);
-            {
-                let mut block_hashes = state.block_hashes.block();
-                block_hashes.push_for_tests(
-                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                        Hash::prehashed([0x52; Hash::LENGTH]),
-                    ),
-                );
-                block_hashes.commit_for_tests();
-            }
+            seed_committed_world_test_block(&state);
             let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -31065,21 +31094,13 @@ seiyaku GovernanceLifecycle {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &lease_owner, &domain_id);
             let state = State::new(world, kura, query_handle);
-            {
-                let mut block_hashes = state.block_hashes.block();
-                block_hashes.push_for_tests(
-                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                        Hash::prehashed([0x53; Hash::LENGTH]),
-                    ),
-                );
-                block_hashes.commit_for_tests();
-            }
+            seed_committed_world_test_block(&state);
             let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let err = Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute_err(&authority, &mut stx, "a foreign active lease owner must fail");
-            let message = err.to_string();
+            let message = format!("{err:?}");
             assert!(
                 message.contains("active SNS domain-name lease")
                     && message.contains("not")
@@ -31144,7 +31165,7 @@ seiyaku GovernanceLifecycle {
                 &vk_rec,
             )
             .expect_err("zero OpenVerifyEnvelope verifier hash must reject explicitly");
-            assert_contains!(err.to_string(), "verifier-key hash must be non-zero", "unexpected zero-hash rejection: {err}");
+            assert_contains!(format!("{err:?}"), "verifier-key hash must be non-zero", "unexpected zero-hash rejection: {err}");
             let mut non_empty_aux = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
                 TEST_HALO2_CIRCUIT_ALIAS,
@@ -31182,7 +31203,7 @@ seiyaku GovernanceLifecycle {
                     &bad_backend_rec,
                 )
                 .expect_err("registered backend tag must match the admitted proof backend");
-                assert_contains!(err.to_string(), "verifying key backend mismatch", "unexpected backend-tag rejection for {}: {err}", backend_tag.canonical_label());
+                assert_contains!(format!("{err:?}"), "verifying key backend mismatch", "unexpected backend-tag rejection for {}: {err}", backend_tag.canonical_label());
             }
             for (label, envelope, expected) in [
                 (
@@ -31240,7 +31261,7 @@ seiyaku GovernanceLifecycle {
                     &vk_rec,
                 )
                 .expect_err("{label} must reject");
-                assert_contains!(err.to_string(), expected, "unexpected {label} rejection: {err}");
+                assert_contains!(format!("{err:?}"), expected, "unexpected {label} rejection: {err}");
             }
         });
         world_test!(validate_open_verify_envelope_metadata_checks_schema_hash {
@@ -31469,10 +31490,10 @@ seiyaku GovernanceLifecycle {
             assert!(backend_requires_open_verify_envelope(
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1"
             ));
-            assert!(backend_requires_open_verify_envelope(
+            assert!(!backend_requires_open_verify_envelope(
                 "stark/fri/poseidon2-goldilocks"
             ));
-            assert!(backend_requires_open_verify_envelope(
+            assert!(!backend_requires_open_verify_envelope(
                 "stark/fri/sha256_goldilocks.v1"
             ));
             assert!(!open_verify_backend_tag_matches(
@@ -31534,9 +31555,9 @@ seiyaku GovernanceLifecycle {
         world_test!(validate_proof_attachment_rejects_mismatched_attachment_triples {
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                "halo2/ipa:tiny-add",
-                [0u8; 32],
-                Vec::new(),
+                TEST_HALO2_CIRCUIT_ID,
+                [0x41u8; 32],
+                crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
                 vec![1, 2, 3],
             );
             let proof = ProofBox::new(
@@ -31872,7 +31893,8 @@ seiyaku GovernanceLifecycle {
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id =
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             if stx.sccp_registry.lanes().is_empty() {
                 stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(
                     test_active_eth_registry(),
@@ -32283,7 +32305,8 @@ seiyaku GovernanceLifecycle {
         ) -> (AssetDefinitionId, AccountId) {
             *stx.world.sccp_registry.get_mut() = registry.to_wire();
             stx.sccp_registry = registry;
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id =
+                iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let (asset, custody) = sccp_test_settlement_ids(stx);
             let route = stx.sccp_registry.lanes()[0]
@@ -32485,7 +32508,7 @@ seiyaku GovernanceLifecycle {
             );
 
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "contains protected native Kaigi state",
                 "unexpected error: {error}"
             );
@@ -32508,8 +32531,8 @@ seiyaku GovernanceLifecycle {
                 account::rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
                 isi::kaigi::EndKaigi,
                 kaigi::{KaigiId, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
-                nexus::DataSpaceId,
             };
+            use iroha_model_base::topology::DataSpaceId;
 
             blank_state_transaction!(state, block, state_block, stx);
             let alias_domain =
@@ -32558,7 +32581,7 @@ seiyaku GovernanceLifecycle {
                 "alias-domain teardown must preserve cross-domain Kaigi continuity",
             );
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "history is required by native Kaigi state",
                 "unexpected error: {error}"
             );
@@ -32593,7 +32616,7 @@ seiyaku GovernanceLifecycle {
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let other_domain_id: DomainId =
-                DomainId::try_new("other", "world").expect("domain id parses");
+                DomainId::try_new("other", "universal").expect("domain id parses");
             let account_label = AccountAlias::new(
                 "primary".parse().unwrap(),
                 Some(AccountAliasDomain::new(domain_id.name().clone())),
@@ -32635,15 +32658,10 @@ seiyaku GovernanceLifecycle {
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
-            let (asset_id, asset_value) = asset.into_key_value();
-            stx.world.assets.insert(asset_id.clone(), asset_value);
-            stx.world.track_asset_holder(&asset_id);
-            stx.world
-                .increase_asset_total_amount(&asset_def_id, &Quantity::one())
-                .expect("fixture asset total must match the inserted balance");
+            Mint::asset_quantity(1_u32, asset_id.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "mint indexed fixture balance");
             let mut metadata = Metadata::default();
-            let key: iroha_data_model::name::Name = "tag".parse().unwrap();
+            let key: iroha_model_base::name::Name = "tag".parse().unwrap();
             let value = Json::from(norito::json!("cleanup"));
             metadata.insert(key, value);
             stx.world.asset_metadata.insert(asset_id.clone(), metadata);
@@ -32792,15 +32810,15 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(unregister_domain_removes_assets_with_definitions_in_other_domains {
             let state = blank_state();
-            let domain_id: DomainId = DomainId::try_new("defs", "world").expect("domain id parses");
+            let domain_id: DomainId = DomainId::try_new("defs", "universal").expect("domain id parses");
             let holder_domain: DomainId =
-                DomainId::try_new("holder", "world").expect("domain id parses");
+                DomainId::try_new("holder", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register defs domain");
             Register::domain(Domain::new(holder_domain.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register holder domain");
-            let (holder_id, _) = gen_account_in(&holder_domain);
+            let holder_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&holder_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register holder account");
             let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -32815,13 +32833,8 @@ seiyaku GovernanceLifecycle {
             ))
             .expect_execute(&ALICE_ID, &mut stx, "register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Quantity::from(1_u32));
-            let (asset_id, asset_value) = asset.into_key_value();
-            stx.world.assets.insert(asset_id.clone(), asset_value);
-            stx.world.track_asset_holder(&asset_id);
-            stx.world
-                .increase_asset_total_amount(&asset_def_id, &Quantity::one())
-                .expect("fixture asset total must match the inserted balance");
+            Mint::asset_quantity(1_u32, asset_id.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "mint indexed fixture balance");
             stx.world
                 .asset_metadata
                 .insert(asset_id.clone(), Metadata::default());
@@ -32847,7 +32860,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_retained_native_transfer_controls_atomically {
             alice_state_transaction!(state, block, state_block, stx);
             let domain_id =
-                DomainId::try_new("transfer-controls", "world").expect("domain id parses");
+                DomainId::try_new("transfer-controls", "universal").expect("domain id parses");
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register controlled domain");
             let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -32887,7 +32900,7 @@ seiyaku GovernanceLifecycle {
             );
 
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "retains native asset transfer-control state",
                 "unexpected domain-removal rejection: {error}"
             );
@@ -32916,15 +32929,15 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_preserves_surviving_account_foreign_ownerships {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let foreign_domain: DomainId =
-                DomainId::try_new("foreign", "world").expect("domain id parses");
+                DomainId::try_new("foreign", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
             Register::domain(Domain::new(foreign_domain.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register foreign domain");
-            let (account_id, _) = gen_account_in(&domain_id);
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&account_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
             stx.world
@@ -32943,13 +32956,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 Some(foreign_domain.clone()),
             ))
-            .expect_execute(&ALICE_ID, &mut stx, "register foreign asset definition");
-            stx.world
-                .asset_definition_mut(&asset_def_id)
-                .expect("foreign asset definition exists")
-                .set_owned_by(account_id.clone());
-            stx.world
-                .replace_asset_definition_owner_index(&asset_def_id, &ALICE_ID, &account_id);
+            .expect_execute(&account_id, &mut stx, "register foreign asset definition");
             Unregister::domain(domain_id.clone())
                 .expect_execute(&ALICE_ID, &mut stx, "domain unlink should preserve foreign ownership references");
             assert!(
@@ -32982,14 +32989,14 @@ seiyaku GovernanceLifecycle {
         {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone())).expect_execute(
                 &ALICE_ID,
                 &mut stx,
                 "register cleanup domain",
             );
-            let (account_id, _) = gen_account_in(&domain_id);
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&account_id)).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -33026,11 +33033,11 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_preserves_configured_canonical_account {
             let state = blank_state();
             let remove_domain: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let retained_domain: DomainId =
-                DomainId::try_new("retained", "world").expect("domain id parses");
+                DomainId::try_new("retained", "universal").expect("domain id parses");
             let holder_domain: DomainId =
-                DomainId::try_new("holder", "world").expect("domain id parses");
+                DomainId::try_new("holder", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(remove_domain.clone()))
@@ -33042,7 +33049,7 @@ seiyaku GovernanceLifecycle {
             let account_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&account_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain account");
-            let (holder_id, _) = gen_account_in(&holder_domain);
+            let holder_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&holder_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register holder account");
             let permission: Permission =
@@ -33081,9 +33088,9 @@ seiyaku GovernanceLifecycle {
         {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let foreign_domain: DomainId =
-                DomainId::try_new("external", "world").expect("domain id parses");
+                DomainId::try_new("external", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone())).expect_execute(
                 &ALICE_ID,
@@ -33095,8 +33102,8 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 "register foreign domain",
             );
-            let (initiator, _) = gen_account_in(&foreign_domain);
-            let (counterparty, _) = gen_account_in(&foreign_domain);
+            let initiator = AccountId::new(checked_keypair().public_key().clone());
+            let counterparty = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&initiator)).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -33154,7 +33161,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 "domain unregister must reject foreign repo references to its assets",
             );
-            let err_string = err.to_string();
+            let err_string = format!("{err:?}");
             assert!(
                 err_string.contains("asset definition")
                     && err_string.contains("repo agreement state"),
@@ -33172,9 +33179,9 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_when_domain_asset_definition_has_settlement_receipt {
             let state = blank_state();
             let domain_id =
-                DomainId::try_new("cleanup", "world").expect("cleanup domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("cleanup domain id parses");
             let foreign_domain =
-                DomainId::try_new("external", "world").expect("foreign domain id parses");
+                DomainId::try_new("external", "universal").expect("foreign domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33188,17 +33195,17 @@ seiyaku GovernanceLifecycle {
                 foreign_domain.clone(),
                 "cash".parse().expect("asset name"),
             );
-            for (definition, name) in [(&target_definition, "bond"), (&payment_definition, "cash")]
+            for (definition, name, owner_domain) in [(&target_definition, "bond", &domain_id), (&payment_definition, "cash", &foreign_domain)]
             {
                 Register::asset_definition(AssetDefinition::numeric(
                     (*definition).clone(),
                     name,
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(owner_domain.clone()),
                 ))
                 .expect_execute(&ALICE_ID, &mut stx, "register settlement asset definition");
             }
-            let (counterparty, _) = gen_account_in(&foreign_domain);
+            let counterparty = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&counterparty))
                 .expect_execute(&ALICE_ID, &mut stx, "register settlement counterparty");
             let settlement_id = "domain_receipt_guard".parse().expect("settlement id");
@@ -33239,7 +33246,7 @@ seiyaku GovernanceLifecycle {
             );
             let error = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "committed settlement receipt must pin its asset-definition domain");
-            assert_contains!(error.to_string(), "committed settlement receipt", "error should explain settlement receipt conflict: {error}");
+            assert_contains!(format!("{error:?}"), "committed settlement receipt", "error should explain settlement receipt conflict: {error}");
             assert!(stx.world.domains.get(&domain_id).is_some());
             assert!(
                 stx.world
@@ -33251,7 +33258,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_ignores_mismatched_public_lane_reward_record_for_domain_asset {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33302,7 +33309,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_governance_voting_asset {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33323,7 +33330,7 @@ seiyaku GovernanceLifecycle {
                 .expect_err(
                     "domain unregister must reject governance voting asset-definition removal",
                 );
-            let err_string = err.to_string();
+            let err_string = format!("{err:?}");
             assert_contains!(err_string, "governance voting asset definition", "error should explain governance voting-asset conflict: {err_string}");
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
@@ -33337,7 +33344,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_immutable_governance_lock_custody_after_config_change {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("custody", "history").expect("domain id parses");
+                DomainId::try_new("custody", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register custody domain");
@@ -33375,7 +33382,7 @@ seiyaku GovernanceLifecycle {
                 .put_governance_locks("retained-domain-custody".to_owned(), locks);
             let err = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "domain holding immutable lock custody must remain registered");
-            assert_contains!(err.to_string(), "retained by immutable governance lock custody", "error should identify retained lock custody: {err}");
+            assert_contains!(format!("{err:?}"), "retained by immutable governance lock custody", "error should identify retained lock custody: {err}");
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
                 "custody domain must remain after rejected unregister"
@@ -33391,7 +33398,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_retained_moderation_policy_after_config_change {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("moderation", "history").expect("domain id parses");
+                DomainId::try_new("moderation", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register moderation domain");
@@ -33417,7 +33424,7 @@ seiyaku GovernanceLifecycle {
                 (*ALICE_ID).clone(),
             )
             .expect("seed a valid retained moderation policy");
-            let policy_path: iroha_data_model::state_path::StatePath =
+            let policy_path: iroha_model_base::state_path::StatePath =
                 "sorafs_moderation_policy_v1"
                     .parse()
                     .expect("moderation policy state path");
@@ -33429,7 +33436,7 @@ seiyaku GovernanceLifecycle {
                 "domain containing moderation-retained definition must remain registered",
             );
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "retained by moderation active policy challenge voting asset",
                 "error should identify moderation retention: {error}"
             );
@@ -33455,7 +33462,7 @@ seiyaku GovernanceLifecycle {
         {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone())).expect_execute(
                 &ALICE_ID,
@@ -33483,7 +33490,7 @@ seiyaku GovernanceLifecycle {
                 .expect_err(
                     "domain unregister must reject governance viral reward asset-definition removal",
                 );
-            let err_string = err.to_string();
+            let err_string = format!("{err:?}");
             assert_contains!(
                 err_string,
                 "governance viral reward asset definition",
@@ -33501,7 +33508,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_oracle_reward_asset {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33519,7 +33526,7 @@ seiyaku GovernanceLifecycle {
             stx.oracle.economics.reward_asset = reward_def.clone();
             let err = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "domain unregister must reject oracle reward asset-definition removal");
-            let err_string = err.to_string();
+            let err_string = format!("{err:?}");
             assert_contains!(err_string, "oracle reward asset definition", "error should explain oracle reward-asset conflict: {err_string}");
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
@@ -33533,7 +33540,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_nexus_fee_asset {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33551,7 +33558,7 @@ seiyaku GovernanceLifecycle {
             stx.nexus.fees.fee_asset_id = fee_def.to_string();
             let err = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "domain unregister must reject nexus fee asset-definition removal");
-            let err_string = err.to_string();
+            let err_string = format!("{err:?}");
             assert_contains!(err_string, "nexus fee asset definition", "error should explain nexus fee-asset conflict: {err_string}");
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
@@ -33565,7 +33572,7 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_rejects_when_domain_asset_definition_is_nexus_staking_asset {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
@@ -33583,7 +33590,7 @@ seiyaku GovernanceLifecycle {
             stx.nexus.staking.stake_asset_id = stake_def.to_string();
             let err = Unregister::domain(domain_id.clone())
                 .expect_execute_err(&ALICE_ID, &mut stx, "domain unregister must reject nexus staking asset-definition removal");
-            let err_string = err.to_string();
+            let err_string = format!("{err:?}");
             assert_contains!(err_string, "nexus staking asset definition", "error should explain nexus staking-asset conflict: {err_string}");
             assert!(
                 stx.world.domains.get(&domain_id).is_some(),
@@ -33667,7 +33674,7 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
             Register::domain(Domain::new(external_domain.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register external domain");
-            let (account_id, _) = gen_account_in(&domain_id);
+            let account_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&account_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
             let cash_def = AssetDefinitionId::derive_from_components(
@@ -33857,11 +33864,12 @@ seiyaku GovernanceLifecycle {
             let state = blank_state();
             let network_id = *state.network_id_ref();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             Register::domain(Domain::new(domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
-            let (account_id, account_keypair) = gen_account_in(&domain_id);
+            let account_keypair = checked_keypair();
+            let account_id = AccountId::new(account_keypair.public_key().clone());
             Register::account(new_account_in_domain(&account_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
             let proposal_id = [0xB7; 32];
@@ -34044,7 +34052,7 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register kingdom domain");
             let owner_domain: DomainId =
                 DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let (bob_id, _) = gen_account_in(&owner_domain);
+            let bob_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&bob_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register bob account");
             let permissions = [
@@ -34119,7 +34127,7 @@ seiyaku GovernanceLifecycle {
         {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone())).expect_execute(
@@ -34127,15 +34135,13 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 "register cleanup domain",
             );
-            let (target_id, _) = gen_account_in(&domain_id);
+            let target_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&target_id)).expect_execute(
                 &ALICE_ID,
                 &mut stx,
                 "register account in cleanup domain",
             );
-            let owner_domain: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let (holder_id, _) = gen_account_in(&owner_domain);
+            let holder_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&holder_id)).expect_execute(
                 &ALICE_ID,
                 &mut stx,
@@ -34200,11 +34206,11 @@ seiyaku GovernanceLifecycle {
         world_test!(unregister_domain_preserves_other_domain_permissions_for_same_subject {
             let state = blank_state();
             let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
             let retained_domain_id: DomainId =
-                DomainId::try_new("retained", "world").expect("domain id parses");
+                DomainId::try_new("retained", "universal").expect("domain id parses");
             let holder_domain_id: DomainId =
-                DomainId::try_new("holder", "world").expect("domain id parses");
+                DomainId::try_new("holder", "universal").expect("domain id parses");
             state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
             Register::domain(Domain::new(domain_id.clone()))
@@ -34217,7 +34223,7 @@ seiyaku GovernanceLifecycle {
             let target_id = AccountId::new(keypair.public_key().clone());
             Register::account(new_account_in_domain(&target_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
-            let (holder_id, _) = gen_account_in(&holder_domain_id);
+            let holder_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&holder_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register holder account");
             let permission: Permission =
@@ -34281,10 +34287,10 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register foreign domain");
             Register::domain(Domain::new(holder_domain_id.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register holder domain");
-            let (target_id, _) = gen_account_in(&domain_id);
+            let target_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&target_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register account in cleanup domain");
-            let (holder_id, _) = gen_account_in(&holder_domain_id);
+            let holder_id = AccountId::new(checked_keypair().public_key().clone());
             Register::account(new_account_in_domain(&holder_id))
                 .expect_execute(&ALICE_ID, &mut stx, "register holder account");
             let nft_id = NftId::new(foreign_domain_id, "phoenix".parse().unwrap());
@@ -34475,7 +34481,7 @@ seiyaku GovernanceLifecycle {
             state_transaction!(state, block, state_block, stx);
             // Construct a peer with a non-BLS-normal key (Ed25519)
             let kp = checked_keypair_with_algorithm(Algorithm::Ed25519);
-            let peer_id = crate::PeerId::new(kp.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(kp.public_key().clone());
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), vec![]);
             let res = isi.execute(&ALICE_ID, &mut stx);
@@ -34549,7 +34555,7 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("a peer in a live validator tenure must not unregister");
             assert!(
-                format!("{error}").contains("wait for its deactivation height"),
+                format!("{error:?}").contains("wait for its deactivation height"),
                 "unexpected rejection: {error}"
             );
 
@@ -34593,7 +34599,7 @@ seiyaku GovernanceLifecycle {
                 .expect_err("an authenticated roster member must not unregister");
 
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "current authenticated consensus roster",
                 "unexpected rejection: {error}"
             );
@@ -34807,6 +34813,8 @@ seiyaku GovernanceLifecycle {
                 recorded_at_height: exact.request.public_inputs.finality_height,
                 commitment_index: 0,
             };
+            let message_key = crate::bridge::test_sccp_outbound_message_key(&exact.bundle.payload);
+            let message_id = exact.bundle.commitment.message_id;
             let proof = BridgeProof {
                 range: BridgeProofRange {
                     start_height: message.recorded_at_height,
@@ -34815,7 +34823,8 @@ seiyaku GovernanceLifecycle {
                 payload: BridgeProofPayload::SccpDestination(exact.bridge_proof),
             };
             blank_state_transaction!(state, block, state_block, stx);
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.world.sccp_outbound_message_locator.insert(message_id, message_key);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
             let verifier_work_before = stx.sccp_verifier_work_for_testing();
@@ -34885,7 +34894,7 @@ seiyaku GovernanceLifecycle {
                 );
             assert_err!(
                 format!("{error:?}"),
-                "requires a canonical replay non-membership witness"
+                "stale SCCP sparse-Merkle witness root"
             );
             assert_eq!(
                 sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
@@ -35357,7 +35366,7 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             let (_, native, registry) = native_ethereum_bridge_proof_for_test();
             stx.sccp_registry = registry;
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let current = native.trust_anchor;
             let admitted_high_water = current
                 .checkpoint_height
@@ -35457,7 +35466,7 @@ seiyaku GovernanceLifecycle {
             assert_eq!(lane.native_trust_anchors.len(), retained_cap);
             stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire)
                 .expect("exact retained-anchor cap must validate");
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             let mut next_hash = [0_u8; 32];
             next_hash[0] = 0xED;
             let next_height = current
@@ -35565,7 +35574,7 @@ seiyaku GovernanceLifecycle {
                 ..previous
             };
             stx.sccp_registry = rotate_native_registry_for_test(registry.as_ref(), next);
-            stx.chain_id = iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             seed_sccp_test_tx_call_hash(&mut stx, 0x90);
             let unknown = replace_native_proof_trust_anchor_for_test(
@@ -35741,7 +35750,7 @@ seiyaku GovernanceLifecycle {
                 Quantity::from(100_u64),
             );
             // Leave enough cheap proof-count/byte capacity for the adversarial replay so the
-            // assertion below specifically proves that the durable lane/message index rejects
+            // assertion below specifically proves that the durable replay root rejects
             // before verifier-work reservation, not merely that a generic quota rejects first.
             stx.zk.sccp.max_proofs_per_transaction = NonZeroU32::new(2).unwrap();
             stx.zk.sccp.max_proof_bytes_per_transaction = stx.zk.sccp.max_proof_bytes_per_block;
@@ -35789,13 +35798,17 @@ seiyaku GovernanceLifecycle {
             .expect("configured retention must prune the older bridge proof");
             assert_contains!(outcome.removed, &proof_id);
             assert!(stx.world.proofs.get(&proof_id).is_none());
+            stx.apply();
+            let mut stx = state_block.transaction();
+            stx.chain_id = iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x96);
             stx.bridge_receipt_proofs_available_in_tx.clear();
             stx.world.internal_event_buf.clear();
             let proof_count_before = stx.world.proofs.iter().count();
             let verifier_work_before = stx.sccp_verifier_work_for_testing();
             let error = native_submit_bridge_proof_for_test(proof)
-                .expect_execute_err(&ALICE_ID, &mut stx, "durable replay index must outlive proof history");
-            assert_err!(format!("{error:?}"), "already been admitted on this exact lane", "unexpected native replay rejection: {error:?}");
+                .expect_execute_err(&ALICE_ID, &mut stx, "durable replay root must outlive proof history");
+            assert_err!(format!("{error:?}"), "stale SCCP sparse-Merkle witness root", "unexpected native replay rejection: {error:?}");
             assert_eq!(stx.world.proofs.iter().count(), proof_count_before);
             assert_eq!(
                 stx.sccp_verifier_work_for_testing(),
@@ -37302,7 +37315,7 @@ seiyaku GovernanceLifecycle {
                 signer: kp.public_key().clone(),
                 signature: checked_signature(kp.private_key(), msg_hash.as_ref()),
             });
-            let key: iroha_data_model::name::Name = "endorsement".parse().expect("name");
+            let key: iroha_model_base::name::Name = "endorsement".parse().expect("name");
             let mut domain = Domain::new(domain_id.clone());
             domain.metadata.insert(key.clone(), Json::new(endorsement));
             Register::domain(domain)
@@ -37390,7 +37403,7 @@ seiyaku GovernanceLifecycle {
             state_transaction!(state, block, state_block, stx);
             // BLS-normal key with valid PoP
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37411,7 +37424,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
             iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
                 peer_id.clone(),
@@ -37462,7 +37475,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
 
             iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
@@ -37508,7 +37521,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
 
             iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
@@ -37566,7 +37579,7 @@ seiyaku GovernanceLifecycle {
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let other = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let wrong_pop =
                 iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("mismatched pop");
             let error = iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
@@ -37601,7 +37614,7 @@ seiyaku GovernanceLifecycle {
             let params = stx.world.parameters.get().clone();
             let activation_lead_blocks = params.sumeragi.key_activation_lead_blocks;
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37637,7 +37650,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             // Seed a conflicting consensus key record with the same derived id but a different pk.
             let collision_id = crate::state::derive_validator_key_id(peer_id.public_key());
@@ -37682,7 +37695,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
-            let peer_id = crate::PeerId::new(bls_small.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37700,7 +37713,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls_small = checked_keypair_with_algorithm(Algorithm::BlsSmall);
-            let peer_id = crate::PeerId::new(bls_small.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls_small.public_key().clone());
             let pop = iroha_crypto::bls_small_pop_prove(bls_small.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37718,7 +37731,7 @@ seiyaku GovernanceLifecycle {
             state.set_pipeline(pipeline);
             state_transaction!(state, block, state_block, stx);
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -37744,7 +37757,7 @@ seiyaku GovernanceLifecycle {
             crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
             let mut stx = state_block.transaction();
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop)
@@ -37768,7 +37781,7 @@ seiyaku GovernanceLifecycle {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
             {
                 let mut stx = state_block.transaction();
@@ -38025,7 +38038,7 @@ seiyaku GovernanceLifecycle {
                 .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
                 .expect_err("registered alternate-layout STARK verifying key must fail");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "invalid STARK verifying key payload", "unexpected registered alternate-layout rejection: {message}");
+            assert_contains!(message, "invalid canonical STARK/FRI verifier key: non-canonical encoding", "unexpected registered alternate-layout rejection: {message}");
         });
         #[cfg(feature = "zk-stark")]
         world_test!(register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor {
@@ -38246,6 +38259,13 @@ seiyaku GovernanceLifecycle {
                 .position(|window| window == circuit_id.as_bytes())
                 .expect("encoded STARK circuit id");
             bytes[circuit_offset - 1] = u8::MAX;
+            let header = norito::core::Header::read(&bytes[..])
+                .expect("canonical fixture header");
+            let payload_start = bytes.len() - usize::try_from(header.length)
+                .expect("fixture payload length fits usize");
+            let checksum = norito::hardware_crc64(&bytes[payload_start..]);
+            // Authenticate the hostile length so rejection exercises bounded payload decoding.
+            bytes[31..39].copy_from_slice(&checksum.to_le_bytes());
             let vk_box = VerifyingKeyBox::new(backend.to_owned(), bytes);
             vk_record!(record, 1, circuit_id, BackendTag::Stark, "goldilocks", [0x51; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("stark_default".to_owned()));
             let id = VerifyingKeyId::new(backend, "huge-inner-length-vk");
@@ -38262,7 +38282,8 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect_err("a forged inner length must fail before typed key storage");
             let message = smart_contract_error_message(error);
-            assert_contains!(message, "invalid STARK verifying key payload", "unexpected bounded STARK rejection: {message}");
+            assert_contains!(message, "invalid canonical STARK/FRI verifier key", "unexpected bounded STARK rejection: {message}");
+            assert!(!message.contains("checksum mismatch"), "hostile payload must retain a valid checksum");
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
         world_test!(register_vk_requires_gas_schedule {
@@ -38273,7 +38294,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x61; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -38290,7 +38311,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x61; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -38311,7 +38332,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x62; 32], hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -38354,14 +38375,14 @@ seiyaku GovernanceLifecycle {
                 };
                 format!("{prefix}_{index}")
             }
-            fn circuit_id(self, backend: &str) -> String {
+            fn circuit_id(self) -> String {
                 let suffix = match self {
                     Self::ProtocolName => "unsupported-protocol-circuit",
                     Self::ProductionClaim => "claimed-production-circuit",
                     Self::DeveloperOnly => "developer-only-circuit",
                     Self::Unsupported => "unsupported-circuit",
                 };
-                format!("{backend}:{suffix}")
+                format!("rejected-backend:{suffix}")
             }
             fn record_hash_byte(self) -> u8 {
                 match self {
@@ -38391,7 +38412,7 @@ seiyaku GovernanceLifecycle {
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
                     unsupported_label_generic_record_profile(backend);
-                vk_record!(record, 1, family.circuit_id(backend), record_backend, curve, [family.record_hash_byte(); 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some(schedule.into()));
+                vk_record!(record, 1, family.circuit_id(), record_backend, curve, [family.record_hash_byte(); 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some(schedule.into()));
                 let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                     id: id.clone(),
                     record,
@@ -38401,9 +38422,14 @@ seiyaku GovernanceLifecycle {
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
                     .expect_err("rejected verifier backend must not register");
                 let message = smart_contract_error_message(error);
+                let expected_message = if backend == "groth16/bls12-377" {
+                    "trusted-setup verifying key backends"
+                } else {
+                    family.expected_message()
+                };
                 assert_contains!(
                     message,
-                    family.expected_message(),
+                    expected_message,
                     "unexpected message for {backend}: {message}"
                 );
                 assert!(
@@ -38425,7 +38451,7 @@ seiyaku GovernanceLifecycle {
         world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
             fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", [0x6D; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 record
             }
             alice_state_transaction!(state, block, state_block, stx);
@@ -38541,7 +38567,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx = state_block.transaction();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", [0x71; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
                 let err = exec
@@ -38609,7 +38635,7 @@ seiyaku GovernanceLifecycle {
             ] {
                 let mut stx = state_block.transaction();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_stark_label");
-                vk_record!(rec, 1, format!("{backend}:trusted-setup-circuit"), BackendTag::Stark, "goldilocks", [0x73; 32], [0x74; 32]; status = ConfidentialStatus::Active, gas_schedule_id = Some("stark_default".into()));
+                vk_record!(rec, 1, "stark/fri:trusted-setup-circuit", BackendTag::Stark, "goldilocks", [0x73; 32], [0x74; 32]; status = ConfidentialStatus::Active, gas_schedule_id = Some("stark_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
                 let err = exec
@@ -39015,7 +39041,7 @@ seiyaku GovernanceLifecycle {
             let disable_error = consensus_keys::DisableConsensusKey { id: id.clone() }
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("retained validator key must not be disabled");
-            assert_contains!(disable_error.to_string(), "cannot disable consensus key");
+            assert_contains!(format!("{disable_error:?}"), "cannot disable consensus key");
             assert_eq!(
                 stx.world.consensus_keys.get(&id).expect("key remains").status,
                 ConsensusKeyStatus::Active
@@ -39044,7 +39070,7 @@ seiyaku GovernanceLifecycle {
             }
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained validator key must not rotate");
-            assert_contains!(rotate_error.to_string(), "cannot rotate consensus key");
+            assert_contains!(format!("{rotate_error:?}"), "cannot rotate consensus key");
             assert!(stx.world.consensus_keys.get(&replacement_id).is_none());
         });
         world_test!(set_parameter_updates_mutable_max_clock_drift {
@@ -39150,7 +39176,7 @@ seiyaku GovernanceLifecycle {
             let parameter_id = grant.parameter_id().expect("canonical grant key");
             stx.nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                 iroha_data_model::nexus::DataSpaceMetadata {
-                    id: iroha_data_model::nexus::DataSpaceId::new(10),
+                    id: iroha_model_base::topology::DataSpaceId::new(10),
                     alias: "bpng".to_owned(),
                     description: None,
                     fault_tolerance: 1,
@@ -39214,7 +39240,7 @@ seiyaku GovernanceLifecycle {
             ] {
                 let error = SetParameter::new(parameter)
                     .expect_execute_err(&ALICE_ID, &mut stx, "heap limit above the ABI address window must fail");
-                assert_contains!(error.to_string(), "exceeds the ABI V1 heap window", "unexpected heap-limit error: {error}");
+                assert_contains!(format!("{error:?}"), "exceeds the ABI V1 heap window", "unexpected heap-limit error: {error}");
             }
             let maximum =
                 NonZeroU64::new(ivm::Memory::HEAP_MAX_SIZE).expect("ABI heap window is non-zero");
@@ -39311,7 +39337,7 @@ seiyaku GovernanceLifecycle {
                 unknown_owner.into_custom_parameter(),
             ))
             .expect_execute_err(&ALICE_ID, &mut stx, "unknown producer must fail closed");
-            assert_contains!(error.to_string(), "names unknown producer");
+            assert_contains!(format!("{error:?}"), "names unknown producer");
 
             let mut wrong_incarnation = initial.clone();
             wrong_incarnation.revision = 2;
@@ -39323,7 +39349,7 @@ seiyaku GovernanceLifecycle {
                 wrong_incarnation.into_custom_parameter(),
             ))
             .expect_execute_err(&ALICE_ID, &mut stx, "stale lane incarnation must fail closed");
-            assert_contains!(error.to_string(), "but the active incarnation is");
+            assert_contains!(format!("{error:?}"), "but the active incarnation is");
 
             let mut successor = initial.clone();
             successor.revision = 2;
@@ -39335,14 +39361,14 @@ seiyaku GovernanceLifecycle {
 
             let error = SetParameter::new(Parameter::Custom(successor.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "stale policy replay must fail closed");
-            assert_contains!(error.to_string(), "revision");
+            assert_contains!(format!("{error:?}"), "revision");
         });
         world_test!(set_parameter_retention_request_requires_exact_ancestor_and_lineage {
             use iroha_data_model::sorafs::reputation::{
                 ReputationFinalizedArchiveRetentionRequestV1,
                 ReputationFinalizedArchiveRetentionTargetV1,
             };
-            let chain_id = iroha_data_model::ChainId::from("retention-request-execution");
+            let chain_id = iroha_model_base::chain::ChainId::from("retention-request-execution");
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new_with_chain_for_testing(
@@ -39351,17 +39377,8 @@ seiyaku GovernanceLifecycle {
                 query_handle,
                 chain_id.clone(),
             );
-            {
-                let mut block_hashes = state.block_hashes.block();
-                for byte in [0x51, 0x52] {
-                    block_hashes.push_for_tests(
-                        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                            Hash::prehashed([byte; Hash::LENGTH]),
-                        ),
-                    );
-                }
-                block_hashes.commit_for_tests();
-            }
+            let first_hash = seed_committed_world_test_block(&state);
+            let second_hash = seed_committed_world_test_block(&state);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(3).expect("nonzero height"),
                 None,
@@ -39383,7 +39400,7 @@ seiyaku GovernanceLifecycle {
                 )
                 .expect("valid request shape")
             };
-            let first = request(1, None, 1, [0x51; 32]);
+            let first = request(1, None, 1, first_hash);
             SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
                 .expect_execute(&ALICE_ID, &mut stx, "exact committed ancestor is accepted");
             SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
@@ -39398,28 +39415,28 @@ seiyaku GovernanceLifecycle {
                 foreign_network,
                 2,
                 Some(first.request_digest),
-                ReputationFinalizedArchiveRetentionTargetV1::try_new(2, [0x52; 32])
+                ReputationFinalizedArchiveRetentionTargetV1::try_new(2, second_hash)
                     .expect("valid foreign-network target shape"),
             )
             .expect("valid foreign-network request shape");
             let error = SetParameter::new(Parameter::Custom(foreign.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "same-label foreign genesis must fail");
-            assert_contains!(error.to_string(), "targets another network");
+            assert_contains!(format!("{error:?}"), "targets another network");
             let wrong_hash = request(2, Some(first.request_digest), 2, [0x53; 32]);
             let error = SetParameter::new(Parameter::Custom(wrong_hash.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "substituted ancestor hash must fail");
-            assert_contains!(error .to_string(), "target hash is not the committed ancestor");
-            let skipped = request(3, Some(first.request_digest), 2, [0x52; 32]);
+            assert_contains!(format!("{error:?}"), "target hash is not the committed ancestor");
+            let skipped = request(3, Some(first.request_digest), 2, second_hash);
             let error = SetParameter::new(Parameter::Custom(skipped.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "request sequence skips must fail");
-            assert_contains!(error.to_string(), "sequence is not contiguous");
-            let successor = request(2, Some(first.request_digest), 2, [0x52; 32]);
+            assert_contains!(format!("{error:?}"), "sequence is not contiguous");
+            let successor = request(2, Some(first.request_digest), 2, second_hash);
             SetParameter::new(Parameter::Custom(successor.clone().into_custom_parameter()))
                 .expect_execute(&ALICE_ID, &mut stx, "exact successor request");
-            let rollback = request(3, Some(successor.request_digest), 1, [0x51; 32]);
+            let rollback = request(3, Some(successor.request_digest), 1, first_hash);
             let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
                 .expect_execute_err(&ALICE_ID, &mut stx, "retention target rollback must fail");
-            assert_contains!(error.to_string(), "target did not advance");
+            assert_contains!(format!("{error:?}"), "target did not advance");
         });
         world_test!(set_parameter_rejects_zero_npos_reconfig_fields {
             let state = blank_state();
@@ -39686,7 +39703,7 @@ seiyaku GovernanceLifecycle {
                 );
 
             assert_contains!(
-                error.to_string(),
+                format!("{error:?}"),
                 "epoch_length_blocks is immutable after installation"
             );
             assert_eq!(
@@ -39708,7 +39725,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_payload_confusion");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x50; 32], hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let mut stx = state_block.transaction();
             let err = Executor::default()
                 .execute_instruction(
@@ -39725,8 +39742,6 @@ seiyaku GovernanceLifecycle {
             let role_id: RoleId = "OPERATIONAL_GOVERNANCE".parse().expect("role id");
             Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
                 .expect_execute(&ALICE_ID, &mut stx, "register governance role");
-            Grant::account_role(role_id.clone(), ALICE_ID.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "assign governance role");
 
             for name in [
                 "CanManageRuntimeUpgrades",
@@ -39764,7 +39779,7 @@ seiyaku GovernanceLifecycle {
                 ),
             ] {
                 let error = result.expect_err("same-name non-unit payload must not authorize");
-                assert_contains!(error.to_string(), name, "unexpected {name} rejection: {error}");
+                assert_contains!(format!("{error:?}"), name, "unexpected {name} rejection: {error}");
             }
 
             for permission in [
@@ -39791,7 +39806,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x51; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let exec = Executor::default();
             let mut stx = state_block.transaction();
             exec.execute_instruction(
@@ -39845,7 +39860,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x51; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -39993,7 +40008,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x53; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -40003,7 +40018,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction();
-            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x54; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_rec,
@@ -40074,7 +40089,7 @@ seiyaku GovernanceLifecycle {
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", [0x62; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -40107,8 +40122,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("missing circuit index should reject proof");
             match err {
                 ValidationFail::InstructionFailed(
@@ -40129,7 +40143,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x63; 32], vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -40143,8 +40157,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope", "unexpected msg: {msg}");
@@ -40155,7 +40168,7 @@ seiyaku GovernanceLifecycle {
                 .copied()
                 .enumerate()
             {
-                proof_verification_fixture!(state, block, exec);
+                proof_verification_fixture!(state, block);
                 let mut stx = block.transaction();
                 bootstrap_alice_account(&mut stx);
                 stx.apply();
@@ -40168,16 +40181,20 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = exec
-                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                     .expect_err("protocol name must reject before registry lookup");
                 let msg = smart_contract_error_message(err);
-                assert_contains!(msg, "unsupported proof backends", "unexpected msg for {backend}: {msg}");
+                let expected_message = if backend == "groth16/bls12-377" {
+                    "trusted-setup proof backends"
+                } else {
+                    "unsupported proof backends"
+                };
+                assert_contains!(msg, expected_message, "unexpected msg for {backend}: {msg}");
             }
         });
         world_test!(verify_proof_rejects_production_claim_backend_labels_before_registry_lookup {
             for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
-                proof_verification_fixture!(state, block, exec);
+                proof_verification_fixture!(state, block);
                 let mut stx = block.transaction();
                 bootstrap_alice_account(&mut stx);
                 stx.apply();
@@ -40190,8 +40207,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = exec
-                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                     .expect_err(
                         "production-claim proof backend must reject before registry lookup",
                     );
@@ -40201,18 +40217,18 @@ seiyaku GovernanceLifecycle {
         });
         world_test!(verify_proof_rejects_cross_engine_record_tag {
             for (idx, backend_tag) in [BackendTag::Stark].into_iter().enumerate() {
-                proof_verification_fixture!(state, block, exec);
+                proof_verification_fixture!(state, block);
                 let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
-                let public_inputs = vec![1, 2, 3, idx as u8];
+                let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 vk_record!(rec, 1, circuit_id.clone(), backend_tag, if backend_tag == BackendTag::Stark {
                         "goldilocks"
                     } else {
                         "pallas"
-                    }, public_inputs_schema_hash, vk_commitment; vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                    }, public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let envelope = OpenVerifyEnvelope {
                     backend: BackendTag::Halo2IpaPasta,
                     circuit_id: circuit_id.clone(),
@@ -40237,8 +40253,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = exec
-                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                     .expect_err("non-admitted verifier record tag must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, "verifying key backend mismatch", "unexpected msg for {}: {msg}", backend_tag.canonical_label());
@@ -40248,7 +40263,6 @@ seiyaku GovernanceLifecycle {
             let state = blank_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
-            let exec = Executor::default();
             let mut stx = block.transaction();
             bootstrap_alice_account(&mut stx);
             stx.apply();
@@ -40273,8 +40287,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("missing verifying key should reject generic VerifyProof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "registered verifying key reference", "unexpected msg: {msg}");
@@ -40291,7 +40304,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = vec![1, 2, 3];
+            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -40323,8 +40336,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("missing verifying key bytes should reject proof");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "verifying key bytes missing", "unexpected msg: {msg}");
@@ -40341,7 +40353,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = vec![1, 2, 3];
+            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -40372,7 +40384,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            exec.execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect("an invalid proof must run backend verification and record rejection");
             let record = stx_verify
                 .world
@@ -40397,7 +40409,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = vec![1, 2, 3, 4];
+            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -40424,8 +40436,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("wrong envelope backend tag should reject");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "OpenVerifyEnvelope backend tag mismatch", "unexpected msg: {msg}");
@@ -40466,7 +40477,8 @@ seiyaku GovernanceLifecycle {
                     "verifying key is not active",
                 ),
             ] {
-                proof_verification_fixture!(state, block, exec);
+                proof_verification_fixture!(state, block);
+                let exec = Executor::default();
                 let mut stx = block.transaction();
                 grant_alice_account_permission(
                     &mut stx,
@@ -40482,10 +40494,10 @@ seiyaku GovernanceLifecycle {
                 );
                 let vk_box = canonical_test_halo2_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
-                let expected_public_inputs = vec![1, 2, 3];
+                let expected_public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] =
                     CryptoHash::new(&expected_public_inputs).into();
-                vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 3, status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let register_vk_instruction: InstructionBox =
                     verifying_keys::RegisterVerifyingKey {
                         id: vk_id.clone(),
@@ -40522,8 +40534,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = exec
-                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                     .expect_err("metadata mismatch must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -40533,11 +40544,10 @@ seiyaku GovernanceLifecycle {
             let state = blank_state();
             let header = first_test_block_header();
             let mut block = state.block(header);
-            let exec = Executor::default();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = vec![1, 2, 3];
+            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let envelope = OpenVerifyEnvelope {
@@ -40578,8 +40588,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("duplicate proof record must reject");
             assert!(
                 matches!(
@@ -40604,10 +40613,10 @@ seiyaku GovernanceLifecycle {
                 (
                     "stored_key_backend",
                     Tamper::StoredKeyBackend,
-                    "verifying key backend mismatch",
+                    "verifying-key payload backend does not match registry id",
                 ),
             ] {
-                proof_verification_fixture!(state, block, exec);
+                proof_verification_fixture!(state, block);
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 let vk_id = VerifyingKeyId::new(
                     "halo2/ipa",
@@ -40622,9 +40631,9 @@ seiyaku GovernanceLifecycle {
                     }
                 };
                 let vk_commitment = hash_vk(&stored_vk);
-                let public_inputs = vec![1, 2, 3];
+                let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
-                vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 3, status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(stored_vk.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("halo2_default".into()));
                 let envelope = OpenVerifyEnvelope {
                     backend: BackendTag::Halo2IpaPasta,
                     circuit_id: circuit_id.clone(),
@@ -40651,8 +40660,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx_verify = block.transaction();
                 let verify: InstructionBox =
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-                let err = exec
-                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                     .expect_err("registry invariant must reject");
                 let msg = smart_contract_error_message(err);
                 assert_contains!(msg, expected_msg, "expected {expected_msg:?}, got {msg:?}");
@@ -40670,7 +40678,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", [0x64; 32], hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -40701,8 +40709,7 @@ seiyaku GovernanceLifecycle {
             let mut stx_verify = block.transaction();
             let verify: InstructionBox =
                 iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
-            let err = exec
-                .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+            let err = verify.execute(&ALICE_ID, &mut stx_verify).map_err(ValidationFail::InstructionFailed)
                 .expect_err("missing gas schedule should reject proof");
             match err {
                 ValidationFail::InstructionFailed(
@@ -40787,7 +40794,7 @@ seiyaku GovernanceLifecycle {
             let error = register_bytes
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "raw bytecode registration requires runtime lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             assert!(stx.world.contract_code.get(&code_hash).is_none());
             Grant::account_permission(
                 Permission::new(
@@ -40803,7 +40810,7 @@ seiyaku GovernanceLifecycle {
                 .expect_err(
                     "a malformed same-name permission must not authorize bytecode mutation",
                 );
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             assert!(
                 stx.world.contract_code.get(&code_hash).is_none(),
                 "malformed same-name permission must apply no bytecode mutation"
@@ -40818,7 +40825,7 @@ seiyaku GovernanceLifecycle {
             };
             let error = upload
                 .expect_execute_err(&attacker, &mut stx, "chunk upload requires exact runtime lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             let attacker_upload_key =
                 SmartContractCodeUploadKey::new(attacker.clone(), upload_hash);
             assert!(
@@ -40841,7 +40848,7 @@ seiyaku GovernanceLifecycle {
                 chunk_count: 1,
             }
             .expect_execute_err(&attacker, &mut stx, "upload finalization requires exact runtime lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             assert!(
                 stx.world
                     .contract_code_uploads
@@ -40887,7 +40894,7 @@ seiyaku GovernanceLifecycle {
             let error = remove_bytes
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "raw bytecode removal requires runtime lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             assert!(stx.world.contract_code.get(&code_hash).is_some());
             remove_bytes
                 .expect_execute(&ALICE_ID, &mut stx, "authorized bytecode removal");
@@ -40900,7 +40907,7 @@ seiyaku GovernanceLifecycle {
             let error = register_manifest
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "raw manifest registration requires runtime lifecycle authority");
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             assert!(stx.world.contract_manifests.get(&code_hash).is_none());
             register_manifest
                 .expect_execute(&ALICE_ID, &mut stx, "authorized manifest registration");
@@ -40958,7 +40965,7 @@ seiyaku GovernanceLifecycle {
             let error = activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not pre-bind another account's address");
-            assert_contains!(error.to_string(), "current account owner");
+            assert_contains!(format!("{error:?}"), "current account owner");
             assert!(
                 stx.world
                     .contract_instances
@@ -41032,7 +41039,7 @@ seiyaku GovernanceLifecycle {
             let error = deactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not begin an ABA rebind");
-            assert_contains!(error.to_string(), "current account owner");
+            assert_contains!(format!("{error:?}"), "current account owner");
             assert_eq!(
                 stx.world.contract_instances.get(&contract_address),
                 Some(&code_hash),
@@ -41046,7 +41053,7 @@ seiyaku GovernanceLifecycle {
             let error = active_activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "even an idempotent binding request requires lifecycle authority");
-            assert_contains!(error.to_string(), "current account owner");
+            assert_contains!(format!("{error:?}"), "current account owner");
             deactivate
                 .expect_execute(&ALICE_ID, &mut stx, "runtime lifecycle authority may deactivate an instance");
             assert!(
@@ -41071,7 +41078,7 @@ seiyaku GovernanceLifecycle {
             let error = reactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not complete an ABA rebind");
-            assert_contains!(error.to_string(), "current account owner");
+            assert_contains!(format!("{error:?}"), "current account owner");
             assert!(
                 stx.world
                     .contract_instances
@@ -41193,7 +41200,7 @@ seiyaku GovernanceLifecycle {
                 &mut stx,
                 "revoked artifact capability must still deny bytecode registration",
             );
-            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
+            assert_contains!(format!("{error:?}"), "CanRegisterSmartContractCode");
             stx.apply();
             let mut stx = block.transaction();
             let network_id = *stx.network_id();
@@ -41477,6 +41484,11 @@ seiyaku GovernanceLifecycle {
                 DataSpaceId::UNIVERSAL,
             )
             .expect("contract address");
+            Register::account(Account::new(contract_address.subject_id()))
+                .expect_execute(&ALICE_ID, &mut stx, "seed contract subject account");
+            stx.world.contract_subject_addresses.insert(
+                contract_address.subject_id(), contract_address.clone(),
+            );
             stx.world.contract_subject_bindings.insert(
                 contract_address.clone(),
                 crate::smartcontracts::code::ContractSubjectBinding::new_parliament(

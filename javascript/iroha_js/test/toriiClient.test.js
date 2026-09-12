@@ -1541,6 +1541,19 @@ function multisigDraftForBindings({
   );
 }
 
+function contractDraftForBindings(options = {}) {
+  return multisigDraftForBindings({ ...options, admissionIntent: 1 });
+}
+
+class ContractToriiClient extends ToriiClient {
+  constructor(baseUrl, options = {}) {
+    super(baseUrl, {
+      canonicalRequestAuth: { ...APPLICATION_CANONICAL_AUTH, accountId: FIXTURE_ALICE_ID },
+      ...options,
+    });
+  }
+}
+
 function draftIntentForDraft(draft) {
   const payload = Buffer.from(draft.transaction_payload_b64, "base64");
   const fields = [];
@@ -21989,8 +22002,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
   let captured;
   const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
   const payload = { value: 7, labels: ["a", "b"] };
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment,
     creationTimeMs: 42,
@@ -22035,7 +22047,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
       headers: { "content-type": "application/json" },
     });
   };
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
     localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
   });
@@ -22050,6 +22062,21 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
     draftIntent: contractDraftIntentForDraft(draft, { payload }),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
+  assert.equal(captured.init.redirect, "error");
+  const accountHeader = captured.init.headers["X-Iroha-Account"];
+  assert.equal(accountHeader, AccountAddress.parseEncoded(FIXTURE_ALICE_ID).address.canonicalHex());
+  const signingMessage = canonicalRequestSignatureMessage({
+    networkId: VK_SIGNING_NETWORK_ID,
+    method: "POST",
+    path: "/v1/contracts/call",
+    body: captured.init.body,
+    timestampMs: Number(captured.init.headers["X-Iroha-Timestamp-Ms"]),
+    nonce: captured.init.headers["X-Iroha-Nonce"],
+  });
+  assert.deepEqual(
+    Buffer.from(captured.init.headers["X-Iroha-Signature"], "base64"),
+    signEd25519(signingMessage, APPLICATION_CANONICAL_AUTH.privateKey),
+  );
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
     authority: FIXTURE_ALICE_ID,
@@ -22080,8 +22107,7 @@ test("prepareContractCall posts a secret-free payload and normalizes the draft",
 
 test("prepareContractCall rejects submitted and unmarked response state", async () => {
   const txHash = "3".repeat(64);
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22127,7 +22153,7 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
       jsonData: responsePayload,
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
     localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
   });
@@ -22155,8 +22181,7 @@ test("prepareContractCall rejects submitted and unmarked response state", async 
 });
 
 test("callContract response requires operation_receipt", async () => {
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22175,7 +22200,7 @@ test("callContract response requires operation_receipt", async () => {
       },
       headers: { "content-type": "application/json" },
     });
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl,
     localSigningContext: new LocalSigningContext(VK_SIGNING_NETWORK_ID),
   });
@@ -22196,8 +22221,7 @@ test("callContract response requires operation_receipt", async () => {
 test("callContract rejects coercible, non-canonical, or unexpected response fields", async () => {
   const contractAddress =
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
@@ -22266,7 +22290,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
   for (const [label, mutate, pattern] of cases) {
     const payload = makePayload();
     mutate(payload);
-    const client = new ToriiClient(BASE_URL, {
+    const client = new ContractToriiClient(BASE_URL, {
       fetchImpl: async () =>
         createResponse({
           status: 200,
@@ -22295,8 +22319,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
     "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
   const payload = { value: 7, labels: ["a", "b"] };
   const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment,
     creationTimeMs: 42,
@@ -22357,6 +22380,15 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
       },
     ]),
     [
+      "colluding Ordinary admission",
+      (value) => {
+        const ordinary = multisigDraftForBindings({ authority: FIXTURE_ALICE_ID, feePayment, creationTimeMs: 42 });
+        value.transaction_payload_b64 = ordinary.transaction_payload_b64;
+        value.signing_message_b64 = ordinary.signing_message_b64;
+      },
+      /canonical transaction payload bound to the requested signer/,
+    ],
+    [
       "colluding resolved address",
       (value) => {
         value.contract_address = "colluding-substitution";
@@ -22410,8 +22442,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
     [
       "colluding creation time",
       (value) => {
-        const substitutedDraft = multisigDraftForBindings({
-          admissionIntent: 1,
+        const substitutedDraft = contractDraftForBindings({
           authority: FIXTURE_ALICE_ID,
           feePayment,
           creationTimeMs: 43,
@@ -22426,7 +22457,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
   for (const [label, mutate, pattern] of cases) {
     const responsePayload = JSON.parse(JSON.stringify(validResponse));
     mutate(responsePayload);
-    const client = new ToriiClient(BASE_URL, {
+    const client = new ContractToriiClient(BASE_URL, {
       fetchImpl: async () => createResponse({
         status: 200,
         jsonData: responsePayload,
@@ -22445,7 +22476,7 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
   aliasResponse.dataspace = "private";
   aliasResponse.operation_receipt.dataspace = "private";
   aliasResponse.operation_receipt.contract_alias = "call::universal";
-  const aliasClient = new ToriiClient(BASE_URL, {
+  const aliasClient = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({
       status: 200,
       jsonData: aliasResponse,
@@ -22465,14 +22496,13 @@ test("prepareContractCall rejects colluding contract substitutions and receipt t
 
 test("prepareContractCall validates caller-trusted payload intent before fetch", async () => {
   const payload = { value: 7 };
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
   });
   let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       fetchCalls += 1;
       throw new Error("fetch must not run for mismatched caller intent");
@@ -22497,14 +22527,13 @@ test("prepareContractCall validates caller-trusted payload intent before fetch",
 });
 
 test("prepareContractCall rejects a zero explicit creation time before fetch", async () => {
-  const draft = multisigDraftForBindings({
-    admissionIntent: 1,
+  const draft = contractDraftForBindings({
     authority: FIXTURE_ALICE_ID,
     feePayment: authorityFeePayment(42),
     creationTimeMs: 42,
   });
   let fetchCalls = 0;
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       fetchCalls += 1;
       throw new Error("fetch must not run for an invalid creation time");
@@ -22527,7 +22556,7 @@ test("prepareContractCall rejects a zero explicit creation time before fetch", a
 });
 
 test("callContract rejects missing feePayment", async () => {
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
     },
@@ -22544,7 +22573,7 @@ test("callContract rejects missing feePayment", async () => {
 });
 
 test("callContract rejects a zero feePayment gas limit", async () => {
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
     },
@@ -22562,7 +22591,7 @@ test("callContract rejects a zero feePayment gas limit", async () => {
 });
 
 test("callContract rejects an implicit entrypoint", async () => {
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
     },
@@ -22579,7 +22608,7 @@ test("callContract rejects an implicit entrypoint", async () => {
 });
 
 test("callContract rejects non-object options", async () => {
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
     },
@@ -22599,7 +22628,7 @@ test("callContract rejects non-object options", async () => {
 });
 
 test("callContract rejects unsupported option fields", async () => {
-  const client = new ToriiClient(BASE_URL, {
+  const client = new ContractToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
     },
@@ -27716,4 +27745,20 @@ test("ToriiClient._normalizeOffset rejects fractional offsets", () => {
     () => ToriiClient._normalizeOffset(1.25),
     /offset must be a non-negative integer/,
   );
+});
+
+test("prepareContractCall requires exact authority authentication before fetch", async () => {
+  let fetched = 0;
+  const draft = contractDraftForBindings({ feePayment: authorityFeePayment(5000) });
+  const request = {
+    authority: FIXTURE_ALICE_ID,
+    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    entrypoint: "increment",
+    feePayment: authorityFeePayment(5000),
+    draftIntent: contractDraftIntentForDraft(draft),
+  };
+  const client = new ContractToriiClient(BASE_URL, { fetchImpl: async () => { fetched += 1; throw new Error("unexpected fetch"); } });
+  await assert.rejects(() => client.prepareContractCall(request, { canonicalAuth: null }), /canonicalAuth is required/);
+  await assert.rejects(() => client.prepareContractCall(request, { canonicalAuth: APPLICATION_CANONICAL_AUTH }), /accountId must equal/);
+  assert.equal(fetched, 0);
 });

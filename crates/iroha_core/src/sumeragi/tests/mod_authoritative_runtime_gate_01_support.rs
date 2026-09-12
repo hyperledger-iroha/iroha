@@ -1,5 +1,5 @@
 use super::{
-    BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
+    BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage, SumeragiHandle,
     authenticated_peer_for_test, fair_v2_ingress_is_certified_body_request,
     fair_v2_ingress_same_control_slot, test_sumeragi_handle,
     test_sumeragi_handle_with_source_geometry,
@@ -18,9 +18,10 @@ use iroha_data_model::{
     merge::{
         LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeCommitteeSignature, MergeLedgerEntry,
     },
-    nexus::{DataSpaceId, LaneFinalityStatement, LaneId},
-    peer::PeerId,
+    nexus::LaneFinalityStatement,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
 use norito::codec::Encode as _;
 use std::{

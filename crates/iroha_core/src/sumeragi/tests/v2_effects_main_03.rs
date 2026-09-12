@@ -387,11 +387,32 @@ fn assert_decided_apply_merge_sidecar_corruption(corrupt_ordinal: bool) {
     let status = executor.status();
     assert_eq!(status.deferred_application_merge_work, 1);
     assert!(services.apply_tasks.is_empty());
+    services.apply_retry_blocked = true;
+    for _ in 0..3 {
+        assert_eq!(
+            executor
+                .retry_deferred_merge_sidecar(entry_hash, &mut services)
+                .expect("full worker queue is a recoverable scheduler condition"),
+            None
+        );
+        assert!(!executor.status().fail_closed);
+        assert_eq!(executor.status().deferred_application_merge_work, 1);
+        let retained = &executor.pending_applications[&work_id].task;
+        assert_eq!(retained.id(), task.id());
+        assert_eq!(retained.tag(), task.tag());
+        assert_eq!(retained.authorized_owner_tag(), task.authorized_owner_tag());
+        assert_eq!(retained.subject(), task.subject());
+        assert_eq!(retained.certificate(), task.certificate());
+        assert_eq!(retained.validated_receipt(), task.validated_receipt());
+        assert_eq!(retained.lifecycle_ordinal(), task.lifecycle_ordinal());
+        assert!(services.apply_tasks.is_empty());
+    }
+    services.apply_retry_blocked = false;
     assert_eq!(
         executor
             .retry_deferred_merge_sidecar(entry_hash, &mut services)
             .expect("retry decided apply after sidecar persistence"),
-        1
+        Some(1)
     );
     assert_eq!(
         services.apply_tasks.last().map(ApplyTask::id),

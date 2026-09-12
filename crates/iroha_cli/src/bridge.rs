@@ -5,11 +5,13 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     client::{
-        SccpBridgeSubmitResponse, SccpCapabilities, SccpDestinationProofSubmitRequest,
-        SccpNativeMessageSubmitRequest, SccpRecentMessages, SccpRecentMessagesQuery,
+        SccpBridgeSubmitResponse, SccpDestinationProofSubmitRequest,
+        SccpNativeMessageSubmitRequest, SccpRecentMessagesQuery,
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
+use iroha_model_base::topology::LaneId;
+use iroha_sccp::api::{SccpCapabilities, SccpRecentMessages};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -191,14 +193,14 @@ fn emit_receipt(ctx: &mut impl RunContext, args: EmitReceiptArgs) -> Result<()> 
     ))])
 }
 fn sccp_capabilities(ctx: &mut impl RunContext) -> Result<()> {
-    let capabilities = ctx.client_from_config().get_sccp_capabilities()?;
+    let capabilities = ctx.client_from_config()?.get_sccp_capabilities()?;
     match ctx.output_format() {
         CliOutputFormat::Text => ctx.println(render_sccp_capabilities_summary(&capabilities)),
         CliOutputFormat::Json => ctx.print_data(&capabilities),
     }
 }
 fn sccp_registry(ctx: &mut impl RunContext) -> Result<()> {
-    let registry = ctx.client_from_config().get_sccp_registry()?;
+    let registry = ctx.client_from_config()?.get_sccp_registry()?;
     match ctx.output_format() {
         CliOutputFormat::Text => ctx.println(render_sccp_registry_summary(&registry)),
         CliOutputFormat::Json => ctx.print_data(&registry),
@@ -209,13 +211,13 @@ fn sccp_recent(ctx: &mut impl RunContext, args: RecentArgs) -> Result<()> {
     match ctx.output_format() {
         CliOutputFormat::Text => {
             let messages = ctx
-                .client_from_config()
+                .client_from_config()?
                 .get_sccp_recent_messages_with_query(query)?;
             ctx.println(render_sccp_recent_messages_summary(&messages))
         }
         CliOutputFormat::Json => {
             let messages = ctx
-                .client_from_config()
+                .client_from_config()?
                 .get_sccp_recent_messages_json_with_query(query)?;
             ctx.print_data(&messages)
         }
@@ -225,13 +227,13 @@ fn sccp_bundle(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()> {
     match ctx.output_format() {
         CliOutputFormat::Text => {
             let bundle = ctx
-                .client_from_config()
+                .client_from_config()?
                 .get_sccp_message_bundle(&args.message_id)?;
             ctx.println(render_sccp_message_bundle_summary(&bundle))
         }
         CliOutputFormat::Json => {
             let bundle = ctx
-                .client_from_config()
+                .client_from_config()?
                 .get_sccp_message_bundle_json(&args.message_id)?;
             ctx.print_data(&bundle)
         }
@@ -241,13 +243,13 @@ fn sccp_proof_request(ctx: &mut impl RunContext, args: MessageArgs) -> Result<()
     match ctx.output_format() {
         CliOutputFormat::Text => {
             let request = ctx
-                .client_from_config()
+                .client_from_config()?
                 .get_sccp_groth16_proof_request(&args.message_id)?;
             ctx.println(render_sccp_proof_request_summary(&request))
         }
         CliOutputFormat::Json => {
             let request = ctx
-                .client_from_config()
+                .client_from_config()?
                 .get_sccp_groth16_proof_request_json(&args.message_id)?;
             ctx.print_data(&request)
         }
@@ -523,7 +525,7 @@ fn sccp_submit_destination_proof(
         destination_proof_b64: base64::engine::general_purpose::STANDARD.encode(proof_envelope),
         creation_time_ms: detached.creation_time_ms,
     };
-    let client = ctx.client_from_config();
+    let client = ctx.client_from_config()?;
     let response = submit_sccp_once("SCCP destination-proof submission", || {
         client.post_sccp_destination_proof(&request)
     })?;
@@ -555,7 +557,7 @@ fn sccp_submit_native_message(
         replay_witness_b64: base64::engine::general_purpose::STANDARD.encode(replay_witness),
         creation_time_ms: detached.creation_time_ms,
     };
-    let client = ctx.client_from_config();
+    let client = ctx.client_from_config()?;
     let response = submit_sccp_once("SCCP native-message submission", || {
         client.post_sccp_native_message(&request)
     })?;
@@ -810,8 +812,8 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
 mod tests {
     use super::*;
     use clap::Parser as _;
-    use iroha::client::{SccpRegistryLimits, SccpResourceLimits};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_sccp::api::{SccpRegistryLimits, SccpResourceLimits};
     use std::{cell::Cell, path::PathBuf};
     use tempfile::tempdir;
     #[derive(clap::Parser)]
@@ -1333,7 +1335,7 @@ mod tests {
     #[test]
     fn recent_summary_includes_both_governed_hash_roles() {
         let summary = render_sccp_recent_messages_summary(&SccpRecentMessages {
-            items: vec![iroha::client::SccpRecentMessage {
+            items: vec![iroha_sccp::api::SccpRecentMessage {
                 height: 9,
                 commitment_index: 0,
                 message_id_hex: "11".repeat(32),
@@ -1370,7 +1372,7 @@ mod tests {
                         },
                     },
                 ),
-                links: iroha::client::SccpRecentMessageLinks {
+                links: iroha_sccp::api::SccpRecentMessageLinks {
                     bundle_path: "/v1/sccp/proofs/message/id".to_owned(),
                     proof_request_path: "/v1/sccp/proof-requests/id".to_owned(),
                 },

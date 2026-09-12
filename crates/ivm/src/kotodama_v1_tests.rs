@@ -421,7 +421,8 @@ fn bounded_transfer_lists_evaluate_before_begin_and_skip_empty_batches() {
 #[test]
 fn saved_transfer_lists_apply_in_order_and_roll_back_on_failure() {
     use crate::mock_wsv::{MockWorldStateView, PermissionToken, WsvHost};
-    use iroha_data_model::{AccountId, AssetDefinitionId, DomainId};
+    use iroha_data_model::{AccountId, AssetDefinitionId};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Quantity;
     let account = |key: &str| AccountId::new(key.parse().unwrap());
     let alice = account("ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774");

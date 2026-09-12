@@ -7,9 +7,9 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 /** Stable cross-SDK signature transcript for Taira prepared transactions. */
 public final class PreparedTransactionSignatureV1 {
   public static final String TRANSCRIPT_SCHEMA =
-      "iroha.taira.prepared-signature-transcript.v1";
+      "iroha.prepared-signature-transcript.v1";
   private static final byte[] DOMAIN =
-      "iroha:taira:prepared-transaction:v1\0".getBytes(StandardCharsets.UTF_8);
+      "iroha:prepared-transaction:v1\0".getBytes(StandardCharsets.UTF_8);
 
   private PreparedTransactionSignatureV1() {}
 
@@ -83,18 +83,16 @@ public final class PreparedTransactionSignatureV1 {
   private static ByteArrayOutputStream base(
       final String envelopeSchema,
       final String operation,
-      final TairaPublicResetMutationBindingV1 binding) {
+      final PreparedOperationBindingV1 binding) {
     final ByteArrayOutputStream transcript = new ByteArrayOutputStream();
     frame(transcript, DOMAIN);
     field(transcript, "transcript_schema", TRANSCRIPT_SCHEMA);
     field(transcript, "envelope_schema", envelopeSchema);
     field(transcript, "operation", operation);
     field(transcript, "binding.schema", binding.schema());
-    field(transcript, "binding.authorization_sha256", binding.authorizationSha256());
-    field(transcript, "binding.authorization_nonce", binding.authorizationNonce());
+    field(transcript, "binding.semantic_hash_hex", binding.semanticHashHex());
     field(transcript, "binding.kind", binding.kind());
-    field(transcript, "binding.phase", binding.phase());
-    field(transcript, "binding.idempotency_key", binding.idempotencyKey());
+    field(transcript, "binding.request_id", binding.requestId());
     field(
         transcript,
         "binding.execution_expires_at_unix_ms",
@@ -122,7 +120,7 @@ public final class PreparedTransactionSignatureV1 {
   }
 
   static byte[] decodeLowerHex(final String value) {
-    TairaPublicResetMutationBindingV1.requireLowerHex(value, "value");
+    PreparedOperationBindingV1.requireLowerHex(value, "value");
     final byte[] result = new byte[value.length() / 2];
     for (int index = 0; index < result.length; index++) {
       result[index] =

@@ -18,6 +18,8 @@ use iroha::{
     },
     query::QueryError,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
@@ -81,7 +83,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             client.transaction_status_timeout = tx_timeout;
             client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
         });
-    let create_domain = domain_setup_instruction(&domain_id, &submitter_client.client().account)?;
+    let create_domain = domain_setup_instruction(&domain_id, submitter_client.client().account())?;
     let setup_result = submitter_client.submit_all::<InstructionBox>(
         [
             create_domain,

@@ -3,7 +3,7 @@
 //! These types deliberately model only the first-release network inventory. There is no catch-all
 //! network, emitter, or arbitrary network identifier: unsupported profiles must fail decoding
 //! instead of being interpreted by node-local policy.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use core::cmp::Ordering;
 use iroha_schema::IntoSchema;
@@ -44,9 +44,22 @@ pub const SCCP_TON_MAINNET_ZERO_STATE_FILE_HASH_V1: [u8; 32] = [
 /// TON basechain workchain used by the first-release SCCP contracts.
 pub const SCCP_TON_BASECHAIN_WORKCHAIN_V1: i32 = 0;
 /// A supported SCCP network profile for the V1 wire format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "network", content = "profile")]
@@ -136,9 +149,22 @@ impl SccpNetworkV1 {
     }
 }
 /// A directed SCCP lane between two exact V1 network profiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -187,9 +213,22 @@ impl SccpLaneIdV1 {
 /// The binding hash is deliberately not part of the replay key. A destination
 /// rollout may rotate after a message is finalized, but the same lane-bound
 /// economic message must never become recordable again under the new binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -237,9 +276,22 @@ impl SccpOutboundMessageContextV1 {
 /// Exact network profiles prevent messages on two networks in the same SCCP domain from aliasing
 /// each other. The destination binding is intentionally excluded so rotating a governed rollout
 /// cannot replay an already-recorded lane-bound message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -271,9 +323,20 @@ impl SccpOutboundMessageKeyV1 {
 /// Reverse-height ordering supports bounded newest-first pagination and direct
 /// seeking to an inclusive historical height. Lane and message id make every
 /// index entry self-checking against the authoritative replay map.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -386,9 +449,21 @@ impl PartialOrd for SccpOutboundMessageIndexKeyV1 {
     }
 }
 /// Fixed replay and discovery descriptor retained for every outbound SCCP message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -429,9 +504,20 @@ impl SccpOutboundMessageDescriptorV1 {
 /// replay transition are retained by the route-scoped accumulator and Kura's immutable
 /// finalized-height archive, which also keeps the canonical payload available for historical
 /// proof serving.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -491,10 +577,21 @@ impl SccpOutboundPendingMessageRecordV1 {
 }
 /// Consensus-state usage of payload-bearing pending SCCP outbox entries.
 #[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -542,9 +639,22 @@ impl SccpOutboundPendingUsageV1 {
 /// The value stored under this key is the greatest authenticated backend-specific
 /// consensus-progress coordinate admitted for the exact lane and anchor. Governance uses it to
 /// prevent a successor checkpoint from retroactively excluding already accepted evidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -577,9 +687,22 @@ impl SccpInboundAnchorHighWaterKeyV1 {
 /// whose immutable configuration makes source emission inseparable from a
 /// successful transfer. The finalized execution proof opens the runtime code;
 /// the canonical transfer event carries the same route-configuration hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -598,9 +721,22 @@ pub struct SccpEvmSourceEmitterV1 {
 /// These fields are therefore an explicit governed deployment trust boundary;
 /// native proofs still authenticate the successful concrete transfer call, its
 /// sender, canonical arguments, and the block transaction root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -618,9 +754,22 @@ pub struct SccpTronSourceEmitterV1 {
 /// Friendly/base64 address flags and checksums are presentation-only. SCCP
 /// consensus state retains the signed workchain id and 256-bit account id
 /// directly, so no network or bounceability flag can alter route identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -651,9 +800,22 @@ impl SccpTonAddressV1 {
 /// for native outbound events and proof-authenticated destination execution;
 /// registry validation therefore requires this identity to match the TON
 /// destination route address and code hash exactly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -667,9 +829,22 @@ pub struct SccpTonSourceEmitterV1 {
     pub route_config_hash: [u8; 32],
 }
 /// Exact source-bridge emitter identity for a supported external chain family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "emitter", content = "identity")]
@@ -746,9 +921,22 @@ impl SccpSourceEmitterV1 {
     }
 }
 /// A typed external-source identity bound to one inbound SORA lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -853,7 +1041,7 @@ mod tests {
             commitment_index: 0,
         }
     }
-    #[cfg(feature = "json")]
+
     fn insert_unknown_json_field(value: &mut norito::json::Value, path: &[&str]) {
         let mut current = value;
         for field in path {
@@ -974,7 +1162,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn unsupported_networks_and_emitters_are_not_json_decodable() {
         for profile in [
@@ -993,7 +1181,8 @@ mod tests {
                 "unsupported profile {profile} unexpectedly decoded"
             );
         }
-        for emitter in ["unknown_emitter"] {
+        {
+            let emitter = "unknown_emitter";
             let json = format!(r#"{{"emitter":"{emitter}","identity":{{}}}}"#);
             assert!(
                 norito::json::from_json::<SccpSourceEmitterV1>(&json).is_err(),
@@ -1001,7 +1190,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_roundtrips_advertise_only_first_release_profiles() {
         for network in NETWORKS {
@@ -1019,7 +1208,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn source_identity_json_rejects_unknown_fields_recursively() {
         let identity = SccpSourceIdentityV1 {
@@ -1256,7 +1445,7 @@ mod tests {
             ]
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn retired_terminal_record_fields_are_rejected() {
         for retired_field in [

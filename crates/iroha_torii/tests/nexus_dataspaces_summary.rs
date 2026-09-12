@@ -20,15 +20,16 @@ use iroha_data_model::{
     account::{AccountId, NewAccount},
     asset::{AssetBalancePolicy, AssetDefinitionId, AssetId, NewAssetDefinition},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{Mint, Register},
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
-        DataSpaceId, DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion,
-        UniversalAccountId,
+        DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion, UniversalAccountId,
     },
-    peer::PeerId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
@@ -956,7 +957,7 @@ fn build_test_router(
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
     let torii = fixtures::ToriiHarness::new(
         &cfg,
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kura,
         &state,

@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,17 +89,124 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         ):
             self.assertIn(invocation, source)
 
-    def test_swift_builder_binds_the_frozen_external_release_lock(self) -> None:
+    def test_swift_builder_binds_the_canonical_external_graph_snapshot(self) -> None:
         source = read("scripts/build_norito_xcframework.sh")
         for marker in (
-            'CARGO_LOCKFILE="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-$ROOT_DIR/Cargo.lock}"',
-            '[[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]',
-            '"$CARGO_LOCKFILE" == "$ROOT_DIR/Cargo.lock"',
-            '"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"',
-            'Privacy release builds require the distinct authenticated cd9e Cargo.lock',
+            'CARGO_LOCKFILE=""',
+            '--lockfile-path is required; no implicit Cargo.lock selection',
+            '"$CARGO_LOCKFILE" != "$ROOT_DIR/Cargo.lock"',
+            'source "$CARGO_GRAPH_OWNER"',
+            '"$PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256"',
+            'Privacy production builds require an explicit external canonical graph snapshot',
             '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
         ):
             self.assertIn(marker, source)
+        self.assertNotIn("IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH", source)
+        fixture = read("scripts/tests/mobile_sdk_build_source_seal_test.sh")
+        self.assertIn('"$root/ci/privacy_sdk_cargo_lockfile.sh"', fixture)
+        self.assertIn("External Cargo.lock must match the canonical reviewed graph", fixture)
+        readme = read("IrohaSwift/README.md")
+        self.assertNotIn('--lockfile-path "$PWD/Cargo.lock" --privacy-production-enabled', readme)
+        self.assertIn("/absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock", readme)
+
+    def test_privacy_builder_rejects_root_selection_with_equal_graph_digest(self) -> None:
+        source = read("scripts/build_norito_xcframework.sh")
+        fragment = source[source.index('source "$CARGO_GRAPH_OWNER"'):source.index('assert_selected_cargo_lock()')]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            owner = root / "owner.sh"
+            owner.write_text('readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256="' + ("a" * 64) + '"\n')
+            for privacy, selected, success in (("1", str(root / "Cargo.lock"), False), ("1", str(root.parent / "snapshot/Cargo.lock"), True), ("0", str(root / "Cargo.lock"), True)):
+                environment = dict(os.environ, ROOT_DIR=str(root), CARGO_GRAPH_OWNER=str(owner), PRIVACY_PRODUCTION_ENABLED=privacy, CARGO_LOCKFILE=selected, CARGO_LOCK_SHA256_START="a" * 64)
+                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + fragment], env=environment, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                if not success:
+                    self.assertIn("explicit external canonical graph snapshot", result.stderr)
+
+    def test_privacy_shell_lock_reader_requires_readonly_equal_bytes(self) -> None:
+        source = read("scripts/build_norito_xcframework.sh")
+        fragment = source[source.index("selected_cargo_lock_sha256() {"):source.index("CARGO_LOCK_SHA256_START=")]
+        command = 'run_isolated_python() { "$TEST_PYTHON_BINARY" -I -S -B "$@"; }\n' + fragment + "\nselected_cargo_lock_sha256\n"
+        with tempfile.TemporaryDirectory() as directory:
+            selected = Path(directory).resolve() / "Cargo.lock"
+            selected.write_bytes((REPO_ROOT / "Cargo.lock").read_bytes())
+            for privacy, mode, valid in (("1", 0o600, False), ("0", 0o600, True), ("1", 0o400, True)):
+                selected.chmod(mode)
+                environment = dict(os.environ, TEST_PYTHON_BINARY=sys.executable, SOURCE_SEAL_SCRIPT=str(REPO_ROOT / "scripts/norito_bridge_source_seal.py"), CARGO_LOCKFILE=str(selected), PRIVACY_PRODUCTION_ENABLED=privacy)
+                result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + command], env=environment, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, valid, result.stderr)
+                if valid:
+                    self.assertEqual(result.stdout.strip(), hashlib.sha256(selected.read_bytes()).hexdigest())
+                else:
+                    self.assertIn("must be read-only", result.stderr)
+            self.assertEqual(selected.read_bytes(), (REPO_ROOT / "Cargo.lock").read_bytes())
+
+    def test_builder_requires_one_explicit_lock_argument_without_environment_alias(self) -> None:
+        source = read("scripts/build_norito_xcframework.sh")
+        fragment = source[source.index('BRIDGE_VERSION=""'):source.index('CI_HANDOFF_DIR=')]
+        fragment += '\nprintf "%s" "$CARGO_LOCKFILE"\n'
+        for arguments, valid in (
+            ([], False),
+            (["--lockfile-path"], False),
+            (["--lockfile-path", ""], False),
+            (["--lockfile-path", "/explicit root/Cargo.lock"], True),
+            (["--lockfile-path", "/reviewed external/Cargo.lock"], True),
+            (["--lockfile-path", "/one/Cargo.lock", "--lockfile-path", "/two/Cargo.lock"], False),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    ["/bin/bash", "-euc", fragment, "build-lock-parser", *arguments],
+                    env={"PATH": "/usr/bin:/bin", "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": "/ignored/alias.lock"},
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode == 0, valid, result.stderr)
+                if valid:
+                    self.assertEqual(result.stdout.strip(), arguments[1])
+                else:
+                    self.assertIn("--lockfile-path", result.stderr)
+
+    def test_all_apple_consumers_reject_missing_selected_lock_before_artifact_access(self) -> None:
+        python = str(Path(sys.executable).resolve())
+        commands = [
+            [python, "-I", "-S", "-B", "scripts/validate_norito_bridge_xcframework.py",
+             "--root", str(REPO_ROOT), "--xcframework", "/absent/framework", "--manifest", "/absent/manifest",
+             "--manifest-link", "/absent/link", "--expected-link-target", "NoritoBridge.xcframework/NoritoBridge.artifacts.json"],
+            [python, "-I", "-S", "-B", "scripts/update_norito_bridge_swift_pins.py",
+             "--root", str(REPO_ROOT), "--artifact-dir", "/absent/artifacts", "--check"],
+            [python, "-I", "-S", "-B", "scripts/archive_norito_xcframework.py",
+             "--xcframework", "/absent/framework", "--output", "/absent/output", "--scratch-dir", "/absent/scratch"],
+            ["/bin/bash", "scripts/check_mobile_sdk_artifacts.sh", "--root", str(REPO_ROOT), "--apple-only"],
+            ["/bin/bash", "scripts/package_mobile_sdk_artifacts.sh", "--root", str(REPO_ROOT), "--apple"],
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                result = subprocess.run(
+                    command, cwd=REPO_ROOT,
+                    env={"PATH": "/usr/bin:/bin", "MOBILE_SDK_PYTHON_BINARY": python},
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("--lockfile-path", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_all_shipped_apple_callers_forward_their_explicit_lock(self) -> None:
+        ordinary = (
+            ".github/workflows/mobile_sdk_artifacts.yml",
+            ".github/workflows/sorafs-orchestrator-sdk.yml",
+            ".github/workflows/numeric_v1_sdk.yml",
+        )
+        for path in ordinary:
+            for line in read(path).splitlines():
+                if ("run: scripts/build_norito_xcframework.sh" in line or
+                    "scripts/check_mobile_sdk_artifacts.sh --apple-only" in line or
+                    "run: bash scripts/package_mobile_sdk_artifacts.sh --apple " in line):
+                    self.assertIn('--lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"', line, path)
+        self.assertIn('--lockfile-path "$(CURDIR)/Cargo.lock"', read("Makefile"))
+        self.assertEqual(read("scripts/check_sccp_production_corridor.sh").count(
+            'run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh" --lockfile-path "$ROOT/Cargo.lock"'), 2)
+        self.assertIn('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only --lockfile-path "${PRIVACY_RELEASE_CARGO_LOCK}"', read("ci/check_privacy_swift_sdk.sh"))
+        android = read("kotlin/client-android/build.gradle.kts")
+        self.assertEqual(android.count('"--lockfile-path",\n                tools.cargoLock.toString(),'), 2)
 
     def test_swift_authenticated_external_lock_allows_execution(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")
@@ -106,16 +215,19 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             root, artifact, scratch, tools = (
                 base / name for name in ("repo", "artifact", "scratch", "bin")
             )
-            for directory in (root / "scripts", artifact, scratch, tools):
+            for directory in (root / "scripts", root / "ci", artifact, scratch, tools):
                 directory.mkdir(parents=True)
             (artifact / "NoritoBridge.xcframework").mkdir()
             tracked, release, log = root / "Cargo.lock", base / "Cargo.lock", base / "calls"
+            (root / "ci/privacy_sdk_cargo_lockfile.sh").write_text(
+                'readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n"' + ("a" * 64) + '"\n', encoding="utf-8",
+            )
             tracked.write_text("tracked\n", encoding="utf-8")
             release.write_text("release\n", encoding="utf-8")
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                'echo "' + ("a" * 64) + '"\n',
                 encoding="utf-8",
             )
             (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
@@ -160,7 +272,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             release.write_text("wrong release\n", encoding="utf-8")
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" || echo "'
+                f'[[ "${{!#}}" == "{tracked}" ]] && echo "' + ("a" * 64) + '" || echo "'
                 + ("0" * 64)
                 + '"\n',
                 encoding="utf-8",
@@ -171,7 +283,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
             self.assertEqual(result.returncode, 1)
-            self.assertIn("external Cargo.lock is not the frozen release lock", result.stderr)
+            self.assertIn("external Cargo.lock does not match the canonical reviewed graph", result.stderr)
             self.assertFalse(log.exists(), "invalid lock allowed artifact/Xcode execution")
 
     def test_package_manifest_requires_the_external_artifact(self) -> None:
@@ -464,8 +576,8 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "NORITO_BRIDGE_OUT_DIR",
             "NORITO_BRIDGE_BUILD_DIR",
             'chmod -R a-w "$GITHUB_WORKSPACE"',
-            "scripts/build_norito_xcframework.sh",
-            "scripts/check_mobile_sdk_artifacts.sh --apple-only",
+            'scripts/build_norito_xcframework.sh --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
+            'scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
             "python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py",
             "run: ci/check_privacy_swift_sdk.sh",
         ):

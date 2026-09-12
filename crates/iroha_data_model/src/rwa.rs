@@ -1,5 +1,5 @@
 //! Real-world asset lot structures and helper types.
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
@@ -7,13 +7,14 @@ use crate::{
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered,
     common::{Owned, Ref, split_nonempty},
-    error::ParseError,
-    metadata::Metadata,
-    prelude::{AccountId, DomainId, Name, RoleId},
+    prelude::{AccountId, RoleId},
 };
 use derive_more::{Constructor, Display};
 use getset::{Getters, MutGetters};
 use iroha_crypto::Hash;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -36,10 +37,7 @@ use std::{format, str::FromStr, string::String, vec::Vec};
 )]
 #[display("{hash}${domain}")]
 #[getset(get = "pub")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -59,10 +57,7 @@ pub struct RwaId {
 /// Quantitative provenance edge from a parent lot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[getset(get = "pub")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -83,10 +78,7 @@ pub struct RwaParentRef {
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
 )]
 #[getset(get = "pub")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -125,8 +117,8 @@ pub struct RwaControlPolicy {
     IntoSchema,
 )]
 #[display("{id}")]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveFast, DeriveJsonSer, DeriveJsonDe)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -175,10 +167,7 @@ pub struct Rwa {
 #[allow(clippy::too_many_arguments)] // Constructor fields intentionally mirror the registration payload one-to-one.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[getset(get = "pub")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -208,9 +197,15 @@ pub struct NewRwa {
 /// Read-only reference to [`Rwa`].
 pub type RwaEntry<'world> = Ref<'world, RwaId, RwaValue>;
 /// [`Rwa`] without `id` field for world-state storage.
-#[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::rwa::RwaData")]
 pub struct RwaData {
@@ -262,13 +257,11 @@ impl FromStr for RwaId {
             "Empty `hash` part in `hash$domain`",
             "Empty `domain` part in `hash$domain`",
         )?;
-        let hash = hash_candidate.parse().map_err(|_| ParseError {
-            reason: "Failed to parse `hash` part in `hash$domain`",
-        })?;
-        let domain_id =
-            DomainId::parse_fully_qualified(domain_id_candidate).map_err(|_| ParseError {
-                reason: "Failed to parse `domain` part in `hash$domain`",
-            })?;
+        let hash = hash_candidate
+            .parse()
+            .map_err(|_| ParseError::new("Failed to parse `hash` part in `hash$domain`"))?;
+        let domain_id = DomainId::parse_fully_qualified(domain_id_candidate)
+            .map_err(|_| ParseError::new("Failed to parse `domain` part in `hash$domain`"))?;
         Ok(Self::new(domain_id, hash))
     }
 }
@@ -450,7 +443,7 @@ mod tests {
         );
     }
 }
-#[cfg(feature = "json")]
+
 impl mv::json::JsonKeyCodec for RwaId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
@@ -461,7 +454,7 @@ impl mv::json::JsonKeyCodec for RwaId {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod json_tests {
     use super::*;
     #[test]

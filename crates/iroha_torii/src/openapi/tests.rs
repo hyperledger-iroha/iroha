@@ -2901,6 +2901,7 @@ include!("tests/hijiri_quote_contract.rs");
 include!("tests/iso20022_auth.rs");
 include!("tests/json_value_contract.rs");
 include!("tests/prepared_account_contracts.rs");
+include!("tests/public_contract_call.rs");
 include!("tests/private_settlement_contract.rs");
 include!("tests/soracloud_lease_contracts.rs");
 include!("tests/sorafs_contracts.rs");

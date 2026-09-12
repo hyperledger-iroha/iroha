@@ -2,9 +2,8 @@
 use super::DaPinIntentValidationError;
 use iroha_config::parameters::actual::Da as DaPolicy;
 use iroha_crypto::blake3_256;
-use iroha_data_model::{
-    account::AccountId, da::pin_intent::DaPinIntentBundle, state_path::StatePath,
-};
+use iroha_data_model::{account::AccountId, da::pin_intent::DaPinIntentBundle};
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{Decode, Encode, decode_from_bytes, to_bytes};
 use std::{collections::BTreeMap, str::FromStr};
@@ -13,7 +12,8 @@ const QUOTA_USAGE_VERSION_V1: u8 = 1;
 const MAX_QUOTA_USAGE_BYTES: usize = 128;
 /// Transactional smart-contract-state writes prepared for one accepted block.
 pub(crate) type DaIngestQuotaWrites = BTreeMap<StatePath, Vec<u8>>;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::da::quota::DaIngestQuotaUsageV1")]
 struct DaIngestQuotaUsageV1 {
     version: u8,
     window: u64,
@@ -200,9 +200,9 @@ mod tests {
             pin_intent::DaPinIntent,
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU64;
     fn authorized_intent(owner_seed: u8, sequence: u64, payload_bytes: u64) -> DaPinIntent {
         let key_pair = KeyPair::try_from_seed(vec![owner_seed; 32], Algorithm::Ed25519)
@@ -235,6 +235,37 @@ mod tests {
             ManifestDigest::new([sequence as u8; 32]),
             None,
         )
+    }
+    #[test]
+    fn quota_frame_owner_rejects_substitution_and_preserves_decoder_policy() {
+        let owner = authorized_intent(12, 1, 1).authorization.owner;
+        let usage = DaIngestQuotaUsageV1 {
+            version: QUOTA_USAGE_VERSION_V1,
+            window: 7,
+            count: 3,
+            bytes: 1024,
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &usage,
+            "iroha_core::da::quota::DaIngestQuotaUsageV1",
+        );
+        let bytes = norito::encode_canonical(&usage).expect("quota frame");
+        assert_eq!(
+            decode_usage(&owner, &bytes).expect("actual quota decoder"),
+            usage
+        );
+        let wrong_owner = norito::encode_canonical(&owner).expect("account frame");
+        assert!(matches!(
+            decode_usage(&owner, &wrong_owner),
+            Err(DaPinIntentValidationError::QuotaStateCorrupt { .. })
+        ));
+        let mut unsupported = usage;
+        unsupported.version += 1;
+        let unsupported =
+            norito::encode_canonical(&unsupported).expect("current owner, wrong version");
+        assert!(matches!(decode_usage(&owner, &unsupported),
+            Err(DaPinIntentValidationError::QuotaStateCorrupt { reason, .. })
+                if reason.contains("unsupported usage version")));
     }
     #[test]
     fn quota_counts_all_intents_for_one_owner_transactionally() {

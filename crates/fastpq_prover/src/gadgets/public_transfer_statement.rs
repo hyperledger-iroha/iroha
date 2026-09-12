@@ -41,6 +41,11 @@ use crate::{
 
 mod materialize;
 mod quantity;
+mod quantity_prefix;
+
+pub use quantity_prefix::{
+    PendingQuantityPrefixUpdate, QuantityPrefixLimits, QuantityPrefixValidator,
+};
 
 pub use materialize::{
     DerivedTransferSmtWitnesses, QuantityTransferMaterialization, TransferSmtBuildLimits,
@@ -727,12 +732,19 @@ fn normalized_values_for<V: TransferValue>(
     delta: &PublicTransferDelta,
     scale: u32,
 ) -> Result<[V; 5]> {
+    normalized_delta_values_for::<V>(DeltaView::from(delta), scale)
+}
+
+fn normalized_delta_values_for<V: TransferValue>(
+    delta: DeltaView<'_>,
+    scale: u32,
+) -> Result<[V; 5]> {
     let [amount, from_before, from_after, to_before, to_after] = [
-        ("amount", &delta.amount),
-        ("from_balance_before", &delta.from_balance_before),
-        ("from_balance_after", &delta.from_balance_after),
-        ("to_balance_before", &delta.to_balance_before),
-        ("to_balance_after", &delta.to_balance_after),
+        ("amount", delta.quantities[0]),
+        ("from_balance_before", delta.quantities[1]),
+        ("from_balance_after", delta.quantities[2]),
+        ("to_balance_before", delta.quantities[3]),
+        ("to_balance_after", delta.quantities[4]),
     ]
     .map(|(field, quantity)| {
         V::normalize(quantity, scale).ok_or(Error::TransferNumericBounds { field })
@@ -745,35 +757,50 @@ fn normalized_values_for<V: TransferValue>(
     if to_before.add(amount) != Some(to_after) {
         return Err(invariant("public receiver arithmetic mismatch or overflow"));
     }
-    if delta.from_account == delta.to_account
-        && (to_before != from_after || to_after != from_before)
-    {
+    if delta.from == delta.to && (to_before != from_after || to_after != from_before) {
         return Err(invariant("public self-transfer legs do not chain"));
     }
     Ok(values)
 }
 
 fn check_digest_policy(claim: &PublicTransferTranscript) -> Result<()> {
-    match claim.deltas.as_slice() {
-        [] => Err(invariant(
+    let delta = claim
+        .deltas
+        .first()
+        .ok_or_else(|| invariant("public transfer transcript must contain at least one delta"))?;
+    check_delta_digest_policy(
+        &claim.batch_hash,
+        claim.poseidon_preimage_digest,
+        claim.deltas.len(),
+        DeltaView::from(delta),
+    )
+}
+
+fn check_delta_digest_policy(
+    batch_hash: &Hash,
+    digest: Option<Hash>,
+    count: usize,
+    delta: DeltaView<'_>,
+) -> Result<()> {
+    match count {
+        0 => Err(invariant(
             "public transfer transcript must contain at least one delta",
         )),
-        [delta] => {
-            let expected = claim
-                .poseidon_preimage_digest
+        1 => {
+            let expected = digest
                 .ok_or_else(|| invariant("single public delta requires its Poseidon digest"))?;
             let mut hasher = PoseidonByteHasher::new();
-            delta.from_account.encode_to(&mut hasher);
-            delta.to_account.encode_to(&mut hasher);
-            delta.asset_definition.encode_to(&mut hasher);
-            delta.amount.encode_to(&mut hasher);
-            hasher.update(claim.batch_hash.as_ref());
+            delta.from.encode_to(&mut hasher);
+            delta.to.encode_to(&mut hasher);
+            delta.asset.encode_to(&mut hasher);
+            delta.quantities[0].encode_to(&mut hasher);
+            hasher.update(batch_hash.as_ref());
             if Hash::prehashed(hasher.finalize()) != expected {
                 return Err(invariant("public transfer Poseidon digest mismatch"));
             }
             Ok(())
         }
-        _ if claim.poseidon_preimage_digest.is_some() => Err(invariant(
+        _ if digest.is_some() => Err(invariant(
             "multiple public deltas must omit the Poseidon digest",
         )),
         _ => Ok(()),
@@ -988,7 +1015,8 @@ impl Write for ByteCounter {
 mod tests {
     use super::*;
     use crate::{TransitionBatch, gadgets::transfer, gadgets::transfer_row_binding};
-    use iroha_data_model::{DomainId, fastpq::TransferSmtWitness};
+    use iroha_data_model::fastpq::TransferSmtWitness;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 

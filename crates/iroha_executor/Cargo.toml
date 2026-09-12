@@ -16,6 +16,7 @@ bridge = []
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract/debug"]
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_executor_derive = { path = "../iroha_executor_derive" }
 
 iroha_executor_data_model.workspace = true

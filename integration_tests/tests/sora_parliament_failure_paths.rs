@@ -3,7 +3,7 @@
 use super::*;
 use iroha::data_model::{
     asset::{AssetBalancePolicy, AssetDefinition},
-    domain::{Domain, DomainId},
+    domain::Domain,
     governance::types::{
         BodyElectionAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadPresentV1,
         GovernanceExpectedHeadV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
@@ -18,6 +18,7 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanProposeRuntimeUpgrade;
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::BOB_ID;
 
 const CAPACITY_BOND_AMOUNT: u64 = 37;
@@ -471,7 +472,7 @@ fn certified_terminal_builder(
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(
-                    iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 ),
             }),
             ALICE_ID.clone(),
@@ -1132,7 +1133,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         "the competing artifact must preserve the proposal's exact ABI surface",
     );
     let competing_deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
-        proposal_operator: client.account.clone(),
+        proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
         code_hash: competing_contract_code_hash,
         abi_hash: competing_abi_hash,
@@ -1172,7 +1173,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     // same absent head; ordinary block progression enacts the competitor before
     // this attempt finishes certification.
     let deploy_proposal = ProposalKind::DeployContract(DeployContractProposal {
-        proposal_operator: client.account.clone(),
+        proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -1300,7 +1301,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         provenance: Vec::new(),
     };
     let runtime_proposal = ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
-        proposal_operator: client.account.clone(),
+        proposal_operator: client.client().account().clone(),
         manifest: runtime_manifest.clone(),
     });
     let runtime_create = CreateParliamentGovernanceAttemptV1 {
@@ -1476,7 +1477,7 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
-        proposal_operator: client.account.clone(),
+        proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -1707,7 +1708,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
-        proposal_operator: client.account.clone(),
+        proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,

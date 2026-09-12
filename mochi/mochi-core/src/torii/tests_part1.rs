@@ -1,4 +1,7 @@
 use super::*;
+use iroha::stream::StreamFrame;
+#[path = "tests/stream_transport.rs"]
+mod stream_test_transport;
 use futures::SinkExt;
 use httpmock::{
     Method::{GET, POST},
@@ -8,7 +11,10 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    block::consensus::{ExecWitness, ExecWitnessMsg},
+    block::{
+        consensus::{ExecWitness, ExecWitnessMsg},
+        stream::{BlockMessage, BlockSubscriptionRequest},
+    },
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -19,24 +25,28 @@ use iroha_data_model::{
             },
         },
         pipeline::PipelineEventBox,
-        stream::EventMessage,
+        stream::{EventMessage, EventSubscriptionRequest},
         time::{TimeEvent, TimeInterval},
     },
     isi::InstructionBox,
     nexus::{LaneCatalog, LaneLifecyclePlan, LaneLifecycleStatusV1},
-    peer::PeerId,
-    prelude::{DomainId, Quantity},
+    prelude::Quantity,
     query::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
         executor::FindExecutorDataModel, prelude::SingularQueryBox,
     },
     transaction::signed::TransactionBuilder,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, PEER_KEYPAIR};
-use iroha_torii_shared::status::{Status as TelemetryStatus, Uptime};
+use iroha_torii_shared::{
+    NORITO_V1_WEBSOCKET_SUBPROTOCOL,
+    status::{Status as TelemetryStatus, Uptime},
+};
 use reqwest::{
     StatusCode,
-    header::{HeaderMap, HeaderValue},
+    header::{HeaderMap, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
 };
 use std::{
     collections::VecDeque,
@@ -50,7 +60,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tokio_tungstenite::tungstenite::http;
+use tokio_tungstenite::{WebSocketStream, tungstenite::http};
 fn operator_test_client(base_url: impl AsRef<str>) -> ToriiClient {
     let network_id = test_network_id();
     let context = OperatorSigningContext::new(
@@ -167,7 +177,7 @@ fn stream_endpoints_and_default_event_filters_match_torii_contract() {
 }
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{Notify, broadcast},
     time::{sleep, timeout},
 };
@@ -186,7 +196,7 @@ fn try_start_mock_server() -> Option<MockServer> {
 fn lifecycle_status() -> LaneLifecycleStatusV1 {
     let catalog = LaneCatalog::default();
     let incarnations = std::collections::BTreeMap::from([(
-        iroha_data_model::nexus::LaneId::SINGLE,
+        iroha_model_base::topology::LaneId::SINGLE,
         Hash::new(b"mochi-lifecycle-status-incarnation"),
     )]);
     LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
@@ -414,15 +424,92 @@ fn reject_code_and_message_helpers_extract_values() {
         reject_code_from_headers(&axt_headers).as_deref(),
         Some("AXT_HANDLE_ERA")
     );
-    let envelope = ToriiErrorEnvelope {
-        code: "PRTRY:AXT_HANDLE_ERA".to_owned(),
-        message: "handle era too low".to_owned(),
-    };
+    let envelope = ErrorEnvelope::new("PRTRY:AXT_HANDLE_ERA", "handle era too low");
+    assert!(envelope.details.is_none());
     let body = norito::to_bytes(&envelope).expect("encode envelope");
     assert_eq!(
         error_message_from_body(&body).as_deref(),
         Some("PRTRY:AXT_HANDLE_ERA: handle era too low")
     );
+}
+#[test]
+fn error_message_decodes_canonical_envelope_with_details() {
+    let envelope = ErrorEnvelope::new("queue_full", "transaction queue is at capacity")
+        .with_details(iroha_torii_shared::ErrorDetails {
+            reject_code: Some("PRTRY:QUEUE_FULL".to_owned()),
+            retry_after_seconds: Some(3),
+            endpoint: Some("/transaction".to_owned()),
+            ..Default::default()
+        });
+    let body = norito::to_bytes(&envelope).expect("encode server-owned envelope");
+    let decoded = decode_norito::<ErrorEnvelope>(&body).expect("decode complete shared envelope");
+    let details = decoded
+        .details
+        .expect("retain populated details on the wire");
+    assert_eq!(details.reject_code.as_deref(), Some("PRTRY:QUEUE_FULL"));
+    assert_eq!(details.retry_after_seconds, Some(3));
+    assert_eq!(details.endpoint.as_deref(), Some("/transaction"));
+    assert_eq!(
+        error_message_from_body(&body).as_deref(),
+        Some("queue_full: transaction queue is at capacity")
+    );
+}
+#[test]
+fn error_message_preserves_empty_code_for_canonical_envelopes() {
+    for envelope in [
+        ErrorEnvelope::new("", "request failed"),
+        ErrorEnvelope::new("", "request failed").with_details(iroha_torii_shared::ErrorDetails {
+            layer: Some("torii".to_owned()),
+            ..Default::default()
+        }),
+    ] {
+        let body = norito::to_bytes(&envelope).expect("encode server-owned envelope");
+        assert_eq!(
+            error_message_from_body(&body).as_deref(),
+            Some("request failed"),
+            "empty codes must not add a colon prefix"
+        );
+    }
+}
+#[test]
+fn error_message_rejects_truncated_canonical_envelope_before_fallback() {
+    let envelope = ErrorEnvelope::new("request_invalid", "invalid field");
+    let complete = norito::to_bytes(&envelope).expect("encode server-owned envelope");
+    assert_eq!(
+        error_message_from_body(&complete).as_deref(),
+        Some("request_invalid: invalid field")
+    );
+    let truncated = &complete[..complete.len() - 1];
+    assert!(decode_norito::<ErrorEnvelope>(truncated).is_err());
+    assert_ne!(
+        error_message_from_body(truncated).as_deref(),
+        Some("request_invalid: invalid field"),
+        "an incomplete frame must not be accepted as a typed error envelope"
+    );
+}
+#[test]
+fn error_message_preserves_json_and_text_fallbacks() {
+    let envelope = ErrorEnvelope::new("request_invalid", "invalid field");
+    let body = norito::json::to_vec(&envelope).expect("encode shared JSON envelope");
+    assert_eq!(
+        error_message_from_body(&body).as_deref(),
+        Some("request_invalid: invalid field")
+    );
+    let empty_code = norito::json::to_vec(&ErrorEnvelope::new("", "request failed"))
+        .expect("encode shared JSON envelope with empty code");
+    assert_eq!(
+        error_message_from_body(&empty_code).as_deref(),
+        Some("request failed")
+    );
+    assert_eq!(
+        error_message_from_body(br#"{"error":"gateway unavailable"}"#).as_deref(),
+        Some("gateway unavailable")
+    );
+    assert_eq!(
+        error_message_from_body(b"  gateway unavailable\n").as_deref(),
+        Some("gateway unavailable")
+    );
+    assert_eq!(error_message_from_body(b" \n\t"), None);
 }
 #[test]
 fn rejects_unsupported_base_scheme() {
@@ -525,19 +612,35 @@ async fn local_mcp_rate_limit_preserves_retry_after() {
     ));
     throttled.assert();
 }
-#[test]
-fn websocket_rate_limit_preserves_retry_after() {
-    let response = http::Response::builder()
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_rate_limit_preserves_retry_after() {
+    let (_sender, mut transport) = stream_test_transport::TestStreamTransport::channel();
+    transport.response = http::Response::builder()
         .status(StatusCode::TOO_MANY_REQUESTS)
         .header(reqwest::header::RETRY_AFTER, "3")
-        .body(None)
+        .body(Vec::new())
         .expect("valid WebSocket HTTP response");
-    let error = websocket_connect_error(WebSocketError::Http(Box::new(response)));
+    let reader = stream_test_transport::reader_builder("http://127.0.0.1:8080/")
+        .stream_transport(Arc::new(transport))
+        .build()
+        .expect("injected reader")
+        .account_client()
+        .expect("explicit Alice authority");
+    let error = ToriiError::from(
+        reader
+            .blocks()
+            .subscribe(NonZeroU64::MIN)
+            .await
+            .err()
+            .expect("throttled upgrade fails"),
+    );
     assert!(matches!(
         error,
-        ToriiError::RateLimited {
+        ToriiError::Sdk(error) if matches!(error.as_ref(), iroha::Error::Http {
+            status: 429,
             retry_after: Some(delay),
-        } if delay == Duration::from_secs(3)
+            ..
+        } if *delay == Duration::from_secs(3))
     ));
 }
 #[tokio::test(flavor = "current_thread")]
@@ -1091,38 +1194,39 @@ async fn websocket_rejects_missing_selected_norito_subprotocol() {
             .expect("handshake without selected subprotocol");
         ws.close(None).await.expect("server close");
     });
-    let client = ToriiClient::new(format!("http://{addr}")).expect("client");
-    let error = client
-        .connect_block_stream()
+    let reader = stream_test_transport::reader(format!("http://{addr}"));
+    let error = reader
+        .blocks()
+        .subscribe(NonZeroU64::MIN)
         .await
-        .expect_err("missing selected subprotocol must fail closed");
-    assert!(matches!(
-        error,
-        ToriiError::WebSocket(WebSocketError::Protocol(
-            tokio_tungstenite::tungstenite::error::ProtocolError::SecWebSocketSubProtocolError(
-                tokio_tungstenite::tungstenite::error::SubProtocolError::NoSubProtocol
-            )
-        ))
-    ));
+        .err()
+        .expect("missing selected subprotocol must fail closed");
+    assert!(matches!(error, iroha::Error::StreamProtocol { .. }));
     server.await.expect("server join");
 }
 #[tokio::test(flavor = "current_thread")]
 async fn block_stream_reports_ws_error() {
-    let client = ToriiClient::new("http://127.0.0.1:65535").expect("valid url");
-    let err = client
-        .connect_block_stream()
+    let reader = stream_test_transport::reader("http://127.0.0.1:65535");
+    let err = reader
+        .blocks()
+        .subscribe(NonZeroU64::MIN)
         .await
-        .expect_err("connection should fail");
-    matches!(err, ToriiError::WebSocket(_));
+        .err()
+        .expect("connection should fail");
+    assert!(matches!(ToriiError::from(err), ToriiError::Sdk(error)
+        if matches!(error.as_ref(), iroha::Error::Transport { .. })));
 }
 #[tokio::test(flavor = "current_thread")]
-async fn subscribe_block_stream_reports_ws_error() {
-    let client = ToriiClient::new("http://127.0.0.1:65535").expect("valid url");
-    let err = client
-        .subscribe_block_stream()
+async fn subscribe_event_stream_reports_ws_error() {
+    let reader = stream_test_transport::reader("http://127.0.0.1:65535");
+    let err = reader
+        .events()
+        .subscribe(canonical_event_filters())
         .await
-        .expect_err("connection should fail");
-    matches!(err, ToriiError::WebSocket(_));
+        .err()
+        .expect("connection should fail");
+    assert!(matches!(ToriiError::from(err), ToriiError::Sdk(error)
+        if matches!(error.as_ref(), iroha::Error::Transport { .. })));
 }
 #[test]
 fn readiness_smoke_plan_uses_checked_transaction_signing() {
@@ -1333,13 +1437,15 @@ async fn submit_and_wait_for_commit_bounds_websocket_handshake_with_absolute_dea
         .next()
         .expect("sample block transaction")
         .clone();
-    let client =
-        ToriiClient::new(format!("http://{address}")).expect("client targeting stalled websocket");
+    let client = ToriiClient::new_for_network(format!("http://{address}"), test_network_id())
+        .expect("client targeting stalled websocket");
+    let reader = stream_test_transport::reader(format!("http://{address}"));
     let started = Instant::now();
 
     let error = timeout(
         Duration::from_secs(1),
         client.submit_and_wait_for_commit(
+            &reader,
             &transaction,
             SmokeCommitOptions::new(Duration::from_millis(50)),
         ),
@@ -1448,10 +1554,8 @@ async fn submit_and_wait_for_commit_times_out_without_events() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives() {
-    use iroha_data_model::{
-        events::pipeline::{TransactionEvent, TransactionStatus},
-        nexus::{DataSpaceId, LaneId},
-    };
+    use iroha_data_model::events::pipeline::{TransactionEvent, TransactionStatus};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let block = sample_block();
     let tx_hash = block
         .external_transactions()
@@ -1500,9 +1604,9 @@ async fn submit_and_wait_for_commit_reports_rejected_when_expired_event_arrives(
 async fn submit_and_wait_for_commit_reports_rejected_when_pipeline_event_rejects() {
     use iroha_data_model::{
         events::pipeline::{TransactionEvent, TransactionStatus},
-        nexus::{DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let block = sample_block();
     let tx_hash = block
         .external_transactions()
@@ -1665,18 +1769,15 @@ async fn block_stream_decodes_block_events() {
     let expected_block = sample_block();
     let expected_summary = BlockSummary::from_block(&expected_block);
     let frame = block_stream_frame(&expected_block);
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::block_subscription().await;
     let stream = BlockStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(frame.clone()))
+        .send(Ok(StreamFrame::Binary(frame.clone())))
         .expect("send frame");
-    sender.send(WsFrame::Closed).expect("send close");
+    sender
+        .send(stream_test_transport::normal_close())
+        .expect("send close");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("timely block event")
@@ -1762,11 +1863,14 @@ async fn block_stream_end_to_end_decodes_canonical_block() {
             .await
             .expect("send block close");
     });
-    let client = ToriiClient::new(format!("http://{addr}")).expect("block client");
-    let stream = client
-        .block_stream()
-        .await
-        .expect("connect block stream end-to-end");
+    let reader = stream_test_transport::reader(format!("http://{addr}"));
+    let stream = BlockStream::new(
+        reader
+            .blocks()
+            .subscribe(NonZeroU64::MIN)
+            .await
+            .expect("connect block stream end-to-end"),
+    );
     let mut receiver = stream.subscribe();
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -1807,16 +1911,11 @@ async fn block_stream_end_to_end_decodes_canonical_block() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn block_stream_rejects_unwrapped_signed_block_wire() {
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::block_subscription().await;
     let stream = BlockStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(BLOCK_WIRE_FIXTURE.to_vec()))
+        .send(Ok(StreamFrame::Binary(BLOCK_WIRE_FIXTURE.to_vec())))
         .expect("send unwrapped block wire");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -1830,29 +1929,23 @@ async fn block_stream_rejects_unwrapped_signed_block_wire() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn block_stream_reports_decode_errors() {
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::block_subscription().await;
     let stream = BlockStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(vec![0, 1, 2]))
+        .send(Ok(StreamFrame::Binary(vec![0, 1, 2])))
         .expect("send invalid frame");
-    sender.send(WsFrame::Closed).expect("send close");
+    sender
+        .send(stream_test_transport::normal_close())
+        .expect("send close");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("timely error event")
         .expect("error event value");
     match event {
         BlockStreamEvent::DecodeError { error } => {
-            assert!(matches!(
-                error.stage,
-                BlockDecodeStage::Frame | BlockDecodeStage::Block
-            ));
-            assert_eq!(error.raw_len, 3);
+            assert!(matches!(error.stage, BlockDecodeStage::Frame));
+            assert_eq!(error.raw_len, Some(3));
         }
         other => panic!("expected decode error event, got {other:?}"),
     }
@@ -1860,18 +1953,15 @@ async fn block_stream_reports_decode_errors() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn event_stream_reports_decode_errors() {
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::event_subscription().await;
     let stream = EventStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(vec![1, 2, 3]))
+        .send(Ok(StreamFrame::Binary(vec![1, 2, 3])))
         .expect("send invalid frame");
-    sender.send(WsFrame::Closed).expect("send close");
+    sender
+        .send(stream_test_transport::normal_close())
+        .expect("send close");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("error available")
@@ -1889,18 +1979,15 @@ async fn event_stream_decodes_time_events() {
     let expected_event = sample_time_event_box();
     assert_eq!(time_event_fixture_event(), expected_event);
     let expected_summary = EventSummary::from_event(&expected_event);
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::event_subscription().await;
     let stream = EventStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(EVENT_MESSAGE_FIXTURE.to_vec()))
+        .send(Ok(StreamFrame::Binary(EVENT_MESSAGE_FIXTURE.to_vec())))
         .expect("send event frame");
-    sender.send(WsFrame::Closed).expect("send close");
+    sender
+        .send(stream_test_transport::normal_close())
+        .expect("send close");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("timely event")
@@ -1934,18 +2021,17 @@ async fn event_stream_decodes_pipeline_events() {
     assert_eq!(pipeline_event_fixture_event(), expected_event_box);
     let expected_summary = EventSummary::from_event(&expected_event_box);
     let expected_event = Arc::new(expected_event_box);
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::event_subscription().await;
     let stream = EventStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(PIPELINE_EVENT_MESSAGE_FIXTURE.to_vec()))
+        .send(Ok(StreamFrame::Binary(
+            PIPELINE_EVENT_MESSAGE_FIXTURE.to_vec(),
+        )))
         .expect("send pipeline event frame");
-    sender.send(WsFrame::Closed).expect("send close");
+    sender
+        .send(stream_test_transport::normal_close())
+        .expect("send close");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("timely pipeline event")
@@ -2007,11 +2093,14 @@ async fn events_stream_end_to_end_decodes_pipeline_event() {
             .await
             .expect("send events close");
     });
-    let client = ToriiClient::new(format!("http://{addr}")).expect("events client");
-    let stream = client
-        .events_stream()
-        .await
-        .expect("connect events stream end-to-end");
+    let reader = stream_test_transport::reader(format!("http://{addr}"));
+    let stream = EventStream::new(
+        reader
+            .events()
+            .subscribe(canonical_event_filters())
+            .await
+            .expect("connect events stream end-to-end"),
+    );
     let mut receiver = stream.subscribe();
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -2041,18 +2130,15 @@ async fn event_stream_decodes_data_events() {
     assert_eq!(data_event_fixture_event(), expected_event_box);
     let expected_summary = EventSummary::from_event(&expected_event_box);
     let expected_event = Arc::new(expected_event_box);
-    let (sender, _) = broadcast::channel(8);
-    let handle = tokio::spawn(async {});
-    let subscription = WsSubscription {
-        sender: sender.clone(),
-        handle,
-    };
+    let (sender, subscription) = stream_test_transport::event_subscription().await;
     let stream = EventStream::new(subscription);
     let mut receiver = stream.subscribe();
     sender
-        .send(WsFrame::Binary(DATA_EVENT_MESSAGE_FIXTURE.to_vec()))
+        .send(Ok(StreamFrame::Binary(DATA_EVENT_MESSAGE_FIXTURE.to_vec())))
         .expect("send data event frame");
-    sender.send(WsFrame::Closed).expect("send close");
+    sender
+        .send(stream_test_transport::normal_close())
+        .expect("send close");
     let event = timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("timely data event")
@@ -2105,7 +2191,7 @@ fn data_event_message_matches_fixture() {
 #[tokio::test(flavor = "current_thread")]
 async fn managed_block_stream_reconnects_and_forwards_events() {
     let handle = tokio::runtime::Handle::current();
-    let senders = Arc::new(Mutex::new(Vec::<broadcast::Sender<WsFrame>>::new()));
+    let senders = Arc::new(Mutex::new(Vec::<stream_test_transport::FrameSender>::new()));
     let notify = Arc::new(Notify::new());
     let factory = {
         let senders = senders.clone();
@@ -2114,39 +2200,41 @@ async fn managed_block_stream_reconnects_and_forwards_events() {
             let senders = senders.clone();
             let notify = notify.clone();
             async move {
-                let (sender, _) = broadcast::channel(16);
-                let task = tokio::spawn(async {});
-                let subscription = WsSubscription {
-                    sender: sender.clone(),
-                    handle: task,
-                };
+                let (sender, subscription) = stream_test_transport::block_subscription().await;
                 senders.lock().expect("factory mutex poisoned").push(sender);
-                notify.notify_waiters();
+                notify.notify_one();
                 Ok(subscription)
             }
         }
     };
     let stream = ManagedBlockStream::spawn_with_factory(&handle, "reconnect-peer", factory);
     let mut receiver = stream.subscribe();
-    notify.notified().await;
+    timeout(Duration::from_secs(2), notify.notified())
+        .await
+        .expect("factory connection notification");
     assert_eq!(stream.alias(), "reconnect-peer");
     tokio::task::yield_now().await;
     let first_sender = {
         let guard = senders.lock().expect("sender mutex poisoned");
         guard.last().expect("first sender present").clone()
     };
+    let first_block = sample_block();
+    let first_frame = block_stream_frame(&first_block);
     first_sender
-        .send(WsFrame::Text("hello".to_owned()))
-        .expect("send hello frame");
+        .send(Ok(StreamFrame::Binary(first_frame.clone())))
+        .expect("send first canonical block frame");
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("receive first frame")
     {
-        Ok(BlockStreamEvent::Text { text }) => assert_eq!(text, "hello"),
+        Ok(BlockStreamEvent::Block { block, raw_len, .. }) => {
+            assert_eq!(block.as_ref(), &first_block);
+            assert_eq!(raw_len, first_frame.len());
+        }
         other => panic!("unexpected event: {other:?}"),
     }
     first_sender
-        .send(WsFrame::Closed)
+        .send(stream_test_transport::normal_close())
         .expect("send closed frame");
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -2156,14 +2244,18 @@ async fn managed_block_stream_reconnects_and_forwards_events() {
         other => panic!("expected closed event, got {other:?}"),
     }
     sleep(INITIAL_BACKOFF).await;
-    notify.notified().await;
+    timeout(Duration::from_secs(2), notify.notified())
+        .await
+        .expect("factory connection notification");
     tokio::task::yield_now().await;
     let second_sender = {
         let guard = senders.lock().expect("sender mutex poisoned");
         guard.last().expect("second sender present").clone()
     };
+    let second_block = sample_block_proposal();
+    let second_frame = block_stream_frame(&second_block);
     second_sender
-        .send(WsFrame::Text("reconnected".to_owned()))
+        .send(Ok(StreamFrame::Binary(second_frame.clone())))
         .expect("send reconnection frame");
     let mut saw_notice = false;
     let mut saw_custom = false;
@@ -2177,7 +2269,9 @@ async fn managed_block_stream_reconnects_and_forwards_events() {
             {
                 saw_notice = true;
             }
-            Ok(BlockStreamEvent::Text { text }) if text == "reconnected" => {
+            Ok(BlockStreamEvent::Block { block, raw_len, .. }) => {
+                assert_eq!(block.as_ref(), &second_block);
+                assert_eq!(raw_len, second_frame.len());
                 saw_custom = true;
             }
             Ok(other) => panic!("unexpected event after reconnect: {other:?}"),
@@ -2196,7 +2290,7 @@ async fn managed_block_stream_reconnects_and_forwards_events() {
 #[tokio::test(flavor = "current_thread")]
 async fn managed_event_stream_reconnects_and_forwards_events() {
     let handle = tokio::runtime::Handle::current();
-    let senders = Arc::new(Mutex::new(Vec::<broadcast::Sender<WsFrame>>::new()));
+    let senders = Arc::new(Mutex::new(Vec::<stream_test_transport::FrameSender>::new()));
     let notify = Arc::new(Notify::new());
     let factory = {
         let senders = senders.clone();
@@ -2205,39 +2299,40 @@ async fn managed_event_stream_reconnects_and_forwards_events() {
             let senders = senders.clone();
             let notify = notify.clone();
             async move {
-                let (sender, _) = broadcast::channel(16);
-                let task = tokio::spawn(async {});
-                let subscription = WsSubscription {
-                    sender: sender.clone(),
-                    handle: task,
-                };
+                let (sender, subscription) = stream_test_transport::event_subscription().await;
                 senders.lock().expect("factory mutex poisoned").push(sender);
-                notify.notify_waiters();
+                notify.notify_one();
                 Ok(subscription)
             }
         }
     };
     let stream = ManagedEventStream::spawn_with_factory(&handle, "events-peer", factory);
     let mut receiver = stream.subscribe();
-    notify.notified().await;
+    timeout(Duration::from_secs(2), notify.notified())
+        .await
+        .expect("factory connection notification");
     assert_eq!(stream.alias(), "events-peer");
     tokio::task::yield_now().await;
     let first_sender = {
         let guard = senders.lock().expect("sender mutex poisoned");
         guard.last().expect("first sender present").clone()
     };
+    let first_event: EventBox = time_event_fixture_message().into();
     first_sender
-        .send(WsFrame::Text("hello-events".to_owned()))
-        .expect("send text frame");
+        .send(Ok(StreamFrame::Binary(EVENT_MESSAGE_FIXTURE.to_vec())))
+        .expect("send first canonical event frame");
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
         .expect("receive first frame")
     {
-        Ok(EventStreamEvent::Text { text }) => assert_eq!(text, "hello-events"),
+        Ok(EventStreamEvent::Event { event, raw_len, .. }) => {
+            assert_eq!(event.as_ref(), &first_event);
+            assert_eq!(raw_len, EVENT_MESSAGE_FIXTURE.len());
+        }
         other => panic!("unexpected event: {other:?}"),
     }
     first_sender
-        .send(WsFrame::Closed)
+        .send(stream_test_transport::normal_close())
         .expect("send closed frame");
     match timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -2247,14 +2342,19 @@ async fn managed_event_stream_reconnects_and_forwards_events() {
         other => panic!("expected closed event, got {other:?}"),
     }
     sleep(INITIAL_BACKOFF).await;
-    notify.notified().await;
+    timeout(Duration::from_secs(2), notify.notified())
+        .await
+        .expect("factory connection notification");
     tokio::task::yield_now().await;
     let second_sender = {
         let guard = senders.lock().expect("sender mutex poisoned");
         guard.last().expect("second sender present").clone()
     };
+    let second_event: EventBox = pipeline_event_fixture_message().into();
     second_sender
-        .send(WsFrame::Text("reconnected-events".to_owned()))
+        .send(Ok(StreamFrame::Binary(
+            PIPELINE_EVENT_MESSAGE_FIXTURE.to_vec(),
+        )))
         .expect("send reconnection frame");
     let mut saw_notice = false;
     let mut saw_custom = false;
@@ -2268,7 +2368,9 @@ async fn managed_event_stream_reconnects_and_forwards_events() {
             {
                 saw_notice = true;
             }
-            Ok(EventStreamEvent::Text { text }) if text == "reconnected-events" => {
+            Ok(EventStreamEvent::Event { event, raw_len, .. }) => {
+                assert_eq!(event.as_ref(), &second_event);
+                assert_eq!(raw_len, PIPELINE_EVENT_MESSAGE_FIXTURE.len());
                 saw_custom = true;
             }
             Ok(other) => panic!("unexpected event after reconnect: {other:?}"),

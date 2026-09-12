@@ -72,7 +72,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let status = client.client().get_status()?;
+    let status = client.client().status().get().await?;
     for idx in status.blocks..BLOCK_TARGET {
         client.submit(
             Log::new(Level::INFO, format!("npos happy seed {idx}")),
@@ -82,7 +82,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     network
         .ensure_blocks_with(|height| height.total >= BLOCK_TARGET)
         .await?;
-    let status = client.client().get_status()?;
+    let status = client.client().status().get().await?;
     ensure!(
         status.blocks >= BLOCK_TARGET,
         "expected at least {BLOCK_TARGET} blocks, observed {}",
@@ -101,7 +101,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         "NPoS happy path must expose NPoS diagnostics"
     );
     let http = integration_tests::http::client();
-    let torii = client.client().torii_url.clone();
+    let torii = client.client().endpoint().clone();
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
     ensure_metrics_within_bounds(&http, &metrics_url, BG_QUEUE_DEPTH_BUDGET).await?;
     network.shutdown().await;

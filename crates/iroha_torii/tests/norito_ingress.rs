@@ -628,10 +628,9 @@ async fn public_query_route_rejects_version_only_body_without_decode_panic() {
 async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_transaction_ingress()
 {
     use iroha::{client::Client, config::Config};
-    use iroha_data_model::{
-        ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder,
-    };
+    use iroha_data_model::{account::AccountId, isi::Log, transaction::TransactionBuilder};
     use iroha_logger::Level;
+    use iroha_model_base::chain::ChainId;
     use tokio::net::TcpListener;
     let harness = NoritoRpcHarness::new(|cfg| {
         cfg.torii.transport.norito_rpc.stage = NoritoRpcStage::Ga;
@@ -648,7 +647,7 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     let key_pair = checked_norito_ingress_client_fixture();
     let account = AccountId::of(key_pair.public_key().clone());
     let network_id = harness.network_id;
-    let client = Client::new(Config {
+    let client = Client::builder(Config {
         chain: chain.clone(),
         network_id,
         account: account.clone(),
@@ -664,7 +663,9 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
         sorafs_alias_cache: default_alias_policy(),
         sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::Canary,
-    });
+    })
+    .build()
+    .expect("valid test client configuration");
     let tx = TransactionBuilder::new(
         network_id,
         account,

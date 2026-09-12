@@ -594,13 +594,23 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let (app, request) =
         incoming_proxy_submit_fixture(0xee, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let final_authority = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
-    let forwarding_authority = checked_torii_test_peer_id(
-        0xef,
-        "derive QueuePlanSynced forwarding-authority fixture key",
+    let forwarding_authority = PeerId::new(
+        checked_torii_test_keypair_from_seed_byte(
+            0xf0,
+            Algorithm::BlsNormal,
+            "third bound authority relays another pair's quorum",
+        )
+        .public_key()
+        .clone(),
     );
     assert_ne!(forwarding_authority, final_authority);
+    let second_signer = checked_torii_test_keypair_from_seed_byte(
+        0xef,
+        Algorithm::BlsNormal,
+        "second durable authority in forwarded quorum",
+    );
     let final_authority_snapshot =
-        exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
+        exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let forwarding_authority_for_closure = forwarding_authority.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
@@ -638,16 +648,21 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let body = torii_body_bytes(response, "read reforwarded strict receipt").await;
     let certificate: QueuePlanAdmissionCertificateV1 =
         norito::decode_from_bytes(&body).expect("decode reforwarded strict certificate");
-    let attestation = certificate
-        .attestations
-        .first()
-        .expect("reforwarded strict certificate must contain one attestation");
     let coordinator = certificate
         .binding
         .admission_context
         .route_incarnations
         .first()
         .expect("reforwarded certificate coordinator context");
+    assert!(coordinator.validator_set.contains(&forwarding_authority));
+    assert_eq!(certificate.attestations.len(), 2);
+    let attestation = certificate
+        .attestations
+        .iter()
+        .find(|attestation| {
+            coordinator.validator_set[usize::from(attestation.validator_index)] == final_authority
+        })
+        .expect("the relayed quorum must retain the final authority's attestation");
     assert_eq!(
         coordinator.validator_set[usize::from(attestation.validator_index)],
         final_authority
@@ -770,7 +785,13 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         incoming_proxy_submit_fixture(0xaf, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let peer_id = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
     let expected_hash_literal = accepted_queue_hash_for_proxy_submit(&app, &request).to_string();
-    let valid_snapshot = exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
+    let second_signer = checked_torii_test_keypair_from_seed_byte(
+        0xb0,
+        Algorithm::BlsNormal,
+        "second authority in exact durable evidence fixture",
+    );
+    let valid_snapshot =
+        exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let response =
             super::execute_torii_proxy_request_across_candidates(
                 vec![ToriiProxyCandidate::P2p(peer_id.clone())],
@@ -1082,10 +1103,7 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
     ));
     assert!(!error.may_have_reached_authority());
     assert!(
-        !app.torii_proxy_pending
-            .lock()
-            .await
-            .contains_key(&pending_key),
+        !app.torii_proxy_pending.lock().contains_key(&pending_key),
         "failed exact admission must remove the response waiter"
     );
 }
@@ -1128,8 +1146,7 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         tx,
         1024,
         false,
-    )
-    .await;
+    );
     super::process_incoming_torii_proxy_response(
         &app,
         responder_peer_id,
@@ -1389,7 +1406,10 @@ fn sample_privacy_share_dto(app: &SharedAppState) -> RecordSoranetPrivacyShareDt
 fn privacy_event_dto_native_norito_roundtrip() {
     let mut expected = sample_privacy_event_dto();
     expected.source = Some("relay-a".to_owned());
-    let encoded = norito::to_bytes(&expected).expect("encode privacy event request as Norito");
+    let encoded = crate::frame_test_support::assert_current_frame(
+        &expected,
+        "iroha_torii::routing::RecordSoranetPrivacyEventDto",
+    );
     let decoded: RecordSoranetPrivacyEventDto =
         norito::decode_from_bytes(&encoded).expect("decode privacy event request from Norito");
     assert_eq!(decoded.event, expected.event);
@@ -1401,7 +1421,10 @@ fn privacy_share_dto_native_norito_roundtrip() {
     let app = mk_app_state_for_tests();
     let mut expected = sample_privacy_share_dto(&app);
     expected.forwarded_by = Some("collector-a".to_owned());
-    let encoded = norito::to_bytes(&expected).expect("encode privacy share request as Norito");
+    let encoded = crate::frame_test_support::assert_current_frame(
+        &expected,
+        "iroha_torii::routing::RecordSoranetPrivacyShareDto",
+    );
     let decoded: RecordSoranetPrivacyShareDto =
         norito::decode_from_bytes(&encoded).expect("decode privacy share request from Norito");
     assert_eq!(decoded.share, expected.share);
@@ -1956,9 +1979,11 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     );
     assert_eq!(caps.signed_transaction_schema_hash_hex.len(), 32);
     assert_eq!(
-            caps.signed_transaction_schema_hash_hex,
-            hex::encode(<iroha_data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
-        );
+        caps.signed_transaction_schema_hash_hex,
+        hex::encode(norito::schema::identity::frame_hash::<
+            iroha_data_model::transaction::SignedTransaction,
+        >())
+    );
     assert!(caps.crypto.sm.acceleration.scalar);
     assert!(caps.query.aggregate.v1);
     assert!(caps.query.aggregate.exact_results);
@@ -2090,6 +2115,11 @@ async fn node_query_projection_checkpoint_handler_returns_persisted_payload() {
     let body = torii_body_bytes(response, "body").await;
     let checkpoint: crate::runtime::NodeProjectionCheckpointResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
+    let canonical = crate::frame_test_support::assert_current_frame(
+        &checkpoint,
+        "iroha_torii::runtime::NodeProjectionCheckpointResponse",
+    );
+    assert_eq!(canonical.as_slice(), body.as_ref());
     assert_eq!(checkpoint.indexed_height, 55);
     assert_eq!(
         checkpoint.indexed_block_hash_hex,
@@ -2126,6 +2156,11 @@ async fn node_query_projection_shard_catalog_handler_returns_catalog_payload() {
     let body = torii_body_bytes(response, "body").await;
     let catalog: crate::runtime::NodeProjectionShardCatalogResponse =
         norito::decode_from_bytes(&body).expect("decode default Norito response");
+    let canonical = crate::frame_test_support::assert_current_frame(
+        &catalog,
+        "iroha_torii::runtime::NodeProjectionShardCatalogResponse",
+    );
+    assert_eq!(canonical.as_slice(), body.as_ref());
     assert_eq!(catalog.resource, "accounts");
     assert_eq!(catalog.limit, 32);
     assert_eq!(catalog.offset, 0);

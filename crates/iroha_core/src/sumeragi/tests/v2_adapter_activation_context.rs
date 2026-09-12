@@ -92,8 +92,8 @@ fn executable_leader_rotation_matches_the_canonical_wire_context() {
 }
 #[test]
 fn core_context_rejects_same_label_foreign_genesis_network() {
-    let display_label = iroha_data_model::ChainId::from("shared-display-label");
-    let foreign_display_label = iroha_data_model::ChainId::from("shared-display-label");
+    let display_label = iroha_model_base::chain::ChainId::from("shared-display-label");
+    let foreign_display_label = iroha_model_base::chain::ChainId::from("shared-display-label");
     assert_eq!(display_label, foreign_display_label);
     let canonical = context();
     let mut foreign = canonical.clone();

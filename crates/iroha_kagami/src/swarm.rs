@@ -8,7 +8,7 @@ use color_eyre::eyre::{WrapErr as _, ensure, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::address::ChainDiscriminantGuard,
     block::{
         SignedBlock,
@@ -28,6 +28,7 @@ use iroha_genesis::{
     GENESIS_MANIFEST_JSON_MAX_BYTES_V1, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
     ValidatedGenesisBundle,
 };
+use iroha_model_base::chain::ChainId;
 use iroha_swarm::{
     PeerOverride, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
     PreparedValidator,
@@ -3051,14 +3052,15 @@ mod tests {
     use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _, localnet::LocalnetOptions};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
-        ChainId, NetworkId,
+        NetworkId,
         parameter::{
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
-        peer::PeerId,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use std::{
         fs,
         io::{BufWriter, Write},

@@ -1,24 +1,26 @@
 //! Asset definitions and builders.
 pub use self::model::*;
 use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
 };
 use crate::{
-    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*, domain::DomainId,
-    isi::error::MintabilityError, metadata::Metadata, sorafs_uri::SorafsUri,
+    HasMetadata, Identifiable, Registered, Registrable, account::prelude::*,
+    isi::error::MintabilityError, sorafs_uri::SorafsUri,
 };
 use core::fmt;
 use derive_more::Display;
 use getset::{CopyGetters, Getters};
 use iroha_crypto::Hash;
 use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 use norito::json::Value;
 /// Maximum accepted asset human-name length.
 pub const MAX_ASSET_NAME_LEN: usize = 128;
@@ -29,25 +31,25 @@ pub const MAX_ASSET_DESCRIPTION_LEN: usize = 2048;
 /// # Errors
 /// Returns [`crate::error::ParseError`] when `name` is blank, too long, or contains
 /// reserved alias separators (`#`/`@`).
-pub fn validate_asset_name(name: &str) -> Result<(), crate::error::ParseError> {
+pub fn validate_asset_name(name: &str) -> Result<(), iroha_model_base::error::ParseError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name must not be blank",
         ));
     }
     if trimmed.len() > MAX_ASSET_NAME_LEN {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name exceeds maximum length",
         ));
     }
     if name.contains('#') || name.contains('@') {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name must not contain `#` or `@`",
         ));
     }
     if name.chars().any(char::is_control) {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name must not contain control characters",
         ));
     }
@@ -60,22 +62,22 @@ pub fn validate_asset_name(name: &str) -> Result<(), crate::error::ParseError> {
 /// or contains control characters.
 pub fn validate_asset_description(
     description: Option<&str>,
-) -> Result<(), crate::error::ParseError> {
+) -> Result<(), iroha_model_base::error::ParseError> {
     let Some(description) = description else {
         return Ok(());
     };
     if description.trim().is_empty() {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset description must not be blank when provided",
         ));
     }
     if description.len() > MAX_ASSET_DESCRIPTION_LEN {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset description exceeds maximum length",
         ));
     }
     if description.chars().any(char::is_control) {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset description must not contain control characters",
         ));
     }
@@ -91,7 +93,7 @@ pub fn validate_asset_description(
 pub fn validate_asset_alias(
     alias: Option<&AssetDefinitionAlias>,
     expected_name: &str,
-) -> Result<(), crate::error::ParseError> {
+) -> Result<(), iroha_model_base::error::ParseError> {
     validate_asset_alias_against_names(alias, [expected_name])
 }
 /// Validate optional alias literal for an asset definition against a set of allowed name stems.
@@ -103,7 +105,7 @@ pub fn validate_asset_alias(
 pub fn validate_asset_alias_against_names<I, S>(
     alias: Option<&AssetDefinitionAlias>,
     expected_names: I,
-) -> Result<(), crate::error::ParseError>
+) -> Result<(), iroha_model_base::error::ParseError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -118,7 +120,7 @@ where
     {
         return Ok(());
     }
-    Err(crate::error::ParseError::new(
+    Err(iroha_model_base::error::ParseError::new(
         "asset alias name segment must match the asset name",
     ))
 }
@@ -157,8 +159,8 @@ mod model {
     )]
     #[display("{id} {spec}{mintable}")]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::definition::model::AssetDefinition")]
@@ -251,13 +253,22 @@ mod model {
     }
     /// Remaining mintability budget for limited assets.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, CopyGetters,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        CopyGetters,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(DeriveJsonSer, DeriveJsonDe, DeriveFast),
-        norito(no_fast_from_json)
-    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(transparent)]
     pub struct MintabilityTokens {
@@ -380,9 +391,11 @@ mod model {
         IntoSchema,
         CopyGetters,
         Getters,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
     )]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ConfidentialPolicyTransition {
         /// Identifier of the new mode to transition into.
@@ -415,9 +428,11 @@ mod model {
         IntoSchema,
         CopyGetters,
         Getters,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
     )]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetConfidentialPolicy {
         /// Current mode for shielded versus transparent handling.
@@ -667,7 +682,7 @@ impl HasMetadata for AssetDefinition {
         &self.metadata
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Mintable {
     fn write_json(&self, out: &mut String) {
         match self {
@@ -694,7 +709,7 @@ impl norito::json::FastJsonWrite for Mintable {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -716,7 +731,7 @@ impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AssetBalancePolicy {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -736,7 +751,7 @@ impl norito::json::FastJsonWrite for AssetBalancePolicy {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -753,7 +768,7 @@ impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AssetBalancePolicy {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -769,7 +784,7 @@ impl norito::json::JsonDeserialize for AssetBalancePolicy {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Mintable {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -778,7 +793,7 @@ impl norito::json::JsonDeserialize for Mintable {
         parse_mintable_label(label.as_str())
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_mintable_label(label: &str) -> Result<Mintable, norito::json::Error> {
     match label {
         "Infinitely" => Ok(Mintable::Infinitely),
@@ -811,8 +826,8 @@ impl HasMetadata for NewAssetDefinition {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
-    use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::DecodeAll as _;
     #[derive(Encode)]
@@ -872,11 +887,11 @@ mod validation_tests {
             expected
         );
         assert_eq!(
-            <NewAssetDefinition as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
             expected
         );
         assert_eq!(
-            <NewAssetDefinition as norito::NoritoDeserialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
             expected
         );
     }
@@ -1121,10 +1136,12 @@ mod validation_tests {
             .expect("one allowed display-name stem should be accepted");
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod json_tests {
     use super::*;
-    use crate::{Name, domain::DomainId, metadata::Metadata};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use norito::json::{Arena, FastFromJson, TapeWalker};
     use std::str::FromStr;
     #[test]

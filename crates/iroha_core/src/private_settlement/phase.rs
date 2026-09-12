@@ -18,14 +18,12 @@ use super::{
 };
 use crate::state::StateView;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
-use iroha_data_model::{
-    nexus::{
-        AtomicPrivateSettlementV1, PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
-        PrivateSettlementPhaseBodyV1, PrivateSettlementPhaseCertificateV1,
-        PrivateSettlementPhaseV1, PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
-    },
-    peer::PeerId,
+use iroha_data_model::nexus::{
+    AtomicPrivateSettlementV1, PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
+    PrivateSettlementPhaseBodyV1, PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
+    PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
 };
+use iroha_model_base::peer::PeerId;
 use std::fmt;
 use thiserror::Error;
 

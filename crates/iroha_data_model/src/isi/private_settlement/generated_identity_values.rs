@@ -14,7 +14,7 @@ use crate::nexus::{
 };
 
 /// Build the missing private-settlement generated-record rows from validated fixtures.
-pub(crate) fn values() -> Vec<Value> {
+pub fn values() -> Vec<Value> {
     let activation = super::tests::pool_activation();
     activation
         .validate()

@@ -2,13 +2,15 @@ use super::*;
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    metadata::Metadata,
     nexus::{
-        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
-        LaneRelayEnvelope, ProofBlob,
+        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneRelayEnvelope,
+        ProofBlob,
     },
-    peer::PeerId,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 isi! {
     /// Set or clear emergency validator peers used for lane relay quorum recovery.
@@ -145,8 +147,9 @@ iroha_data_model_derive::model_single! {
         pub revision: u64,
         /// Earliest consensus height at which activation may take effect.
         ///
-        /// The runtime postpones activation until every spend lease from an older revision has
-        /// expired.
+        /// Inclusion after this lower bound activates at the executing height, subject to every
+        /// spend lease from an older revision having expired. A future lower bound schedules
+        /// activation; it does not cause the chain to produce a block.
         pub activate_at_height: u64,
     }
 }
@@ -198,13 +201,16 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Enroll an exact canonical account in a fee sponsor program.
+    /// Enroll an exact canonical account identity in a fee sponsor program.
+    ///
+    /// The beneficiary may be registered by its first sponsored transaction. Enrollment
+    /// does not register the account or grant permission to execute its instructions.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary")]
     pub struct EnrollFeeSponsorBeneficiary {
         /// Program granting eligibility.
         pub program_id: FeeSponsorProgramId,
-        /// Canonical beneficiary account to enroll.
+        /// Canonical beneficiary identity to enroll, whether or not its account exists yet.
         pub beneficiary: AccountId,
     }
 }
@@ -250,11 +256,8 @@ iroha_data_model_derive::model_single! {
     #[derive(getset::Getters)]
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[getset(get = "pub")]
     /// Withdraw assets from a paused or closing program vault allocation.
     #[derive(norito::NoritoSchema)]
@@ -484,7 +487,7 @@ impl_decode_fields!(WithdrawFeeSponsorProgram {
 });
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "json")]
+
     mod generated_identity;
 
     use super::*;
@@ -493,10 +496,11 @@ mod tests {
         block::{BlockHeader, consensus::LaneBlockCommitment},
         nexus::{
             FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
-            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
+            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::codec::{Decode, Encode};
     use std::num::NonZeroU64;
@@ -702,7 +706,7 @@ mod tests {
             amount: Quantity::from(1_u32),
         });
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn withdrawal_json_rejects_caller_selected_destination() {
         let program = sample_fee_sponsor_program();

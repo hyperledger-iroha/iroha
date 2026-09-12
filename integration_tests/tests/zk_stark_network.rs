@@ -9,7 +9,6 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     isi::{Grant, InstructionBox},
-    metadata::Metadata,
     permission::Permission,
     proof::{
         ProofAttachment, ProofAttachmentList, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
@@ -22,6 +21,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanManageParliament, CanSubmitGovernanceBallot,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
@@ -103,7 +103,7 @@ fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
 }
 fn derive_ballot_nullifier(
     domain_tag: &str,
-    chain_id: &iroha_data_model::ChainId,
+    chain_id: &iroha_model_base::chain::ChainId,
     election_id: &str,
     commit: &[u8; 32],
 ) -> [u8; 32] {
@@ -151,7 +151,7 @@ where
     Ok(())
 }
 fn torii_v2_url(client: &Client, segments: &[&str]) -> reqwest::Url {
-    let mut url = client.torii_url.clone();
+    let mut url = client.client().endpoint().clone();
     let mut path_segments = url
         .path_segments_mut()
         .expect("torii_url must be a base URL");
@@ -185,16 +185,19 @@ fn add_canonical_prove_headers(
     );
     let uri = signing_uri(url)?;
     let message = canonical_network_request_signature_message(
-        &client.network_id,
+        client.client().network_id(),
         &method,
         &uri,
         body,
         timestamp_ms,
         &nonce,
     )?;
-    let signature = Signature::try_new(client.key_pair.private_key(), &message)?;
+    let signature = Signature::try_new(client.client().key_pair().private_key(), &message)?;
     Ok(request
-        .header(HEADER_ACCOUNT, client.account.to_canonical_hex()?)
+        .header(
+            HEADER_ACCOUNT,
+            client.client().account().to_canonical_hex()?,
+        )
         .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce))
@@ -488,8 +491,12 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         mismatched_ballot_proof,
         ballot_vk_id.clone(),
     );
-    let mismatched_nullifier =
-        derive_ballot_nullifier(&nullifier_domain, &client.chain, &election_id, &bad_commit);
+    let mismatched_nullifier = derive_ballot_nullifier(
+        &nullifier_domain,
+        client.client().chain(),
+        &election_id,
+        &bad_commit,
+    );
     let bad_ballot = client.submit(
         iroha_data_model::isi::zk::SubmitBallot {
             election_id: election_id.clone(),
@@ -514,8 +521,12 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     .map_err(|err| eyre!(err))?;
     let ballot_attachment =
         ProofAttachment::new_ref(backend.to_owned(), ballot_proof, ballot_vk_id.clone());
-    let nullifier =
-        derive_ballot_nullifier(&nullifier_domain, &client.chain, &election_id, &commit);
+    let nullifier = derive_ballot_nullifier(
+        &nullifier_domain,
+        client.client().chain(),
+        &election_id,
+        &commit,
+    );
     submit_and_wait_next_block(
         &client,
         &network,
@@ -566,7 +577,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     let fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(50_000_000));
     let derive_req = ZkIvmDeriveRequest {
         vk_ref: ivm_vk_id.clone(),
-        authority: client.account.clone(),
+        authority: client.client().account().clone(),
         fee_payment: fee_payment.clone(),
         metadata: tx_meta.clone(),
         bytecode: bytecode.clone(),
@@ -583,7 +594,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         norito::json::from_value(derive_resp_json).wrap_err("decode derive response")?;
     let prove_req = ZkIvmProveRequest {
         vk_ref: ivm_vk_id.clone(),
-        authority: client.account.clone(),
+        authority: client.client().account().clone(),
         fee_payment: fee_payment.clone(),
         metadata: tx_meta.clone(),
         bytecode,
@@ -601,8 +612,8 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         norito::json::from_value(prove_created_json).wrap_err("decode prove created response")?;
     let attachment = wait_for_prove_attachment(&client, &prove_created.job_id).await?;
     let tx_valid = TransactionBuilder::new(
-        client.network_id,
-        client.account.clone(),
+        *client.client().network_id(),
+        client.client().account().clone(),
         fee_payment.clone(),
     )
     .with_executable(Executable::IvmProved(derive_resp.proved.clone()))
@@ -611,20 +622,24 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         ProofAttachmentList::try_from(vec![attachment.clone()])
             .expect("one attachment is a valid bounded proof list"),
     )
-    .sign(client.key_pair.private_key());
+    .sign(client.client().key_pair().private_key());
     client
         .submit_transaction_and_wait(&tx_valid)
         .wrap_err("submit STARK IvmProved tx after AIR proving is re-enabled")?;
     let bad_attachment =
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);
-    let tx_bad = TransactionBuilder::new(client.network_id, client.account.clone(), fee_payment)
-        .with_executable(Executable::IvmProved(derive_resp.proved))
-        .with_metadata(tx_meta)
-        .with_attachments(
-            ProofAttachmentList::try_from(vec![bad_attachment])
-                .expect("one attachment is a valid bounded proof list"),
-        )
-        .sign(client.key_pair.private_key());
+    let tx_bad = TransactionBuilder::new(
+        *client.client().network_id(),
+        client.client().account().clone(),
+        fee_payment,
+    )
+    .with_executable(Executable::IvmProved(derive_resp.proved))
+    .with_metadata(tx_meta)
+    .with_attachments(
+        ProofAttachmentList::try_from(vec![bad_attachment])
+            .expect("one attachment is a valid bounded proof list"),
+    )
+    .sign(client.client().key_pair().private_key());
     let bad = client.submit_transaction_and_wait(&tx_bad);
     assert!(
         bad.is_err(),

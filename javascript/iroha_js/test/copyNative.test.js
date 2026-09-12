@@ -1600,6 +1600,8 @@ test("required-export probe rejects missing strict boundary symbols", (t) => {
   for (const missing of [
     "accountAddressParseEncoded",
     "accountAddressRender",
+    "noritoEncodeInstructionBoxArchive",
+    "noritoDecodeInstructionBoxArchive",
     "buildKaigiAuthorizationProofV1",
     "buildKaigiUsageProofV1",
     "privacyCompiledProfileCatalogV1",

@@ -112,7 +112,7 @@ impl<T: std::io::Write> RunArgs<T> for Args {
 fn extract_peer(
     entry: norito::json::Value,
 ) -> color_eyre::Result<(norito::json::Value, PublicKey)> {
-    use iroha_data_model::peer::PeerId;
+    use iroha_model_base::peer::PeerId;
     use norito::json::Value;
     let Value::Object(mut map) = entry else {
         return Err(eyre!(

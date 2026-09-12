@@ -9,10 +9,11 @@ use crate::state::WorldReadOnly;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAliasDomain},
-    domain::DomainId,
-    error::ParseError,
-    nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, UniversalAccountId},
+    nexus::{AssetPermissionManifest, DataSpaceCatalog, UniversalAccountId},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::error::ParseError;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
@@ -225,7 +226,10 @@ pub fn extract_authority_domains(
     Ok(domains.into_iter().collect())
 }
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::UaidDataspaceBindings")]
 pub struct UaidDataspaceBindings {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountId>>,
 }
@@ -305,7 +309,10 @@ impl UaidDataspaceBindings {
 }
 /// Deterministic mapping from a canonical account id to the dataspaces and domains where it is
 /// visible for routed read queries.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::AccountScopeDirectoryEntry")]
 pub struct AccountScopeDirectoryEntry {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountAliasDomain>>,
 }
@@ -409,6 +416,8 @@ impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
     }
 }
 /// Manifest record tracked by the Space Directory host.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRecord {
     /// Canonical manifest payload (UAID + dataspace scope).
@@ -446,6 +455,8 @@ impl SpaceDirectoryManifestRecord {
     }
 }
 /// Lifecycle metadata recorded for a manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestLifecycle")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 pub struct SpaceDirectoryManifestLifecycle {
     /// Epoch (inclusive) when the manifest actually became active, if known.
@@ -456,6 +467,8 @@ pub struct SpaceDirectoryManifestLifecycle {
     pub revocation: Option<SpaceDirectoryManifestRevocation>,
 }
 /// Metadata describing a manifest revocation event.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestRevocation")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRevocation {
     /// Epoch when the revocation took effect.
@@ -485,6 +498,8 @@ impl SpaceDirectoryManifestLifecycle {
     }
 }
 /// Deterministic mapping from dataspace id to manifest record for a UAID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestSet")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestSet {
     entries: BTreeMap<DataSpaceId, SpaceDirectoryManifestRecord>,
@@ -608,6 +623,14 @@ mod tests {
         let decoded: UaidDataspaceBindings =
             json::from_str(&encoded).expect("bindings should deserialize from JSON");
         assert_eq!(decoded, bindings);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &bindings,
+            "iroha_core::nexus::space_directory::UaidDataspaceBindings",
+        );
+        assert!(
+            json::from_str::<AccountScopeDirectoryEntry>(&encoded).is_err(),
+            "UAID membership frame must not be accepted as account scope"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let ambient_encoded = {
@@ -640,6 +663,14 @@ mod tests {
         let decoded: AccountScopeDirectoryEntry =
             json::from_str(&encoded).expect("scope entry should deserialize from JSON");
         assert_eq!(decoded, entry);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &entry,
+            "iroha_core::nexus::space_directory::AccountScopeDirectoryEntry",
+        );
+        assert!(
+            json::from_str::<UaidDataspaceBindings>(&encoded).is_err(),
+            "account scope frame must not be accepted as UAID membership"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
         let ambient_encoded = {

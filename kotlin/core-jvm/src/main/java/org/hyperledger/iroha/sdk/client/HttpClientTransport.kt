@@ -82,7 +82,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedVerifier
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingReceiptVerifier
 import org.hyperledger.iroha.sdk.alias.AliasSetupReportV1
 import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
-import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
+import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1
 import org.hyperledger.iroha.sdk.alias.requireOnboardingCredential
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanJsonParser
 import org.hyperledger.iroha.sdk.alias.AliasTransactionPlanV1
@@ -598,7 +598,7 @@ class HttpClientTransport private constructor(
     override fun prepareSponsoredAccountOnboarding(
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -610,7 +610,7 @@ class HttpClientTransport private constructor(
             expectedNetworkId,
             expectedAuthority,
         )
-        require(binding.kind == TairaPublicResetMutationBindingV1.ONBOARDING) {
+        require(binding.kind == PreparedOperationBindingV1.ONBOARDING) {
             "onboarding prepare requires an onboarding binding"
         }
         require(binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
@@ -656,7 +656,7 @@ class HttpClientTransport private constructor(
         proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -732,12 +732,12 @@ class HttpClientTransport private constructor(
 
     override fun prepareAccountFaucetTransaction(
         claim: AccountFaucetClaimV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: AccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
     ): CompletableFuture<AccountFaucetPreparedTransactionV1> {
-        require(binding.kind == TairaPublicResetMutationBindingV1.FAUCET) {
+        require(binding.kind == PreparedOperationBindingV1.FAUCET) {
             "faucet prepare requires a faucet binding"
         }
         require(binding.executionExpiresAtUnixMs > System.currentTimeMillis()) {
@@ -1228,6 +1228,7 @@ class HttpClientTransport private constructor(
         entrypoint: String,
         payload: Any? = null,
         draftIntent: ContractCallDraftIntent,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<ContractCallResponse> {
         val signingContext = config.requireLocalSigningContext()
         val requestPayload = buildContractCallDraftPayload(
@@ -1239,10 +1240,13 @@ class HttpClientTransport private constructor(
             payload = payload,
         )
         requireCanonicalI105Address(requestPayload.getValue("authority") as String, "authority")
+        require(sameFeeQuoteAccountIdentity(authority, canonicalAuth.accountId)) {
+            "canonicalAuth.accountId must identify the contract call authority"
+        }
         validateContractCallDraftIntent(draftIntent, requestPayload, payload != null)
         val body = encodeJsonBody(requestPayload)
         return fetchJson(
-            buildJsonPostRequest("/v1/contracts/call", body),
+            buildVpnRequest("POST", "/v1/contracts/call", body, canonicalAuth),
             ContractJsonParser::parseCallResponse,
             "contract call draft",
         ).thenApply { response ->
@@ -2127,6 +2131,29 @@ class HttpClientTransport private constructor(
         return current
     }
 
+    private fun <T> executeResponse(
+        request: TransportRequest,
+        errorContext: String,
+        consume: (TransportResponse) -> T,
+    ): CompletableFuture<T> = CompletableFuture.completedFuture(Unit).thenCompose {
+        notifyRequest(request)
+        executor.execute(request)
+    }.handle { response, failure ->
+        try {
+            if (failure != null) {
+                throw RuntimeException("$errorContext request failed", unwrapCompletion(failure))
+            }
+            consume(response)
+        } catch (error: Throwable) {
+            try {
+                notifyFailure(request, error)
+            } catch (observerError: Throwable) {
+                if (observerError !== error) error.addSuppressed(observerError)
+            }
+            throw CompletionException(error)
+        }
+    }
+
     private fun <T> fetchJson(
         request: TransportRequest,
         parser: Function<ByteArray, T>,
@@ -2135,33 +2162,26 @@ class HttpClientTransport private constructor(
         responseValidator: ((T, Int) -> T)? = null,
         exactJsonMediaType: Boolean = false,
     ): CompletableFuture<T> {
-        notifyRequest(request); val future = CompletableFuture<T>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
+        return executeResponse(request, errorContext) { response ->
             val maximumResponseBytes = request.maximumResponseBytes
             if (maximumResponseBytes != null && response.body.size.toLong() > maximumResponseBytes) {
                 val error = IllegalArgumentException(
                     "$errorContext response exceeds the $maximumResponseBytes byte limit",
                 )
-                notifyFailure(request, error)
-                future.completeExceptionally(error)
-                return@whenComplete
+                throw error
             }
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
             val statusAccepted = acceptedStatus?.let { response.statusCode == it }
                 ?: (response.statusCode in 200..299)
-            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
-            try {
-                if (exactJsonMediaType) {
-                    requireExactJsonResponse(response, errorContext)
-                }
-                val parsed = parser.apply(response.body)
-                val validated = responseValidator?.invoke(parsed, response.statusCode) ?: parsed
-                notifyResponse(request, clientResponse)
-                future.complete(validated)
+            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); throw error }
+            if (exactJsonMediaType) {
+                requireExactJsonResponse(response, errorContext)
             }
-            catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
-        }; return future
+            val parsed = parser.apply(response.body)
+            val validated = responseValidator?.invoke(parsed, response.statusCode) ?: parsed
+            notifyResponse(request, clientResponse)
+            validated
+        }
     }
 
     private fun <T> fetchSccpJson(
@@ -2175,15 +2195,7 @@ class HttpClientTransport private constructor(
         parser: Function<ByteArray, T>,
         errorContext: String,
     ): CompletableFuture<T> {
-        notifyRequest(request)
-        val future = CompletableFuture<T>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!)
-                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
-                return@whenComplete
-            }
+        return executeResponse(request, errorContext) { response ->
             val body = response.body
             val clientResponse = ClientResponse(
                 response.statusCode,
@@ -2192,25 +2204,19 @@ class HttpClientTransport private constructor(
                 null,
                 extractRejectCode(response),
             )
-            try {
-                requireExactJsonResponse(response, errorContext)
-                val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
-                    "$errorContext request must declare a response-body limit"
-                }
-                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
-                require(body.size.toLong() <= maximumResponseBytes) {
-                    "$errorContext response exceeds $maximumResponseBytes bytes"
-                }
-                requireExactOptionalContentLength(response.headers, body.size, errorContext)
-                val parsed = parser.apply(body)
-                notifyResponse(request, clientResponse)
-                future.complete(parsed)
-            } catch (error: RuntimeException) {
-                notifyFailure(request, error)
-                future.completeExceptionally(error)
+            requireExactJsonResponse(response, errorContext)
+            val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
+                "$errorContext request must declare a response-body limit"
             }
+            require(body.isNotEmpty()) { "$errorContext response must not be empty" }
+            require(body.size.toLong() <= maximumResponseBytes) {
+                "$errorContext response exceeds $maximumResponseBytes bytes"
+            }
+            requireExactOptionalContentLength(response.headers, body.size, errorContext)
+            val parsed = parser.apply(body)
+            notifyResponse(request, clientResponse)
+            parsed
         }
-        return future
     }
 
     private fun fetchExactNoritoBytes(
@@ -2222,15 +2228,7 @@ class HttpClientTransport private constructor(
         requirePrivateNoStoreResponse: Boolean = false,
         requireExactResponseProvenance: Boolean = false,
     ): CompletableFuture<ByteArray> {
-        notifyRequest(request)
-        val future = CompletableFuture<ByteArray>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!)
-                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
-                return@whenComplete
-            }
+        return executeResponse(request, errorContext) { response ->
             val body = response.body
             val clientResponse = ClientResponse(
                 response.statusCode,
@@ -2239,67 +2237,61 @@ class HttpClientTransport private constructor(
                 null,
                 extractRejectCode(response),
             )
-            try {
-                if (requireExactResponseProvenance) {
-                    requireExactSignedResponseProvenance(request, response, errorContext)
-                }
-                val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
-                    "$errorContext request must declare a response-body limit"
-                }
-                require(body.isNotEmpty()) { "$errorContext response must not be empty" }
-                require(body.size.toLong() <= maximumResponseBytes) {
-                    "$errorContext response exceeds $maximumResponseBytes bytes"
-                }
-                requireExactOptionalContentLength(response.headers, body.size, errorContext)
-                if (requirePrivateNoStoreResponse) {
-                    requireExactHeader(
-                        response.headers,
-                        "Content-Type",
-                        APPLICATION_NORITO,
-                        errorContext,
-                    )
-                    if (requireIdentityEncoding) {
-                        if (allowExplicitIdentityEncoding) {
-                            requireAbsentOrIdentityEncoding(response.headers, errorContext)
-                        } else {
-                            requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
-                        }
-                    }
-                    requirePrivateNoStore(response.headers, errorContext)
-                }
-                require(response.statusCode == 200) {
-                    "$errorContext request failed with status ${response.statusCode}"
-                }
-                if (!requirePrivateNoStoreResponse) {
-                    requireExactHeader(
-                        response.headers,
-                        "Content-Type",
-                        APPLICATION_NORITO,
-                        errorContext,
-                    )
-                    if (requireIdentityEncoding) {
-                        if (allowExplicitIdentityEncoding) {
-                            requireAbsentOrIdentityEncoding(response.headers, errorContext)
-                        } else {
-                            requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
-                        }
-                    }
-                }
-                if (forbidRejectCodeHeader) {
-                    require(response.headers.keys.none {
-                        it.equals("x-iroha-reject-code", ignoreCase = true)
-                    }) {
-                        "$errorContext successful response carried x-iroha-reject-code"
-                    }
-                }
-                notifyResponse(request, clientResponse)
-                future.complete(body.copyOf())
-            } catch (error: RuntimeException) {
-                notifyFailure(request, error)
-                future.completeExceptionally(error)
+            if (requireExactResponseProvenance) {
+                requireExactSignedResponseProvenance(request, response, errorContext)
             }
+            val maximumResponseBytes = requireNotNull(request.maximumResponseBytes) {
+                "$errorContext request must declare a response-body limit"
+            }
+            require(body.isNotEmpty()) { "$errorContext response must not be empty" }
+            require(body.size.toLong() <= maximumResponseBytes) {
+                "$errorContext response exceeds $maximumResponseBytes bytes"
+            }
+            requireExactOptionalContentLength(response.headers, body.size, errorContext)
+            if (requirePrivateNoStoreResponse) {
+                requireExactHeader(
+                    response.headers,
+                    "Content-Type",
+                    APPLICATION_NORITO,
+                    errorContext,
+                )
+                if (requireIdentityEncoding) {
+                    if (allowExplicitIdentityEncoding) {
+                        requireAbsentOrIdentityEncoding(response.headers, errorContext)
+                    } else {
+                        requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
+                    }
+                }
+                requirePrivateNoStore(response.headers, errorContext)
+            }
+            require(response.statusCode == 200) {
+                "$errorContext request failed with status ${response.statusCode}"
+            }
+            if (!requirePrivateNoStoreResponse) {
+                requireExactHeader(
+                    response.headers,
+                    "Content-Type",
+                    APPLICATION_NORITO,
+                    errorContext,
+                )
+                if (requireIdentityEncoding) {
+                    if (allowExplicitIdentityEncoding) {
+                        requireAbsentOrIdentityEncoding(response.headers, errorContext)
+                    } else {
+                        requireHeaderAbsent(response.headers, "Content-Encoding", errorContext)
+                    }
+                }
+            }
+            if (forbidRejectCodeHeader) {
+                require(response.headers.keys.none {
+                    it.equals("x-iroha-reject-code", ignoreCase = true)
+                }) {
+                    "$errorContext successful response carried x-iroha-reject-code"
+                }
+            }
+            notifyResponse(request, clientResponse)
+            body.copyOf()
         }
-        return future
     }
 
     private fun sameCanonicalHijiriQuoteAccount(left: String, right: String): Boolean =
@@ -2519,24 +2511,15 @@ class HttpClientTransport private constructor(
     }
 
     private fun executeAccepted(request: TransportRequest, errorContext: String, acceptedStatus: Int): CompletableFuture<ClientResponse> {
-        notifyRequest(request); val future = CompletableFuture<ClientResponse>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) {
-                val cause = if (throwable is CompletionException) throwable.cause else throwable
-                notifyFailure(request, cause!!)
-                future.completeExceptionally(RuntimeException("$errorContext request failed", cause))
-                return@whenComplete
-            }
+        return executeResponse(request, errorContext) { response ->
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
             if (response.statusCode != acceptedStatus) {
                 val error = RuntimeException("$errorContext request failed with status ${response.statusCode}")
-                notifyFailure(request, error)
-                future.completeExceptionally(error)
-                return@whenComplete
+                throw error
             }
             notifyResponse(request, clientResponse)
-            future.complete(clientResponse)
-        }; return future
+            clientResponse
+        }
     }
 
     private fun requireExactSccpJsonResponse(
@@ -2666,29 +2649,27 @@ class HttpClientTransport private constructor(
         errorContext: String,
         acceptedStatus: Int? = null,
     ): CompletableFuture<Optional<T>> {
-        notifyRequest(request); val future = CompletableFuture<Optional<T>>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
+        return executeResponse(request, errorContext) { response ->
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
-            if (response.statusCode == 404) { notifyResponse(request, clientResponse); future.complete(Optional.empty<T>()); return@whenComplete }
+            if (response.statusCode == 404) { notifyResponse(request, clientResponse); return@executeResponse Optional.empty<T>() }
             val statusAccepted = acceptedStatus?.let { response.statusCode == it }
                 ?: (response.statusCode in 200..299)
-            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
-            try { val parsed = parser.apply(response.body); notifyResponse(request, clientResponse); future.complete(Optional.of<T>(parsed)) }
-            catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
-        }; return future
+            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); throw error }
+            val parsed = parser.apply(response.body)
+            notifyResponse(request, clientResponse)
+            Optional.of<T>(parsed)
+        }
     }
 
     private fun <T : Any> fetchOptionalJson(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<Optional<T>> {
-        notifyRequest(request); val future = CompletableFuture<Optional<T>>()
-        executor.execute(request).whenComplete { response, throwable ->
-            if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
+        return executeResponse(request, errorContext) { response ->
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
-            if (response.statusCode < 200 || response.statusCode >= 300) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
-            if (response.body.isEmpty()) { notifyResponse(request, clientResponse); future.complete(Optional.empty<T>()); return@whenComplete }
-            try { val parsed = parser.apply(response.body); notifyResponse(request, clientResponse); future.complete(Optional.of(parsed)) }
-            catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
-        }; return future
+            if (response.statusCode < 200 || response.statusCode >= 300) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); throw error }
+            if (response.body.isEmpty()) { notifyResponse(request, clientResponse); return@executeResponse Optional.empty<T>() }
+            val parsed = parser.apply(response.body)
+            notifyResponse(request, clientResponse)
+            Optional.of(parsed)
+        }
     }
 
     companion object {

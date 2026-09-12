@@ -29,14 +29,12 @@ use axum::{
 use base64::Engine as _;
 use iroha_config::parameters::{actual::ComputeEconomics, defaults::compute as compute_defaults};
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    compute::{
-        ComputeAuthz, ComputeCall, ComputeCallSummary, ComputeCodec, ComputeGovernanceError,
-        ComputeManifest, ComputeManifestError, ComputeRequest, ComputeRoute, ComputeRouteId,
-        ComputeValidationError, enforce_sponsor_policy,
-    },
-    name::Name,
+use iroha_data_model::compute::{
+    ComputeAuthz, ComputeCall, ComputeCallSummary, ComputeCodec, ComputeGovernanceError,
+    ComputeManifest, ComputeManifestError, ComputeRequest, ComputeRoute, ComputeRouteId,
+    ComputeValidationError, enforce_sponsor_policy,
 };
+use iroha_model_base::name::Name;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,

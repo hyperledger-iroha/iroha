@@ -18,7 +18,6 @@ use iroha_data_model::smart_contract::manifest::{
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
     events::{
         EventFilterBox,
         data::DataEventFilter,
@@ -29,14 +28,15 @@ use iroha_data_model::{
         },
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
-    metadata::Metadata,
     nft::NftId,
-    peer::PeerId,
-    prelude::Name,
     role::RoleId,
     rwa::RwaId,
     trigger::{TriggerId, action::Repeats},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,

@@ -153,8 +153,21 @@ struct LifecycleDecisionApplySuccessorOutputsSealV1;
 pub(in crate::sumeragi) enum LifecycleDecisionApplySuccessorOutputModeV1 {
     /// Broadcast and Apply are the two effects of one retained periodic batch.
     SameBatchSuffix,
-    /// Broadcast predates Apply in the runtime but was admitted after it.
+    /// A single-effect Broadcast predates Apply but was admitted after it.
+    /// This mode has no retained periodic Apply suffix.
     DelayedAdmissionPeriodicRetransmit { runtime_ordinal: u128 },
+    /// Delayed Broadcast admission retains its bound two-effect Apply suffix.
+    DelayedAdmissionPeriodicApplySuffix { runtime_ordinal: u128 },
+}
+
+impl LifecycleDecisionApplySuccessorOutputModeV1 {
+    /// Whether this mode requires the exact retained two-effect Apply suffix.
+    pub(in crate::sumeragi) const fn retains_apply_suffix(self) -> bool {
+        matches!(
+            self,
+            Self::SameBatchSuffix | Self::DelayedAdmissionPeriodicApplySuffix { .. }
+        )
+    }
 }
 
 /// Proof that the sole executor-pending output is an exact CommitQC
@@ -250,6 +263,8 @@ pub(in crate::sumeragi) enum LifecycleDecisionApplyPendingOutputCensusErrorV1 {
     SuccessorOrdinalOrder,
     /// The Apply/output pair was not the first adjacent Ready pair.
     SuccessorReadyOrder,
+    /// Delayed periodic output was neither a single Broadcast nor an exact Apply prefix.
+    InvalidDelayedPeriodicBatchShape,
     /// Delayed admission exposed additional Ready work beside the exact pair.
     DelayedSuccessorReadyCardinality,
 }
@@ -307,6 +322,9 @@ impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
             LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => true,
             LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
                 runtime_ordinal,
+            }
+            | LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                runtime_ordinal,
             } => {
                 let AdapterEffect::Broadcast(message) = &pending.effect else {
                     return false;
@@ -321,6 +339,11 @@ impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
                     && pending
                         .ownership
                         .exactly_binds_periodic_retransmit_broadcast(&pending.effect)
+                    && if self.mode.retains_apply_suffix() {
+                        pending.binds_periodic_retransmit_apply_prefix()
+                    } else {
+                        pending.binds_single_periodic_retransmit_broadcast()
+                    }
                     && certificate == self.live_apply.certificate()
                     && certificate.phase == wire::GlobalPhase::Commit
             }
@@ -359,6 +382,17 @@ fn terminal_direct_output_matches_record(
     };
     let expected_slot = PhysicalSlotId::for_capacity(expected_class.capacity_class(), 0);
     let expected_digest = digest_from_hash(pending.exact_effect_identity());
+    // LedgerV1 retains the complete signed replay authority, not process-local
+    // physical slots. A reopened terminal row therefore has no physical episode;
+    // a live terminal row still has its one fully consumed exact slot. Reject
+    // mixed or malformed geometry while deriving identity from the durable source.
+    let terminal_geometry_is_exact = if record.physical_slots.is_empty() {
+        record.episode.slot_universe.is_empty() && record.episode.consumed_slots.is_empty()
+    } else {
+        record.physical_slots == BTreeMap::from([(expected_slot, expected_digest)])
+            && record.episode.slot_universe == std::collections::BTreeSet::from([expected_slot])
+            && record.episode.consumed_slots == record.episode.slot_universe
+    };
     coordinator.fault.is_none()
         && coordinator.active_context.id() == record.key.context()
         && coordinator.active_context.height() == record.key.round().height()
@@ -370,9 +404,7 @@ fn terminal_direct_output_matches_record(
             .work_class
             .accepts_stage(record.key.phase(), record.stage)
         && record.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
-        && record.physical_slots == BTreeMap::from([(expected_slot, expected_digest)])
-        && record.episode.slot_universe == std::collections::BTreeSet::from([expected_slot])
-        && record.episode.consumed_slots == record.episode.slot_universe
+        && terminal_geometry_is_exact
         && metadata.reconstruction_source == record.owner.causal_root().digest()
         && metadata.payload == DurablePayloadReference::None
         && metadata.continuation == super::schema::DurableContinuation::None
@@ -673,8 +705,16 @@ impl ConcreteLifecycleWorkRegistry {
                     LifecycleDecisionApplyPendingOutputCensusErrorV1::DelayedSuccessorReadyCardinality,
                 );
             }
-            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
-                runtime_ordinal,
+            if pending_output.binds_periodic_retransmit_apply_prefix() {
+                LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                    runtime_ordinal,
+                }
+            } else if pending_output.binds_single_periodic_retransmit_broadcast() {
+                LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                    runtime_ordinal,
+                }
+            } else {
+                return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidDelayedPeriodicBatchShape);
             }
         } else {
             LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix

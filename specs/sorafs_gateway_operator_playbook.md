@@ -23,24 +23,10 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    nonce_ttl_secs = 120
    replay_cache_capacity = 4096
 
-   [sorafs.storage]
-   enabled = true
-
-   [sorafs.storage.stream_tokens]
-   enabled = true
-   signer_handle = "signer://prod/stream-token/v4"
-   signer_public_key_hex = "<64-lowercase-hex-characters>"
-   signer_revision = 4
-   signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
-   admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
-   admission_provider_revision = 7
-   admission_provider_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
-   key_version = 4
-   default_ttl_secs = 900
-   default_max_streams = 32
-   default_rate_limit_bytes = 104857600
-   default_requests_per_minute = 60
    ```
+   Merge the complete [public-pin template](sorafs/snippets/stream_token_hardware_binding.toml)
+   for storage and stream tokens. Its trust placeholders are deliberately invalid;
+   obtain reviewed hardware, attester and observer pins before enabling issuance.
    Keep the allow-list limited to the exact runtime operator keys. The issuance
    route accepts no API-token or session fallback.
    For Soracloud remote hydration, list every consuming daemon's configured
@@ -52,21 +38,16 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    `sorafs.storage.native_transaction_signers`, and inject all four matching
    live providers. Storage startup requires them even when the corresponding
    new-work generation flags are disabled.
-3. Inject the authenticated external software-signer adapter for the configured non-secret
-   handle. The Ed25519 private key must remain non-exportable; its credentials,
-   session, and PIN are runtime-only and must never be committed or written to
-   TOML, signing-key files, logs, or readiness artefacts. The TOML `enabled`
-   value is the only production activation control; an environment variable
-   cannot enable issuance.
-4. Require two startup probes to bind the adapter's reported handle, public key,
-   non-zero revision, and public-policy digest exactly to `signer_handle`,
-   `signer_public_key_hex`, `signer_revision`, and
-   `signer_policy_digest_hex`. For every issuance, revalidate that identity
-   before and after signing, then strictly verify the raw 64-byte signature
-   against the configured public key before releasing the token. Missing,
-   mismatched, drifting, stale, substituted, or test-marked bindings,
-   unavailable/refusing signers, and malformed or non-verifying output fail
-   closed.
+3. Inject separate opaque hardware and independently signed observer clients plus
+   the independently approved full custody anchor. The key must be generated in
+   hardware, non-exportable and never previously exported. Credentials, sessions
+   and PINs remain runtime-only; TOML is the only activation control.
+4. Follow the [hardware custody contract](sorafs/stream_token_hardware_custody.md):
+   authenticate fresh startup and per-operation state, retain one exact body across
+   one Sign or bounded read-only recovery, and require separate `AfterCommit` and
+   `BeforeRelease` evidence with local Core finality and expiry fences. Missing,
+   substituted, revoked or stale state and malformed outputs fail closed. Source
+   tests do not replace native/device/authoritative-state qualification.
 5. Point gateway at admission registry (`sorafs_manifest::provider_admission`).
 6. Configure the Prometheus scrape target and structured-log aggregation.
 7. Set up payload-free log aggregation for token issuance/revocation outcomes.
@@ -116,8 +97,8 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 - Run SF-5a self-cert kit before and after major upgrades.
 - Update fixtures when governance publishes new dataset.
 - Review observability dashboards weekly, ensure alert routing functioning.
-- Reconcile the configured signer handle, public-key fingerprint, and
-  `key_version` with the approved external software-signer inventory after every deployment.
+- Reconcile the complete signer/attester/observer configuration digest, public-key
+  fingerprints and sole `hardware.key_revision` with approved deployment inventory.
 
 ## 6. Automation & Incident Playbooks
 
@@ -160,21 +141,16 @@ Recommended automation pattern:
 
 ### 6.2 Signing-key rotation
 
-1. Create the replacement Ed25519 key inside the independently administered
-   software signer, keep it encrypted and runtime-only, and assign a new non-secret signer handle.
-2. In one controlled rollout, inject the replacement adapter and update
-   `signer_handle`, `signer_public_key_hex`, `signer_revision`,
-   `signer_policy_digest_hex`, and `key_version`.
-3. Restart the issuer, require both exact startup qualification probes, and issue a probe token.
-   Strictly verify the returned signature against the new configured public key
-   before publishing that key through authenticated provider inventory.
-4. Deploy a matching `gateway-key` and token atomically. If an overlap is
-   necessary, use separately named old/new descriptors; there is no implicit
-   multi-key acceptance or file/env fallback.
-5. Remove the old descriptor by its final token expiry, revoke the old software-signing
-   key, and retain only payload-free evidence: non-secret handles, public-key
-   fingerprints, versions, approval, activation/expiry times, and negative
-   old-key/cross-key/wrong-handle probes.
+1. Generate the replacement inside qualified hardware and obtain independent
+   attestation and governed activation under the [custody contract](sorafs/stream_token_hardware_custody.md).
+2. Atomically update the complete hardware pins, independent approved anchor and
+   authenticated provider inventory. Require fresh signed startup and final
+   completed-operation evidence before releasing a probe token.
+3. Switch each descriptor's pinned `gateway-key` and matching token together.
+   No existing operation may be relabelled or re-signed under renewed custody.
+4. Finalize the old custody's terminal audit/revocation before it takes effect.
+   Retain only public generations, fingerprints, policy/custody digests, approvals
+   and negative old-key/cross-key/wrong-binding evidence.
 
 ### 6.3 Incident playbook integration
 

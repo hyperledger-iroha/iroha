@@ -61,6 +61,8 @@ const VERIFIED_SOURCE_SECURE_TEMP_RETRIES_V1: usize = 16;
 const RENDERED_SOURCE_VERIFIED: &str = "verified_source";
 const RENDERED_SOURCE_PSEUDO: &str = "pseudo_source";
 const RENDERED_SOURCE_MANIFEST_STUB: &str = "manifest_stub";
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractViewAccessHintsDto")]
 #[derive(
     Debug,
     Clone,
@@ -73,6 +75,8 @@ pub struct ContractViewAccessHintsDto {
     pub read_keys: Vec<String>,
     pub write_keys: Vec<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractViewEntrypointParamDto")]
 #[derive(
     Debug,
     Clone,
@@ -85,6 +89,8 @@ pub struct ContractViewEntrypointParamDto {
     pub name: String,
     pub type_name: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractViewEntrypointDto")]
 #[derive(
     Debug,
     Clone,
@@ -108,6 +114,8 @@ pub struct ContractViewEntrypointDto {
     pub access_hints_skipped: Vec<String>,
     pub triggers: Vec<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractViewSyscallDto")]
 #[derive(
     Debug,
     Clone,
@@ -122,6 +130,8 @@ pub struct ContractViewSyscallDto {
     pub name: Option<String>,
     pub count: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractViewMemoryDto")]
 #[derive(
     Debug,
     Clone,
@@ -136,6 +146,8 @@ pub struct ContractViewMemoryDto {
     pub load128: u64,
     pub store128: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractViewAnalysisDto")]
 #[derive(
     Debug,
     Clone,
@@ -149,6 +161,8 @@ pub struct ContractViewAnalysisDto {
     pub memory: ContractViewMemoryDto,
     pub syscalls: Vec<ContractViewSyscallDto>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractVerifiedSourceRefDto")]
 #[derive(
     Debug,
     Clone,
@@ -169,6 +183,8 @@ pub struct ContractVerifiedSourceRefDto {
     #[norito(default)]
     pub content_length: Option<u64>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractCodeViewDto")]
 #[derive(
     Debug,
     Clone,
@@ -199,6 +215,8 @@ pub struct ContractCodeViewDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::SubmitVerifiedContractSourceDto")]
 #[derive(
     Debug,
     Clone,
@@ -207,12 +225,15 @@ pub struct ContractCodeViewDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct SubmitVerifiedContractSourceDto {
     pub language: String,
     #[norito(default)]
     pub source_name: Option<String>,
     pub source_text: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::ContractVerifiedSourceJobResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -235,6 +256,8 @@ pub struct ContractVerifiedSourceJobResponseDto {
     #[norito(default)]
     pub verified_source_ref: Option<ContractVerifiedSourceRefDto>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::StoredVerifiedSourceRecord")]
 #[derive(
     Debug,
     Clone,
@@ -262,6 +285,8 @@ struct StoredVerifiedSourceRecord {
     #[norito(default)]
     content_length: Option<u64>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::contract_sources::StoredVerifiedSourceJob")]
 #[derive(
     Debug,
     Clone,
@@ -3182,9 +3207,13 @@ mod tests {
         let verified = ivm::verify_contract_artifact(&compiled.artifact)
             .expect("verify compiled source fixture");
         let network_id = *state.network_id_ref();
-        let contract_address =
-            dm::ContractAddress::derive(&network_id, &authority, 0, dm::DataSpaceId::UNIVERSAL)
-                .expect("contract address");
+        let contract_address = dm::ContractAddress::derive(
+            &network_id,
+            &authority,
+            0,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),
             &authority,
@@ -3268,16 +3297,18 @@ seiyaku Demo { kotoage fn main() authorize("Run") {} }
                 .data_dir(_guard.path().join("sorafs"))
                 .build(),
         );
-        let (status, JsonBody(response)) = handle_post_verified_source_job(
-            code_hash_hex.clone(),
-            SubmitVerifiedContractSourceDto {
-                language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
-                source_name: Some("demo.ko".to_owned()),
-                source_text: source.to_owned(),
-            },
-            node,
-        )
-        .expect("submit verified source");
+        let request = SubmitVerifiedContractSourceDto {
+            language: VERIFIED_SOURCE_LANGUAGE_KOTODAMA.to_owned(),
+            source_name: Some("demo.ko".to_owned()),
+            source_text: source.to_owned(),
+        };
+        crate::frame_test_support::assert_current_frame(
+            &request,
+            "iroha_torii::contract_sources::SubmitVerifiedContractSourceDto",
+        );
+        let (status, JsonBody(response)) =
+            handle_post_verified_source_job(code_hash_hex.clone(), request, node)
+                .expect("submit verified source");
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(response.status, "accepted");
         assert!(response.verified_source_ref.is_none());

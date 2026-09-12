@@ -6,6 +6,9 @@ mod alias_registry_bootstrap_network;
 mod concurrency;
 #[path = "extra_functional/mod.rs"]
 mod extra_functional;
+#[cfg(feature = "privacy-release-evidence")]
+#[path = "kaigi_privacy_network.rs"]
+mod kaigi_privacy_network;
 #[path = "observer_sync.rs"]
 mod observer_sync;
 #[cfg(feature = "zk-stark")]

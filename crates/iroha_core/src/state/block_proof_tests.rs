@@ -15,6 +15,8 @@ use iroha_data_model::{
 use iroha_primitives::const_vec::ConstVec;
 use nonzero_ext::nonzero;
 use norito::codec::DecodeAll as _;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::block_proof_tests::MutableSignedBlockWire")]
 #[derive(norito::codec::Decode, norito::codec::Encode)]
 struct MutableSignedBlockWire {
     signatures: BTreeSet<BlockSignature>,
@@ -81,7 +83,12 @@ fn proof_error(
 ) -> BlockProofError {
     let kura = Kura::blank_kura_for_testing();
     let expected_hash = block.hash();
-    kura.append_pending_block_for_bench(Arc::new(block));
+    let block = Arc::new(block);
+    // Exercise the proof builder against an occupied physical slot, including
+    // deliberately inconsistent cached Merkle trees and header heights.
+    kura.persist_block_immediate_for_bench(&block)
+        .expect("persist structurally encodable adversarial fixture");
+    kura.append_pending_block_for_bench(block);
     block_proofs_for_entry_from_kura(kura.as_ref(), requested_height, expected_hash, entry_hash)
         .expect_err("adversarial stored block must not produce a proof")
 }

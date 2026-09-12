@@ -310,7 +310,7 @@
       "needles": [
         "fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(",
         "fn prover_secret_leaf_coordinates_v1(",
-        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n         fn with_fcmp_fixture_leaf_coordinate_owners_v1<T>("
+        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_leaf_coordinate_owners_v1<T>("
       ],
       "counts": []
     },

@@ -1,4 +1,3 @@
-#[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     da::{
@@ -6,19 +5,31 @@ use crate::{
         ingest::{DaIngestAuthorizationV1, DaPinScopeAuthorizationV1},
         types::StorageTicketId,
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
 use core::cmp::Ordering;
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::topology::LaneId;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
     to_bytes,
 };
 /// Pin intent emitted by the DA ingest pipeline to seed the `SoraFS` registry.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntent")]
@@ -65,8 +76,17 @@ impl DaPinIntent {
     }
 }
 /// Bundle of pin intents embedded into a block payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntentBundle")]
@@ -162,9 +182,18 @@ impl Ord for DaPinIntentBundle {
     }
 }
 /// Pin intent annotated with its position inside a block payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntentWithLocation")]
 pub struct DaPinIntentWithLocation {
     /// Pin intent contents.
@@ -173,9 +202,19 @@ pub struct DaPinIntentWithLocation {
     pub location: DaCommitmentLocation,
 }
 /// Merkle membership proof for a DA pin intent inside a committed block bundle.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::pin_intent::DaPinIntentProof")]
 pub struct DaPinIntentProof {
     /// Pin intent covered by the proof.
@@ -248,10 +287,10 @@ mod tests {
             },
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature};
+    use iroha_model_base::topology::LaneId;
     fn test_key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::Ed25519)
             .expect("valid deterministic pin-intent key")
@@ -294,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "json")]
+
     fn pin_intent_json_requires_explicit_alias_and_rejects_unknown_fields() {
         let intent = test_intent(
             LaneId::new(1),

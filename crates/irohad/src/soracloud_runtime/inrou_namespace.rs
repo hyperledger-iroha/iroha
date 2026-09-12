@@ -1,6 +1,7 @@
 //! Single-path Linux namespace and minimal-root confinement for PortableVM.
 //!
-//! The root supervisor accepts exactly the pinned bubblewrap launcher. QEMU is
+//! The root supervisor retains its self-exec watchdog, the pinned bubblewrap
+//! launcher, and bubblewrap's private PID1 reaper as one exact process chain. QEMU is
 //! released into private mount, network, IPC, UTS, PID, and cgroup namespaces
 //! with a fixed authenticated runtime root populated only by QEMU's closure, `/dev/kvm`,
 //! immutable inputs, and the exact writable disks. Live procfs attestation is
@@ -41,9 +42,8 @@ const INROU_RUNTIME_MAX_FILES: usize = 512;
 pub(super) const INROU_NAMESPACE_MAX_LEASE_DISKS: usize = SORA_INROU_DATA_VOLUME_MAX_COUNT_V1;
 const INROU_NAMESPACE_TOOL_PROBE_MAX_BYTES: usize = 1024 * 1024;
 const INROU_NAMESPACE_TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-const INROU_NAMESPACE_MAX_CGROUP_PIDS: usize = 2;
-const INROU_BWRAP_REQUIRED_OPTIONS: [&str; 15] = [
-    "--as-pid-1",
+const INROU_NAMESPACE_MAX_CGROUP_PIDS: usize = 4;
+const INROU_BWRAP_REQUIRED_OPTIONS: [&str; 14] = [
     "--bind-fd",
     "--clearenv",
     "--dev-bind",
@@ -160,6 +160,7 @@ pub(super) struct InrouNamespacePlan {
     runtime_root_identity: InrouFileIdentity,
     runtime_entries: Vec<InrouRuntimeManifestEntry>,
     qemu_identity: InrouFileIdentity,
+    watchdog_identity: InrouFileIdentity,
     bubblewrap_identity: InrouFileIdentity,
     kvm_identity: InrouFileIdentity,
     bindings: Vec<InrouNamespaceBinding>,
@@ -170,8 +171,20 @@ pub(super) struct InrouNamespacePlan {
 pub(super) struct InrouNamespaceAttestation {
     plan: Arc<InrouNamespacePlan>,
     launcher_pid: u32,
+    bubblewrap_pid: u32,
+    reaper_pid: u32,
     qemu_pid: u32,
+    identity: PortableVmChildIdentity,
     namespaces: BTreeMap<&'static str, u64>,
+}
+
+#[derive(Debug)]
+struct InrouNamespaceProcessStatus {
+    pid: u32,
+    parent_pid: u32,
+    namespace_pids: Vec<u32>,
+    uids: [u32; 4],
+    gids: [u32; 4],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,6 +292,7 @@ impl InrouNamespacePlan {
             }
         }
         let bubblewrap_identity = inspect_root_runtime_file(&tools.bubblewrap, "bubblewrap")?;
+        let watchdog_identity = proc_executable_identity(std::process::id())?;
         let kvm_identity = inspect_kvm_device(Path::new("/dev/kvm"))?;
         let mut bindings = Vec::new();
         for request in requests {
@@ -358,6 +372,7 @@ impl InrouNamespacePlan {
             runtime_root_identity,
             runtime_entries,
             qemu_identity,
+            watchdog_identity,
             bubblewrap_identity,
             kvm_identity,
             bindings,
@@ -451,13 +466,14 @@ impl InrouNamespacePlan {
 
     pub(super) fn discover_and_attest_qemu(
         self: &Arc<Self>,
-        launcher_pid: u32,
+        child: &mut std::process::Child,
         cgroup: &InrouCgroupAttestation,
         identity: &PortableVmChildIdentity,
         deadline: std::time::Instant,
     ) -> eyre::Result<InrouNamespaceAttestation> {
         loop {
-            let last_mismatch = match self.try_discover_qemu(launcher_pid, cgroup, identity) {
+            super::require_inrou_launcher_running(child)?;
+            let last_mismatch = match self.try_discover_qemu(child.id(), cgroup, identity) {
                 Ok(attestation) => return Ok(attestation),
                 Err(error) => error.to_string(),
             };
@@ -479,13 +495,13 @@ impl InrouNamespacePlan {
         cgroup.attest_pid(launcher_pid)?;
         validate_proc_executable(
             launcher_pid,
-            self.bubblewrap_identity,
-            "bubblewrap launcher",
+            self.watchdog_identity,
+            "Inrou supervisor watchdog",
         )?;
         let members = cgroup.member_pids()?;
         if members.len() != INROU_NAMESPACE_MAX_CGROUP_PIDS || !members.contains(&launcher_pid) {
             eyre::bail!(
-                "Inrou namespace cgroup must contain exactly bubblewrap and QEMU; members are {:?}",
+                "Inrou namespace cgroup must contain exactly the watchdog, bubblewrap launcher, PID1 reaper, and QEMU; members are {:?}",
                 members
             );
         }
@@ -501,19 +517,33 @@ impl InrouNamespacePlan {
             eyre::bail!("Inrou cgroup does not contain exactly one pinned nested QEMU");
         };
         let qemu_pid = *qemu_pid;
-        cgroup.attest_pid(qemu_pid)?;
         let status = super::read_inrou_proc_status(qemu_pid)?;
-        super::validate_inrou_qemu_proc_status(&status, identity)?;
-        validate_nested_qemu_pid_status(&status, launcher_pid, qemu_pid)?;
-        let namespaces = attest_private_namespace_set(qemu_pid)?;
-        self.attest_mounts_and_root(qemu_pid, true)?;
-        attest_private_loopback_only(qemu_pid)?;
-        Ok(InrouNamespaceAttestation {
+        let reaper_pid = parse_namespace_process_status(&status, qemu_pid)?.parent_pid;
+        let bubblewrap_candidates = members
+            .iter()
+            .copied()
+            .filter(|pid| *pid != launcher_pid && *pid != qemu_pid)
+            .collect::<Vec<_>>();
+        if !bubblewrap_candidates.contains(&reaper_pid) {
+            eyre::bail!("nested QEMU parent is not the retained bubblewrap PID1 reaper");
+        }
+        let bubblewrap_pid = *bubblewrap_candidates
+            .iter()
+            .find(|pid| **pid != reaper_pid)
+            .ok_or_else(|| eyre::eyre!("Inrou namespace cgroup omitted outer bubblewrap"))?;
+        let mut attestation = InrouNamespaceAttestation {
             plan: Arc::clone(self),
             launcher_pid,
+            bubblewrap_pid,
+            reaper_pid,
             qemu_pid,
-            namespaces,
-        })
+            identity: identity.clone(),
+            namespaces: BTreeMap::new(),
+        };
+        attestation.namespaces = attestation.attest_process_chain(cgroup)?;
+        self.attest_mounts_and_root(qemu_pid, true)?;
+        attest_private_loopback_only(qemu_pid)?;
+        Ok(attestation)
     }
 
     fn attest_mounts_and_root(
@@ -650,7 +680,6 @@ fn inrou_bubblewrap_namespace_arguments() -> Vec<OsString> {
     [
         "--die-with-parent",
         "--new-session",
-        "--as-pid-1",
         "--unshare-pid",
         "--unshare-net",
         "--unshare-ipc",
@@ -675,22 +704,77 @@ fn inrou_bubblewrap_namespace_arguments() -> Vec<OsString> {
 }
 
 impl InrouNamespaceAttestation {
-    pub(super) fn attest_live(&self, cgroup: &InrouCgroupAttestation) -> eyre::Result<()> {
-        cgroup.attest_pid(self.launcher_pid)?;
-        cgroup.attest_pid(self.qemu_pid)?;
-        let members = cgroup.member_pids()?;
-        let mut expected = [self.launcher_pid, self.qemu_pid];
-        expected.sort_unstable();
-        if members != expected {
-            eyre::bail!("Inrou namespace cgroup membership changed to {:?}", members);
+    fn attest_process_chain(
+        &self,
+        cgroup: &InrouCgroupAttestation,
+    ) -> eyre::Result<BTreeMap<&'static str, u64>> {
+        let processes = [
+            (
+                self.launcher_pid,
+                self.plan.watchdog_identity,
+                "Inrou supervisor watchdog",
+            ),
+            (
+                self.bubblewrap_pid,
+                self.plan.bubblewrap_identity,
+                "outer bubblewrap",
+            ),
+            (
+                self.reaper_pid,
+                self.plan.bubblewrap_identity,
+                "bubblewrap PID1 reaper",
+            ),
+            (self.qemu_pid, self.plan.qemu_identity, "nested QEMU"),
+        ];
+        let expected = processes.map(|(pid, _, _)| pid);
+        validate_namespace_cgroup_members(&cgroup.member_pids()?, expected)?;
+        let mut statuses = Vec::with_capacity(processes.len());
+        for (pid, executable, label) in processes {
+            cgroup.attest_pid(pid)?;
+            validate_proc_executable(pid, executable, label)?;
+            let status = super::read_inrou_proc_status(pid)?;
+            if pid == self.qemu_pid {
+                super::validate_inrou_qemu_proc_status(&status, &self.identity)?;
+            }
+            statuses.push(parse_namespace_process_status(&status, pid)?);
         }
-        validate_proc_executable(
-            self.launcher_pid,
-            self.plan.bubblewrap_identity,
-            "bubblewrap launcher",
+        validate_namespace_process_chain_status(std::process::id(), &statuses)?;
+        let namespaces = attest_private_namespace_set(self.qemu_pid)?;
+        if attest_private_namespace_set(self.reaper_pid)? != namespaces {
+            eyre::bail!("bubblewrap PID1 reaper does not share QEMU's private namespace set");
+        }
+        for namespace in namespaces.keys() {
+            let supervisor =
+                read_namespace_id(&PathBuf::from(format!("/proc/self/ns/{namespace}")))?;
+            let watchdog = read_namespace_id(&PathBuf::from(format!(
+                "/proc/{}/ns/{namespace}",
+                self.launcher_pid
+            )))?;
+            if watchdog != supervisor {
+                eyre::bail!("Inrou watchdog changed its supervisor's {namespace} namespace");
+            }
+            if *namespace == "pid"
+                && read_namespace_id(&PathBuf::from(format!(
+                    "/proc/{}/ns/pid",
+                    self.bubblewrap_pid
+                )))? != supervisor
+            {
+                eyre::bail!("outer bubblewrap changed its supervisor's PID namespace");
+            }
+        }
+        validate_followed_file_identity(
+            &PathBuf::from(format!("/proc/{}/root", self.reaper_pid)),
+            self.plan.runtime_root_identity,
+            "bubblewrap PID1 reaper runtime root",
         )?;
-        validate_proc_executable(self.qemu_pid, self.plan.qemu_identity, "nested QEMU")?;
-        if attest_private_namespace_set(self.qemu_pid)? != self.namespaces {
+        // Recheck after procfs reads so a departing setup process cannot make a
+        // partial process-chain snapshot appear complete.
+        validate_namespace_cgroup_members(&cgroup.member_pids()?, expected)?;
+        Ok(namespaces)
+    }
+
+    pub(super) fn attest_live(&self, cgroup: &InrouCgroupAttestation) -> eyre::Result<()> {
+        if self.attest_process_chain(cgroup)? != self.namespaces {
             eyre::bail!("nested QEMU namespace identities changed after launch");
         }
         self.plan.attest_mounts_and_root(self.qemu_pid, false)?;
@@ -1305,11 +1389,19 @@ fn expected_minimal_root_entries(
     let mut entries = BTreeMap::<PathBuf, BTreeSet<OsString>>::new();
     for runtime_entry in runtime_entries {
         if runtime_entry.sandbox_path != Path::new("/") {
-            insert_expected_path(&mut entries, &runtime_entry.sandbox_path)?;
+            insert_expected_path(
+                &mut entries,
+                &runtime_entry.sandbox_path,
+                runtime_entry.kind,
+            )?;
         }
     }
     for binding in bindings {
-        insert_expected_path(&mut entries, &binding.sandbox_path)?;
+        insert_expected_path(
+            &mut entries,
+            &binding.sandbox_path,
+            InrouRuntimeEntryKind::Regular,
+        )?;
     }
     Ok(entries)
 }
@@ -1317,11 +1409,13 @@ fn expected_minimal_root_entries(
 fn insert_expected_path(
     entries: &mut BTreeMap<PathBuf, BTreeSet<OsString>>,
     path: &Path,
+    kind: InrouRuntimeEntryKind,
 ) -> eyre::Result<()> {
     validate_sandbox_binding_path_for_tree(path)?;
     let mut current = PathBuf::from("/");
     entries.entry(current.clone()).or_default();
-    for component in path.components().skip(1) {
+    let mut components = path.components().skip(1).peekable();
+    while let Some(component) = components.next() {
         let Component::Normal(name) = component else {
             eyre::bail!("Inrou minimal-root path is not canonical");
         };
@@ -1334,7 +1428,11 @@ fn insert_expected_path(
             // rejected before this trie is built.
         }
         current.push(name);
-        entries.entry(current.clone()).or_default();
+        // Every path is a child of its parent, but regular-file leaves are not
+        // directories to enumerate. Their identity/content checks run separately.
+        if components.peek().is_some() || kind == InrouRuntimeEntryKind::Directory {
+            entries.entry(current.clone()).or_default();
+        }
     }
     Ok(())
 }
@@ -1576,26 +1674,74 @@ fn validate_proc_executable(
     Ok(())
 }
 
-fn validate_nested_qemu_pid_status(
+fn parse_namespace_process_status(
     status: &str,
-    launcher_pid: u32,
-    qemu_pid: u32,
-) -> eyre::Result<()> {
-    let parent = super::inrou_proc_status_field(status, "PPid")?
+    pid: u32,
+) -> eyre::Result<InrouNamespaceProcessStatus> {
+    let recorded_pid = super::inrou_proc_status_field(status, "Pid")?
         .trim()
         .parse::<u32>()
-        .wrap_err("parse nested QEMU parent pid")?;
-    if parent != launcher_pid {
-        eyre::bail!(
-            "nested QEMU pid {qemu_pid} is not a direct child of bubblewrap {launcher_pid}"
-        );
+        .wrap_err("parse Inrou namespace process pid")?;
+    if pid == 0 || recorded_pid != pid {
+        eyre::bail!("Inrou namespace process status changed its observed pid");
     }
+    let parent_pid = super::inrou_proc_status_field(status, "PPid")?
+        .trim()
+        .parse::<u32>()
+        .wrap_err("parse Inrou namespace process parent pid")?;
     let namespace_pids = super::inrou_proc_status_ids(status, "NSpid")?;
-    if namespace_pids.len() < 2
-        || namespace_pids.first() != Some(&qemu_pid)
-        || namespace_pids.last() != Some(&1)
+    if namespace_pids.first() != Some(&pid) || namespace_pids.contains(&0) {
+        eyre::bail!("Inrou namespace process status has an invalid PID namespace chain");
+    }
+    Ok(InrouNamespaceProcessStatus {
+        pid,
+        parent_pid,
+        namespace_pids,
+        uids: super::inrou_proc_status_quad_ids(status, "Uid")?,
+        gids: super::inrou_proc_status_quad_ids(status, "Gid")?,
+    })
+}
+
+fn validate_namespace_cgroup_members(
+    members: &[u32],
+    mut expected: [u32; INROU_NAMESPACE_MAX_CGROUP_PIDS],
+) -> eyre::Result<()> {
+    expected.sort_unstable();
+    if expected[0] == 0 || expected.windows(2).any(|pair| pair[0] == pair[1]) || members != expected
     {
-        eyre::bail!("nested QEMU must be PID 1 in a distinct PID namespace");
+        eyre::bail!("Inrou namespace cgroup membership changed to {:?}", members);
+    }
+    Ok(())
+}
+
+fn validate_namespace_process_chain_status(
+    supervisor_pid: u32,
+    statuses: &[InrouNamespaceProcessStatus],
+) -> eyre::Result<()> {
+    let [watchdog, bubblewrap, reaper, qemu] = statuses else {
+        eyre::bail!("Inrou namespace process chain must contain exactly four processes");
+    };
+    let mut parent_pid = supervisor_pid;
+    for process in statuses {
+        if process.pid == supervisor_pid || process.parent_pid != parent_pid {
+            eyre::bail!("Inrou namespace process chain changed its exact parent relationship");
+        }
+        parent_pid = process.pid;
+    }
+    for process in [watchdog, bubblewrap, reaper] {
+        if process.uids != [0; 4] || process.gids != [0; 4] {
+            eyre::bail!("Inrou namespace watchdog and bubblewrap must retain root uid and gid");
+        }
+    }
+    if bubblewrap.namespace_pids.len() != watchdog.namespace_pids.len()
+        || reaper.namespace_pids.len() != watchdog.namespace_pids.len() + 1
+        || qemu.namespace_pids.len() != reaper.namespace_pids.len()
+        || reaper.namespace_pids.last() != Some(&1)
+        || !qemu.namespace_pids.last().is_some_and(|pid| *pid > 1)
+    {
+        eyre::bail!(
+            "Inrou namespace process chain requires bubblewrap PID1 and a distinct QEMU child PID"
+        );
     }
     Ok(())
 }
@@ -1874,16 +2020,24 @@ fn validate_minimal_root_tree(
     qemu_pid: u32,
     expected: &BTreeMap<PathBuf, BTreeSet<OsString>>,
 ) -> eyre::Result<()> {
+    validate_minimal_root_tree_at(&PathBuf::from(format!("/proc/{qemu_pid}/root")), expected)
+}
+
+fn validate_minimal_root_tree_at(
+    root: &Path,
+    expected: &BTreeMap<PathBuf, BTreeSet<OsString>>,
+) -> eyre::Result<()> {
     for (directory, expected_children) in expected {
         if matches!(directory.to_str(), Some("/dev" | "/proc" | "/tmp")) {
             continue;
         }
-        let path = if directory == Path::new("/") {
-            PathBuf::from(format!("/proc/{qemu_pid}/root"))
+        let path = runtime_host_path(root, directory)?;
+        let metadata = if directory == Path::new("/") {
+            // The procfs root handle itself is a kernel-provided symlink.
+            fs::metadata(&path)?
         } else {
-            proc_root_path(qemu_pid, directory)?
+            fs::symlink_metadata(&path)?
         };
-        let metadata = fs::metadata(&path)?;
         if !metadata.is_dir() {
             eyre::bail!(
                 "nested QEMU minimal-root path {} changed from a directory",
@@ -1902,7 +2056,7 @@ fn validate_minimal_root_tree(
             );
         }
     }
-    let dev_root = PathBuf::from(format!("/proc/{qemu_pid}/root/dev"));
+    let dev_root = root.join("dev");
     for entry in fs::read_dir(&dev_root)? {
         let entry = entry?;
         let metadata = fs::symlink_metadata(entry.path())?;
@@ -1911,7 +2065,7 @@ fn validate_minimal_root_tree(
         }
     }
     for forbidden in ["run", "sys"] {
-        match fs::symlink_metadata(PathBuf::from(format!("/proc/{qemu_pid}/root/{forbidden}"))) {
+        match fs::symlink_metadata(root.join(forbidden)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Ok(_) => eyre::bail!("nested QEMU minimal root exposes forbidden `/{forbidden}`"),
             Err(error) => return Err(error.into()),
@@ -1930,6 +2084,113 @@ mod tests {
             rendered.contains(expected),
             "expected error to contain {expected:?}, got {rendered:?}"
         );
+    }
+
+    struct MinimalRootFixture {
+        root: tempfile::TempDir,
+        expected: BTreeMap<PathBuf, BTreeSet<OsString>>,
+    }
+
+    fn minimal_root_fixture() -> eyre::Result<MinimalRootFixture> {
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let manifest = format!(
+            "{INROU_RUNTIME_MANIFEST_HEADER}\n\
+             d - 0 0555 /\n\
+             d - 0 0555 /dev\n\
+             d - 0 0555 /inrou\n\
+             d - 0 0555 /inrou/bin\n\
+             f {digest} 0 0555 /inrou/bin/qemu\n\
+             f {digest} 0 0555 /inrou/bin/setpriv\n\
+             d - 0 0555 /inrou/disk\n\
+             f {digest} 0 0444 /inrou/disk/root\n\
+             d - 0 0555 /inrou/empty\n\
+             d - 0 0555 /inrou/input\n\
+             f {digest} 0 0444 /inrou/input/kernel\n\
+             d - 0 0555 /proc\n\
+             d - 0 0555 /tmp\n"
+        );
+        let runtime_entries = parse_runtime_manifest(&manifest)?;
+        let root = tempfile::tempdir()?;
+        for entry in &runtime_entries {
+            let path = runtime_host_path(root.path(), &entry.sandbox_path)?;
+            match entry.kind {
+                InrouRuntimeEntryKind::Directory => fs::create_dir_all(path)?,
+                InrouRuntimeEntryKind::Regular => fs::write(path, [])?,
+            }
+        }
+        let mut bindings = Vec::new();
+        for (sandbox_path, writable) in [
+            (INROU_NAMESPACE_KERNEL_PATH, false),
+            (INROU_NAMESPACE_ROOT_DISK_PATH, true),
+        ] {
+            let host_file =
+                fs::File::open(runtime_host_path(root.path(), Path::new(sandbox_path))?)?;
+            bindings.push(InrouNamespaceBinding {
+                identity: file_identity(&host_file.metadata()?, InrouFileKind::Regular),
+                host_file,
+                sandbox_path: PathBuf::from(sandbox_path),
+                writable,
+            });
+        }
+        let expected = expected_minimal_root_entries(&runtime_entries, &bindings)?;
+        Ok(MinimalRootFixture { root, expected })
+    }
+
+    #[test]
+    fn minimal_root_tree_accepts_files_empty_directories_and_file_bindings() -> eyre::Result<()> {
+        let fixture = minimal_root_fixture()?;
+        for file in [
+            INROU_NAMESPACE_QEMU_PATH,
+            INROU_NAMESPACE_SETPRIV_PATH,
+            INROU_NAMESPACE_KERNEL_PATH,
+            INROU_NAMESPACE_ROOT_DISK_PATH,
+        ] {
+            assert!(!fixture.expected.contains_key(Path::new(file)));
+            let path = Path::new(file);
+            assert!(fixture.expected[path.parent().unwrap()].contains(path.file_name().unwrap()));
+        }
+        assert!(fixture.expected[Path::new("/inrou/empty")].is_empty());
+        validate_minimal_root_tree_at(fixture.root.path(), &fixture.expected)
+    }
+
+    #[test]
+    fn minimal_root_tree_rejects_unexpected_and_missing_children() -> eyre::Result<()> {
+        let fixture = minimal_root_fixture()?;
+        let extra = fixture.root.path().join("inrou/unexpected");
+        fs::write(&extra, [])?;
+        let error = validate_minimal_root_tree_at(fixture.root.path(), &fixture.expected)
+            .expect_err("undeclared children must remain forbidden");
+        assert_error_contains(&error, "minimal-root directory /inrou contains");
+        fs::remove_file(extra)?;
+        fs::remove_file(fixture.root.path().join("inrou/bin/qemu"))?;
+        let error = validate_minimal_root_tree_at(fixture.root.path(), &fixture.expected)
+            .expect_err("regular files must remain required directory children");
+        assert_error_contains(&error, "minimal-root directory /inrou/bin contains");
+        Ok(())
+    }
+
+    #[test]
+    fn minimal_root_tree_rejects_directory_file_and_symlink_substitutions() -> eyre::Result<()> {
+        let fixture = minimal_root_fixture()?;
+        let directory = fixture.root.path().join("inrou/empty");
+        fs::remove_dir(&directory)?;
+        fs::write(&directory, [])?;
+        let error = validate_minimal_root_tree_at(fixture.root.path(), &fixture.expected)
+            .expect_err("a declared directory must not become a file");
+        assert_error_contains(
+            &error,
+            "minimal-root path /inrou/empty changed from a directory",
+        );
+        fs::remove_file(&directory)?;
+        let replacement = tempfile::tempdir()?;
+        std::os::unix::fs::symlink(replacement.path(), &directory)?;
+        let error = validate_minimal_root_tree_at(fixture.root.path(), &fixture.expected)
+            .expect_err("a declared directory must not redirect through a symlink");
+        assert_error_contains(
+            &error,
+            "minimal-root path /inrou/empty changed from a directory",
+        );
+        Ok(())
     }
 
     #[test]
@@ -2068,7 +2329,6 @@ mod tests {
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         for required in [
-            "--as-pid-1",
             "--clearenv",
             "--die-with-parent",
             "--new-session",
@@ -2080,11 +2340,127 @@ mod tests {
         ] {
             assert!(arguments.iter().any(|argument| argument == required));
         }
+        assert!(!arguments.iter().any(|argument| {
+            matches!(
+                argument.as_str(),
+                "--as-pid-1" | "--share-net" | "/run" | "/sys"
+            )
+        }));
+    }
+
+    fn namespace_process_chain_fixture() -> eyre::Result<Vec<InrouNamespaceProcessStatus>> {
+        [(100, 90, "100", 0), (101, 100, "101", 0), (102, 101, "102 1", 0), (103, 102, "103 7", 70_000)]
+            .into_iter()
+            .map(|(pid, parent, namespace_pids, uid)| {
+                parse_namespace_process_status(
+                    &format!("Pid:\t{pid}\nPPid:\t{parent}\nNSpid:\t{namespace_pids}\nUid:\t{uid} {uid} {uid} {uid}\nGid:\t{uid} {uid} {uid} {uid}\n"),
+                    pid,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn namespace_process_chain_retains_watchdog_and_pid1_reaper() -> eyre::Result<()> {
+        let mut statuses = namespace_process_chain_fixture()?;
+        validate_namespace_process_chain_status(90, &statuses)?;
+        // A prior setup child may consume PID2; QEMU must be a child of PID1,
+        // but its final namespace PID is not a launch-order constant.
+        assert_eq!(statuses[3].namespace_pids.last(), Some(&7));
+        for (process, namespace_pid) in statuses.iter_mut().zip([40, 41, 42, 43]) {
+            process.namespace_pids.insert(1, namespace_pid);
+        }
+        validate_namespace_process_chain_status(90, &statuses)?;
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_process_chain_rejects_reparenting_and_missing_reaper() -> eyre::Result<()> {
+        for index in 0..4 {
+            let mut statuses = namespace_process_chain_fixture()?;
+            statuses[index].parent_pid = 1;
+            let error = validate_namespace_process_chain_status(90, &statuses)
+                .expect_err("a reparented process must fail attestation");
+            assert_error_contains(&error, "exact parent relationship");
+        }
+        let mut statuses = namespace_process_chain_fixture()?;
+        statuses.remove(2);
+        let error = validate_namespace_process_chain_status(90, &statuses)
+            .expect_err("QEMU cannot replace the PID1 reaper");
+        assert_error_contains(&error, "exactly four processes");
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_process_chain_rejects_changed_root_custody() -> eyre::Result<()> {
+        for index in 0..3 {
+            for credentials in ["uid", "gid"] {
+                let mut statuses = namespace_process_chain_fixture()?;
+                if credentials == "uid" {
+                    statuses[index].uids[2] = 70_000;
+                } else {
+                    statuses[index].gids[2] = 70_000;
+                }
+                let error = validate_namespace_process_chain_status(90, &statuses)
+                    .expect_err("every supervisor credential must retain root custody");
+                assert_error_contains(&error, "retain root uid and gid");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_process_chain_rejects_invalid_pid_namespace_roles() -> eyre::Result<()> {
+        for (index, namespace_pids) in [
+            (1, vec![101, 1]),
+            (2, vec![102]),
+            (2, vec![102, 2]),
+            (3, vec![103, 1]),
+            (3, vec![103, 2, 3]),
+        ] {
+            let mut statuses = namespace_process_chain_fixture()?;
+            statuses[index].namespace_pids = namespace_pids;
+            let error = validate_namespace_process_chain_status(90, &statuses)
+                .expect_err("reaper and QEMU must occupy their exact PID namespace roles");
+            assert_error_contains(
+                &error,
+                "requires bubblewrap PID1 and a distinct QEMU child PID",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_process_status_rejects_ambiguous_proc_identity() -> eyre::Result<()> {
+        let valid = "Pid: 100\nPPid: 90\nNSpid: 100\nUid: 0 0 0 0\nGid: 0 0 0 0\n";
+        parse_namespace_process_status(valid, 100)?;
+        for rejected in [
+            valid.replace("Pid: 100\n", "Pid: 101\n"),
+            valid.replace("NSpid: 100", "NSpid: 100 0"),
+            valid.replace("NSpid: 100", "NSpid:"),
+            valid.replace("Uid: 0 0 0 0", "Uid: 0"),
+            format!("{valid}PPid: 90\n"),
+        ] {
+            assert!(parse_namespace_process_status(&rejected, 100).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_cgroup_requires_exact_distinct_process_chain() -> eyre::Result<()> {
+        let expected = [100, 101, 102, 103];
+        validate_namespace_cgroup_members(&expected, expected)?;
+        for members in [
+            vec![100, 101, 103],
+            vec![100, 101, 102, 103, 104],
+            vec![100, 101, 102, 104],
+        ] {
+            assert!(validate_namespace_cgroup_members(&members, expected).is_err());
+        }
         assert!(
-            !arguments
-                .iter()
-                .any(|argument| { matches!(argument.as_str(), "--share-net" | "/run" | "/sys") })
+            validate_namespace_cgroup_members(&[100, 101, 102, 102], [100, 101, 102, 102]).is_err()
         );
+        Ok(())
     }
 
     #[test]

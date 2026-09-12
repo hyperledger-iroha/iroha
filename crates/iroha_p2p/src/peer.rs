@@ -12,7 +12,7 @@ use crate::puzzle_work_admission::{
 use crate::{
     ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole,
     boilerplate::*,
-    preauth::InboundAuthCompletion,
+    preauth::{InboundAuthCompletion, PreauthDeadline},
     puzzle_work_admission::{SoranetPuzzleWorkAdmission, run_soranet_admission_work},
 };
 use bytes::{Buf, BufMut, BytesMut};
@@ -30,7 +30,7 @@ use iroha_crypto::soranet::{
 };
 #[cfg(test)]
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use message::*;
 use norito::{
     codec::{Decode, DecodeAll, Encode},
@@ -647,6 +647,7 @@ impl SoranetHandshakeConfig {
     pub(crate) fn admission_summary(&self) -> ChallengeAdmission {
         self.admission()
     }
+    #[cfg(test)]
     pub(crate) fn mint_challenge_ticket<R: TryCryptoRng>(
         &self,
         transcript_hash: &[u8; 32],
@@ -791,10 +792,20 @@ async fn mint_handshake_challenge(
     // gate bounds concurrent memory use independently from connection count.
     run_soranet_admission_work(
         config.puzzle_work_admission.outbound_mint_gate(),
-        move || {
-            let minted = config
-                .mint_challenge_ticket(&transcript_hash, &mut rng)
-                .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+        move |cancellation| {
+            let binding = config.puzzle_binding(&transcript_hash);
+            let ticket = puzzle::mint_ticket_while(
+                config.puzzle_params.as_ref(),
+                &binding,
+                config.effective_ticket_ttl(),
+                &mut rng,
+                || !cancellation.is_cancelled(),
+            )
+            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+            let minted = MintedChallenge {
+                credential: ticket.to_vec(),
+                admission: config.admission(),
+            };
             Ok((minted, rng))
         },
     )
@@ -821,7 +832,7 @@ async fn verify_handshake_challenge_with_gate(
 ) -> Result<ChallengeAdmission, Error> {
     // Argon2 verification must never run on a peer task, and every verifier
     // shares the bounded inbound work gate.
-    run_soranet_admission_work(gate, move || {
+    run_soranet_admission_work(gate, move |_cancellation| {
         config
             .verify_challenge_ticket(&ticket, &transcript_hash)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()))
@@ -921,7 +932,8 @@ struct SoranetTransportCertificateV5 {
     transport_public_key: iroha_crypto::PublicKey,
     relay_authentication_mldsa65_public_key: iroha_crypto::PublicKey,
 }
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::peer::SignedSoranetTransportCertificateV5")]
 struct SignedSoranetTransportCertificateV5 {
     certificate: SoranetTransportCertificateV5,
     node_signature: Vec<u8>,
@@ -937,7 +949,8 @@ struct SignedSoranetTransportProofV5 {
     statement: SoranetTransportProofStatementV5,
     transport_signature: Vec<u8>,
 }
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::peer::SignedSoranetTransportDelegationV5")]
 struct SignedSoranetTransportDelegationV5 {
     certificate: SignedSoranetTransportCertificateV5,
     proof: SignedSoranetTransportProofV5,
@@ -3201,13 +3214,14 @@ pub mod handles {
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         peer_addr: SocketAddr,
-        peer_id: iroha_data_model::prelude::PeerId,
+        peer_id: iroha_model_base::peer::PeerId,
         our_public_address: SocketAddr,
         key_pair: Arc<KeyPair>,
         connection_id: ConnectionId,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
         dial_timeout: Duration,
+        authentication_deadline: PreauthDeadline,
         network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -3273,6 +3287,7 @@ pub mod handles {
             peer,
             service_message_sender,
             idle_timeout,
+            authentication_deadline,
             inbound_auth_completion: None,
             post_capacity,
             outbound_frame_queue_limits,
@@ -3335,6 +3350,7 @@ pub mod handles {
             peer,
             service_message_sender,
             idle_timeout,
+            authentication_deadline: inbound_auth_completion.deadline(),
             inbound_auth_completion: Some(inbound_auth_completion),
             post_capacity,
             outbound_frame_queue_limits,
@@ -3730,6 +3746,26 @@ pub mod handles {
         };
         use norito::codec::{Decode, Encode};
         use tokio::sync::mpsc::error::TryRecvError;
+        #[test]
+        fn captured_original_test_payload_identities() {
+            crate::frame_identity_tests::test_payload_identity::<ConsensusSafetyMsg>(
+                "iroha_p2p::peer::handles::tests::ConsensusSafetyMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<ConsensusChunkMsg>(
+                "iroha_p2p::peer::handles::tests::ConsensusChunkMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<ConsensusPayloadMsg>(
+                "iroha_p2p::peer::handles::tests::ConsensusPayloadMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<PriorityMsg>(
+                "iroha_p2p::peer::handles::tests::PriorityMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<BudgetRouteMsg>(
+                "iroha_p2p::peer::handles::tests::BudgetRouteMsg",
+            );
+        }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::ConsensusSafetyMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusSafetyMsg;
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusSafetyMsg {
@@ -3742,6 +3778,8 @@ pub mod handles {
                 Topic::ConsensusSafety
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::ConsensusChunkMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusChunkMsg;
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusChunkMsg {
@@ -3754,6 +3792,8 @@ pub mod handles {
                 Topic::ConsensusChunk
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::ConsensusPayloadMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusPayloadMsg;
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusPayloadMsg {
@@ -3766,6 +3806,8 @@ pub mod handles {
                 Topic::ConsensusPayload
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::PriorityMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct PriorityMsg {
             priority: Priority,
@@ -3783,6 +3825,8 @@ pub mod handles {
                 self.priority
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::BudgetRouteMsg")]
         #[derive(Clone, Debug, Decode, Encode, PartialEq, Eq)]
         enum BudgetRouteMsg {
             Gossip,
@@ -4223,7 +4267,7 @@ mod run {
             topic_frame_caps: crate::network::TopicFrameCaps,
             byte_budget: InboundSourceByteBudget,
         ) -> Result<Self, Error> {
-            let framed_schema = <T as ncore::NoritoSerialize>::schema_hash();
+            let framed_schema = norito::schema::identity::frame_hash::<T>();
             let align = ncore::archived_payload_align::<T>();
             let framed_padding = if align <= 1 {
                 0
@@ -5121,6 +5165,7 @@ mod run {
             peer,
             service_message_sender,
             idle_timeout,
+            authentication_deadline,
             inbound_auth_completion,
             post_capacity,
             outbound_frame_queue_limits,
@@ -5139,17 +5184,9 @@ mod run {
         async {
             // Try to do handshake process
             let hs_start = Instant::now();
-            let handshake_result = if let Some(completion) = inbound_auth_completion.as_ref() {
-                completion
-                    .deadline()
-                    .run(Some(idle_timeout), peer.handshake())
-                    .await
-                    .map_err(|_| ())
-            } else {
-                tokio::time::timeout(idle_timeout, peer.handshake())
-                    .await
-                    .map_err(|_| ())
-            };
+            let handshake_result = authentication_deadline
+                .run(None, peer.handshake())
+                .await;
             let ready_peer = match handshake_result {
                 Ok(Ok(ready)) => {
                     let ms = u64::try_from(hs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -5175,7 +5212,7 @@ mod run {
                     return;
                 },
                 Err(_) => {
-                    iroha_logger::warn!(timeout=?idle_timeout, "Other peer has been idle during handshake");
+                    iroha_logger::warn!(?authentication_deadline, "Peer exhausted its authentication deadline");
                     HANDSHAKE_FAILURES.fetch_add(1, Ordering::Relaxed);
                     HSE_TIMEOUT.fetch_add(1, Ordering::Relaxed);
                     return;
@@ -6494,6 +6531,7 @@ mod run {
         pub peer: P,
         pub service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         pub idle_timeout: Duration,
+        pub authentication_deadline: PreauthDeadline,
         pub inbound_auth_completion: Option<InboundAuthCompletion>,
         pub post_capacity: usize,
         pub outbound_frame_queue_limits: OutboundFrameQueueLimits,
@@ -6610,7 +6648,7 @@ mod run {
                 buffer: BytesMut::with_capacity(capacity),
                 decode_scratch: Vec::new(),
                 pending: VecDeque::new(),
-                framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
+                framed_schema: norito::schema::identity::frame_hash::<M>(),
                 framed_padding,
                 max_frame_bytes,
                 topic_frame_caps,
@@ -8314,8 +8352,26 @@ mod run {
             }
         }
     }
+    #[cfg(test)]
+    pub(crate) fn assert_captured_p2p_message<T>(owner: &str, variant: &str, value: T)
+    where
+        T: Clone + ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
+    {
+        use crate::frame_identity_tests::shapes;
+        shapes(owner, &format!("{variant}_data"), &Message::Data(value));
+        shapes(owner, &format!("{variant}_ping"), &Message::<T>::Ping);
+        shapes(owner, &format!("{variant}_pong"), &Message::<T>::Pong);
+    }
+    #[test]
+    fn captured_original_p2p_scalar_message_frames() {
+        assert_captured_p2p_message("message_u32", "scalar", 0x12345678_u32);
+        assert_captured_p2p_message("message_u64", "scalar", 0x0123456789abcdef_u64);
+    }
+    #[cfg(test)]
+    mod payload_codec_tests;
     /// Either message or ping
     #[derive(Encode, Decode, Clone, Debug)]
+    #[norito(decode_from_slice)]
     enum Message<T> {
         Data(T),
         Ping,
@@ -8390,25 +8446,12 @@ mod run {
             )
         }
     }
-    impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
-    where
-        T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
-    {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            use std::borrow::Cow;
-            let min_size = ncore::archived_payload_size::<Self>();
-            let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-                let mut padded = Vec::with_capacity(min_size);
-                padded.extend_from_slice(bytes);
-                padded.resize(min_size, 0);
-                Cow::Owned(padded)
-            } else {
-                Cow::Borrowed(bytes)
-            };
-            let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-            let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-            let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
-            Ok((value, bytes.len()))
+    impl<T: norito::NoritoSchema> norito::NoritoSchema for Message<T> {
+        fn nominal_name() -> String {
+            norito::schema::identity::generic_name(
+                "iroha_p2p::peer::run::Message",
+                &[T::nominal_name()],
+            )
         }
     }
     fn norito_frame_prefix_len<T>() -> Option<usize> {
@@ -8596,6 +8639,26 @@ mod run {
             time::Duration,
         };
         use tokio::io::{AsyncRead, AsyncWrite};
+        #[test]
+        fn captured_original_test_payload_identities() {
+            crate::frame_identity_tests::test_payload_identity::<Dummy>(
+                "iroha_p2p::peer::run::tests::Dummy",
+            );
+            crate::frame_identity_tests::test_payload_identity::<Blob>(
+                "iroha_p2p::peer::run::tests::Blob",
+            );
+            crate::frame_identity_tests::test_payload_identity::<GuardedBlob>(
+                "iroha_p2p::peer::run::tests::GuardedBlob",
+            );
+            crate::frame_identity_tests::test_payload_identity::<PredecodeGuardedBlob>(
+                "iroha_p2p::peer::run::tests::PredecodeGuardedBlob",
+            );
+            crate::frame_identity_tests::test_payload_identity::<RoutedMsg>(
+                "iroha_p2p::peer::run::tests::RoutedMsg",
+            );
+        }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::Dummy")]
         #[derive(Encode, Decode, Clone, Debug)]
         struct Dummy;
         impl ClassifyTopic for Dummy {}
@@ -8603,6 +8666,70 @@ mod run {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
+        }
+        struct PendingHandshake;
+        #[async_trait::async_trait]
+        impl<E: Enc> Handshake<E> for PendingHandshake {
+            async fn handshake(self) -> Result<Ready<E>, crate::Error> {
+                std::future::pending().await
+            }
+        }
+        impl<E: Enc> Entrypoint<E> for PendingHandshake {
+            fn connection_id(&self) -> ConnectionId {
+                73
+            }
+            fn log_description(&self) -> String {
+                "controlled pending authentication".to_owned()
+            }
+        }
+        #[tokio::test(start_paused = true)]
+        async fn peer_run_authentication_deadline_precedes_long_idle_and_retires_exact_connection()
+        {
+            let (service_tx, mut service_rx) = mpsc::channel::<ServiceMessage<Dummy>>(2);
+            let authentication_deadline = PreauthDeadline::from_now(Duration::from_secs(35))
+                .expect("authentication deadline");
+            let task = tokio::spawn(run::<Dummy, ChaCha20Poly1305, _>(RunPeerArgs {
+                peer: PendingHandshake,
+                service_message_sender: service_tx,
+                idle_timeout: Duration::from_secs(300),
+                authentication_deadline,
+                inbound_auth_completion: None,
+                post_capacity: 1,
+                outbound_frame_queue_limits: OutboundFrameQueueLimits::new(1, 1, 1, 1),
+                outbound_post_byte_budgets: OutboundPostByteBudgets::new(1, 1, 0, 1)
+                    .expect("outbound budget"),
+                inbound_frame_byte_budgets: InboundFrameByteBudgets::new(1, 1, 0, 1)
+                    .expect("inbound budget"),
+                max_frame_bytes: 1,
+                quic_datagrams_enabled: false,
+                quic_datagram_max_payload_bytes: 0,
+            }));
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(34)).await;
+            assert!(
+                !task.is_finished(),
+                "authentication remains owned before its deadline"
+            );
+            assert!(service_rx.try_recv().is_err());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .expect("authentication must not wait for the 300-second idle timeout")
+                .expect("peer task must exit without panic");
+            assert!(
+                matches!(
+                    service_rx.recv().await,
+                    Some(ServiceMessage::Terminated(Terminated {
+                        peer: None,
+                        conn_id: 73
+                    }))
+                ),
+                "the expired unauthenticated tenure must publish its exact termination witness"
+            );
+            assert!(
+                service_rx.try_recv().is_err(),
+                "termination is published exactly once"
+            );
         }
         #[test]
         fn authenticated_via_survives_clone_mapping_and_into_parts() {
@@ -9167,6 +9294,8 @@ mod run {
             assert_eq!(source_budget.retained_total(), 0);
             assert_eq!(high_budget.retained_total(), 0);
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::Blob")]
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
         impl ClassifyTopic for Blob {}
@@ -9175,6 +9304,8 @@ mod run {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::GuardedBlob")]
         #[derive(Encode, Decode, Clone, Debug)]
         struct GuardedBlob(Vec<u8>);
         impl ClassifyTopic for GuardedBlob {
@@ -9194,6 +9325,8 @@ mod run {
         }
         static PREDECODE_POLICY_CALLS: std::sync::atomic::AtomicUsize =
             std::sync::atomic::AtomicUsize::new(0);
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::PredecodeGuardedBlob")]
         #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
         struct PredecodeGuardedBlob(Vec<u8>);
         impl ClassifyTopic for PredecodeGuardedBlob {
@@ -9227,6 +9360,8 @@ mod run {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::RoutedMsg")]
         #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
         enum RoutedMsg {
             ConsensusSafety(u8),
@@ -13639,7 +13774,7 @@ mod state {
     #[allow(clippy::struct_excessive_bools)]
     pub(super) struct Connecting {
         pub peer_addr: SocketAddr,
-        pub peer_id: iroha_data_model::prelude::PeerId,
+        pub peer_id: iroha_model_base::peer::PeerId,
         pub our_public_address: SocketAddr,
         pub key_pair: Arc<KeyPair>,
         pub connection_id: ConnectionId,
@@ -14116,7 +14251,7 @@ mod state {
     /// Peer that is being connected to.
     pub(super) struct ConnectedTo {
         our_public_address: SocketAddr,
-        expected_peer_id: iroha_data_model::prelude::PeerId,
+        expected_peer_id: iroha_model_base::peer::PeerId,
         key_pair: Arc<KeyPair>,
         connection: Connection,
         network_id: iroha_data_model::NetworkId,
@@ -14132,7 +14267,7 @@ mod state {
         #[cfg(test)]
         pub(super) fn for_transport_delegation_test(
             our_public_address: SocketAddr,
-            expected_peer_id: iroha_data_model::prelude::PeerId,
+            expected_peer_id: iroha_model_base::peer::PeerId,
             key_pair: Arc<KeyPair>,
             connection: Connection,
             network_id: iroha_data_model::NetworkId,
@@ -14452,7 +14587,7 @@ mod state {
     #[cfg(test)]
     pub(super) struct SendKeyInit<E: Enc> {
         pub(super) our_public_address: SocketAddr,
-        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
+        pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) key_pair: KeyPair,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
@@ -14468,7 +14603,7 @@ mod state {
     /// Peer that needs to send key.
     pub(super) struct SendKey<E: Enc> {
         pub(super) our_public_address: SocketAddr,
-        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
+        pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) key_pair: Arc<KeyPair>,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
@@ -14589,7 +14724,7 @@ mod state {
     /// Peer that needs to get key.
     pub struct GetKey<E: Enc> {
         pub(super) connection: Connection,
-        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
+        pub(super) expected_peer_id: Option<iroha_model_base::peer::PeerId>,
         pub(super) cryptographer: Cryptographer<E>,
         pub(super) network_id: iroha_data_model::NetworkId,
         pub(super) soranet_transport_binding: [u8; iroha_crypto::Hash::LENGTH],
@@ -14680,7 +14815,7 @@ mod state {
                 .map_err(crate::Error::Keys)?;
             signature.verify(&remote_pub_key, &payload)?;
             if let Some(expected_peer_id) = expected_peer_id {
-                let found_peer_id = iroha_data_model::prelude::PeerId::from(remote_pub_key.clone());
+                let found_peer_id = iroha_model_base::peer::PeerId::from(remote_pub_key.clone());
                 if found_peer_id != expected_peer_id {
                     return Err(crate::Error::HandshakePeerMismatch {
                         expected: expected_peer_id,
@@ -15653,3 +15788,6 @@ impl Connection {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) use run::assert_captured_p2p_message;

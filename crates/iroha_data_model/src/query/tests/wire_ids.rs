@@ -169,3 +169,101 @@ fn installed_query_registry_rejects_alternate_id_for_builtin_type() {
     let installed = QueryRegistry::new().register_with_id::<DomainQuery>("installed.domain");
     builtin.assert_compatible_with(&installed);
 }
+
+// A registered query is a bare payload inside the registry envelope. It need not
+// expose a typed frame serializer or consult a frame schema during decoding.
+#[derive(Debug, PartialEq)]
+struct PayloadOnlyQuery(u32);
+
+impl seal::Query for PayloadOnlyQuery {}
+
+impl Query for PayloadOnlyQuery {
+    type Item = QueryOutputBatchBox;
+}
+
+impl norito::core::SerializePayload for PayloadOnlyQuery {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::SerializePayload::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(4)
+    }
+}
+
+impl<'de> norito::core::DeserializePayload<'de> for PayloadOnlyQuery {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("validated query payload")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        u32::try_deserialize(archived.cast()).map(Self)
+    }
+}
+
+#[test]
+fn registry_preserves_bare_query_encoding_without_a_frame_serializer() {
+    const WIRE_ID: &str = "test.bare-query.v1";
+    let query = PayloadOnlyQuery(0x1020_3040);
+    let payload = query.encode();
+    let registry = QueryRegistry::new().register_with_id::<PayloadOnlyQuery>(WIRE_ID);
+    let decoded = registry.decode(WIRE_ID, &payload).unwrap().unwrap();
+    assert_eq!(decoded.erased_as_any().downcast_ref(), Some(&query));
+    assert_eq!(decoded.encode_bytes(), payload);
+    assert_eq!(decoded.encoded_payload_len_exact(), Some(payload.len()));
+    let mut streamed = Vec::new();
+    let used = decoded
+        .encode_payload_to(&mut norito::core::Encoder::new(&mut streamed))
+        .unwrap();
+    assert_eq!(used, payload.len());
+    assert_eq!(streamed, payload);
+    let mut malformed = payload;
+    malformed.push(0xff);
+    assert!(matches!(
+        registry.decode(WIRE_ID, &malformed).unwrap(),
+        Err(norito::Error::LengthMismatch)
+    ));
+}
+
+#[test]
+fn registry_entry_checks_all_type_and_wire_namespace_pairs() {
+    let registry =
+        QueryRegistry::new().register_with_id::<ErasedIterQuery<Domain>>("fixture.domain");
+    let entry = QueryRegistryEntry {
+        type_name: "left.type",
+        wire_id: "left.wire",
+        ctor: registry.entries[0].ctor,
+    };
+    for (type_name, wire_id, expected) in [
+        ("left.type", "other.wire", true),
+        ("other.type", "left.type", true),
+        ("left.wire", "other.wire", true),
+        ("other.type", "left.wire", true),
+        ("other.type", "other.wire", false),
+    ] {
+        let other = QueryRegistryEntry {
+            type_name,
+            wire_id,
+            ctor: entry.ctor,
+        };
+        assert_eq!(
+            entry.collides_with(&other),
+            expected,
+            "{type_name}/{wire_id}"
+        );
+        assert_eq!(
+            other.collides_with(&entry),
+            expected,
+            "collision must be symmetric"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "query registry key collision")]
+fn registry_rejects_previous_wire_id_equal_to_new_type_name() {
+    type AccountQuery = ErasedIterQuery<crate::account::Account>;
+    let _ = QueryRegistry::new()
+        .register_with_id::<ErasedIterQuery<Domain>>(std::any::type_name::<AccountQuery>())
+        .register_with_id::<AccountQuery>("fixture.account");
+}

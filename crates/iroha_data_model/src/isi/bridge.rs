@@ -1,10 +1,21 @@
 //! Bridge proof ingestion instructions.
 use super::*;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 /// Activation update for one exact governed SCCP route.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct SccpSetRouteActivationV1 {
     /// Exact route to update.
@@ -18,8 +29,20 @@ pub struct SccpSetRouteActivationV1 {
     pub inbound_finality_cutoff: Option<crate::bridge::SccpInboundFinalityCutoffV1>,
 }
 /// Append-only native trust-anchor update for one exact governed SCCP lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct SccpAdvanceLaneTrustAnchorV1 {
     /// Exact lane whose current checkpoint advances.
@@ -30,8 +53,20 @@ pub struct SccpAdvanceLaneTrustAnchorV1 {
     pub next: crate::bridge::SccpNativeTrustAnchorV1,
 }
 /// First native trust-anchor installation for one exact governed SCCP lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct SccpInitializeLaneTrustAnchorV1 {
     /// Exact lane whose absent checkpoint is initialized.
@@ -42,8 +77,19 @@ pub struct SccpInitializeLaneTrustAnchorV1 {
     pub initial: crate::bridge::SccpNativeTrustAnchorV1,
 }
 /// Atomic registration input for one exact staged route.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct SccpRegisterRouteV1 {
     /// Complete immutable route, necessarily staged at registration.
@@ -52,8 +98,19 @@ pub struct SccpRegisterRouteV1 {
     pub native_trust_anchor: Option<crate::bridge::SccpNativeTrustAnchorV1>,
 }
 /// Atomic cutover from one immutable route revision to its staged successor.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct SccpSwitchRouteRevisionV1 {
     /// Currently selected immutable revision.
@@ -71,8 +128,19 @@ pub struct SccpSwitchRouteRevisionV1 {
     pub successor_next: crate::bridge::SccpRouteActivationV1,
 }
 /// Closed atomic SCCP route-governance action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "action", content = "route")]
 #[expect(
@@ -107,9 +175,20 @@ pub enum SccpRouteGovernanceActionV1 {
 /// The exact genesis-derived network identity is part of the canonical
 /// preimage, so an approval cannot be replayed on a network with the same
 /// display label or rebound to a different registry action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 pub struct SccpRouteGovernanceAnchorV1 {
@@ -292,10 +371,7 @@ impl SccpRouteGovernanceActionV1 {
 }
 isi! {
     /// Submit a bridge proof artifact for verification and registry retention.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::bridge::SubmitBridgeProof")]
     pub struct SubmitBridgeProof {
@@ -330,10 +406,7 @@ impl SubmitBridgeProof {
 }
 isi! {
     /// Record a bridge receipt and emit a typed bridge event.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::bridge::RecordBridgeReceipt")]
     pub struct RecordBridgeReceipt {
@@ -353,10 +426,7 @@ isi! {
     ///
     /// Core and the default executor reject this instruction unconditionally;
     /// route actions execute only from an exact due Parliament certificate.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::bridge::ApplySccpRouteGovernance")]
     pub struct ApplySccpRouteGovernance {
@@ -379,14 +449,11 @@ isi! {
     /// record digest, making observation updates an explicit compare-and-swap.
     /// Submission is permissionless because every persisted bit is derived
     /// from native finality and the exact governed dual-account openings.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1")]
     pub struct SubmitSccpTonBreakerObservationV1 {
-        /// Exact governed TonMainnet route revision being observed.
+        /// Exact governed `TonMainnet` route revision being observed.
         pub route_key: crate::bridge::SccpRouteKeyV1,
         /// Zero for absence, otherwise the complete prior observation digest.
         pub expected_prior_observation_digest: [u8; 32],
@@ -510,10 +577,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitSccpTonBreakerObservationV1
 }
 isi! {
     /// Record an SCCP message payload for block-level commitment anchoring.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::bridge::RecordSccpMessage")]
     pub struct RecordSccpMessage {
@@ -877,9 +941,9 @@ mod tests {
             BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeReceipt,
             BridgeTransparentProof, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
         },
-        nexus::LaneId,
         proof::ProofBox,
     };
+    use iroha_model_base::topology::LaneId;
     fn proof() -> BridgeProof {
         BridgeProof {
             range: BridgeProofRange {
@@ -988,7 +1052,7 @@ mod tests {
             ),
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn record_bridge_receipt_json_rejects_unknown_instruction_fields() {
         let instruction = RecordBridgeReceipt::new(receipt());
@@ -1006,7 +1070,7 @@ mod tests {
             "signed receipt instruction JSON must reject unknown fields"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn ton_breaker_submission_json_is_closed() {
         let instruction = ton_breaker_submission();

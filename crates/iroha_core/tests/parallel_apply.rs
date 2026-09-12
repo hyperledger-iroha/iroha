@@ -9,6 +9,9 @@ use iroha_core::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use snapshots::assert_events;
@@ -288,6 +291,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         .get(&a_coin)
         .map_or_else(Quantity::zero, |v| v.clone().into_inner());
     assert_eq!(bal_seq, bal_par, "final balances must match");
+    assert_eq!(bal_seq, Quantity::from(10_u64), "the mint must be applied");
 }
 fn run_block_and_events(
     parallel_apply: bool,
@@ -368,9 +372,14 @@ fn run_block_and_events(
     // Execute and commit
     let mut sb = state.block(block.header());
     let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
+    let errors: Vec<_> = vb.as_ref().errors().collect();
+    assert!(
+        errors.is_empty(),
+        "parity fixture transactions failed: {errors:?}"
+    );
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
-    drop(sb);
+    sb.commit().expect("commit parity fixture state");
     (events, state)
 }
 // event_list_json moved to snapshot helpers; removed.
@@ -428,6 +437,8 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     };
     assert_eq!(bal(&state_seq, &a_coin), bal(&state_par, &a_coin));
     assert_eq!(bal(&state_seq, &b_coin), bal(&state_par, &b_coin));
+    assert_eq!(bal(&state_seq, &a_coin), Quantity::from(62_u64));
+    assert_eq!(bal(&state_seq, &b_coin), Quantity::from(12_u64));
 }
 #[test]
 fn events_snapshot_kv_and_nft_match_between_modes() {
@@ -607,10 +618,11 @@ fn owner_transfer_domain_and_asset_def_parity() {
         .expect("domain exists")
         .owned_by()
         .clone();
-    // With parallel apply, domain/asset ownership updates may land on different lanes;
-    // ensure both updates target the intended owner instead of insisting on order parity.
-    // Ownership transfer order is not deterministic across lanes; ensure parity instead of exact owner.
     assert_eq!(dom_owner_seq, dom_owner_par, "domain owners must match");
+    assert_eq!(
+        dom_owner_seq, bob_id,
+        "domain ownership must transfer to Bob"
+    );
     let ad_owner_seq = state_seq
         .view()
         .world()
@@ -628,5 +640,9 @@ fn owner_transfer_domain_and_asset_def_parity() {
     assert_eq!(
         ad_owner_seq, ad_owner_par,
         "asset definition owners must match"
+    );
+    assert_eq!(
+        ad_owner_seq, bob_id,
+        "asset definition ownership must transfer to Bob"
     );
 }

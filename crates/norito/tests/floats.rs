@@ -15,7 +15,7 @@ fn f32_roundtrip() {
         // For NaN bit patterns, direct equality is false; compare bits
         if v.is_nan() {
             let arch = from_bytes::<f32>(&bytes).unwrap();
-            let got = <f32 as NoritoDeserialize>::deserialize(arch);
+            let got = <f32 as DeserializePayload>::deserialize(arch);
             assert!(got.is_nan());
         } else {
             assert_eq!(v, decoded);
@@ -36,7 +36,7 @@ fn f64_roundtrip() {
         let decoded: f64 = decode_from_bytes(&bytes).expect("decode f64");
         if v.is_nan() {
             let arch = from_bytes::<f64>(&bytes).unwrap();
-            let got = <f64 as NoritoDeserialize>::deserialize(arch);
+            let got = <f64 as DeserializePayload>::deserialize(arch);
             assert!(got.is_nan());
         } else {
             assert_eq!(v, decoded);

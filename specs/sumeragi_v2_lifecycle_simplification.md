@@ -533,17 +533,28 @@ so an unrelated later malformed family cannot poison the exact ordinary head;
 an exact recovered family winner alone retains its queue witness and enters
 Decision-Fetch Phase A without dequeue.
 
-For a selected current-height Certified-Serve request, the driver arms output
-fail-stop before authentication, durable negative staging, or service
-preparation. Accepted, rejected, and service outcomes move beside the exact
-dequeued carrier into the opaque handoff. Capacity backpressure completes the
-local fail-stop scope but retains both the physical cut and the already
-installed off-queue debt, so the Serve barrier cannot be leapfrogged. Every
-post-preparation error closes output while the service guard is still held, and
-dropping an unconsumed handoff closes output before its admission or carrier is
-released. The activated ordinary lifecycle owner consumes that handoff through
-one production runner tail; PendingKura admits only its restricted decided-lane
-path. A runner-owned lifecycle height
+Before a current-height Certified-Serve request retains a payload or reserves
+worker capacity, its ingress census checks the exact LedgerV1 frame, complete
+Ready index and concrete registry. Admission proceeds with an empty Ready
+census or the same request's sole Ready Serve incumbent. Other Ready work,
+including ordinary Broadcast rows, keeps the request in ingress until that work
+runs; checking only for a Ready ProducerTurn is insufficient for the Serve-only
+scheduler. The ProducerTurn adjacency/debt check still applies when it is oldest.
+Admission, Ready-attestation and scheduler failures retain their typed cause in
+the log before the reservation's fail-stop scope closes output.
+
+For an authenticated current-height Certified-Serve request, worker-capacity
+reservation arms the fail-stop scope before payload and LedgerV1 publication.
+The exact ingress winner stays retained until the complete Ready census yields
+its typed execution lease and worker dispatch passes preflight. Capacity
+backpressure returns a target-bound release-generation wait without dequeue.
+A proven pre-publication rollback completes the reservation's typed abort;
+post-publication failures close output before the held capacity is released.
+Rejected or ordinary service outcomes instead move beside their exact dequeued
+carrier into the opaque ordinary handoff, whose unconsumed drop closes output.
+The activated ordinary lifecycle owner consumes that handoff through one
+production runner tail; PendingKura admits only its restricted decided-lane path.
+A runner-owned lifecycle height
 driver also preserves the real Completion/Runtime/Ingress cursor order and
 derives output authority from the retained services for the whole ordinary
 batch. `run_inner` now transfers every ordinary, Applied, Snapshot, and
@@ -1536,6 +1547,20 @@ unchanged, while `SourceRetained` or a service error returns the same move-only
 pending owner for a later attempt. This is the implementation cut for the
 formal retained-control action: repeated packets preserve one logical wire
 identity without resurrecting lifecycle state.
+A periodic CommitQC Broadcast can receive its durable lifecycle ordinal after
+its already-Ready live Decision Apply, even though both effects retain the
+same earlier periodic runtime owner. Delayed admission may therefore retain
+one exact paired Apply suffix. The executor verifies the complete pending
+output census, effect binding and adjacent periodic ownership before allowing
+Apply dispatch; an unrelated, extra or substituted effect remains blocking.
+If runtime commands are already queued, only the finite FIFO whose complete
+ownership precedes Apply may drain, one bounded turn at a time, while the
+Broadcast stays deferred and the paired Apply remains retained or explicitly
+parked. Delayed output without that suffix cannot authorize this drain, and
+any queue owner at or after Apply blocks it. The runner tries this attested
+predecessor drain before yielding for Completion. Once the FIFO is empty,
+worker publication consumes the exact retained suffix under the queue lock
+and installs its successor-output attestation before waking the worker.
 An authenticated control packet that is older than an already-fsynced
 monotone view or Decision cut likewise settles as a WAL-obsolete stutter;
 current-view slot and identity conflicts remain fail-closed.

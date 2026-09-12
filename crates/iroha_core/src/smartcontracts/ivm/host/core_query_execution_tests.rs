@@ -1,10 +1,28 @@
+fn ledger_reader_world_for_core_query_tests(mut world: World, authority: &AccountId) -> World {
+    if world.accounts.view().get(authority).is_none() {
+        let (id, account) = iroha_data_model::IntoKeyValue::into_key_value(
+            Account::new(authority.clone()).build(authority),
+        );
+        world.accounts.insert(id, account);
+    }
+    world.account_permissions.insert(
+        authority.clone(),
+        [Permission::from(
+            iroha_executor_data_model::permission::query::CanReadAllLedgerData,
+        )]
+        .into_iter()
+        .collect(),
+    );
+    world
+}
+
 #[test]
 fn execute_query_syscall_returns_norito_response_and_gas() {
-    let world = World::new();
+    let authority: AccountId = fixture_account("alice");
+    let world = ledger_reader_world_for_core_query_tests(World::new(), &authority);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
-    let authority: AccountId = fixture_account("alice");
     let view = state.view();
     let mut host = CoreHostImpl::new(authority.clone());
     host.set_query_state(&view);
@@ -216,6 +234,12 @@ seiyaku DedicatedQueryContract {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
         }),
     );
+    // This positive fixture reads NFTs and an unrelated missing account through the
+    // production native query gate, which requires the ledger-wide read permission.
+    tx.world_mut_for_testing().add_account_permission(
+        &authority,
+        Permission::from(iroha_executor_data_model::permission::query::CanReadAllLedgerData),
+    );
     iroha_data_model::isi::SetContractAlias::bind(contract_address.clone(), alias.clone(), None)
         .execute(&authority, &mut tx)
         .expect("bind contract alias");
@@ -419,6 +443,20 @@ seiyaku DedicatedQueryContract {
     assert_eq!(instance_out.contract_address, contract_address);
     assert_eq!(instance_out.code_hash, code_hash);
     assert_eq!(instance_out.contract_alias, Some(alias.clone()));
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &instance_out,
+        "iroha_data_model::smart_contract::model::ContractInstance",
+    );
+    assert_eq!(
+        contract_tlv.payload,
+        norito::encode_canonical(&instance_out).expect("shared instance owner frame"),
+    );
+    let mut wrong_owner = contract_tlv.payload.to_vec();
+    wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<ContractAddress>());
+    assert!(matches!(
+        norito::decode_from_bytes::<ContractInstance>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch),
+    ));
     let alias_name: Name = alias.as_ref().parse().expect("alias name pointer");
     let alias_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&alias_name));
     vm.set_register(10, alias_ptr);
@@ -636,7 +674,7 @@ fn core_query_page_is_bounded_ordered_and_validates_arguments() {
         .iter()
         .map(|id| build_fixture_account(id, &authority))
         .collect::<Vec<_>>();
-    let world = World::with([], accounts, []);
+    let world = ledger_reader_world_for_core_query_tests(World::with([], accounts, []), &authority);
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),

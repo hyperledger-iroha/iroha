@@ -9,7 +9,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 use iroha_torii::Torii;
 use std::sync::Arc;
 use tower::ServiceExt as _;
@@ -47,6 +47,7 @@ async fn webhooks_endpoints_exposed_by_default() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
+        build_identity_test_fixture::build_identity(),
         chain_id,
         network_id,
         kiso,
@@ -147,6 +148,7 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
+        build_identity_test_fixture::build_identity(),
         chain_id,
         network_id,
         kiso,
@@ -191,3 +193,6 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

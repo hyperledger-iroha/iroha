@@ -28,6 +28,10 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::trigger_completed::model::TriggerCompletedEvent"
+    )]
     pub struct TriggerCompletedEvent {
         trigger_id: TriggerId,
         trigger_execution_hash: HashOf<TransactionEntrypoint>,
@@ -39,6 +43,10 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::trigger_completed::model::TriggerCompletedOutcome"
+    )]
     pub enum TriggerCompletedOutcome {
         Success,
         Failure(String),
@@ -49,6 +57,10 @@ mod model {
         derive(iroha_ffi::FfiType)
     )]
     #[repr(u8)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::trigger_completed::model::TriggerCompletedOutcomeType"
+    )]
     pub enum TriggerCompletedOutcomeType {
         Success,
         Failure,
@@ -80,12 +92,16 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::trigger_completed::model::TriggerCompletedEventFilter"
+    )]
     pub struct TriggerCompletedEventFilter {
         pub(super) trigger_id: Option<TriggerId>,
         pub(super) outcome_type: Option<TriggerCompletedOutcomeType>,
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     TriggerCompletedEvent,
     TriggerCompletedOutcome,
@@ -260,7 +276,7 @@ mod tests {
         assert_eq!(decoded.trigger_execution_hash(), &trigger_execution_hash);
         assert_eq!(*decoded.step_index(), 3);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn trigger_completed_event_json_roundtrip_preserves_invocation_identity() {
         let trigger_id: TriggerId = "trigger".parse().expect("Valid");
@@ -277,7 +293,7 @@ mod tests {
         assert_eq!(decoded.trigger_execution_hash(), &trigger_execution_hash);
         assert_eq!(*decoded.step_index(), 2);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn trigger_completed_event_json_rejects_non_base64_payload_without_panicking() {
         let err = norito::json::from_json::<TriggerCompletedEvent>(r#""not valid base64!!!""#)
@@ -287,7 +303,7 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn trigger_completed_event_json_rejects_invalid_norito_payload_without_panicking() {
         let err = norito::json::from_json::<TriggerCompletedEvent>(r#""AQIDBA==""#)
@@ -297,7 +313,7 @@ mod tests {
             "decode failure should produce a diagnostic"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn trigger_completed_event_json_rejects_non_string_payload_without_panicking() {
         let err = norito::json::from_json::<TriggerCompletedEvent>(r#"{"event":"completed"}"#)
@@ -316,3 +332,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

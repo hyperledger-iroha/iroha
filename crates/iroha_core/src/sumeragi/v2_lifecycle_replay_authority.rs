@@ -62,7 +62,8 @@ use crate::sumeragi::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::block::consensus_v2 as wire;
+use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use std::{mem::size_of, sync::Arc};
 const REPLAY_AUTHORITY_FORMAT_VERSION: u16 = 1;
@@ -75,6 +76,10 @@ const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
 ///
 /// The fields are private so neither decoded wire values nor an arbitrary
 /// source can become runtime authority through a parts API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::LifecycleReplayAuthorityV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(in crate::sumeragi) struct LifecycleReplayAuthorityV1 {
@@ -106,6 +111,32 @@ impl LifecycleReplayAuthorityV1 {
                 ..
             })
         )
+    }
+    /// Select an obsolete ordinary execution without accepting future tags.
+    /// A Decision discards unrelated work even in its current generation. The
+    /// canonical view/generation order accounts for generation resetting when
+    /// a TC advances the view. This
+    /// predicate grants no retirement authority: the complete body census must
+    /// authenticate the source and immutable frame before its owner is retired.
+    pub(super) fn ordinary_body_is_obsolete_for_decision(
+        &self,
+        current: crate::sumeragi::v2_core::EventTag,
+        is_decided_body: bool,
+    ) -> bool {
+        let LifecycleReplaySourceV1::BodyPipeline(source) = &self.source else {
+            return false;
+        };
+        let original = crate::sumeragi::v2_core::EventTag::new(
+            source.tag.height,
+            source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(source.tag.generation),
+        );
+        matches!(
+            &source.origin,
+            BodyPipelineOriginV1::LocalBody(_)
+                | BodyPipelineOriginV1::Proposal(_)
+                | BodyPipelineOriginV1::Certified { .. }
+        ) && (current.strictly_advances(original) || (current == original && !is_decided_body))
     }
     /// Return whether this canonical authority is one deterministic invalid-body report.
     pub(super) fn is_invalid_body_report_origin(&self) -> bool {
@@ -441,6 +472,10 @@ enum ReplayAuthorityValidationError {
     RecordMismatch,
 }
 /// Fixed scalar projection of the process-local reducer tag.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::ReplayEventTagV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct ReplayEventTagV1 {
@@ -466,6 +501,10 @@ impl ReplayEventTagV1 {
     }
 }
 /// Fixed scalar code for the WAL record that owns a replay action.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::ReplayWalRoleV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(transparent)]
 struct ReplayWalRoleV1(u8);
@@ -480,6 +519,10 @@ impl ReplayWalRoleV1 {
         self.0 == expected.0
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::LifecycleReplaySourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LifecycleReplaySourceV1 {
@@ -519,6 +562,10 @@ impl LifecycleReplaySourceV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::WalReplaySourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct WalReplaySourceV1 {
@@ -527,6 +574,10 @@ struct WalReplaySourceV1 {
     tag: ReplayEventTagV1,
     action: WalReplayActionV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::WalReplayActionV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum WalReplayActionV1 {
@@ -1484,22 +1535,43 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
                 super::schema::DurableContinuation::None,
             )
     }
-    /// Join an older released Validate replay envelope directly to this
-    /// lineage's independent Apply without inventing an intermediate owner.
+    /// Compare the current Decision's canonical owner with a retained row.
+    pub(super) fn has_causal_root(&self, root: CausalRoot) -> bool {
+        self.apply.causal_root == root
+    }
+    /// Join an older released Validate replay envelope to the current Apply's
+    /// exact body. The caller separately authenticates the immutable terminal
+    /// claim and successful semantic receipt; the current lineage authenticates
+    /// the Decision WAL. Those independent sources need not share a WAL frame.
     pub(super) fn exactly_continues_released_validate(
         &self,
         context: LifecycleContext,
         validate_authority: &LifecycleReplayAuthorityV1,
         validate_payload: DurablePayloadReference,
     ) -> bool {
-        self.is_exact(context)
-            && recovered_decision_body_continuation_is_exact(
-                super::schema::DurableContinuationEdge::ValidateToApply,
-                validate_authority,
-                validate_payload,
-                &self.apply.replay_authority,
-                self.apply.payload,
-            ) == Some(true)
+        if !self.is_exact(context)
+            || validate_payload != self.apply.payload
+            || !validate_authority.payload.matches(validate_payload)
+            || !LifecycleReplayAuthorityV1::decode_canonical(&validate_authority.encode())
+                .is_ok_and(|decoded| decoded == *validate_authority)
+        {
+            return false;
+        }
+        let Ok(validate) = validate_authority.source.project(
+            context,
+            LifecycleStageKind::ValidateBody,
+            &validate_authority.payload,
+        ) else {
+            return false;
+        };
+        validate.work_class == LifecycleWorkClass::Validate
+            && validate.stage_kind == LifecycleStageKind::ValidateBody
+            && validate.key.proposal_round() == self.apply.key.proposal_round()
+            && validate.key.subject() == self.apply.key.subject()
+            && validate
+                .key
+                .execution_commitment()
+                .is_none_or(|commitment| Some(commitment) == self.apply.key.execution_commitment())
     }
     /// Insert only the independent Apply after its exact row was authenticated.
     pub(super) fn splice_standalone_apply_candidate_from_record(
@@ -1933,6 +2005,11 @@ impl RecoveredLifecycleNextWalVoteSealV1 {
     }
 }
 impl RecoveredLifecycleNextWalVoteCandidateProjectionV1 {
+    /// Borrow a WAL-derived candidate only to construct exact durable crash fixtures.
+    #[cfg(test)]
+    pub(super) fn candidate_for_continuation_test(&self) -> &CandidateAdmission {
+        &self.candidate
+    }
     /// Revalidate the full retained executable seal, pending owner, candidate,
     /// and canonical standalone Ready/Effect geometry.
     pub(in crate::sumeragi) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
@@ -2777,13 +2854,15 @@ pub(super) fn exact_invalid_body_report_candidate_for_test(
         authority,
     )
 }
+/// Inert exact-effect fingerprint with no admission or pending reconstruction API.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DirectSignedPendingBindingV1 {
+pub(super) struct DirectSignedPendingBindingV1 {
     causal_lifecycle_key: [u8; 32],
     effect_identity: [u8; 32],
 }
 impl DirectSignedPendingBindingV1 {
-    fn from_exact_effect(
+    /// Retain comparison data only after the pending validates its entire effect.
+    pub(super) fn from_exact_effect(
         effect: &AdapterEffect,
         pending: &PendingRuntimeEffectBinding,
     ) -> Option<Self> {
@@ -2792,7 +2871,8 @@ impl DirectSignedPendingBindingV1 {
             effect_identity: *pending.exact_effect_identity().as_ref(),
         })
     }
-    fn exactly_matches(
+    /// Recheck a current pending without constructing or cloning its ownership.
+    pub(super) fn exactly_matches(
         &self,
         effect: &AdapterEffect,
         pending: &PendingRuntimeEffectBinding,
@@ -5098,7 +5178,7 @@ pub(in crate::sumeragi) struct DurableCertifiedFetchPendingMintPermit {
 pub(in crate::sumeragi) struct DurableStandaloneValidatePendingMintPermit {
     _linearity: DurableStandaloneValidatePendingMintLinearity,
 }
-/// One-shot proof that a cold output pending owner is reconstructed only
+/// One-shot proof that a durable output pending owner is reconstructed only
 /// while its signed/rejection replay source remains authenticated.
 pub(in crate::sumeragi) struct DurableLifecycleOutputPendingMintPermit {
     _linearity: DurableLifecycleOutputPendingMintLinearity,
@@ -5208,13 +5288,14 @@ pub(in crate::sumeragi) struct RecoveredStandaloneValidateReplayEvidenceV1 {
 ///
 /// The body origin and complete canonical V1 envelope remain private. The
 /// runtime-only pending fingerprint binds the exact adapter-proved report to
-/// the causal root of the rejected Validate owner.
+/// its linked Validate owner or the canonical independent released Report owner.
 #[derive(Debug)]
 #[must_use = "invalid-body replay evidence must remain attached to its report work"]
 pub(in crate::sumeragi) struct InvalidBodyReportReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
     validate_origin: DurableValidateReplayEvidenceV1,
     report_pending: DirectSignedPendingBindingV1,
+    resolved_terminal: Option<Arc<super::ResolvedLifecycleValidateOutcomeV1>>,
 }
 /// One-shot proof that only sealed invalid-body replay evidence may mint the
 /// mandatory bound effect consumed by the live report registry transaction.
@@ -5232,6 +5313,272 @@ impl InvalidBodyReportBoundEffectPermit {
         }
     }
 }
+
+impl RecoveredDecisionApplyCandidateLineageV1 {
+    /// Match only the current Decision's Apply key; this does not authenticate a row.
+    pub(super) fn names_retained_apply_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        record.key() == Some(self.apply.key)
+    }
+
+    /// Reconstruct a linked Apply only from its authenticated original body owner
+    /// and the unchanged current Decision WAL source. The result is inert and
+    /// must remain joined to the exact complete ledger prefix before installation.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn authenticate_retained_body_apply_projection(
+        &self,
+        verified: &VerifiedHeightContext,
+        owner: OwnerId,
+        validate_key: LifecycleKey,
+        validate_authority: &LifecycleReplayAuthorityV1,
+        receipt: &ValidatedBodyReceipt,
+        effect: &AdapterEffect,
+        canonical_pending: &PendingRuntimeEffectBinding,
+        original_fetch: Option<&LifecycleReplayAuthorityV1>,
+    ) -> Option<(CandidateAdmission, PendingRuntimeEffectBinding)> {
+        let context = super::projection::lifecycle_context(verified.context());
+        if !self.is_exact(context)
+            || !self.exactly_matches_validated_receipt(context, receipt)
+            || owner.causal_root() == self.apply.causal_root
+        {
+            return None;
+        }
+        let AdapterEffect::Apply { certificate, .. } = effect else {
+            return None;
+        };
+        if certificate.execution_commitment != receipt.execution_commitment()
+            || verified.verify_quorum_certificate(certificate).is_err()
+        {
+            return None;
+        }
+        let canonical_projection = super::projection::authority_free_admission_projection(
+            context,
+            verified,
+            effect,
+            canonical_pending,
+        )
+        .ok()?;
+        let canonical_candidate = candidate_from_authorized_projection(
+            context,
+            canonical_projection,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+        )?;
+        if canonical_candidate != self.apply {
+            return None;
+        }
+        let source = validate_authority.recover_durable_standalone_validate(
+            context,
+            validate_key,
+            LifecycleStage::new(
+                LifecycleStageKind::ValidateBody,
+                PredecessorScope::Independent,
+            ),
+            self.apply.payload,
+        )?;
+        let validate_effect = standalone_validate_effect(&source.source)?;
+        if !standalone_validate_stage_matches(
+            &source.source,
+            source.body_frame,
+            &validate_effect,
+            receipt.durable(),
+        ) {
+            return None;
+        }
+        let certified_predecessor = match &source.source.origin {
+            BodyPipelineOriginV1::Certified { certificate, .. } => {
+                let authenticated = if original_fetch
+                    .is_some_and(|fetch| fetch.same_persisted_family(validate_authority))
+                {
+                    CertifiedFetchReplayEvidenceV1 {
+                        family: CertifiedBodyPipelineReplayFamilyV1 {
+                            source: source.source.clone(),
+                            body_frame: source.body_frame,
+                        },
+                    }
+                    .authenticated_by_verified_height(verified)
+                } else {
+                    authenticated_genesis_standalone_source(verified, &source.source)
+                        || authenticated_refined_proposal_standalone_source(
+                            verified,
+                            &source.source,
+                        )
+                };
+                if !authenticated {
+                    return None;
+                }
+                Some(certificate)
+            }
+            BodyPipelineOriginV1::Proposal(proposal) => {
+                verified
+                    .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                    ))
+                    .ok()?;
+                None
+            }
+            BodyPipelineOriginV1::LocalBody(_) if original_fetch.is_none() => None,
+            BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::RecoveredDecision { .. } => {
+                return None;
+            }
+        };
+        let validate_pending = PendingRuntimeEffectBinding::from_durable_standalone_validate(
+            DurableStandaloneValidatePendingMintPermit::new(),
+            Hash::prehashed(*owner.causal_root().digest().as_bytes()),
+            &validate_effect,
+            certified_predecessor,
+        )?;
+        if let Some(fetch) = original_fetch {
+            let LifecycleReplaySourceV1::BodyPipeline(fetch_source) = &fetch.source else {
+                return None;
+            };
+            if !fetch.same_persisted_family(validate_authority) {
+                let BodyPipelineOriginV1::Proposal(proposal) = &fetch_source.origin else {
+                    return None;
+                };
+                verified
+                    .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                    ))
+                    .ok()?;
+                if !exact_remote_proposal_validate_source_from_retained(
+                    fetch_source,
+                    &source.source,
+                    &validate_pending,
+                ) {
+                    return None;
+                }
+            }
+        }
+        let pending =
+            validate_pending.project_validate_apply_successor(&validate_effect, effect)?;
+        let projected = super::projection::authority_free_admission_projection(
+            context, verified, effect, &pending,
+        )
+        .ok()?;
+        let candidate = candidate_from_authorized_projection(
+            context,
+            projected,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+        )?;
+        (candidate.causal_root == owner.causal_root()
+            && candidate.key == self.apply.key
+            && candidate.stage == self.apply.stage
+            && candidate.payload == self.apply.payload)
+            .then_some((candidate, pending))
+    }
+}
+
+impl LifecycleReplayAuthorityV1 {
+    /// Authenticate the original Validate source against the Kura-authenticated
+    /// current Apply envelope without granting executable validation or Apply.
+    pub(in crate::sumeragi) fn authenticates_complete_tip_validate_origin(
+        &self,
+        verified: &VerifiedHeightContext,
+        original_fetch: Option<&Self>,
+        apply: &Self,
+    ) -> bool {
+        let context = super::projection::lifecycle_context(verified.context());
+        let Some((_locator, _tag, decision, apply_frame)) = recovered_decision_apply_parts(apply)
+        else {
+            return false;
+        };
+        let (
+            LifecycleReplaySourceV1::BodyPipeline(source),
+            ReplayPayloadBindingV1::BodyFrame(frame),
+        ) = (&self.source, &self.payload)
+        else {
+            return false;
+        };
+        if *frame != apply_frame
+            || verified.verify_quorum_certificate(decision).is_err()
+            || !Self::decode_canonical(&self.encode()).is_ok_and(|decoded| decoded == *self)
+        {
+            return false;
+        }
+        let Ok(shape) =
+            self.source
+                .project(context, LifecycleStageKind::ValidateBody, &self.payload)
+        else {
+            return false;
+        };
+        if shape.work_class != LifecycleWorkClass::Validate
+            || shape.key.proposal_round()
+                != Some(LifecycleRound::new(
+                    decision.proposal_round.height,
+                    decision.proposal_round.view,
+                ))
+            || shape.key.subject() != Some(block_subject(decision.subject))
+            || shape
+                .key
+                .execution_commitment()
+                .is_some_and(|value| value != execution_commitment(decision.execution_commitment))
+        {
+            return false;
+        }
+        let authenticated = match &source.origin {
+            BodyPipelineOriginV1::Certified { .. } => {
+                // A released terminal may retain an ordinary Certified family
+                // whose Fetch owner is already closed. CompleteTip authenticates
+                // its semantic result; this path never recreates that Fetch.
+                CertifiedFetchReplayEvidenceV1 {
+                    family: CertifiedBodyPipelineReplayFamilyV1 {
+                        source: source.clone(),
+                        body_frame: *frame,
+                    },
+                }
+                .authenticated_by_verified_height(verified)
+                    || authenticated_genesis_standalone_source(verified, source)
+                    || authenticated_refined_proposal_standalone_source(verified, source)
+            }
+            BodyPipelineOriginV1::Proposal(proposal) => verified
+                .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                ))
+                .is_ok(),
+            BodyPipelineOriginV1::LocalBody(_) => original_fetch.is_none(),
+            BodyPipelineOriginV1::RecoveredDecision { certificate, .. } => {
+                original_fetch.is_none() && verified.verify_quorum_certificate(certificate).is_ok()
+            }
+        };
+        if !authenticated {
+            return false;
+        }
+        let Some(fetch) = original_fetch else {
+            return true;
+        };
+        if fetch.same_persisted_family(self) {
+            return true;
+        }
+        let LifecycleReplaySourceV1::BodyPipeline(proposal_source) = &fetch.source else {
+            return false;
+        };
+        let BodyPipelineOriginV1::Proposal(proposal) = &proposal_source.origin else {
+            return false;
+        };
+        let BodyPipelineOriginV1::Certified {
+            certificate,
+            manifest,
+            fetch_manifest_present,
+            certified_sources,
+        } = &source.origin
+        else {
+            return false;
+        };
+        proposal_source.tag == source.tag
+            && proposal.manifest == *manifest
+            && proposal.round == certificate.proposal_round
+            && proposal.subject == certificate.subject
+            && *fetch_manifest_present
+            && certified_sources.is_empty()
+            && verified
+                .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                ))
+                .is_ok()
+    }
+}
+
 include!("v2_lifecycle_replay_authority_certified_serve.rs");
 include!("v2_lifecycle_replay_authority_certified_body.rs");
 include!("v2_lifecycle_replay_authority_payload_projection.rs");
@@ -5241,13 +5588,16 @@ mod tests {
     include!("tests/v2_lifecycle_replay_authority_fixtures.rs");
     include!("tests/v2_lifecycle_replay_authority_cases.rs");
 }
+#[cfg(all(test, feature = "bls"))]
+pub(super) use tests::exact_retained_prepare_apply_family_fixture;
 #[cfg(test)]
 pub(super) use tests::{
     ReplayCase, durable_certified_fetch_projection_fixture,
     durable_certified_fetch_waiting_record_fixture, exact_body_execution_commitment_fixture,
-    exact_body_record_fixture, exact_durable_certified_fetch_record_fixture,
-    exact_local_body_record_fixture, exact_pending_certified_fetch_candidate_fixture,
-    exact_prepare_sign_broadcast_fixture, exact_record_fixture,
-    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
-    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
+    exact_body_record_fixture, exact_decision_body_record_fixture,
+    exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
+    exact_pending_certified_fetch_candidate_fixture, exact_prepare_sign_broadcast_fixture,
+    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
+    exact_replay_authority_for_payload_fixture, exact_timeout_sign_broadcast_fixture,
+    foreign_certified_serve_family_authority_fixture,
 };

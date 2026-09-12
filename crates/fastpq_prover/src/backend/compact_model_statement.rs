@@ -9,7 +9,6 @@
 
 use iroha_data_model::fastpq::{FastpqOperationKind, FastpqPublicTransferStatementV1};
 
-#[cfg(test)]
 use iroha_data_model::fastpq::FastpqQuantityUnits;
 
 use super::compact_value_domain::CompactTransferValue;
@@ -40,7 +39,6 @@ pub(super) fn with_prepared_statement<T>(
 ///
 /// This typed route never infers a value format from statement bytes or metadata.
 /// It grants no authority and leaves the legacy narrow bridge's decoder unchanged.
-#[cfg(test)]
 pub(super) fn with_prepared_quantity_statement<T>(
     statement: &FastpqPublicTransferStatementV1,
     expected: &PublicIO,
@@ -435,5 +433,5 @@ mod tests {
     }
 }
 
-#[path = "compact_shake_artifact.rs"]
+#[path = "compact_artifact.rs"]
 pub(super) mod candidate_artifact;

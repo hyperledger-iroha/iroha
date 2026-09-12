@@ -532,7 +532,7 @@ async fn soracloud_public_hosted_http_route_streams_sse_bodies() {
         let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
         assert_eq!(current_height, 1, "hosted SSE lease must start at height 1");
         assert!(
-            state_view.is_lane_active_for_authority(iroha_data_model::nexus::LaneId::SINGLE),
+            state_view.is_lane_active_for_authority(iroha_model_base::topology::LaneId::SINGLE),
             "hosted SSE validator lane must be active"
         );
         let world = state_view.world();
@@ -886,7 +886,7 @@ fn mutate_hosted_http_deployment(
     app: &mut SharedAppState,
     mutate: impl FnOnce(&mut iroha_data_model::soracloud::SoraServiceDeploymentStateV1),
 ) {
-    let service_name: iroha_data_model::name::Name = "web_portal".parse().expect("service name");
+    let service_name: iroha_model_base::name::Name = "web_portal".parse().expect("service name");
     let app = Arc::get_mut(app).expect("unique app state");
     let state = Arc::get_mut(&mut app.state).expect("unique state");
     let deployments = state.world.soracloud_service_deployments_mut_for_testing();
@@ -1373,7 +1373,7 @@ async fn hosted_http_runtime_target_rejects_inactive_validator_with_live_capabil
         let mut validators = state.world.public_lane_validators_mut_for_testing().block();
         validators
             .get_mut(&(
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 validator_account_id,
             ))
             .expect("host validator record")
@@ -2255,16 +2255,19 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         for spoofed in [false, true] {
             let request_id = tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
-                    let pending = app_for_response.torii_proxy_pending.lock().await;
-                    if let Some((request_id, _peer_id)) =
-                        pending.keys().find(|(request_id, peer_id)| {
-                            *peer_id == remote_peer_for_response
-                                && prior_request_id.as_ref() != Some(request_id)
-                        })
-                    {
-                        break *request_id;
+                    let pending_request = {
+                        let pending = app_for_response.torii_proxy_pending.lock();
+                        pending
+                            .keys()
+                            .find(|(request_id, peer_id)| {
+                                *peer_id == remote_peer_for_response
+                                    && prior_request_id.as_ref() != Some(request_id)
+                            })
+                            .map(|(request_id, _)| *request_id)
+                    };
+                    if let Some(request_id) = pending_request {
+                        break request_id;
                     }
-                    drop(pending);
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             })
@@ -3309,20 +3312,23 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 async fn incoming_read_proxy_response_for_route(
-    app: SharedAppState,
+    mut app: SharedAppState,
     route: RoutingDecision,
 ) -> Response {
     let ingress_peer_id = checked_torii_test_peer_id(
         0x67,
         "derive stale-route proxied read ingress peer fixture key",
     );
+    Arc::get_mut(&mut app)
+        .expect("stale-route fixture app must be uniquely owned")
+        .local_peer_id = Some(ingress_peer_id.clone());
     let request = ToriiProxyRequestV1 {
         schema_version: TORII_PROXY_REQUEST_VERSION_V1,
         request_id: Hash::new(b"incoming-read-proxy-stale-route"),
         deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
-        visited_peer_ids: vec![ingress_peer_id],
+        visited_peer_ids: vec![ingress_peer_id.clone()],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
             ToriiFanoutRouteScopeV1::AllDataspaces,
@@ -3338,7 +3344,7 @@ async fn incoming_read_proxy_response_for_route(
             Vec::new(),
         )),
     };
-    super::execute_incoming_torii_proxy_request(&app, request, None).await
+    super::execute_incoming_torii_proxy_request(&app, request, Some(ingress_peer_id)).await
 }
 #[cfg(all(feature = "app_api", feature = "connect"))]
 async fn incoming_verified_query_proxy_response_for_route(

@@ -2,7 +2,8 @@
 //!
 //! Properties validated:
 //! - Domain‑tagged leaf hashing is stable and distinct from raw/prehashed bytes.
-//! - Explicit empty‑tree root obeys `R_{d+1} = H(R_d || R_d)`.
+//! - Empty roots include the generic leaf domain and obey
+//!   `R_{d+1} = H(internal_domain || R_d || R_d)`.
 //! - Empty‑tree root for small depths matches the root of a perfect tree
 //!   constructed from 2^d identical zero‑leaves.
 use iroha_crypto::{Hash, HashOf, MerkleTree};
@@ -19,11 +20,12 @@ fn shielded_leaf_is_domain_tagged() {
 }
 #[test]
 fn empty_root_recursive_identity() {
-    // Depth 0: root equals domain‑tagged zero leaf
+    // Depth 0: the shielded commitment passes through the generic leaf domain.
     let r0 = MerkleTree::<[u8; 32]>::shielded_empty_root(0);
     let l0 = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([0u8; 32]);
-    assert_eq!(r0, <Hash as Into<[u8; 32]>>::into(Hash::from(l0)));
-    // Check a few levels satisfy R_{d+1} = H(R_d || R_d)
+    let expected_leaf = Hash::new_from_chunks(&[b"iroha:merkle:leaf:v1\0", l0.as_ref()]);
+    assert_eq!(r0, <Hash as Into<[u8; 32]>>::into(expected_leaf));
+    // Check the independently spelled internal domain at each level.
     let mut prev = r0;
     for d in 0..4u8 {
         let next = MerkleTree::<[u8; 32]>::shielded_empty_root(d + 1);
@@ -31,7 +33,7 @@ fn empty_root_recursive_identity() {
         let mut buf = [0u8; 64];
         buf[..32].copy_from_slice(&prev);
         buf[32..].copy_from_slice(&prev);
-        let manual = Hash::new(buf);
+        let manual = Hash::new_from_chunks(&[b"iroha:merkle:internal:v1\0", &buf]);
         assert_eq!(next, <Hash as Into<[u8; 32]>>::into(manual));
         prev = next;
     }
@@ -64,38 +66,41 @@ fn shielded_leaf_golden_vectors() {
 }
 #[test]
 fn shielded_empty_root_golden_vectors() {
+    // Independent Python hashlib.blake2b(digest_size=32) vectors. Each hash sets
+    // the final-byte low bit. Hash the shielded commitment, then the generic
+    // leaf domain, then the internal domain at every parent; all tags end in NUL.
     const GOLDENS: &[(u8, &str)] = &[
         (
             0,
-            "D6BF3EAAC5E6107CA805D08C4C788968A88AE2050268A8585C47BEB03F296C0F",
+            "00E7E4B201291FCABF1EE078A09F8EC3A5D73608971F64F352E10045B3041695",
         ),
         (
             1,
-            "6A5E6172A92EA453201C2BFF0517CC5B35CECB95F13B5724F7D9731B802570DB",
+            "C135A96E299AD0BC4CD5A1818696E603DBA410993C194154274BA827EDDD8193",
         ),
         (
             2,
-            "872470D163B62FDEAFFA5EA605C4C942690249BB8E2636F324F9F4F4B42F0197",
+            "062AD9A32A3E9DD3C1925B80198B7957433CD90E93241B3BFDD2EB22EE25E583",
         ),
         (
             3,
-            "F16CEA0AC60DBAC3267337EBCE2366FA0DBBC044E8B9EEBB1CD49E7238890E77",
+            "122B1724362D3260E406604CE87FAAD8BE1B298AA836455CD852135254656C45",
         ),
         (
             4,
-            "77C86326A6B44FF12ECB4A26210CFF1007A8955985489488B1403F69B85BD3E1",
+            "428A69DC240C901D8F4F736ABA5B298F8597F60C4C5BF01BD495615D0E2249C7",
         ),
         (
             5,
-            "EF5CAA7789EF5A5CE09E616C1CDE579A976A51A2D3A47CBF89280E2618C324C5",
+            "E71ED395B7F1A67A2544466B8C0F2D49FBCB492A4A37AE1CA3D6BB340D33E2AB",
         ),
         (
             8,
-            "2577885FFA39174A44504289BB613B914F96157D9C502E5697057F05BB410817",
+            "335FA2337834BECF009F9311436FF24F89B3378200FE5E50DEE5264172EF3F71",
         ),
         (
             12,
-            "803DAFC24BF2B020CB57F1951ADBF3DB6150A820CFA939CBC84DD86A4C4DF9F1",
+            "D4FAAE9F41DD99329346D8FE5F666BFAD81E0F7CA5AC6A975BF56E6A0BC7E88B",
         ),
     ];
     for &(depth, expected) in GOLDENS {

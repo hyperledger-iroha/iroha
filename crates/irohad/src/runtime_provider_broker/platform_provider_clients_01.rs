@@ -452,6 +452,7 @@ fn source_reader_io_error(kind: std::io::ErrorKind) -> std::io::Error {
     std::io::Error::new(kind, "authenticated provider source stream failed")
 }
 struct ProviderIngestBrokerSourceReader {
+    decode_pool: Arc<DecodeResourcePoolV1>,
     stream: UnixStream,
     deadline: std::time::Instant,
     content_length: u64,
@@ -481,7 +482,8 @@ impl ProviderIngestBrokerSourceReader {
         source_reader_io_error(kind)
     }
     fn apply_deadline(&mut self) -> std::io::Result<()> {
-        apply_source_socket_deadline(&self.stream, self.deadline)
+        source_deadline_remaining(self.deadline)
+            .map(|_| ())
             .map_err(|_| self.poison(std::io::ErrorKind::TimedOut))
     }
     fn transport_failure(&mut self) -> std::io::Error {
@@ -497,11 +499,17 @@ impl ProviderIngestBrokerSourceReader {
             return Err(self.poison(std::io::ErrorKind::InvalidData));
         }
         self.apply_deadline()?;
-        let decode_admission =
-            DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
-                .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
+        let decode_admission = DecodeResourceAdmissionV1::acquire_from(
+            Arc::clone(&self.decode_pool),
+            None,
+            SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
+        )
+        .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
         let frame = read_length_prefixed_with_decode_admission(
-            &mut self.stream,
+            &mut ProviderSourceDeadlineReader {
+                stream: &self.stream,
+                deadline: self.deadline,
+            },
             MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
             &decode_admission,
         )
@@ -560,11 +568,17 @@ impl ProviderIngestBrokerSourceReader {
             return Err(self.poison(std::io::ErrorKind::UnexpectedEof));
         }
         self.apply_deadline()?;
-        let decode_admission =
-            DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
-                .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
+        let decode_admission = DecodeResourceAdmissionV1::acquire_from(
+            Arc::clone(&self.decode_pool),
+            None,
+            SOURCE_STREAM_FRAME_DECODE_POLICY_V1,
+        )
+        .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
         let frame = read_length_prefixed_with_decode_admission(
-            &mut self.stream,
+            &mut ProviderSourceDeadlineReader {
+                stream: &self.stream,
+                deadline: self.deadline,
+            },
             MAX_PROVIDER_INGEST_SOURCE_TRAILER_FRAME_BYTES_V1,
             &decode_admission,
         )
@@ -591,7 +605,13 @@ impl ProviderIngestBrokerSourceReader {
         }
         self.apply_deadline()?;
         let mut trailing = [0_u8; 1];
-        match std::io::Read::read(&mut self.stream, &mut trailing) {
+        match std::io::Read::read(
+            &mut ProviderSourceDeadlineReader {
+                stream: &self.stream,
+                deadline: self.deadline,
+            },
+            &mut trailing,
+        ) {
             Ok(0) => {
                 self.finished = true;
                 Ok(())
@@ -684,6 +704,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
         reason = "the blocking stream owns all authenticated connection inputs"
     )]
     fn open_stream(
+        decode_pool: Arc<DecodeResourcePoolV1>,
         endpoint: EndpointPolicy,
         chain_id: String,
         network_id: NetworkId,
@@ -706,6 +727,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
             network_id,
             requested_catalog,
             Some(source_deadline_remaining(deadline)?),
+            &decode_pool,
         )?;
         let observed = observations
             .iter()
@@ -717,7 +739,8 @@ impl ProviderIngestBrokerAuthenticatedSource {
             return Err(BrokerError::StaleOrRevoked);
         }
         apply_source_socket_deadline(&connection.stream, deadline)?;
-        let decode_admission = DecodeResourceAdmissionV1::acquire_operation(
+        let decode_admission = DecodeResourceAdmissionV1::acquire_operation_from(
+            Arc::clone(&decode_pool),
             OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
         )?;
         let decode_scope = decode_admission.enter();
@@ -738,7 +761,10 @@ impl ProviderIngestBrokerAuthenticatedSource {
         write_operation_request_frame(&mut connection.stream, &operation_request, &request_frame)?;
         drop(request_frame);
         let response_frame = read_length_prefixed_with_decode_admission(
-            &mut connection.stream,
+            &mut ProviderSourceDeadlineReader {
+                stream: &connection.stream,
+                deadline,
+            },
             MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
             &decode_admission,
         )?;
@@ -769,7 +795,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
             .map_err(|_| BrokerError::Rejected)?;
         let plan = decode_source_plan(&header.plan)?;
         validate_source_payload_metadata(&fetch.authorization, &manifest, &plan)?;
-        let retained_memory = acquire_source_retained_memory(&plan)?;
+        let retained_memory = acquire_source_retained_memory(&decode_pool, &plan)?;
         let content_length = header.content_length;
         let frame_count = header.frame_count;
         let transcript = source_stream_transcript(&operation_request, &response);
@@ -780,6 +806,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
         drop(header);
         let expected_payload_digest = *plan.payload_digest.as_bytes();
         let reader = ProviderIngestBrokerSourceReader {
+            decode_pool,
             stream: connection.stream,
             deadline,
             content_length,
@@ -816,6 +843,7 @@ impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1
         '_,
         Result<Self::Fetched, sorafs_node::ProviderIngestSourceFetchErrorV1>,
     > {
+        let decode_pool = Arc::clone(&self.session.decode_pool);
         let endpoint = self.endpoint.clone();
         let chain_id = self.chain_id.clone();
         let network_id = self.session.network_id;
@@ -827,6 +855,7 @@ impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1
             crate::panic_recovery::join_recoverable(
                 crate::panic_recovery::spawn_blocking_recoverable(move || {
                     Self::open_stream(
+                        decode_pool,
                         endpoint,
                         chain_id,
                         network_id,
@@ -1086,99 +1115,7 @@ fn live_exact_qualification(
     }
     Ok(qualification)
 }
-fn map_stream_token_error(error: BrokerError) -> iroha_torii::sorafs::StreamTokenSigningError {
-    match error {
-        BrokerError::Unavailable | BrokerError::Ambiguous => {
-            iroha_torii::sorafs::StreamTokenSigningError::Unavailable
-        }
-        BrokerError::Rejected
-        | BrokerError::Conflict
-        | BrokerError::StaleOrRevoked
-        | BrokerError::Protocol
-        | BrokerError::BindingMismatch => iroha_torii::sorafs::StreamTokenSigningError::Refused,
-    }
-}
-fn map_stream_token_probe_error(
-    error: BrokerError,
-) -> iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1 {
-    match error {
-        BrokerError::Unavailable | BrokerError::Ambiguous => {
-            iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::Unavailable
-        }
-        BrokerError::Rejected
-        | BrokerError::Conflict
-        | BrokerError::StaleOrRevoked
-        | BrokerError::Protocol
-        | BrokerError::BindingMismatch => {
-            iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked
-        }
-    }
-}
-#[derive(Clone)]
-struct StreamTokenBrokerSigner {
-    session: Arc<BrokerSession>,
-    binding: ProviderBindingWireV1,
-    metadata_digest: [u8; 32],
-    public_key: [u8; 32],
-}
-impl iroha_torii::sorafs::StreamTokenRuntimeSigner for StreamTokenBrokerSigner {
-    fn handle(&self) -> &str {
-        &self.binding.handle
-    }
-    fn public_key(&self) -> [u8; 32] {
-        self.public_key
-    }
-    fn qualification(
-        &self,
-    ) -> Result<
-        iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1,
-        iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1,
-    > {
-        let qualification =
-            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-                .map_err(map_stream_token_probe_error)?;
-        let qualification = iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-            qualification.revision,
-            qualification.policy_digest,
-        );
-        qualification.validate().map_err(|_| {
-            self.session.poison();
-            iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked
-        })?;
-        Ok(qualification)
-    }
-    fn sign(
-        &self,
-        signing_payload: &[u8],
-    ) -> Result<[u8; 64], iroha_torii::sorafs::StreamTokenSigningError> {
-        validate_stream_token_signing_payload(signing_payload).map_err(map_stream_token_error)?;
-        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-            .map_err(map_stream_token_error)?;
-        let payload = encode_canonical(
-            &SignRequestWireV1 {
-                payload: signing_payload.to_vec(),
-            },
-            MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-        )
-        .map_err(map_stream_token_error)?;
-        let result = provider_call!(self, call, OPERATION_STREAM_TOKEN_SIGN_V1, payload, false,)
-            .map_err(map_stream_token_error)?;
-        let signature = self
-            .session
-            .decode_result::<SignResultWireV1>(&result)
-            .map_err(map_stream_token_error)?
-            .signature;
-        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-            .map_err(map_stream_token_error)?;
-        if verify_evidence_viewer_ed25519_signature(self.public_key, signature, signing_payload)
-            .is_err()
-        {
-            self.session.poison();
-            return Err(iroha_torii::sorafs::StreamTokenSigningError::Refused);
-        }
-        Ok(signature)
-    }
-}
+include!("stream_token_hardware_client.rs");
 #[derive(Clone)]
 struct AppealFinanceBrokerSigner {
     session: Arc<BrokerSession>,

@@ -37,6 +37,8 @@ pub const QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES: usize = 4 *
 /// First-release aggregate ceiling for asset-definition discriminators in one checkpoint.
 pub const QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES: usize = 4 * 1024 * 1024;
 /// Resource family described by a query projection checkpoint shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_checkpoint::QueryProjectionResourceKind")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub enum QueryProjectionResourceKind {
     /// Account inventory rows and related aggregate cubes.
@@ -51,6 +53,8 @@ pub enum QueryProjectionResourceKind {
     Domains,
 }
 /// Reference to one immutable DA shard that belongs to a query projection checkpoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionCheckpointShard {
     /// Resource family covered by this shard.
@@ -67,6 +71,8 @@ pub struct QueryProjectionCheckpointShard {
     pub blob_hash: BlobDigest,
 }
 /// Top-level checkpoint descriptor tying a set of projection shards to one indexed height.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionCheckpoint {
     /// Version of this descriptor payload.
@@ -509,7 +515,7 @@ mod tests {
     use super::*;
     use crate::query::projection_shard::QueryProjectionShardArchive;
     use iroha_crypto::Hash;
-    use norito::{decode_from_bytes, to_bytes};
+    use norito::codec::{decode_adaptive, encode_adaptive};
     fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::new([byte; Hash::LENGTH]))
     }
@@ -587,7 +593,7 @@ mod tests {
         assert!(checkpoint.shards.is_empty());
     }
     #[test]
-    fn checkpoint_round_trips_through_norito() {
+    fn checkpoint_payload_round_trips_through_norito() {
         let checkpoint = QueryProjectionCheckpoint {
             indexed_height: 77,
             indexed_block_hash: Some(sample_hash(0x5A)),
@@ -602,10 +608,15 @@ mod tests {
             }],
             ..QueryProjectionCheckpoint::default()
         };
-        let bytes = to_bytes(&checkpoint).expect("encode checkpoint");
+        // The durable journal owns the frame; this descriptor is its nested payload.
+        let bytes = encode_adaptive(&checkpoint);
         let decoded: QueryProjectionCheckpoint =
-            decode_from_bytes(&bytes).expect("decode checkpoint");
+            decode_adaptive(&bytes).expect("decode checkpoint payload in the fixed v1 layout");
         assert_eq!(decoded, checkpoint);
+        assert!(decode_adaptive::<QueryProjectionCheckpoint>(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(decode_adaptive::<QueryProjectionCheckpoint>(&trailing).is_err());
     }
     #[test]
     fn checkpoint_publish_plan_builds_checkpoint_from_uploaded_archives() {

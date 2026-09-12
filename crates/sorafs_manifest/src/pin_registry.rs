@@ -26,6 +26,8 @@ fn validate_first_release_manifest_cid(cid: &[u8]) -> Result<(), ManifestValidat
     )
 }
 /// Alias binding that maps a human-friendly alias to a manifest CID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pin_registry::AliasBindingV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AliasBindingV1 {
     /// Alias identifier (`namespace/name` or account-style `name@domain` lower-case ASCII).
@@ -99,6 +101,8 @@ pub enum AliasBindingValidationError {
     ExpiryBeforeBound { bound_at: u64, expiry_epoch: u64 },
 }
 /// Alias proof bundle propagated alongside SoraFS responses.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pin_registry::AliasProofBundleV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(decode_from_slice)]
 pub struct AliasProofBundleV1 {
@@ -354,6 +358,8 @@ where
         .map_err(AliasProofVerificationError::CouncilAuthorization)
 }
 /// Provider acknowledgement for a replication order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pin_registry::ReplicationReceiptV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ReplicationReceiptV1 {
     /// Order identifier being acknowledged.
@@ -394,6 +400,8 @@ impl ReplicationReceiptV1 {
     }
 }
 /// Receipt status outcomes reported by providers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pin_registry::ReplicationReceiptStatus")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ReplicationReceiptStatus {
@@ -419,6 +427,8 @@ pub enum ReplicationReceiptValidationError {
     InvalidPorSampleDigest,
 }
 /// Governance policy snapshot associated with the pin registry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pin_registry::ManifestPolicyV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ManifestPolicyV1 {
     /// Minimum replica count required for approval.
@@ -887,3 +897,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("pin_registry/captured_owner_identity_tests.rs");

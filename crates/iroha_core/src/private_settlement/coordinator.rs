@@ -23,6 +23,10 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 /// Bundle-level private-settlement lifecycle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::coordinator::PrivateSettlementBundleLifecycleV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum PrivateSettlementBundleLifecycleV1 {
     /// Per-leg auditor evidence is still being collected.
@@ -545,7 +549,8 @@ pub(crate) mod tests {
         sidecar_store::tests::{SidecarFixtureV1, sidecar_fixture},
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
-    use iroha_data_model::{account::AccountId, peer::PeerId, privacy::PrivacyRecipientIdV1};
+    use iroha_data_model::{account::AccountId, privacy::PrivacyRecipientIdV1};
+    use iroha_model_base::peer::PeerId;
 
     fn fixture_parts() -> (
         SidecarFixtureV1,

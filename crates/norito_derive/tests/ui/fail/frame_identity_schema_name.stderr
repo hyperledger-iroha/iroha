@@ -1,0 +1,23 @@
+error: schema_name is unsupported; declare identity once with NoritoSchema and #[norito_schema(name = "...")] (with frame = "..." for an explicit projection)
+ --> tests/ui/fail/frame_identity_schema_name.rs:3:10
+  |
+3 | #[norito(schema_name = "retired")]
+  |          ^^^^^^^^^^^
+
+error: schema_name is unsupported; declare identity once with NoritoSchema and #[norito_schema(name = "...")] (with frame = "..." for an explicit projection)
+ --> tests/ui/fail/frame_identity_schema_name.rs:7:10
+  |
+7 | #[norito(schema_name = "retired")]
+  |          ^^^^^^^^^^^
+
+error: schema_name is unsupported; declare identity once with NoritoSchema and #[norito_schema(name = "...")] (with frame = "..." for an explicit projection)
+  --> tests/ui/fail/frame_identity_schema_name.rs:11:10
+   |
+11 | #[norito(schema_name = "retired")]
+   |          ^^^^^^^^^^^
+
+error: schema_name is unsupported; declare identity once with NoritoSchema and #[norito_schema(name = "...")] (with frame = "..." for an explicit projection)
+  --> tests/ui/fail/frame_identity_schema_name.rs:15:10
+   |
+15 | #[norito(schema_name = "retired")]
+   |          ^^^^^^^^^^^

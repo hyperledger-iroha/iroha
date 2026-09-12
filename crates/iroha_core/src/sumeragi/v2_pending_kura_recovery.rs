@@ -109,11 +109,23 @@ pub(crate) struct DeferredReleasedLifecycleValidatedMarkerV1 {
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(Clone))]
 pub(in crate::sumeragi) struct ReleasedLifecycleValidateTerminalProofV1 {
-    ordinal: u128,
-    effect: AdapterEffect,
-    pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
-    statement: crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement,
-    durable: crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    origin: ReleasedLifecycleValidateTerminalOriginV1,
+}
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Clone))]
+enum ReleasedLifecycleValidateTerminalOriginV1 {
+    Authenticated(
+        Arc<crate::sumeragi::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+    ),
+    /// Drop-inert adapter fixtures cannot authenticate a registry publication.
+    #[cfg(test)]
+    Synthetic {
+        ordinal: u128,
+        effect: AdapterEffect,
+        pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
+        statement: crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement,
+        durable: crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    },
 }
 
 /// Staged pending-Kura validation plus its predecessor-derived Apply owner.
@@ -720,6 +732,11 @@ impl DeferredPendingKuraValidatedMarkerV1 {
 }
 
 impl DeferredReleasedLifecycleValidatedMarkerV1 {
+    /// Return the actual immutable terminal Validate ordinal.
+    pub(in crate::sumeragi) fn terminal_ordinal(&self) -> u128 {
+        self.terminal.ordinal()
+    }
+
     /// Return the exact decided body key retained by this publication owner.
     pub(in crate::sumeragi) const fn key(
         &self,
@@ -744,6 +761,47 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
                 == Some(&self.validate_pending)
     }
 
+    /// Retain the actual completed Validate result beside one independently
+    /// authenticated current Commit occurrence. No ordinal-only projection can
+    /// enter this production constructor.
+    pub(in crate::sumeragi) fn from_resolved_outcome(
+        permit: crate::sumeragi::v2_effects::ReleasedLifecycleValidatedMarkerSealPermitV1,
+        resolved: Arc<
+            crate::sumeragi::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1,
+        >,
+        current_effect: AdapterEffect,
+        current_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
+        current_certificate: crate::sumeragi::v2::wire::QuorumCertificate,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = &current_effect
+        else {
+            return None;
+        };
+        let (tag, round, subject) = (*tag, *round, *subject);
+        let validated = resolved.validated_receipt()?.clone();
+        let durable = resolved.durable().clone();
+        let terminal = ReleasedLifecycleValidateTerminalProofV1 {
+            origin: ReleasedLifecycleValidateTerminalOriginV1::Authenticated(resolved),
+        };
+        Self::seal_exact(
+            permit,
+            tag,
+            round,
+            subject,
+            durable.manifest_hash(),
+            durable,
+            validated,
+            current_certificate,
+            current_effect,
+            current_pending,
+            terminal,
+        )
+    }
+
     /// Build one exact marker for direct adapter transaction tests.
     #[cfg(test)]
     pub(in crate::sumeragi) fn for_test(
@@ -759,6 +817,15 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
         let terminal_pending =
             validate_pending.published_validate_retry_fingerprint(&predecessor)?;
         let terminal_statement = validate_pending.candidate_statement()?;
+        let terminal = ReleasedLifecycleValidateTerminalProofV1 {
+            origin: ReleasedLifecycleValidateTerminalOriginV1::Synthetic {
+                ordinal: terminal_ordinal,
+                effect: predecessor.clone(),
+                pending: terminal_pending,
+                statement: terminal_statement,
+                durable: durable.clone(),
+            },
+        };
         Self::seal_exact(
             crate::sumeragi::v2_effects::ReleasedLifecycleValidatedMarkerSealPermitV1::for_test(),
             tag,
@@ -768,18 +835,15 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
             durable.clone(),
             validated.clone(),
             certificate.clone(),
-            predecessor.clone(),
-            validate_pending,
-            terminal_ordinal,
             predecessor,
-            terminal_pending,
-            terminal_statement,
+            validate_pending,
+            terminal,
         )
     }
 
     /// Seal the exact catalog, terminal marker, and current Commit-owned Validate.
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::sumeragi) fn seal_exact(
+    fn seal_exact(
         _permit: crate::sumeragi::v2_effects::ReleasedLifecycleValidatedMarkerSealPermitV1,
         tag: crate::sumeragi::v2::reducer::EventTag,
         round: crate::sumeragi::v2::wire::ConsensusRound,
@@ -790,20 +854,10 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
         certificate: crate::sumeragi::v2::wire::QuorumCertificate,
         predecessor: AdapterEffect,
         validate_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
-        terminal_ordinal: u128,
-        terminal_effect: AdapterEffect,
-        terminal_pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
-        terminal_statement: crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement,
+        terminal: ReleasedLifecycleValidateTerminalProofV1,
     ) -> Option<Self> {
         let predecessor_statement = validate_pending.candidate_statement()?;
-        let terminal = ReleasedLifecycleValidateTerminalProofV1 {
-            ordinal: terminal_ordinal,
-            effect: terminal_effect,
-            pending: terminal_pending,
-            statement: terminal_statement,
-            durable: durable.clone(),
-        };
-        (terminal_ordinal != 0
+        (terminal.ordinal() != 0
             && tag.height() == round.height
             && durable.context_id() == round.context_id
             && durable.round() == round
@@ -916,7 +970,7 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
             drop(prepared);
             return Err((self, AdapterError::ReleasedLifecycleValidatedApplyMismatch));
         };
-        let persisted_apply = match persisted_apply.complete_exact_apply(
+        let persisted_apply = match persisted_apply.complete_exact_released_apply(
             predecessor,
             &self.validate_pending,
             child_pending,
@@ -945,49 +999,108 @@ impl DeferredReleasedLifecycleValidatedMarkerV1 {
 }
 
 impl ReleasedLifecycleValidateTerminalProofV1 {
-    fn validates_internal(&self) -> bool {
-        let AdapterEffect::ValidateBody { round, subject, .. } = &self.effect else {
-            return false;
-        };
-        self.ordinal != 0
-            && self.pending.exactly_binds_adapter_effect(&self.effect)
-            && self.pending.candidate_statement() == Some(self.statement)
-            && self.durable.round() == *round
-            && self.durable.subject() == *subject
-            && self.statement.context_id() == round.context_id
-            && self.statement.proposal_round() == *round
-            && self.statement.subject() == Some(*subject)
+    /// Borrow only an actual live or cold registry outcome. Unit fixtures carry
+    /// no such authority and cannot pass a publication boundary.
+    pub(in crate::sumeragi) fn authenticated(
+        &self,
+    ) -> Option<&crate::sumeragi::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>
+    {
+        match &self.origin {
+            ReleasedLifecycleValidateTerminalOriginV1::Authenticated(resolved) => Some(resolved),
+            #[cfg(test)]
+            ReleasedLifecycleValidateTerminalOriginV1::Synthetic { .. } => None,
+        }
+    }
+
+    /// Check the closed result shape without inventing cold process-local work.
+    /// Exact original live identity or cold claim is rechecked at publication.
+    pub(in crate::sumeragi) fn validates_internal(&self) -> bool {
+        match &self.origin {
+            ReleasedLifecycleValidateTerminalOriginV1::Authenticated(resolved) => {
+                resolved.ordinal() != 0 && resolved.validated_receipt().is_some()
+            }
+            #[cfg(test)]
+            ReleasedLifecycleValidateTerminalOriginV1::Synthetic {
+                ordinal,
+                effect,
+                pending,
+                statement,
+                durable,
+            } => {
+                let AdapterEffect::ValidateBody {
+                    tag,
+                    round,
+                    subject,
+                } = effect
+                else {
+                    return false;
+                };
+                *ordinal != 0
+                    && pending.exactly_binds_adapter_effect(effect)
+                    && pending.candidate_statement() == Some(*statement)
+                    && durable.round() == *round
+                    && durable.subject() == *subject
+                    && statement.context_id() == round.context_id
+                    && statement.proposal_round() == *round
+                    && statement.subject() == Some(*subject)
+                    && tag.height() == round.height
+                    && tag.height() == statement.round().height
+                    && (statement.phase() == Some(crate::sumeragi::v2::wire::GlobalPhase::Commit)
+                        || tag.view() >= statement.round().view)
+            }
+        }
+    }
+
+    /// Authenticate the actual terminal form: completed physical row while
+    /// live, or the exact empty-slot coordinator tombstone after cold open.
+    pub(in crate::sumeragi) fn matches_resolved_terminal(
+        &self,
+        coordinator: &crate::sumeragi::v2_lifecycle_coordinator::LifecycleCoordinator,
+        validated: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+    ) -> bool {
+        self.authenticated().is_some_and(|resolved| {
+            resolved.matches_terminal(coordinator)
+                && resolved.validated_receipt() == Some(validated)
+        })
+    }
+
+    /// Borrow the original terminal causal root, never the current Apply root.
+    pub(in crate::sumeragi) fn causal_root(
+        &self,
+    ) -> Option<crate::sumeragi::v2_lifecycle_coordinator::CausalRoot> {
+        self.authenticated()
+            .map(|resolved| resolved.terminal_causal_root())
+    }
+
+    /// Return the exact original terminal key without manufacturing cold tags.
+    pub(in crate::sumeragi) fn key(
+        &self,
+    ) -> Option<crate::sumeragi::v2_lifecycle_coordinator::LifecycleKey> {
+        self.authenticated().map(|resolved| resolved.terminal_key())
     }
 
     /// Return the exact terminal ledger ordinal.
-    pub(in crate::sumeragi) const fn ordinal(&self) -> u128 {
-        self.ordinal
+    pub(in crate::sumeragi) fn ordinal(&self) -> u128 {
+        match &self.origin {
+            ReleasedLifecycleValidateTerminalOriginV1::Authenticated(resolved) => {
+                resolved.ordinal()
+            }
+            #[cfg(test)]
+            ReleasedLifecycleValidateTerminalOriginV1::Synthetic { ordinal, .. } => *ordinal,
+        }
     }
 
-    /// Borrow the exact durable receipt authenticated by the terminal row.
-    pub(in crate::sumeragi) const fn durable(
+    /// Borrow the semantically authenticated original durable receipt.
+    pub(in crate::sumeragi) fn durable(
         &self,
     ) -> &crate::sumeragi::v2_body_store::DurableBodyReceipt {
-        &self.durable
-    }
-
-    /// Borrow the immutable original Validate effect fingerprint.
-    pub(in crate::sumeragi) const fn effect(&self) -> &AdapterEffect {
-        &self.effect
-    }
-
-    /// Borrow the comparison-only pending identity of the terminal row.
-    pub(in crate::sumeragi) const fn pending(
-        &self,
-    ) -> &crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1 {
-        &self.pending
-    }
-
-    /// Return the terminal row's immutable semantic statement.
-    pub(in crate::sumeragi) const fn statement(
-        &self,
-    ) -> crate::sumeragi::v2_runtime::RuntimeCandidateSemanticStatement {
-        self.statement
+        match &self.origin {
+            ReleasedLifecycleValidateTerminalOriginV1::Authenticated(resolved) => {
+                resolved.durable()
+            }
+            #[cfg(test)]
+            ReleasedLifecycleValidateTerminalOriginV1::Synthetic { durable, .. } => durable,
+        }
     }
 }
 

@@ -8,9 +8,10 @@ the sibling `iroha-docs` repository.
 embed an exact package-local mirror at
 `crates/iroha_torii/assets/openapi/torii.json`, while
 `artifacts/openapi/versions/current/torii.json` is the release alias. All three
-files must remain byte-identical. The full Torii release profile serves those
-exact bytes; reduced feature profiles prune only route-catalog-gated path and
-method entries.
+files must remain byte-identical. Runtime parses this authority, installs
+security and Kagemusha definitions, prunes disabled catalog operations and
+retired schemas, and serializes the compiled projection. Its response is not a
+claim that the authored JSON bytes were served unchanged.
 
 The xtask and release wrappers load the static authority through a live Torii
 router, validate its OpenAPI shape and route contract, and emit the bytes for
@@ -65,23 +66,29 @@ pin must exactly match the bytes compiled into `xtask`, and the dirty-source
 digest binds that repair. Signed generation and clean release provenance still
 require the committed lock and pin to agree.
 
-## Staging-safe development replay
+## Unsigned authored-spec metadata
 
-Update `artifacts/openapi/torii.json` and its package-local mirror together,
-without normalizing the JSON bytes, then commit the reviewed source authority.
-Copy the existing artifact tree to a private `/private/tmp` directory, replay
-an explicitly unsigned first-release artifact there through the shared release
-process policy, synchronize the `current` alias, and run the metadata check.
-The wrapper requires an exact clean candidate, creates a fresh hard-link-free
-source clone, seals it read-only, and owns a fresh external Cargo target. The
-Node steps do not launch Cargo or read the live artifact tree. Place output
-below `<run>/artifacts`, use that directory as the authenticated artifact root,
-and keep the cooperative cancellation marker at `<run>/cancel-request.json`,
-outside the artifact and Cargo roots. Callers that override either
-`IROHA_RELEASE_ARTIFACT_ROOT` or
-`IROHA_RELEASE_CANCEL_REQUEST_PATH` must provide both; a cancellation request
-is observed only between commands, never by interrupting an in-flight process.
-Each script reports both authenticated channel paths before release work starts.
+Update all three authored spec copies together without changing their bytes,
+then commit the reviewed source. Plain `--unsigned-manifest` uses the Node
+metadata owner on that exact clean checkout. It runs no Cargo command, creates
+no clone or Cargo target, and does not execute a live router. The mandatory
+native Torii tests validate the compiled projection separately; their evidence
+must not be inferred from a successful metadata refresh.
+
+The V2 manifest binds the actual clean commit, its commit timestamp, the source
+inventory digest, and the exact authored artifact hashes. The recursive `tools`
+entry in `release/openapi-generator-inputs-v1.txt` includes this generator and
+its shared verifier. A separate `unsigned-authored-spec.json` receipt identifies
+this owner and explicitly records `runtime_projection: "not_executed"`. No
+xtask command identity, router result, or signature is invented.
+
+Use an empty owner-private output directory below `<run>/artifacts`. The owner
+preserves historical public versions, checks the existing real V2 release-input
+verifier against the complete staged tree, rechecks source and destination,
+then publishes by one directory rename. Validation failures leave the output
+empty. Existing output contents are rejected. Callers overriding either
+`IROHA_RELEASE_ARTIFACT_ROOT` or `IROHA_RELEASE_CANCEL_REQUEST_PATH` must provide both;
+cancellation remains cooperative at command boundaries.
 
 ```bash
 OPENAPI_RUN_ROOT="$(mktemp -d /private/tmp/iroha-openapi-refresh.XXXXXX)"
@@ -89,27 +96,23 @@ chmod 700 "${OPENAPI_RUN_ROOT}"
 OPENAPI_ARTIFACT_ROOT="${OPENAPI_RUN_ROOT}/artifacts"
 OPENAPI_STAGE="${OPENAPI_ARTIFACT_ROOT}/openapi"
 mkdir -m 700 "${OPENAPI_ARTIFACT_ROOT}" "${OPENAPI_STAGE}"
-cp -R artifacts/openapi/. "${OPENAPI_STAGE}/"
 export IROHA_RELEASE_ARTIFACT_ROOT="${OPENAPI_ARTIFACT_ROOT}"
 export IROHA_RELEASE_CANCEL_REQUEST_PATH="${OPENAPI_RUN_ROOT}/cancel-request.json"
 
 bash ci/run_openapi_generator.sh \
   --output-dir "${OPENAPI_STAGE}" \
   --unsigned-manifest
-
-node tools/openapi/scripts/sync-openapi.mjs \
-  --version=current --latest --allow-unsigned \
-  --output-dir="${OPENAPI_STAGE}"
 node tools/openapi/scripts/verify-openapi-versions.mjs \
   --output-dir="${OPENAPI_STAGE}" --allow-unsigned
 npm --prefix tools/openapi test
 ```
 
-Unsigned artifacts are for development only. Their manifests still bind the
-artifact path, byte count, SHA-256, BLAKE3, and generator provenance.
-Publish the five emitted JSON files only after comparing this complete cache
-tree with `artifacts/openapi/` and rechecking the package mirror byte-for-byte;
-`allowed_signers.json` remains an input.
+Unsigned artifacts are for development only. Review and publish the five JSON
+outputs listed in `generated-files.toml`; retain the receipt as run evidence and
+leave `allowed_signers.json` and the package mirror unchanged. Commit only those
+metadata outputs after the clean generator commit. The existing release-input
+verifier admits that later output-only commit through its ancestor/source-tree
+contract, without changing the native binary identity or rebuilding Rust.
 
 ## Release signing
 

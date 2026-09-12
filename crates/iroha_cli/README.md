@@ -120,6 +120,51 @@ load the witness through a bounded, change-detecting reader and validate its
 schema, account, exact network request hash, and signer set before sending it.
 Configured relative paths resolve from the directory containing the client TOML file.
 
+### Fixed-schedule transaction collection
+
+`iroha tx load` uses persistent SDK clients to prepare and submit a fixed
+open-loop workload and observe exact global state-resolved Applied outcomes.
+It requires an explicit fee payer and existing funded account configuration:
+
+```sh
+iroha --config client.toml --fee-payer authority tx load \
+  --pair-index 1 --variant one_lane --seed "${PAIR_SEED}" \
+  --offered-load-tps "${OFFERED_TPS}" --warmup-seconds "${WARMUP_SECONDS}" \
+  --measurement-seconds "${MEASUREMENT_SECONDS}" --drain-seconds "${DRAIN_SECONDS}" \
+  --max-submission-lag-ms "${SUBMISSION_LAG_MS}" \
+  --trace-out "${ABSENT_ABSOLUTE_TRACE_PATH}" \
+  --diagnostic-out "${ABSENT_ABSOLUTE_JOURNAL_PATH}"
+```
+
+Use repeated `--account-config` paths to select an ordered pool of independently
+funded signing accounts on the same network. Logical workload identities select
+accounts deterministically; config files and signing credentials remain local.
+The workload emits equal-size Log instructions and binds its logical identity in
+transaction metadata. It does not claim that this workload exercises independent
+execution lanes: routing, fee contention and real workload representativeness
+still require qualification.
+
+Preparation, submission, outstanding observations and diagnostic recording have
+explicit fixed bounds. A missed schedule, exhausted local capacity, unknown or
+failed submission, authoritative terminal failure, or incomplete drain fails
+collection; no transaction is automatically replayed. `--help` lists the
+lookahead, concurrency and polling controls. The collector includes polling and
+transport delay in its observed latency; it never estimates a server commit time.
+
+The new diagnostic JSON-lines file retains the schedule, exact hashes,
+observations and final outcomes. The strict V1 trace is published without
+replacing an existing file only after every scheduled request is acknowledged
+and state-applied within its phase deadline and the journal reaches durable
+storage. Both files have hard byte bounds; oversized experiments fail instead
+of truncating records. Endpoint URLs and external error text are omitted; the
+journal retains fixed failure stages and bounded status classifications. No
+private key or authentication header is written.
+
+This command supplies the transaction-observation component of
+[G-SCALE](../../specs/sumeragi_v2_multilane_scaling_gate.md). Trial-adapter wiring,
+production collector capacity, deployment/routing and resource qualification,
+and the five real paired trials remain separate completion requirements.
+
 ### Transaction waits
 
 Use the built-in wait flow instead of shell polling:
@@ -210,11 +255,13 @@ Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instruc
 
 ### Sumeragi consensus helpers
 
-Operator reads require an explicit runtime key file whose public key is allowlisted by the node.
-Pass the absolute file path on every invocation; the CLI does not read this credential from the
-environment or client TOML and never substitutes the account key. On Unix the file must be an
-owner-owned, singly linked regular file with exact mode `0600`. Requests are signed for the exact
-`network_id` in `client.toml`.
+Operator reads require an explicit runtime key whose public key is allowlisted by the node.
+Pass either `--operator-private-key-file /absolute/path` or an inherited read-only descriptor with
+`--operator-private-key-fd FD` (3–65535). These options are mutually exclusive. The CLI does not
+read this credential from the environment or client TOML and never substitutes the account key.
+On Unix the key must be in an owner-owned, singly linked regular file with exact mode `0600`.
+Descriptor reads use the inherited file directly, preserve the caller's file offset and never
+reopen a path. Requests are signed for the exact `network_id` in `client.toml`.
 
 Fetch the exact reducer-owned consensus status:
 

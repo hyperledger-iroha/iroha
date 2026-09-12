@@ -269,8 +269,8 @@ pub enum StorageError {
         /// Maximum sample count accepted by the v1 protocol.
         maximum: u32,
     },
-    /// Failed to rebuild the PoR tree from persisted chunk data.
-    #[error("failed to build PoR tree: {0}")]
+    /// Chunk ingestion, integrity checking, or persistence failed.
+    #[error("chunk storage operation failed: {0}")]
     ChunkStore(#[from] ChunkStoreError),
     /// Bounded PoR commitment geometry overflowed its persistent representation.
     #[error("PoR commitment geometry overflow while accounting for {context}")]
@@ -1188,7 +1188,8 @@ impl ChunkSlice {
 }
 const POR_COMMITMENT_VERSION_V1: u8 = 1;
 const POR_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.por.commitment.digest.v1\0";
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::store::StoredPorCommitmentV1")]
 struct StoredPorCommitmentV1 {
     version: u8,
     root: [u8; 32],
@@ -1276,7 +1277,8 @@ impl StoredPorCommitmentV1 {
         Ok(hasher.finalize().into())
     }
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::store::ManifestIndex")]
 struct ManifestIndex {
     version: u8,
     total_bytes: u64,
@@ -1324,7 +1326,8 @@ struct ManifestIndexEntry {
     #[norito(default)]
     last_access: u64,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::store::StoredManifestRecord")]
 struct StoredManifestRecord {
     manifest_id: String,
     manifest_cid: Vec<u8>,
@@ -3765,6 +3768,50 @@ impl StorageBackend {
         self.ensure_durability_healthy()?;
         work(&manifest)
     }
+    /// Verify an entire offline payload under one manifest lifecycle read lease.
+    ///
+    /// Each stored chunk receives the normal no-follow, exact-length, stable-identity, and
+    /// digest checks. The expected stream must match every byte and end at the admitted length.
+    /// This maintenance read does not update access metadata or issue provider attestations.
+    /// Retirement cannot remove the manifest until verification returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unavailable or retiring manifests, damaged chunks, source I/O errors,
+    /// or differing, truncated, or trailing expected bytes.
+    pub fn verify_offline_payload<R: Read>(
+        &self,
+        manifest_id: &str,
+        expected: &mut R,
+    ) -> Result<(), StorageError> {
+        self.with_manifest_io(manifest_id, |manifest| {
+            let mut expected_chunk = Vec::new();
+            for (chunk_index, record) in manifest.chunk_files.iter().enumerate() {
+                self.ensure_durability_healthy()?;
+                let actual = read_verified_chunk(record, chunk_index)?;
+                expected_chunk.try_reserve(actual.len()).map_err(|_| {
+                    StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                        context: "offline payload verification buffer",
+                        requested: actual.len(),
+                    })
+                })?;
+                expected_chunk.resize(actual.len(), 0);
+                expected.read_exact(&mut expected_chunk)?;
+                if actual != expected_chunk {
+                    return Err(StorageError::ChunkDigestMismatch { chunk_index });
+                }
+                expected_chunk.clear();
+            }
+            let mut trailing = [0_u8; 1];
+            if expected.read(&mut trailing)? != 0 {
+                return Err(StorageError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "offline payload contains trailing bytes",
+                )));
+            }
+            self.ensure_durability_healthy()
+        })?
+    }
     /// Read an exact range from the stored payload.
     pub fn read_payload_range(
         &self,
@@ -5755,338 +5802,7 @@ fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use blake3;
-    use sorafs_car::{CarPlanError, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
-    use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
-    use std::{
-        fs,
-        io::{self, Cursor, Read},
-        sync::{Arc, mpsc},
-        thread,
-        time::Duration,
-    };
-    use tempfile::TempDir;
-    // Keep one target-gated assertion for every ABI branch. Overlapping branches
-    // fail with duplicate definitions; missing branches fail to resolve the flag.
-    #[cfg(all(
-        target_os = "linux",
-        any(
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        )
-    ))]
-    #[test]
-    fn linux_directory_open_flags_match_low_flag_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x8000);
-        assert_eq!(platform_directory_only_flag(), 0x4000);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        not(any(
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "m68k",
-            target_arch = "powerpc",
-            target_arch = "powerpc64"
-        ))
-    ))]
-    #[test]
-    fn linux_directory_open_flags_match_generic_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-        assert_eq!(platform_directory_only_flag(), 0x10000);
-    }
-    #[cfg(all(
-        target_os = "android",
-        any(target_arch = "aarch64", target_arch = "arm")
-    ))]
-    #[test]
-    fn android_arm_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x8000);
-        assert_eq!(platform_directory_only_flag(), 0x4000);
-    }
-    #[cfg(all(
-        target_os = "android",
-        any(target_arch = "x86", target_arch = "x86_64")
-    ))]
-    #[test]
-    fn android_x86_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-        assert_eq!(platform_directory_only_flag(), 0x10000);
-    }
-    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
-    #[test]
-    fn android_riscv64_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x400000);
-        assert_eq!(platform_directory_only_flag(), 0x200000);
-    }
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "riscv32", target_arch = "riscv64")
-    ))]
-    #[test]
-    fn linux_riscv_directory_open_flags_remain_generic_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x20000);
-        assert_eq!(platform_directory_only_flag(), 0x10000);
-    }
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x2000_0000);
-        assert_eq!(platform_directory_only_flag(), 0x0010_0000);
-    }
-    #[cfg(target_os = "ios")]
-    #[test]
-    fn ios_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
-        assert_eq!(platform_directory_only_flag(), 0x0010_0000);
-    }
-    #[cfg(target_os = "freebsd")]
-    #[test]
-    fn freebsd_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
-        assert_eq!(platform_directory_only_flag(), 0x0002_0000);
-    }
-    #[cfg(target_os = "dragonfly")]
-    #[test]
-    fn dragonfly_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
-        assert_eq!(platform_directory_only_flag(), 0x0800_0000);
-    }
-    #[cfg(target_os = "openbsd")]
-    #[test]
-    fn openbsd_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
-        assert_eq!(platform_directory_only_flag(), 0x0002_0000);
-    }
-    #[cfg(target_os = "netbsd")]
-    #[test]
-    fn netbsd_directory_open_flags_match_target_abi() {
-        assert_eq!(platform_no_follow_flag(), 0x100);
-        assert_eq!(platform_directory_only_flag(), 0x0020_0000);
-    }
-    fn temp_config(temp_dir: &TempDir) -> StorageConfig {
-        let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
-        StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_path.join("storage"))
-            .build()
-    }
-    fn temp_config_with_pdp_limit(temp_dir: &TempDir, limit: u64) -> StorageConfig {
-        let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
-        StorageConfig::builder()
-            .enabled(true)
-            .data_dir(temp_path.join("storage"))
-            .pdp_tree_memory_limit_bytes(iroha_config::base::util::Bytes(limit))
-            .build()
-    }
-    fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
-        temp_dir.path().canonicalize().expect("canonical tempdir")
-    }
-    fn single_file_plan(bytes: &[u8]) -> Result<CarBuildPlan, CarPlanError> {
-        CarBuildPlan::single_file(bytes)
-    }
-    fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
-        let heap_limit = plan
-            .validate()
-            .expect("valid manifest fixture plan")
-            .estimated_ingest_heap_bytes()
-            .max(1);
-        let mut chunk_store =
-            ChunkStore::with_profile_and_heap_limit(plan.chunk_profile, heap_limit)
-                .expect("bounded manifest fixture chunk store");
-        chunk_store
-            .ingest_plan(payload, plan)
-            .expect("manifest fixture payload matches plan");
-        let car_stats = CarWriter::new(plan, payload)
-            .expect("prepare canonical fixture CAR")
-            .write_to(io::sink())
-            .expect("compute canonical fixture CAR");
-        ManifestBuilder::new()
-            .root_cid(
-                car_stats
-                    .root_cids
-                    .first()
-                    .cloned()
-                    .expect("fixture CAR root"),
-            )
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(
-                plan.chunk_profile,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(*chunk_store.por_tree().root())
-            .content_length(plan.content_length)
-            .car_digest(*car_stats.car_archive_digest.as_bytes())
-            .car_size(car_stats.car_size)
-    }
-    fn empty_file_plan() -> CarBuildPlan {
-        let plan = CarBuildPlan {
-            chunk_profile: ChunkProfile::DEFAULT,
-            payload_digest: blake3::hash(&[]),
-            content_length: 0,
-            chunks: Vec::new(),
-            files: vec![FilePlan {
-                path: Vec::new(),
-                first_chunk: 0,
-                chunk_count: 0,
-                size: 0,
-            }],
-        };
-        plan.validate().expect("canonical empty plan");
-        plan
-    }
-    fn test_manifest(payload: &[u8], plan: &CarBuildPlan, fixture_id_byte: u8) -> ManifestV1 {
-        manifest_builder_for_plan(payload, plan)
-            .add_metadata("test.fixture_id", fixture_id_byte.to_string())
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest")
-    }
-    fn ingest_test_payload(
-        temp_dir: &TempDir,
-        payload: &[u8],
-        root_byte: u8,
-    ) -> (StorageConfig, StorageBackend, String) {
-        let config = temp_config(temp_dir);
-        let backend = StorageBackend::new(config.clone()).expect("backend init");
-        let plan = single_file_plan(payload).expect("plan");
-        let manifest = test_manifest(payload, &plan, root_byte);
-        let mut reader = payload;
-        let manifest_id = backend
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest");
-        (config, backend, manifest_id)
-    }
-    fn rewrite_manifest_record(
-        backend: &StorageBackend,
-        manifest_id: &str,
-        mutate: impl FnOnce(&mut StoredManifestRecord),
-    ) {
-        let metadata_path = backend
-            .manifests_dir
-            .join(manifest_id)
-            .join(METADATA_FILE_NAME);
-        let bytes = fs::read(&metadata_path).expect("read manifest metadata");
-        let mut record: StoredManifestRecord =
-            norito::decode_from_bytes(&bytes).expect("decode manifest metadata");
-        mutate(&mut record);
-        fs::write(
-            &metadata_path,
-            norito::to_bytes(&record).expect("encode manifest metadata"),
-        )
-        .expect("rewrite manifest metadata");
-    }
-    fn rewrite_manifest_index(backend: &StorageBackend, mutate: impl FnOnce(&mut ManifestIndex)) {
-        let bytes = fs::read(&backend.index_path).expect("read manifest index");
-        let mut index: ManifestIndex =
-            norito::decode_from_bytes(&bytes).expect("decode manifest index");
-        mutate(&mut index);
-        fs::write(
-            &backend.index_path,
-            norito::to_bytes(&index).expect("encode manifest index"),
-        )
-        .expect("rewrite manifest index");
-    }
-    fn first_pdp_sample() -> Vec<PdpSampleV1> {
-        vec![PdpSampleV1 {
-            segment_index: 0,
-            hot_leaf_indices: vec![0],
-        }]
-    }
-    fn replace_with_empty_index(config: &StorageConfig) {
-        let index_path = config.data_dir().join("index.norito");
-        let bytes = norito::to_bytes(&ManifestIndex::default()).expect("encode empty index");
-        write_atomic(&index_path, &bytes).expect("replace storage index");
-    }
-    struct GatedReader {
-        bytes: Cursor<Vec<u8>>,
-        entered: Option<mpsc::Sender<()>>,
-        release: mpsc::Receiver<()>,
-        fail_after_release: bool,
-    }
-    impl Read for GatedReader {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            if let Some(entered) = self.entered.take() {
-                entered
-                    .send(())
-                    .map_err(|_| io::Error::other("test gate receiver dropped"))?;
-                self.release
-                    .recv()
-                    .map_err(|_| io::Error::other("test gate sender dropped"))?;
-                if self.fail_after_release {
-                    return Err(io::Error::other("injected ingest reader failure"));
-                }
-            }
-            self.bytes.read(buffer)
-        }
-    }
-    fn assert_staging_empty(backend: &StorageBackend) {
-        let staging_root = backend.root_dir().join(INGEST_STAGING_DIR_NAME);
-        if staging_root.exists() {
-            assert!(
-                fs::read_dir(&staging_root)
-                    .expect("read staging root")
-                    .next()
-                    .is_none(),
-                "ingest staging root must not retain attempt directories"
-            );
-        }
-    }
-    #[test]
-    fn storage_directory_has_single_process_owner() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let config = temp_config(&temp_dir);
-        let owner = StorageBackend::new(config.clone()).expect("acquire storage ownership");
-        assert!(matches!(
-            StorageBackend::new(config.clone()),
-            Err(StorageError::StorageDirectoryInUse { .. })
-        ));
-        drop(owner);
-        StorageBackend::new(config).expect("storage ownership releases on drop");
-    }
-    #[cfg(unix)]
-    #[test]
-    fn storage_lock_rejects_symlink() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let config = temp_config(&temp_dir);
-        fs::create_dir_all(config.data_dir()).expect("create storage root");
-        let target = temp_dir.path().join("lock-target");
-        fs::write(&target, b"must remain untouched").expect("write lock target");
-        std::os::unix::fs::symlink(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
-            .expect("create storage lock symlink");
-        assert!(matches!(
-            StorageBackend::new(config),
-            Err(StorageError::Io(_))
-        ));
-        assert_eq!(
-            fs::read(&target).expect("read lock target"),
-            b"must remain untouched"
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn storage_lock_rejects_hard_link() {
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let config = temp_config(&temp_dir);
-        fs::create_dir_all(config.data_dir()).expect("create storage root");
-        let target = temp_dir.path().join("lock-target");
-        fs::write(&target, b"must remain untouched").expect("write lock target");
-        fs::hard_link(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
-            .expect("create storage lock hard link");
-        assert!(matches!(
-            StorageBackend::new(config),
-            Err(StorageError::CorruptStorageState { .. })
-        ));
-        assert_eq!(
-            fs::read(&target).expect("read target"),
-            b"must remain untouched"
-        );
-    }
+    include!("store_fixture_and_ownership_tests.rs");
     include!("store_manifest_payload_integrity_tests.rs");
     #[test]
     fn startup_rolls_back_uncommitted_gc_move() {
@@ -6313,6 +6029,59 @@ mod tests {
         let por_tree = stored.por_tree();
         assert_eq!(por_tree.payload_len(), plan.content_length);
         assert_eq!(por_tree.chunks().len(), plan.chunks.len());
+        fn assert_frame<T>(bytes: &[u8], name: &str) -> T
+        where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+            let decoded: T = norito::decode_canonical(bytes).expect("actual durable storage frame");
+            assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+            let mut wrong_owner = bytes.to_vec();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+            let mut trailing = bytes.to_vec();
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+            decoded
+        }
+        let metadata = fs::read(
+            backend
+                .manifests_dir
+                .join(&manifest_id)
+                .join(METADATA_FILE_NAME),
+        )
+        .unwrap();
+        let record = assert_frame::<StoredManifestRecord>(
+            &metadata,
+            "sorafs_node::store::StoredManifestRecord",
+        );
+        assert_eq!(record.manifest_id, manifest_id);
+        let index = assert_frame::<ManifestIndex>(
+            &fs::read(&backend.index_path).unwrap(),
+            "sorafs_node::store::ManifestIndex",
+        );
+        assert_eq!(index.entries.len(), 1);
+        assert_eq!(index.entries[0].manifest_id, manifest_id);
+        let commitment_bytes = norito::to_bytes(&record.por_commitment).unwrap();
+        let commitment = assert_frame::<StoredPorCommitmentV1>(
+            &commitment_bytes,
+            "sorafs_node::store::StoredPorCommitmentV1",
+        );
+        assert_eq!(commitment, record.por_commitment);
+        let mut expected = blake3::Hasher::new();
+        expected.update(POR_COMMITMENT_DIGEST_DOMAIN_V1);
+        expected.update(&u64::try_from(commitment_bytes.len()).unwrap().to_le_bytes());
+        expected.update(&commitment_bytes);
+        assert_eq!(
+            commitment.digest().unwrap(),
+            *expected.finalize().as_bytes()
+        );
     }
     #[test]
     fn ingest_rejects_manifest_por_root_mismatch_without_publication() {
@@ -6933,6 +6702,172 @@ mod tests {
                 Err(StorageError::CorruptStorageState { .. })
             ));
         }
+    }
+    #[test]
+    fn offline_payload_verification_preserves_access_metadata_across_chunks() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload: Vec<u8> = (0..ChunkProfile::DEFAULT.max_size + 4096)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xC1);
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        assert!(stored.chunk_count() >= 2);
+        let metadata_path = stored
+            .manifest_path()
+            .parent()
+            .expect("manifest dir")
+            .join(METADATA_FILE_NAME);
+        let before_metadata = fs::read(&metadata_path).expect("metadata before");
+        let before_index = fs::read(&backend.index_path).expect("index before");
+        let before_modified = fs::metadata(&metadata_path)
+            .expect("metadata stat")
+            .modified()
+            .expect("modified");
+        for _ in 0..2 {
+            backend
+                .verify_offline_payload(&manifest_id, &mut payload.as_slice())
+                .expect("verify full offline payload");
+        }
+        assert_eq!(
+            fs::read(&metadata_path).expect("metadata after"),
+            before_metadata
+        );
+        assert_eq!(
+            fs::read(&backend.index_path).expect("index after"),
+            before_index
+        );
+        assert_eq!(
+            fs::metadata(&metadata_path)
+                .expect("metadata stat")
+                .modified()
+                .expect("modified"),
+            before_modified
+        );
+        assert_eq!(
+            backend
+                .manifest(&manifest_id)
+                .expect("manifest")
+                .last_access(),
+            stored.last_access()
+        );
+    }
+    #[test]
+    fn offline_payload_verification_rejects_source_and_stored_integrity_failures() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload: Vec<u8> = (0..ChunkProfile::DEFAULT.max_size + 4096)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xC2);
+        let mut wrong = payload.clone();
+        *wrong.last_mut().expect("payload") ^= 1;
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut wrong.as_slice()),
+            Err(StorageError::ChunkDigestMismatch { .. })
+        ));
+        assert!(
+            matches!(backend.verify_offline_payload(&manifest_id, &mut &payload[..payload.len() - 1]),
+            Err(StorageError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof)
+        );
+        let mut trailing = payload.clone();
+        trailing.push(0);
+        assert!(
+            matches!(backend.verify_offline_payload(&manifest_id, &mut trailing.as_slice()),
+            Err(StorageError::Io(error)) if error.kind() == io::ErrorKind::InvalidData)
+        );
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let chunk = stored.chunk_files.last().expect("last chunk");
+        let original = fs::read(&chunk.path).expect("chunk bytes");
+        let mut corrupt = original.clone();
+        corrupt[0] ^= 1;
+        fs::write(&chunk.path, &corrupt).expect("corrupt stored chunk");
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut payload.as_slice()),
+            Err(StorageError::ChunkStore(
+                ChunkStoreError::DigestMismatch { .. }
+            ))
+        ));
+        fs::write(&chunk.path, &original[..original.len() - 1]).expect("truncate chunk");
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut payload.as_slice()),
+            Err(StorageError::ChunkStore(
+                ChunkStoreError::LengthMismatch { .. }
+            ))
+        ));
+        #[cfg(unix)]
+        {
+            let other = temp_dir.path().join("other-chunk");
+            fs::write(&other, &original).expect("other chunk");
+            fs::remove_file(&chunk.path).expect("remove chunk");
+            std::os::unix::fs::symlink(&other, &chunk.path).expect("substitute symlink");
+            assert!(
+                backend
+                    .verify_offline_payload(&manifest_id, &mut payload.as_slice())
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn offline_payload_verification_holds_retirement_lease_until_stream_finishes() {
+        let _serial = MANIFEST_IO_WRITE_WAIT_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"offline verification holds one lifecycle lease";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC3);
+        let backend = Arc::new(backend);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let verifier_backend = Arc::clone(&backend);
+        let verifier_id = manifest_id.clone();
+        let verifier = thread::spawn(move || {
+            let mut expected = GatedReader {
+                bytes: Cursor::new(payload.to_vec()),
+                entered: Some(entered_tx),
+                release: release_rx,
+                fail_after_release: false,
+            };
+            verifier_backend.verify_offline_payload(&verifier_id, &mut expected)
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("verification entered lease");
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        *MANIFEST_IO_WRITE_WAIT_TEST_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(ManifestIoWriteWaitTestHook {
+                manifest_id: manifest_id.clone(),
+                waiting: waiting_tx,
+            });
+        let (done_tx, done_rx) = mpsc::channel();
+        let eviction_backend = Arc::clone(&backend);
+        let eviction_id = manifest_id.clone();
+        let eviction = thread::spawn(move || {
+            done_tx
+                .send(eviction_backend.evict_manifest(&eviction_id))
+                .expect("eviction result");
+        });
+        waiting_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("eviction waits for lease");
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut payload.as_slice()),
+            Err(StorageError::ManifestRetirementInProgress { .. })
+        ));
+        release_tx.send(()).expect("release expected stream");
+        verifier
+            .join()
+            .expect("verification joins")
+            .expect("verification succeeds");
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("eviction completes")
+                .expect("eviction succeeds"),
+            payload.len() as u64
+        );
+        eviction.join().expect("eviction joins");
     }
     #[test]
     fn last_access_persists_after_reads() {
@@ -8669,4 +8604,5 @@ mod tests {
     }
     #[cfg(unix)]
     include!("store_atomic_path_tests.rs");
+    include!("store_schema_identity_tests.rs");
 }

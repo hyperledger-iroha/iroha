@@ -520,6 +520,8 @@ pub fn canonical_manifest_root_cid(digest: [u8; 32]) -> Vec<u8> {
     cid
 }
 /// Norito-encoded manifest (version 1).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::ManifestV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -733,6 +735,8 @@ impl ManifestBuilder {
     }
 }
 /// Simple newtype for Dag codec identifiers (CID multicodec).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::DagCodecId")]
 #[derive(
     Debug,
     Clone,
@@ -746,6 +750,8 @@ impl ManifestBuilder {
 )]
 pub struct DagCodecId(pub u64);
 /// Snapshot of the chunking profile baked into the manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::ChunkingProfileV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -802,6 +808,8 @@ impl ChunkingProfileV1 {
     }
 }
 /// Profile identifier used for chunking negotiation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::ProfileId")]
 #[derive(
     Debug,
     Clone,
@@ -817,6 +825,8 @@ impl ChunkingProfileV1 {
 )]
 pub struct ProfileId(pub u32);
 /// Storage replication policy encoded in the manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::PinPolicy")]
 #[derive(
     Debug,
     Clone,
@@ -843,6 +853,8 @@ impl Default for PinPolicy {
     }
 }
 /// Storage tier expressed in the manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::StorageClass")]
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord, Default,
 )]
@@ -879,6 +891,8 @@ impl json::JsonDeserialize for StorageClass {
 ///
 /// Future policy proofs (e.g., admission allowlists, replication attestations)
 /// will be threaded through this container once the registry schema lands.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::GovernanceProofs")]
 #[derive(
     Debug,
     Clone,
@@ -894,6 +908,8 @@ pub struct GovernanceProofs {
     pub council_signatures: Vec<CouncilSignature>,
 }
 /// Council signature proof binding the manifest digest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::CouncilSignature")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -902,6 +918,8 @@ pub struct CouncilSignature {
     pub signature: Vec<u8>,
 }
 /// Alias binding bundled with the manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::AliasClaim")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -911,6 +929,8 @@ pub struct AliasClaim {
     pub proof: Vec<u8>,
 }
 /// Metadata key/value pair recorded in the manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::MetadataEntry")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -1114,3 +1134,12 @@ mod tests {
         assert_eq!(chunking.aliases, vec!["inline.inline@0.0.0".to_owned()]);
     }
 }
+
+#[cfg(test)]
+include!("captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+mod captured_owner_identity_support;
+
+#[cfg(test)]
+mod signing_identity_test_support;

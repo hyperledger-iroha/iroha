@@ -213,24 +213,12 @@ fn load_prepared_storage_payload_uses_canonical_directory_ordering() {
         "console.log('hayahi');",
     )
     .expect("write script");
-    let mut manifest = sample_manifest();
+    let manifest = sample_manifest();
     let profile = chunk_profile_from_manifest(&manifest).expect("chunk profile");
     let (expected_plan, expected_payload) =
         CarBuildPlan::from_directory_with_profile(&payload_dir, profile)
             .expect("build canonical directory payload");
-    let mut reader = expected_payload.as_slice();
-    let stats = CarStreamingWriter::new(&expected_plan)
-        .write_from_reader(&mut reader, &mut io::sink())
-        .expect("canonical directory CAR stats");
-    manifest.root_cid = stats.root_cids[0].clone();
-    manifest.dag_codec = DagCodecId(stats.dag_codec);
-    manifest.content_length = expected_plan.content_length;
-    manifest.chunk_digest_sha3_256 =
-        sorafs_car::compute_chunk_plan_digest_sha3(&expected_plan.chunks);
-    manifest.por_root =
-        compute_por_root(&expected_payload, &expected_plan).expect("directory PoR root");
-    manifest.car_digest = *stats.car_archive_digest.as_bytes();
-    manifest.car_size = stats.car_size;
+    let manifest = super::deployment_integrity_tests::manifest(&expected_plan, &expected_payload);
     let (payload, files, payload_kind) =
         load_prepared_storage_payload(&payload_dir, &manifest).expect("load storage payload");
     assert_eq!(payload_kind, "directory");

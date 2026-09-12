@@ -15,8 +15,8 @@ pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_c
 use norito::{
     Decode, Encode,
     core::{
-        Archived, DecodeFromSlice, DecodeLimits, Error as NoritoError, NoritoDeserialize,
-        NoritoSerialize, SerializePayload, serialize_to_buffer,
+        Archived, DecodeFromSlice, DecodeLimits, DeserializePayload, Error as NoritoError,
+        SerializePayload, serialize_to_buffer,
     },
 };
 use std::io::Write;
@@ -113,7 +113,8 @@ pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK | CONTRACT_
 const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
 const CONTRACT_DEBUG_SECTION_HEADER_SIZE: usize = 8;
 /// Artifact-local entrypoint metadata carried inside the required `CNTR` section.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedEntrypointDescriptor")]
 pub struct EmbeddedEntrypointDescriptor {
     pub name: String,
     pub kind: EntryPointKind,
@@ -154,7 +155,8 @@ impl EmbeddedEntrypointDescriptor {
     }
 }
 /// Field descriptor for embedded durable state record types.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedStateFieldDescriptor")]
 pub struct EmbeddedStateFieldDescriptor {
     pub name: String,
     pub ty: EmbeddedStateType,
@@ -165,7 +167,11 @@ pub struct EmbeddedStateFieldDescriptor {
 /// budget remains safe on constrained runtime stacks. `Clone` and `Debug` remain recursively
 /// derived for tooling; production boundary code must borrow rather than clone or format an
 /// untrusted maximum-depth tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::metadata::EmbeddedStateType",
+    frame = "iroha.kotodama.EmbeddedStateTypeV1"
+)]
 pub enum EmbeddedStateType {
     /// Unit value represented by one zero scalar.
     Unit,
@@ -1239,19 +1245,20 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         .map(|decoded| decoded.value)
         .ok_or(NoritoError::LengthMismatch)
 }
-impl NoritoSerialize for EmbeddedStateFieldDescriptor {}
+
 impl SerializePayload for EmbeddedStateFieldDescriptor {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_field_payload(self)?;
         encoded.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for EmbeddedStateFieldDescriptor {
+
+impl<'a> DeserializePayload<'a> for EmbeddedStateFieldDescriptor {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateFieldDescriptor decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
+        let encoded = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_field_payload(&encoded)
     }
 }
@@ -1262,26 +1269,20 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateFieldDescriptor {
         Ok((value, used))
     }
 }
-impl NoritoSerialize for EmbeddedStateType {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
-    }
-}
+
 impl SerializePayload for EmbeddedStateType {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_type_payload(self)?;
         encoded.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for EmbeddedStateType {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
-    }
+
+impl<'a> DeserializePayload<'a> for EmbeddedStateType {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateType decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
+        let encoded = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_type_payload(&encoded)
     }
 }
@@ -1293,14 +1294,18 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateType {
     }
 }
 /// Seiyaku-level durable state declaration descriptor.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedStateDescriptor")]
 pub struct EmbeddedStateDescriptor {
     pub name: String,
     pub ty: EmbeddedStateType,
 }
 /// Decoded payload of the required `CNTR` section carried by contract artifacts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kotodama.EmbeddedContractInterfaceV1")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::metadata::EmbeddedContractInterfaceV1",
+    frame = "iroha.kotodama.EmbeddedContractInterfaceV1"
+)]
 pub struct EmbeddedContractInterfaceV1 {
     /// Canonical source-level seiyaku identity.
     pub seiyaku_name: String,
@@ -1325,7 +1330,8 @@ pub struct EmbeddedContractInterfaceV1 {
     pub error_types: Vec<ContractErrorTypeDescriptor>,
 }
 /// Exact source location emitted for hash-keyed compiler debug sidecars.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedSourceLocation")]
 pub struct EmbeddedSourceLocation {
     #[norito(default)]
     pub source_path: Option<String>,
@@ -1339,7 +1345,8 @@ pub struct EmbeddedSourceLocation {
     pub column: u32,
 }
 /// One exact bytecode/source segment in compiler debug metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedSourceMapEntryV1")]
 pub struct EmbeddedSourceMapEntryV1 {
     pub function_name: String,
     /// Function start PC relative to the executable instruction stream.
@@ -1349,7 +1356,8 @@ pub struct EmbeddedSourceMapEntryV1 {
     pub source: EmbeddedSourceLocation,
 }
 /// Function-level budget summary emitted inside the optional `DBG1` section.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedFunctionBudgetReportV1")]
 pub struct EmbeddedFunctionBudgetReportV1 {
     pub function_name: String,
     pub pc_start: u64,
@@ -1362,7 +1370,8 @@ pub struct EmbeddedFunctionBudgetReportV1 {
     pub source: Option<EmbeddedSourceLocation>,
 }
 /// Decoded payload of the optional `DBG1` section carried by contract artifacts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedContractDebugInfoV1")]
 pub struct EmbeddedContractDebugInfoV1 {
     pub source_map: Vec<EmbeddedSourceMapEntryV1>,
     pub budget_report: Vec<EmbeddedFunctionBudgetReportV1>,
@@ -2100,11 +2109,11 @@ mod tests {
             assert_eq!(payload.first(), Some(&expected_tag));
         }
         assert_eq!(
-            <EmbeddedStateType as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<EmbeddedStateType>(),
             norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
         );
         assert_eq!(
-            <EmbeddedContractInterfaceV1 as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<EmbeddedContractInterfaceV1>(),
             norito::core::schema_hash_for_name(CONTRACT_INTERFACE_SCHEMA_NAME_V1)
         );
     }
@@ -2449,6 +2458,49 @@ mod tests {
             parse_contract_debug_section(&alternate, 0)
                 .expect_err("alternate-layout DBG1 payload must be rejected"),
             VMError::InvalidMetadata
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedEntrypointDescriptor>(
+            "ivm_abi::metadata::EmbeddedEntrypointDescriptor",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedStateDescriptor>(
+            "ivm_abi::metadata::EmbeddedStateDescriptor",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedContractInterfaceV1>(
+            "ivm_abi::metadata::EmbeddedContractInterfaceV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedSourceLocation>(
+            "ivm_abi::metadata::EmbeddedSourceLocation",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedSourceMapEntryV1>(
+            "ivm_abi::metadata::EmbeddedSourceMapEntryV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedFunctionBudgetReportV1>(
+            "ivm_abi::metadata::EmbeddedFunctionBudgetReportV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedContractDebugInfoV1>(
+            "ivm_abi::metadata::EmbeddedContractDebugInfoV1",
+        );
+    }
+    #[test]
+    fn observed_manual_frames() {
+        use super::*;
+        crate::captured_identity_tests::assert_manual::<EmbeddedStateFieldDescriptor>(
+            "EmbeddedStateFieldDescriptor",
+            &(EmbeddedStateFieldDescriptor {
+                name: "balance".to_owned(),
+                ty: EmbeddedStateType::Quantity,
+            }),
+        );
+        crate::captured_identity_tests::assert_manual::<EmbeddedStateType>(
+            "EmbeddedStateType",
+            &(EmbeddedStateType::Option(Box::new(EmbeddedStateType::Bool))),
         );
     }
 }

@@ -427,12 +427,8 @@ async fn managed_block_stream_emits_alias_on_error() {
                         message: None,
                     })
                 } else {
-                    let (sender, _) = broadcast::channel(4);
-                    let task = tokio::spawn(async {});
-                    Ok(WsSubscription {
-                        sender,
-                        handle: task,
-                    })
+                    let (_sender, subscription) = stream_test_transport::block_subscription().await;
+                    Ok(subscription)
                 }
             }
         }
@@ -469,12 +465,8 @@ async fn managed_block_stream_emits_alias_on_error() {
 async fn managed_block_stream_abort_stops_worker() {
     let handle = tokio::runtime::Handle::current();
     let stream = ManagedBlockStream::spawn_with_factory(&handle, "abort-peer", || async {
-        let (sender, _) = broadcast::channel(1);
-        let task = tokio::spawn(async {});
-        Ok(WsSubscription {
-            sender,
-            handle: task,
-        })
+        let (_sender, subscription) = stream_test_transport::block_subscription().await;
+        Ok(subscription)
     });
     assert_eq!(stream.alias(), "abort-peer");
     stream.abort();
@@ -1029,7 +1021,7 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
         &status,
         LaneLifecyclePlan {
             additions: Vec::new(),
-            retire: vec![iroha_data_model::nexus::LaneId::SINGLE],
+            retire: vec![iroha_model_base::topology::LaneId::SINGLE],
         },
     )
     .expect("build signed lifecycle transaction");
@@ -1096,7 +1088,12 @@ async fn lane_lifecycle_rejects_network_id_different_from_client() {
         .first()
         .expect("development signer");
     let error = client
-        .apply_lane_lifecycle(supplied_network_id, signer, LaneLifecyclePlan::default())
+        .apply_lane_lifecycle(
+            &stream_test_transport::reader("http://127.0.0.1:9"),
+            supplied_network_id,
+            signer,
+            LaneLifecyclePlan::default(),
+        )
         .await
         .expect_err("mismatched exact network identity must fail before I/O");
     assert!(matches!(error, ToriiError::SignedQueryContext(_)));
@@ -2392,7 +2389,7 @@ fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
 fn account_recovery_policy_summary_mentions_alias_and_quorum() {
     let alias = iroha_data_model::account::AccountAlias::domainless(
         "primary".parse().expect("valid alias label"),
-        iroha_data_model::nexus::DataSpaceId::new(7),
+        iroha_model_base::topology::DataSpaceId::new(7),
     );
     let policy = iroha_data_model::account::AccountRecoveryPolicy::new(
         vec![iroha_data_model::account::RecoveryGuardian::new(

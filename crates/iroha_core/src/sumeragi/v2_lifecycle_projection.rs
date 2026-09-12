@@ -2135,7 +2135,7 @@ fn project_fetch(
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     manifest: Option<&wire::PayloadManifest>,
-    certified_sources: &[iroha_data_model::peer::PeerId],
+    certified_sources: &[iroha_model_base::peer::PeerId],
     certificate: Option<&wire::QuorumCertificate>,
 ) -> Result<ProjectedShape, AdapterEffectAdmissionError> {
     if certificate.is_some_and(|certificate| certificate.phase == wire::GlobalPhase::Commit) {
@@ -2232,6 +2232,17 @@ fn project_inherited_body_stage(
     } else {
         validate_tag_for_round(context, tag, inherited.round())?;
     }
+    let phase = match (phase, inherited.phase()) {
+        (LifecyclePhase::Store, Some(wire::GlobalPhase::Commit)) => LifecyclePhase::StoreDecision,
+        (LifecyclePhase::Validate, Some(wire::GlobalPhase::Commit)) => {
+            LifecyclePhase::ValidateDecision
+        }
+        (
+            LifecyclePhase::Store | LifecyclePhase::Validate,
+            None | Some(wire::GlobalPhase::Prepare),
+        ) => phase,
+        _ => return Err(AdapterEffectAdmissionError::InvalidCarrier),
+    };
     Ok(ProjectedShape {
         key: lifecycle_key(
             context,
@@ -2620,9 +2631,10 @@ pub(super) fn certified_fetch_lifecycle_key(
     {
         return None;
     }
-    match authority_phase {
-        wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit => {}
-    }
+    let phase = match authority_phase {
+        wire::GlobalPhase::Prepare => LifecyclePhase::Fetch,
+        wire::GlobalPhase::Commit => LifecyclePhase::FetchDecision,
+    };
     Some(LifecycleKey::new(
         active_context.id(),
         LifecycleRound::new(round.height, round.view),
@@ -2631,7 +2643,7 @@ pub(super) fn certified_fetch_lifecycle_key(
             proposal_round.view,
         )),
         Some(block_subject(subject)),
-        LifecyclePhase::Fetch,
+        phase,
         Some(execution_commitment(commitment)),
     ))
 }
@@ -2857,7 +2869,7 @@ fn recovered_validate_no_successor_durable_identity_is_authenticated(
         && key.round().height() == context.height()
         && key.proposal_round() == Some(expected_proposal_round)
         && key.subject() == Some(expected_subject)
-        && key.phase() == LifecyclePhase::Validate
+        && key.phase().is_validate()
         && causal_root.digest() == reconstruction_source
         && stage.kind() == LifecycleStageKind::ValidateBody
         && stage.predecessor_scope() == PredecessorScope::Independent

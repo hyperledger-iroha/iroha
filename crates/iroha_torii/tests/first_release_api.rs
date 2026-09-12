@@ -441,10 +441,16 @@ fn build_router() -> iroha_torii::TestApiRouterRuntime {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid first-release Torii fixture");
     torii
         .api_router_for_tests()
         .expect("test Torii router initializes")
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

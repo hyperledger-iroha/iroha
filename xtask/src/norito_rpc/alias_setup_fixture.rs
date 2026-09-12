@@ -22,7 +22,6 @@ use iroha_data_model::{
         ResolvedDataSpaceV1, ResolvedDomainV1,
     },
     asset::AssetDefinitionId,
-    domain::DomainId,
     isi::{
         InstructionBox,
         alias_setup::{
@@ -31,8 +30,9 @@ use iroha_data_model::{
         },
         framed_instruction_payload,
     },
-    nexus::DataSpaceId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{
     codec::{Decode, Encode},

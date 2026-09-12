@@ -114,7 +114,9 @@ pub enum TleKeySessionLifecycleValidationErrorV1 {
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::tle_release::TleKeySessionLifecycleV1")]
 pub struct TleKeySessionLifecycleV1 {
     /// Fixed lifecycle-record version.
     pub version: u16,
@@ -272,6 +274,8 @@ impl TleKeySessionLifecycleV1 {
 }
 
 /// Public coefficient commitments and constant-term proof for one qualified dealer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleAdaptiveDealerCommitmentV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -302,6 +306,8 @@ impl TleAdaptiveDealerCommitmentV1 {
 }
 
 /// One public composite verification share in a finalized adaptive TLE transcript.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleAdaptivePublicShareV1")]
 #[derive(
     Debug,
     Clone,
@@ -328,8 +334,17 @@ pub struct TleAdaptivePublicShareV1 {
 /// and revalidate the complete cryptographic transcript instead of trusting
 /// cached public-key bytes.
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::tle_release::TleKeySessionPublicStateV1")]
 pub struct TleKeySessionPublicStateV1 {
     /// Fixed adapter version.
     pub version: u16,
@@ -732,6 +747,8 @@ impl ValidatedTleKeySessionV1 {
 /// from committed state; broker transport must admit it only from the scoped
 /// daemon session, and the daemon must construct it through
 /// [`AuthorizedTleReleaseContextV1::broker_projection_v1`].
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::AuthorizedTleReleaseProjectionV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct AuthorizedTleReleaseProjectionV1 {
     /// Fixed projection layout version.
@@ -1388,6 +1405,8 @@ impl TleProjectedPartialReleaseSignerV1 for InMemoryTlePartialReleaseSignerV1 {
 }
 
 /// Public adaptive partial release and representation proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TlePartialReleaseShareV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1435,6 +1454,8 @@ impl VerifiedTlePartialReleaseShareV1 {
 /// Unique public final threshold release signature for one future identity.
 ///
 /// No reconstruction subset or signer bitmap is serialized.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleFinalReleaseSignatureV1")]
 #[derive(
     Debug,
     Clone,
@@ -1542,6 +1563,10 @@ pub(crate) mod tests {
             Err(TleKeySessionLifecycleValidationErrorV1::FreshBallotBudgetExceeded)
         );
 
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &lifecycle,
+            "iroha_core::tle_release::TleKeySessionLifecycleV1",
+        );
         let encoded = norito::encode_canonical(&lifecycle).expect("encode lifecycle");
         let decoded = norito::decode_canonical::<TleKeySessionLifecycleV1>(&encoded)
             .expect("decode lifecycle");
@@ -1974,6 +1999,21 @@ pub(crate) mod tests {
     #[test]
     fn public_state_roundtrips_and_revalidates_every_proof() {
         let fixture = fixture();
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            fixture.validated.public_state(),
+            "iroha_core::tle_release::TleKeySessionPublicStateV1",
+        );
+        let framed = norito::encode_canonical(fixture.validated.public_state())
+            .expect("public-state owner frame");
+        let restored_frame: TleKeySessionPublicStateV1 =
+            norito::decode_canonical(&framed).expect("public-state frame roundtrip");
+        assert_eq!(
+            restored_frame
+                .validate()
+                .expect("revalidate all decoded proofs")
+                .public_state(),
+            fixture.validated.public_state()
+        );
         let encoded = fixture.validated.public_state().encode();
         let decoded = TleKeySessionPublicStateV1::decode_all(&mut encoded.as_slice())
             .expect("decode public state");

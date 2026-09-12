@@ -1,6 +1,8 @@
 //! Dedicated instructions for real-world asset lots.
 use super::*;
 use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 isi! {
     /// Issue a new canonical RWA lot.
@@ -409,6 +411,7 @@ mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, NumericSpec},

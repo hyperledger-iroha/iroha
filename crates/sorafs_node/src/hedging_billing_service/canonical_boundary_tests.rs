@@ -28,6 +28,30 @@ fn billing_identity_signatures_and_checkpoint_ignore_ambient_norito_layout() {
         .as_ref()
         .expect("publication receipt");
     let close = checkpoint.period_closes.first().expect("period close");
+    let close_frame = crate::frame_test_support::assert_current_frame(
+        close,
+        "sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1",
+    );
+    let decoded_close: HedgingBillingFinalizedPeriodCloseV1 =
+        norito::decode_canonical(&close_frame).expect("decode authenticated period close");
+    decoded_close
+        .validate(&policy, &feed_policy)
+        .expect("same valid close");
+    let cursor_frame = crate::frame_test_support::assert_current_frame(
+        &close.journal_commitment.finalized_cursor,
+        "sorafs_node::hedging_billing_service::HedgingBillingFinalizedCursorV1",
+    );
+    let decoded_cursor: HedgingBillingFinalizedCursorV1 =
+        norito::decode_canonical(&cursor_frame).expect("decode finalized cursor");
+    decoded_cursor.validate().expect("same valid cursor");
+    let optional_close = crate::frame_test_support::assert_current_frame(
+        &Some(close.clone()),
+        "core::option::Option<sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1>",
+    );
+    assert!(matches!(
+        norito::decode_canonical::<HedgingBillingFinalizedPeriodCloseV1>(&optional_close),
+        Err(norito::Error::SchemaMismatch),
+    ));
     let mut substituted = signed.clone();
     substituted.signed_at_unix += 1;
     let mut forged = signed.clone();

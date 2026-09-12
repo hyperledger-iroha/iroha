@@ -11,11 +11,11 @@
 //!
 //! TODO: Integrate and qualify the complete canonical outer bundle, cumulative
 //! proof/decoder budgets, authenticated caller and aggregate soundness argument.
-//! The 136-query profile and production replay/default limits are unchanged.
+//! The offline engine fixes375 queries; production replay and default limits
+//! remain unmodified pending a complete qualified artifact cutover.
 
 use norito::{NoritoSerialize, codec::Encode};
 
-#[cfg(test)]
 use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
@@ -54,8 +54,11 @@ impl Default for BatchContextLimits {
     }
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferBatchContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_batch::BoundBatchContext",
+    frame = "fastpq_prover::compact_v1::OrdinaryTransferBatchContextV1"
+)]
 struct BoundBatchContext {
     version: u16,
     segment_count: u32,
@@ -63,8 +66,11 @@ struct BoundBatchContext {
     intermediate_roots: Vec<[u8; 32]>,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferSegmentContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_batch::BoundSegmentContext",
+    frame = "fastpq_prover::compact_v1::OrdinaryTransferSegmentContextV1"
+)]
 struct BoundSegmentContext {
     version: u16,
     segment_count: u32,
@@ -170,7 +176,6 @@ impl PublicTransferBatch {
     }
 
     /// Exact ports derived from the complete preparation in chronological order.
-    #[cfg(test)]
     pub(super) fn statements(&self) -> &[PublicStatement] {
         &self.statements
     }
@@ -240,7 +245,6 @@ impl FixedAir for PublicTransferSegmentAir {
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
-    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }
@@ -383,7 +387,8 @@ mod tests {
         },
     };
     use iroha_crypto::Hash;
-    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId};
+    use iroha_data_model::asset::id::AssetDefinitionId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use iroha_zkp_halo2::poseidon::PoseidonByteHasher;

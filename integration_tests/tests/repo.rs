@@ -5,7 +5,6 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     data_model::{
-        metadata::Metadata,
         prelude::*,
         query::repo::prelude::FindRepoAgreements,
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
@@ -14,6 +13,8 @@ use iroha::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::isi::RepoMarginCallIsi;
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use std::{
@@ -28,10 +29,7 @@ fn install_quiet_tracing() {
     QUIET_TRACE.get_or_init(|| {});
 }
 fn ivm_build_profile_exists() -> bool {
-    use std::path::PathBuf;
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/ivm/target/prebuilt/build_config.toml")
-        .exists()
+    iroha_test_samples::ivm_build_profile_path().is_file()
 }
 fn quiet_network_builder() -> NetworkBuilder {
     install_quiet_tracing();

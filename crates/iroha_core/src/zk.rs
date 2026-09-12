@@ -117,7 +117,8 @@ const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_CIRCUIT_FAMILY_BYTES: usize =
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_NESTING_DEPTH: usize = 16;
 #[cfg(feature = "zk-halo2-ipa")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::Halo2IpaProvingKeyArchive")]
 struct Halo2IpaProvingKeyArchive {
     version: u16,
     circuit_family: String,
@@ -383,7 +384,7 @@ fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backe
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 pub(crate) fn relabelled_halo2_ipa_demo_vk_box_for_test() -> Result<VerifyingKeyBox, String> {
     let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
-    let vk = halo2_backend::keygen_vk(&params, &pasta_tiny::Add)
+    let vk = halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows)
         .map_err(|err| format!("failed to generate relabelled demo key: {err}"))?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
@@ -1561,10 +1562,9 @@ fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str)
     if stark_open_verify_circuit_id_uses_reserved_proof_family(trimmed) {
         return false;
     }
-    if backend == ZK_BACKEND_STARK_FRI_V1 {
-        return true;
-    }
-    if trimmed == ZK_BACKEND_STARK_FRI_V1 || trimmed.starts_with("stark/fri:") {
+    // The sole production backend is a concrete commitment profile. A circuit
+    // naming another profile or the retired generic family cannot inherit it.
+    if trimmed == "stark/fri" || trimmed.starts_with("stark/fri:") {
         return false;
     }
     if trimmed.starts_with("stark/fri/") {
@@ -1958,14 +1958,14 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     if vk_box.backend != backend {
         return Err("STARK verifying key backend mismatch".to_owned());
     }
+    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
+        return Err("STARK circuit_id does not match backend family".to_owned());
+    }
     let vk_payload =
         validate_stark_fri_verifying_key_v1(backend, circuit_id, vk_box.bytes.as_slice())
             .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
     let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
-    if !stark_open_verify_circuit_id_matches_backend(backend, circuit_id) {
-        return Err("STARK circuit_id does not match backend family".to_owned());
-    }
     let is_ivm_execution_circuit = normalized_ivm_execution_stark_circuit_id_for_backend(backend)
         .as_deref()
         == Some(env_circuit_id.as_str());
@@ -2087,7 +2087,8 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
 ///
 /// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
-/// public inputs in a `StarkFriOpenProofV1` wrapper.
+/// public inputs in a `StarkFriOpenProofV1` wrapper. Verification uses the dedicated
+/// IVM binding AIR context, and admission still requires deterministic VM replay.
 #[cfg(feature = "zk-stark")]
 pub fn prove_stark_fri_ivm_execution_envelope(
     backend: &str,
@@ -2813,14 +2814,6 @@ struct VkCacheKey {
 type CachedVk = Arc<halo2_backend::VerifyingKey>;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-struct BuiltinVkCacheKey {
-    backend: String,
-    params_fingerprint: [u8; 32],
-}
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-static BUILTIN_VK_CACHE: OnceLock<Mutex<BTreeMap<BuiltinVkCacheKey, CachedVk>>> = OnceLock::new();
 #[cfg(feature = "telemetry")]
 fn record_vk_cache_event(cache: &'static str, event: &'static str) {
     if let Some(metrics) = iroha_telemetry::metrics::global() {
@@ -3084,37 +3077,6 @@ macro_rules! cached_vk_for {
         let _ = ($params, $backend, $vk_box, $circuit);
         false
     }};
-}
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-fn keygen_vk_cached<C>(
-    backend: &str,
-    params: &PastaParams,
-    circuit: &C,
-) -> Result<CachedVk, halo2_backend::Error>
-where
-    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
-{
-    let cache = BUILTIN_VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let key = BuiltinVkCacheKey {
-        backend: backend.to_owned(),
-        params_fingerprint: params_fingerprint(params),
-    };
-    {
-        let guard = lock_cache(cache)?;
-        if let Some(existing) = guard.get(&key).cloned() {
-            record_vk_cache_event("builtin", "hit");
-            return Ok(existing);
-        }
-    }
-    record_vk_cache_event("builtin", "miss");
-    let vk = halo2_backend::keygen_vk(params, circuit)?;
-    let arc = Arc::new(vk);
-    let mut guard = lock_cache(cache)?;
-    let entry = match guard.entry(key) {
-        Entry::Occupied(existing) => existing.get().clone(),
-        Entry::Vacant(slot) => Arc::clone(slot.insert(Arc::clone(&arc))),
-    };
-    Ok(entry)
 }
 // Parsed verifying keys are cached above and keyed by backend, parameter fingerprint, and
 // verifying-key hash so repeated proofs avoid repeated strict parsing.
@@ -5191,8 +5153,15 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if air.public_digest != expected_public_digest {
         return reject("STARK AIR public digest mismatch");
     }
-    let stark_ok =
-        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits);
+    let stark_ok = if is_ivm_execution_circuit {
+        crate::zk_stark::verify_stark_fri_ivm_execution_air_envelope_with_limits(
+            &open.envelope_bytes,
+            limits,
+            &expected_public_digest,
+        )
+    } else {
+        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits)
+    };
     if !stark_ok {
         return reject("inner STARK/FRI verifier rejected proof");
     }
@@ -5438,17 +5407,26 @@ mod debug_backend_tests {
             norito::decode_canonical(&proof.bytes).expect("fixture envelope");
         let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
         let demo_vk =
-            halo2_backend::keygen_vk(&params, &pasta_tiny::Add).expect("demo verifier key");
+            halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows).expect("demo verifier key");
+        // Two enabled selector rows make this key distinct from the one-row
+        // IVM fixture even though processed VK bytes omit gate expressions.
+        let canonical_vk =
+            halo2_backend::keygen_vk(&params, &pasta_tiny::IvmExecutionBindV1::default())
+                .expect("canonical IVM verifier key");
+        assert_ne!(
+            halo2_backend::verifying_key_to_processed_bytes(&demo_vk),
+            halo2_backend::verifying_key_to_processed_bytes(&canonical_vk),
+        );
         let mut demo_vk_bytes = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut demo_vk_bytes, IVM_EXECUTION_V1_IPA_K);
         zk1::wrap_append_vk_pasta(&mut demo_vk_bytes, &demo_vk);
         let relabelled_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), demo_vk_bytes);
         assert!(
-            resolve_vk_cached_for_type::<pasta_tiny::Add, _>(
+            resolve_vk_cached_for_type::<pasta_tiny::AddTwoRows, _>(
                 ZK_BACKEND_HALO2_IPA,
                 &params,
                 &relabelled_vk,
-                || halo2_backend::keygen_vk(&params, &pasta_tiny::Add),
+                || halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows),
             )
             .is_ok(),
             "the demo key must populate only its own circuit-typed cache entry"
@@ -5953,6 +5931,29 @@ mod stark_backend_tag_tests {
             assert!(
                 !is_trusted_setup_backend_label(backend),
                 "transparent backend {backend} must not be classified as trusted setup"
+            );
+        }
+    }
+    #[test]
+    fn stark_open_verify_circuit_ids_are_bound_to_the_sole_production_profile() {
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        for circuit_id in ["binding-air".to_owned(), format!("{backend}:binding-air")] {
+            assert!(stark_open_verify_circuit_id_matches_backend(
+                backend,
+                &circuit_id
+            ));
+        }
+        for circuit_id in [
+            "stark/fri".to_owned(),
+            "stark/fri:binding-air".to_owned(),
+            "stark/fri/poseidon2-goldilocks:binding-air".to_owned(),
+            backend.to_owned(),
+            format!("{backend}:"),
+            format!("{backend}-other:binding-air"),
+        ] {
+            assert!(
+                !stark_open_verify_circuit_id_matches_backend(backend, &circuit_id),
+                "circuit `{circuit_id}` must not inherit the canonical backend profile"
             );
         }
     }
@@ -6582,9 +6583,9 @@ mod stark_prover_tests {
                 vec![vec![[0x33; 32]]],
             )
             .expect_err("generic STARK prover must not target ZK-ACE circuit aliases");
-            assert!(
-                err.contains("ZK-ACE"),
-                "unexpected ZK-ACE alias rejection for {circuit_id}: {err}"
+            assert_eq!(
+                err, "STARK circuit_id does not match backend family",
+                "reserved privacy namespaces must reject before verifier-key decoding: {circuit_id}"
             );
         }
     }
@@ -8161,7 +8162,7 @@ mod guardrails_tests {
             norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
         let open: StarkFriOpenProofV1 =
             norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
-        proof.backend = ZK_BACKEND_STARK_FRI_V1.into();
+        proof.backend = "stark/fri".into();
         assert_guardrails_reject!(
             backend,
             &proof,
@@ -8479,6 +8480,26 @@ mod halo2_ipa_proving_key_archive_tests {
         let archive =
             encode_halo2_ipa_proving_key_archive("proof-family-a", vk_commitment, vec![1, 2])
                 .expect("encode proving key archive");
+        let record = Halo2IpaProvingKeyArchive {
+            version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
+            circuit_family: "proof-family-a".to_owned(),
+            vk_commitment,
+            proving_key: vec![1, 2],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::zk::Halo2IpaProvingKeyArchive",
+        );
+        assert_eq!(
+            archive,
+            norito::encode_canonical(&record).expect("archive owner frame")
+        );
+        let mut wrong_owner = archive.clone();
+        wrong_owner[6] ^= 1;
+        assert!(
+            decode_halo2_ipa_proving_key_archive(&wrong_owner, "proof-family-a", vk_commitment)
+                .is_err()
+        );
         assert_eq!(
             decode_halo2_ipa_proving_key_archive(&archive, "proof-family-a", vk_commitment)
                 .expect("decode matching archive"),
@@ -10645,10 +10666,13 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
         #[cfg(test)]
         "halo2/pasta/tiny-vote-bool" => {
             let circuit = pasta_tiny::VoteBool;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
+            let vk_h2 =
+                match resolve_vk_cached(normalized.as_str(), &params, vk_box, &circuit, || {
+                    halo2_backend::keygen_vk(&params, &circuit)
+                }) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
             verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         _ => false,
@@ -10749,7 +10773,9 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     macro_rules! verify_test_circuit {
         ($circuit:expr, $mode:ident $(, $reject:expr)?) => {{
             let circuit = $circuit;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+            let vk_h2 = match resolve_vk_cached(normalized.as_str(), &params, vk_box, &circuit, || {
+                halo2_backend::keygen_vk(&params, &circuit)
+            }) {
                 Ok(v) => v,
                 Err(_) => return false,
             };
@@ -10759,7 +10785,9 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             verify_test_circuit!(@verify $mode, vk_h2.as_ref())
         }};
         (using $circuit:ident, $mode:ident $(, $reject:expr)?) => {{
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &$circuit) {
+            let vk_h2 = match resolve_vk_cached(normalized.as_str(), &params, vk_box, &$circuit, || {
+                halo2_backend::keygen_vk(&params, &$circuit)
+            }) {
                 Ok(v) => v,
                 Err(_) => return false,
             };
@@ -11833,59 +11861,25 @@ mod preverify_tests {
     }
     #[test]
     fn preverify_rejects_stark_open_verify_circuit_mismatch_before_dedup() {
-        for (case, backend, accepted_circuit_id, mismatched_circuit_id) in [
+        let backend = ZK_BACKEND_STARK_FRI_V1;
+        let accepted_circuit_id = format!("{backend}:preverify-test");
+        for (case, mismatched_circuit_id) in [
             (
-                "profile backend with sibling STARK profile",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
+                "sibling STARK profile",
                 "stark/fri/poseidon2-goldilocks:preverify-test",
             ),
+            ("retired generic STARK prefix", "stark/fri:preverify-test"),
+            ("bare generic STARK family", "stark/fri"),
+            ("halo2 circuit", "halo2/ipa:preverify-test"),
+            ("colon-form halo2 circuit", "halo2:preverify-test"),
+            ("colon-form kzg circuit", "kzg:trusted-setup-spoof"),
+            ("bare trusted-setup curve circuit", "bn254"),
             (
-                "profile backend with generic STARK prefix",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
-                "stark/fri:preverify-test",
-            ),
-            (
-                "profile backend with bare generic STARK family",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
-                "stark/fri",
-            ),
-            (
-                "generic STARK backend with halo2 circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "halo2/ipa:preverify-test",
-            ),
-            (
-                "generic STARK backend with colon-form halo2 circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "halo2:preverify-test",
-            ),
-            (
-                "generic STARK backend with colon-form kzg circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "kzg:trusted-setup-spoof",
-            ),
-            (
-                "generic STARK backend with bare trusted-setup curve circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
-                "bn254",
-            ),
-            (
-                "generic STARK backend with STARK-prefixed trusted-setup circuit",
-                ZK_BACKEND_STARK_FRI_V1,
-                "stark/fri:preverify-test",
+                "STARK-prefixed trusted-setup circuit",
                 "stark/fri:universal-srs",
             ),
             (
-                "profile backend with profile-prefixed trusted-setup circuit",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1",
-                "stark/fri/poseidon-x7-goldilocks-6x64-v1:preverify-test",
+                "profile-prefixed trusted-setup circuit",
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1:structured-reference-string",
             ),
         ] {
@@ -11894,7 +11888,7 @@ mod preverify_tests {
             let accepted = preverify_enveloped_proof_for_backend(
                 backend,
                 BackendTag::Stark,
-                accepted_circuit_id,
+                &accepted_circuit_id,
                 expected,
             );
             let mismatched = preverify_enveloped_proof_for_backend(

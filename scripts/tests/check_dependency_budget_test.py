@@ -524,3 +524,233 @@ execution=["proof/full"]
     selection["features"] = ["execution"]
     tree = subprocess.check_output(MODULE.boundary_tree_command(manifest, selection, offline=True), text=True)
     assert "optional-engine" in MODULE.evaluate_boundary_tree(policy, selection, tree)["packages"]
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true", "false", [], {}])
+def test_boundary_policy_rejects_nonboolean_root_dev_selection(value: object) -> None:
+    policy = _boundary_policy()
+    MODULE.validate_boundary_policy({"architecture": policy})
+    policy["configurations"]["sdk"]["include_root_dev_dependencies"] = value
+    with pytest.raises(
+        ValueError,
+        match="^boundary `sdk` include_root_dev_dependencies must be boolean$",
+    ):
+        MODULE.validate_boundary_policy({"architecture": policy})
+
+
+def test_boundary_root_dev_opt_in_preserves_shipping_command() -> None:
+    policy = _boundary_policy()
+    selection = policy["configurations"]["sdk"]
+    shipping = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+    selection["include_root_dev_dependencies"] = False
+    MODULE.validate_boundary_policy({"architecture": policy})
+    assert MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True) == shipping
+
+    selection["include_root_dev_dependencies"] = True
+    MODULE.validate_boundary_policy({"architecture": policy})
+    expected = list(shipping)
+    expected[expected.index("--edges") + 1] = "normal,build,dev"
+    actual = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+    assert actual == expected
+    assert actual.count("--package") == 1
+    assert "--workspace" not in actual
+    assert "--all-features" not in actual
+    assert "--prune" not in actual
+
+
+def test_foundation_model_selections_reject_upper_layer_dependencies() -> None:
+    path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
+    policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))
+    selections = {
+        name: selection for name, selection in policy["configurations"].items()
+        if selection["package"] == "iroha_model_base"
+    }
+    assert {tuple(row["features"]) for row in selections.values()} == {
+        (), ("ffi_export",), ("transparent_api",), ("ffi_export", "transparent_api"),
+    }
+    forbidden = {
+        "iroha_data_model", "iroha_privacy_model", "iroha_service_model",
+        "iroha_core", "iroha_torii", "irohad", "ivm", "ivm_abi",
+        "iroha_config", "iroha_telemetry", "iroha_zkp_halo2", "fastpq_prover",
+        "zk_ace_prover", "sorafs_manifest", "sorafs_car", "sorafs_orchestrator",
+        "iroha_musubi_service", "iroha_storage_client", "iroha",
+        "reqwest", "axum", "tungstenite",
+    }
+    baseline = "0|iroha_model_base v1.0.0|\n1|norito v1.0.0|\n"
+    for selection in selections.values():
+        assert selection["target"] == "all"
+        command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+        assert command[command.index("--edges") + 1] == "normal,build"
+        assert MODULE.evaluate_boundary_tree(policy, selection, baseline)["within_boundary"]
+        for package in forbidden:
+            result = MODULE.evaluate_boundary_tree(
+                policy, selection, baseline + f"2|{package} v1.0.0|\n",
+            )
+            assert not result["within_boundary"], package
+
+
+def test_aggregate_model_test_boundary_retains_protocol_ownership_and_denials() -> None:
+    path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
+    policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))
+    shipping = policy["configurations"]["aggregate-model"]
+    tests = policy["configurations"]["aggregate-model-tests"]
+    assert tests == {
+        **shipping,
+        "default_features": True,
+        "features": ["http"],
+        "include_root_dev_dependencies": True,
+    }
+    assert tests["package"] == "iroha_data_model"
+    assert tests["target"] == "all"
+    assert set(tests["forbidden_layers"]) == {
+        "node_execution", "node_configuration", "telemetry_runtime", "storage_runtime",
+    }
+    assert tests["forbidden_features"] == {
+        "iroha_zkp_halo2": ["full", "parallel", "goldilocks_backend"],
+    }
+    assert "ivm_abi" in policy["layers"]["protocol"]
+    assert "ivm" in policy["layers"]["node_execution"]
+    for selection, expected_edges in [(shipping, "normal,build"), (tests, "normal,build,dev")]:
+        command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+        assert command[command.index("--edges") + 1] == expected_edges
+    baseline = "0|iroha_data_model v1.0.0|\n1|ivm_abi v1.0.0|\n"
+    assert MODULE.evaluate_boundary_tree(policy, tests, baseline)["within_boundary"]
+    with_engine = MODULE.evaluate_boundary_tree(policy, tests, baseline + "2|ivm v1.0.0|\n")
+    assert with_engine["violations"] == [{
+        "package": "ivm", "forbidden_layer": "node_execution",
+        "path": ["iroha_data_model", "ivm_abi", "ivm"],
+    }]
+
+
+@pytest.mark.parametrize("owner", ["wire", "compiler", "test-support"])
+def test_boundary_test_closure_rejects_forbidden_transitive_paths(owner: str) -> None:
+    policy = _boundary_policy()
+    selection = policy["configurations"]["sdk"]
+    selection["include_root_dev_dependencies"] = True
+    policy["layers"]["wire"].append("test-support")
+    MODULE.validate_boundary_policy({"architecture": policy})
+    baseline = f"0|sdk v1.0.0|\n1|{owner} v1.0.0|\n"
+    assert MODULE.evaluate_boundary_tree(policy, selection, baseline)["within_boundary"]
+    mutated = baseline + "2|engine v1.0.0|runtime\n"
+    assert mutated != baseline
+    report = MODULE.evaluate_boundary_tree(policy, selection, mutated)
+    assert report["violations"] == [{
+        "package": "engine", "forbidden_layer": "node", "path": ["sdk", owner, "engine"],
+    }]
+
+
+def test_boundary_mode_enforces_explicit_test_selection(tmp_path, monkeypatch, capsys) -> None:
+    policy = _boundary_policy()
+    shipping = policy["configurations"]["sdk"]
+    policy["configurations"]["sdk-tests"] = {
+        **shipping, "include_root_dev_dependencies": True,
+    }
+    policy["layers"]["wire"].append("test-support")
+    config = _config({key: 100 for key in MODULE.METRIC_KEYS})
+    config["architecture"] = policy
+    path = tmp_path / "budget.json"
+    path.write_text(json.dumps(config))
+    commands = []
+
+    def resolve(command, **kwargs):
+        commands.append(command)
+        tree = "0|sdk v1.0.0|\n1|wire v1.0.0|\n"
+        if command[command.index("--edges") + 1] == "normal,build,dev":
+            tree += "1|test-support v1.0.0|\n2|engine v1.0.0|runtime\n"
+        return subprocess.CompletedProcess(command, 0, tree, "")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", resolve)
+    assert MODULE.main(["--config", str(path), "--check-boundaries", "--json-out", "-"]) == 1
+    output = capsys.readouterr()
+    report = json.loads(output.out)
+    assert report["measurement_kind"] == "cargo-feature-resolved-layer-boundaries-v1"
+    assert report["configurations"]["sdk"]["within_boundary"]
+    assert report["configurations"]["sdk-tests"]["violations"] == [{
+        "package": "engine", "forbidden_layer": "node", "path": ["sdk", "test-support", "engine"],
+    }]
+    assert not report["within_boundary"]
+    assert "sdk-tests: sdk -> test-support -> engine (node)" in output.err
+    assert [command[command.index("--edges") + 1] for command in commands] == [
+        "normal,build", "normal,build,dev",
+    ]
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo required for feature resolution")
+def test_boundary_resolution_includes_only_root_dev_dependencies(tmp_path: Path) -> None:
+    """Qualify root-only dev resolution and normal/build closure of its test helpers."""
+
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nresolver="2"\nmembers=["crates/*"]\n')
+    dependencies = {
+        "sdk": '''[dependencies]
+wire={path="../wire"}
+[build-dependencies]
+compiler={path="../compiler"}
+[dev-dependencies]
+test-support={path="../test-support"}
+[features]
+normal-leak=["wire/execution"]
+build-leak=["compiler/execution"]
+dev-leak=["test-support/execution"]
+''',
+        "wire": '''[dependencies]
+proof={path="../proof", default-features=false}
+engine={path="../engine", optional=true}
+[dev-dependencies]
+nonroot-dev-only={path="../nonroot-dev-only"}
+[features]
+execution=["dep:engine"]
+''',
+        "compiler": '''[build-dependencies]
+engine={path="../engine", optional=true}
+[features]
+execution=["dep:engine"]
+''',
+        "test-support": '''[dependencies]
+engine={path="../engine", optional=true}
+[dev-dependencies]
+nonroot-dev-only={path="../nonroot-dev-only"}
+[features]
+execution=["dep:engine"]
+''',
+        "daemon": '''[dependencies]
+proof={path="../proof", features=["full"]}
+[dev-dependencies]
+workspace-dev-only={path="../workspace-dev-only"}
+''',
+        "proof": '[features]\nfull=[]\n',
+        "engine": "", "nonroot-dev-only": "", "workspace-dev-only": "",
+    }
+    for name, deps in dependencies.items():
+        _write_package(tmp_path, f"crates/{name}", f'[package]\nname="{name}"\nversion="1.0.0"\n{deps}')
+        source = tmp_path / "crates" / name / "src"
+        source.mkdir()
+        (source / "lib.rs").write_text("//! Root test dependency boundary fixture.\n")
+    manifest = tmp_path / "Cargo.toml"
+    subprocess.run(["cargo", "generate-lockfile", "--offline", "--manifest-path", str(manifest)], check=True, capture_output=True)
+    policy = _boundary_policy()
+    policy["layers"]["wire"].append("test-support")
+    policy["layers"]["node"].extend(["nonroot-dev-only", "workspace-dev-only"])
+    selection = policy["configurations"]["sdk"]
+
+    def inspect() -> dict:
+        tree = subprocess.check_output(MODULE.boundary_tree_command(manifest, selection, offline=True), text=True)
+        return MODULE.evaluate_boundary_tree(policy, selection, tree)
+
+    shipping = inspect()
+    assert shipping["within_boundary"]
+    assert "test-support" not in shipping["packages"]
+    selection["include_root_dev_dependencies"] = True
+    baseline = inspect()
+    assert baseline["within_boundary"]
+    assert set(baseline["packages"]) == {"sdk", "wire", "proof", "compiler", "test-support"}
+    assert "nonroot-dev-only" not in baseline["packages"]
+    assert "workspace-dev-only" not in baseline["packages"]
+    for feature, owner in [
+        ("normal-leak", "wire"), ("build-leak", "compiler"), ("dev-leak", "test-support"),
+    ]:
+        selection["features"] = [feature]
+        report = inspect()
+        assert not report["within_boundary"]
+        assert report["violations"] == [{
+            "package": "engine", "forbidden_layer": "node", "path": ["sdk", owner, "engine"],
+        }]

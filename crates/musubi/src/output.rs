@@ -174,7 +174,6 @@ impl Diagnostic {
     }
     /// Return the stable public code.
     #[must_use]
-    #[cfg(test)]
     pub const fn code(&self) -> ErrorCode {
         self.code
     }
@@ -405,7 +404,7 @@ fn is_exact_public_string(key: &str, value: &Value) -> bool {
     key == "chain_id"
         && value
             .as_str()
-            .is_some_and(|value| value.parse::<iroha_data_model::ChainId>().is_ok())
+            .is_some_and(|value| value.parse::<iroha_model_base::chain::ChainId>().is_ok())
 }
 fn is_secret_key(key: &str) -> bool {
     let normalized = key

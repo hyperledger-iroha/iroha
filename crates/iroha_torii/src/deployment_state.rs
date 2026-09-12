@@ -13,10 +13,10 @@ use iroha_core::{
 };
 use iroha_data_model::{
     account::{AccountId, address::chain_discriminant},
-    name::Name,
-    nexus::DataSpaceId,
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
 };
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use mv::storage::StorageReadOnly as _;
 use std::str::FromStr as _;
 fn conversion_error(message: impl Into<String>) -> Error {
@@ -391,11 +391,11 @@ mod tests {
         Registrable as _,
         account::{Account, AccountAddress, AccountId},
         block::{BlockHeader, builder::BlockBuilder},
-        metadata::Metadata,
-        name::Name,
         smart_contract::{ContractAddress, ContractAlias},
         sns::{NameControllerV1, NameRecordV1},
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use norito::codec::Encode as _;
     use std::{num::NonZeroU64, sync::Arc};
@@ -660,7 +660,7 @@ mod tests {
             &valid_app,
             &request(&authority),
             Some(RoutingDecision::new(
-                iroha_data_model::nexus::LaneId::SINGLE,
+                iroha_model_base::topology::LaneId::SINGLE,
                 DataSpaceId::new(9),
             )),
         )
@@ -695,7 +695,7 @@ mod tests {
         };
         let response_body = norito::json::to_vec(&response).expect("response JSON");
         let route = RoutingDecision::new(
-            iroha_data_model::nexus::LaneId::SINGLE,
+            iroha_model_base::topology::LaneId::SINGLE,
             DataSpaceId::UNIVERSAL,
         );
         assert_eq!(

@@ -6,7 +6,7 @@
 use crate::smart_contract::manifest::ManifestProvenance;
 use iroha_crypto::{Error as CryptoError, Hash, KeyPair, Signature};
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{string::String, vec::Vec};
 /// Runtime upgrade manifest hashing helper.
@@ -39,10 +39,17 @@ impl RuntimeUpgradeId {
     }
 }
 /// SBOM digest bundled with a runtime upgrade.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -51,14 +58,21 @@ pub struct RuntimeUpgradeSbomDigest {
     /// Digest algorithm identifier (e.g., `sha256`).
     pub algorithm: String,
     /// Digest bytes for the SBOM artifact.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub digest: Vec<u8>,
 }
 /// Runtime upgrade manifest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -71,7 +85,7 @@ pub struct RuntimeUpgradeManifest {
     /// ABI version to activate. Must be `1` in the first release.
     pub abi_version: u16,
     /// ABI hash for the target version.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub abi_hash: [u8; 32],
     /// Reserved syscall delta list. Must remain empty in the first release.
     pub added_syscalls: Vec<u16>,
@@ -84,18 +98,24 @@ pub struct RuntimeUpgradeManifest {
     /// SBOM digests associated with the upgrade artefacts.
     pub sbom_digests: Vec<RuntimeUpgradeSbomDigest>,
     /// Raw SLSA attestation bytes (base64 in JSON).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub slsa_attestation: Vec<u8>,
     /// Provenance signatures over the canonical manifest payload.
     pub provenance: Vec<ManifestProvenance>,
 }
 /// Canonical payload signed to attest a runtime upgrade manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeManifestSignaturePayload")]
 pub struct RuntimeUpgradeManifestSignaturePayload {
     /// Human-readable name.
@@ -105,7 +125,7 @@ pub struct RuntimeUpgradeManifestSignaturePayload {
     /// ABI version to activate. Must be `1` in the first release.
     pub abi_version: u16,
     /// ABI hash for the target version.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub abi_hash: [u8; 32],
     /// Reserved syscall delta list. Must remain empty in the first release.
     pub added_syscalls: Vec<u16>,
@@ -118,7 +138,7 @@ pub struct RuntimeUpgradeManifestSignaturePayload {
     /// SBOM digests associated with the upgrade artefacts.
     pub sbom_digests: Vec<RuntimeUpgradeSbomDigest>,
     /// Raw SLSA attestation bytes (base64 in JSON).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub slsa_attestation: Vec<u8>,
 }
 impl From<&RuntimeUpgradeManifest> for RuntimeUpgradeManifestSignaturePayload {
@@ -181,12 +201,18 @@ impl RuntimeUpgradeManifest {
     }
 }
 /// Runtime upgrade record stored in WSV.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeRecord")]
 pub struct RuntimeUpgradeRecord {
     /// Canonical manifest payload.
@@ -220,12 +246,19 @@ pub enum RuntimeUpgradeStatus {
     Canceled,
 }
 /// Provenance validation failures for runtime upgrade manifests.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[norito(tag = "kind", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeProvenanceError")]
 pub enum RuntimeUpgradeProvenanceError {
@@ -315,7 +348,7 @@ pub fn render_runtime_upgrade_types_markdown_section() -> String {
     out.push_str("<!-- END RUNTIME UPGRADE TYPES -->");
     out
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for RuntimeUpgradeId {
     fn json_serialize(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.0, out);
@@ -337,13 +370,13 @@ impl JsonSerialize for RuntimeUpgradeId {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for RuntimeUpgradeId {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         crate::json_helpers::fixed_bytes::deserialize(parser).map(Self)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for RuntimeUpgradeStatus {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -382,7 +415,7 @@ impl JsonSerialize for RuntimeUpgradeStatus {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for RuntimeUpgradeStatus {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -518,7 +551,7 @@ mod tests {
             .verify(kp.public_key(), &payload)
             .expect("signature must verify");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn runtime_manifest_json_requires_the_complete_first_release_shape() {
         let manifest = RuntimeUpgradeManifest {

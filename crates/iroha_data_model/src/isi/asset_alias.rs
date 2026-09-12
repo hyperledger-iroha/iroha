@@ -92,6 +92,7 @@ mod tests {
     use super::*;
     use crate::asset::AssetDefinitionAlias;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
+    use iroha_model_base::domain::DomainId;
     fn asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),

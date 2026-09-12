@@ -15,7 +15,7 @@ The local SF-9b status/reporting surfaces are partially implemented. Torii
 exposes PoR status, export, report, and ingestion endpoints backed by
 an atomic `PorCoordinator` read projection rebuilt from the node's durable PoR
 checkpoint; `sorafs_cli por status`, `por export`, and `por report` consume
-those endpoints; and `sorafs-validate por` performs deterministic
+those endpoints; and `iroha app sorafs toolkit validate por` performs deterministic
 challenge/proof pair validation for offline fixture and release checks.
 Manual and externally supplied challenge ingress is intentionally absent from
 the first-release API. Live challenges can originate only from the verified
@@ -54,10 +54,10 @@ before promotion can report ready.
 | `sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=awaiting_proof|proof_submitted|verified|failed|repaired] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE] [--format=table|json]` | List one bounded challenge-status page from Torii. | Table or JSON records; the next opaque cursor is printed separately when present. |
 | `sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N --end-epoch=N] [--limit=N] [--max-bytes=N] [--cursor=OPAQUE]` | Download one bounded coordinator status-export page. | Raw `PorStatusExportPageV1` bytes written to disk. |
 | `sorafs_cli por report --torii-url=URL --week=YYYY-Www [--format=markdown|json]` | Render a weekly coordinator report. | Markdown or JSON `PorWeeklyReportV1`. |
-| `sorafs-validate por --challenge <challenge.to> --proof <proof.to> --format json` | Validate a committed or downloaded challenge/proof pair offline. | `ValidationOutcomeV1`. |
+| `iroha app sorafs toolkit validate por --challenge <challenge.to> --proof <proof.to> --format json` | Validate a committed or downloaded challenge/proof pair offline. | `ValidationOutcomeV1`. |
 
 The shipped `sorafs_cli por` commands use `--torii-url=URL` key/value syntax.
-The offline validator remains in `sorafs-validate` so it can share the SF-11
+The offline validator remains in `iroha` so it can share the SF-11
 reference outcome contract.
 
 ### Norito Payloads
@@ -142,6 +142,11 @@ Governance DAG publication, the coordinator durably retains the canonical
 report and an unpublished marker; it records the publication acknowledgement
 after success, retries exact bytes after crashes, refuses to skip a pending
 cycle, and catches up one missing week at a time.
+
+The canonical status and export page DTOs are `sorafs_manifest::por::PorStatusPageV1`
+and `sorafs_manifest::por::PorStatusExportPageV1`. Torii, the orchestrator CLI, and
+its fixtures use these definitions directly. Each type declares one protocol
+frame identity independently of its Rust module path.
 
 ## Torii API Extensions
 | Method | Path | Description |
@@ -256,7 +261,7 @@ state; deterministic seed material is explicitly not a substitute for those
 verified inputs.
 
 ## Offline Verification Pipeline
-- Implemented: `sorafs-validate por` loads Norito `PorChallengeV1` and
+- Implemented: `iroha app sorafs toolkit validate por` loads Norito `PorChallengeV1` and
   `PorProofV1`, validates payload shape, seed/deadline policy, challenge/proof
   binding, exact ordered sample-index coverage, and the provider's
   domain-separated proof signature, then emits `ValidationOutcomeV1`. Offline
@@ -333,7 +338,7 @@ python3 scripts/run_sorafs_por_rollout_evidence.py \
   --dry-run
 ```
 
-The validator-specific evidence must prove `sorafs-validate por` challenge/proof
+The validator-specific evidence must prove `iroha app sorafs toolkit validate por` challenge/proof
 replay, challenge/proof binding, exact sample coverage, deadline policy,
 Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded
 status/export/report route latency, weekly report generation, archive-retention
@@ -350,7 +355,7 @@ Implemented locally:
 - Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
   authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.
-- `sorafs-validate por` challenge/proof pair validation.
+- `iroha app sorafs toolkit validate por` challenge/proof pair validation.
 - Focused tests for CLI status/export/report behavior, Torii
   status/export/report handlers, and removed-route absence.
 - Shared fail-closed SF-9 rollout evidence gate, collection planner, operator
@@ -360,6 +365,6 @@ Implemented locally:
 
 Remaining production gates:
 - Add proof-bundle fetch/show/offline replay commands if operators need them
-  beyond `sorafs-validate por`.
+  beyond `iroha app sorafs toolkit validate por`.
 - Archive live auditor, drand, VRF, report, and export evidence before treating
   SF-9 as fully released, and require that evidence to pass the SF-9 gate.

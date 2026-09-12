@@ -9,7 +9,7 @@ use iroha_core::jurisdiction::JdgSdnEnforcer;
 use iroha_data_model::jurisdiction::{
     JdgAttestation, JdgBlockRange, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRotationPolicy,
 };
-use iroha_data_model::nexus::DataSpaceId;
+use iroha_model_base::topology::DataSpaceId;
 use norito::{
     DecodeLimits, decode_from_bytes_with_limits,
     json::{self, JsonDeserialize, JsonPreflightLimits, JsonSerialize},
@@ -275,8 +275,9 @@ mod tests {
         JDG_ATTESTATION_VERSION_V1, JDG_SDN_COMMITMENT_VERSION_V1, JdgAttestationScope,
         JdgCommitteeId, JdgSdnCommitment, JdgStateAccessSet, JdgVerdict,
     };
-    use iroha_data_model::{ChainId, prelude::AccountId};
+    use iroha_data_model::prelude::AccountId;
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
     use std::str::FromStr;
     use tempfile::NamedTempFile;
     use url::Url;
@@ -336,7 +337,7 @@ mod tests {
         fn config(&self) -> &iroha::config::Config {
             &self.cfg
         }
-        fn transaction_metadata(&self) -> Option<&iroha_data_model::metadata::Metadata> {
+        fn transaction_metadata(&self) -> Option<&iroha_model_base::metadata::Metadata> {
             None
         }
         fn input_instructions(&self) -> bool {

@@ -1,7 +1,5 @@
-use iroha_data_model::{
-    nexus::{AxtFastpqBinding, DataSpaceId, LaneId},
-    prelude::Quantity,
-};
+use iroha_data_model::{nexus::AxtFastpqBinding, prelude::Quantity};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
     axt::{

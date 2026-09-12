@@ -253,7 +253,8 @@ fn byte_len(path: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata, LaneId};
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneMetadata};
+    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU32;
     use tempfile::tempdir;
     fn lane_cfg() -> LaneConfig {

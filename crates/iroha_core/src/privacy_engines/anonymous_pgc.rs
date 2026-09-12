@@ -239,6 +239,8 @@ impl PgcDecryptionTableV1 {
 static PGC_DECRYPTION_TABLE: Lazy<Result<PgcDecryptionTableV1, AnonymousPgcError>> =
     Lazy::new(PgcDecryptionTableV1::derive);
 /// Canonical non-identity Twisted-ElGamal public key `pk = g·sk`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::TwistedElGamalPublicKeyV1")]
 #[derive(
     Clone,
     Copy,
@@ -298,6 +300,8 @@ impl TwistedElGamalPublicKeyV1 {
     }
 }
 /// Twisted-ElGamal ciphertext `(C_L, C_R) = (pk·r, g·r + h·m)`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::TwistedElGamalCiphertextV1")]
 #[derive(
     Clone,
     Copy,
@@ -805,6 +809,8 @@ impl<'a> PgcKeyPossessionStatementV1<'a> {
     }
 }
 /// Canonical Schnorr proof that `pk = g·sk`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::PgcKeyPossessionProofV1")]
 #[derive(
     Clone,
     Copy,
@@ -961,6 +967,8 @@ impl<'a> PgcCiphertextOpeningStatementV1<'a> {
     }
 }
 /// Canonical generalized-Schnorr proof of a Twisted-ElGamal opening.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::PgcCiphertextOpeningProofV1")]
 #[derive(
     Clone,
     Copy,
@@ -1653,7 +1661,15 @@ mod tests {
         mutations.push(changed);
         let mut changed = statement.transcript_binding;
         changed.genesis_hash[0] ^= 1;
-        mutations.push(changed);
+        assert!(
+            PgcCiphertextOpeningStatementV1::new(
+                statement.public_key,
+                statement.ciphertext,
+                changed
+            )
+            .is_err(),
+            "network/genesis disagreement must reject before proof evaluation"
+        );
         let mut changed = statement.transcript_binding;
         changed.action_index += 1;
         mutations.push(changed);
@@ -1720,7 +1736,7 @@ mod tests {
                 "9cacd524346b8e92765f16bd25941f661606ace6a60184f621af700500c3fadc".to_owned(),
                 "030f3b56925aa800a902be063f559e832a1f80b1a1989ffff2b5d37e9628ee7c3c".to_owned(),
                 "42878d6c1427706aca80b2e5e296554c094e2c265f9d8e76f208db20118a9758".to_owned(),
-                "2788d3086bd9228860dc1f57b128eee6df7374a1c6d9e37bcf5c8cc6d3ddf69f".to_owned(),
+                "aa565629ce913ff334bd889580a61bff34a325fdde4f72c474637a19ee99c2b8".to_owned(),
             )
         );
     }

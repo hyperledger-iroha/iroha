@@ -16,7 +16,7 @@ fn norito_roundtrip_open_verify_envelope() {
     // Header-framed Norito roundtrip using archived access + deserialize
     let bytes = norito::to_bytes(&env).expect("encode");
     let archived = norito::from_bytes::<OpenVerifyEnvelope>(&bytes).expect("archived");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, env);
 }
 #[test]

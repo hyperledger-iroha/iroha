@@ -3,7 +3,8 @@
 #[test]
 fn captured_codec_schema_identities() {
     #[cfg(test)]
-    crate::captured_schema_tests::assert_serialize::<super::ForgedTokenValue>(
+    crate::captured_schema_tests::Case::serialize::<super::ForgedTokenValue>(
         "iroha_data_model::sns::tests::ForgedTokenValue",
-    );
+    )
+    .check();
 }

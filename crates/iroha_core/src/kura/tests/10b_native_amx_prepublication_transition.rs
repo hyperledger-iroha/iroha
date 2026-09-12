@@ -1027,8 +1027,10 @@ fn native_amx_prune_exact_object_removal_rejects_same_length_in_place_rewrites()
             let namespace = kura
                 .native_amx_evidence_namespace_for_entry(&entry)
                 .expect("bind Native prune in-place rewrite namespace");
-            kura.prune_native_amx_evidence_pairs_locked(&entry, &namespace)
-                .expect_err("same-length Native prune rewrite must fail before unlink")
+            with_native_resource_batch_for_test(&kura, |resources| {
+                kura.prune_native_amx_evidence_pairs_locked(resources, &entry, &namespace)
+            })
+            .expect_err("same-length Native prune rewrite must fail before unlink")
         };
         assert!(
             error.to_string().contains("changed") || error.to_string().contains("exact-object"),
@@ -1384,13 +1386,15 @@ fn native_amx_manifest_temp_requires_qc_authenticated_finality_before_promotion(
     let namespace = kura
         .native_amx_evidence_namespace_for_entry(&entry)
         .expect("bind forged Native manifest evidence namespace");
-    let error = kura
-        .recover_native_amx_evidence_publication_temp_locked(
+    let error = with_native_resource_batch_for_test(&kura, |resources| {
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            resources,
             &entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::ManifestPublication,
         )
-        .expect_err("a structurally valid manifest without matching finality must fail");
+    })
+    .expect_err("a structurally valid manifest without matching finality must fail");
     assert!(
         error
             .to_string()
@@ -1443,13 +1447,15 @@ fn native_amx_receipt_temp_requires_manifest_finality_before_promotion() {
     let namespace = kura
         .native_amx_evidence_namespace_for_entry(&entry)
         .expect("bind unbacked Native receipt evidence namespace");
-    let error = kura
-        .recover_native_amx_evidence_publication_temp_locked(
+    let error = with_native_resource_batch_for_test(&kura, |resources| {
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            resources,
             &entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
         )
-        .expect_err("a receipt temporary without authenticated finality must fail");
+    })
+    .expect_err("a receipt temporary without authenticated finality must fail");
     assert!(
         error
             .to_string()
@@ -1501,13 +1507,15 @@ fn native_amx_redundant_temp_is_not_deleted_before_finality_authentication() {
     let namespace = kura
         .native_amx_evidence_namespace_for_entry(&entry)
         .expect("bind redundant Native evidence namespace");
-    let error = kura
-        .recover_native_amx_evidence_publication_temp_locked(
+    let error = with_native_resource_batch_for_test(&kura, |resources| {
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            resources,
             &entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::ManifestPublication,
         )
-        .expect_err("redundant temporary cleanup must authenticate finality first");
+    })
+    .expect_err("redundant temporary cleanup must authenticate finality first");
     assert!(
         error
             .to_string()
@@ -1720,7 +1728,8 @@ fn append_ordinary_carrier_for_native_chain(
         &v2_finality_fixture_keys(),
         v2_finality_fixture_execution_commitment(),
     );
-    let _ = kura.store_v2_finality_artifact(&finality)
+    let _ = kura
+        .store_v2_finality_artifact(&finality)
         .expect("publish ordinary carrier finality");
     kura.persist_lane_block_application_receipt(&proposal)
         .expect("publish ordinary shared-lane application receipt");

@@ -284,6 +284,10 @@ fn persist_da_commitment_schedule_entry_writes_bundle() {
     let archived = from_bytes::<persistence::DaCommitmentScheduleEntry>(&bytes)
         .expect("decode schedule entry");
     let decoded = persistence::DaCommitmentScheduleEntry::deserialize(archived);
+    crate::frame_test_support::assert_current_frame(
+        &decoded,
+        "iroha_torii::da::persistence::DaCommitmentScheduleEntry",
+    );
     assert_eq!(decoded.record, record);
     assert_eq!(decoded.pdp_commitment, pdp_bytes);
 }
@@ -323,7 +327,7 @@ fn persist_da_pin_intent_writes_file() {
     let bytes = fs::read(&path).expect("read pin intent");
     let archived = from_bytes::<DaPinIntent>(&bytes).expect("decode pin intent");
     let decoded: DaPinIntent =
-        NoritoDeserialize::try_deserialize(archived).expect("deserialize pin intent");
+        DeserializePayload::try_deserialize(archived).expect("deserialize pin intent");
     assert_eq!(decoded, intent);
     assert_eq!(decoded.alias, Some("sora/docs".to_owned()));
     assert_eq!(decoded.authorization.owner, *ALICE_ID);

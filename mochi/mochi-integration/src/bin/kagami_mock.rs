@@ -3,8 +3,9 @@ use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId, isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
-    parameter::system::SumeragiConsensusMode, prelude::ChainId,
+    parameter::system::SumeragiConsensusMode,
 };
+use iroha_model_base::chain::ChainId;
 use mochi_core::{GenesisProfile, sign_kagami_stub_genesis_from_config};
 use mochi_integration::kagami_default_manifest_json;
 use std::{env, fs, path::PathBuf, process};
@@ -68,16 +69,17 @@ fn sign(args: Vec<String>) -> Result<()> {
         return Err(eyre!("private key record is not canonical"));
     }
     let key_pair = KeyPair::from_private_key(private_key.0)?;
-    let block = sign_kagami_stub_genesis_from_config(
+    let (bound_manifest, block) = sign_kagami_stub_genesis_from_config(
         &parsed.manifest_path,
         &parsed.config_file,
         &key_pair,
         None,
     )?;
     fs::write(&parsed.out_file, block.encode_wire()?)?;
-    if parsed.bound_manifest_out != parsed.manifest_path {
-        fs::copy(&parsed.manifest_path, &parsed.bound_manifest_out)?;
-    }
+    fs::write(
+        &parsed.bound_manifest_out,
+        norito::json::to_vec_pretty(&bound_manifest)?,
+    )?;
     fs::write(
         &parsed.expected_hash_out,
         format!("{}\n", NetworkId::from_genesis_hash(block.hash())),
@@ -366,9 +368,9 @@ mod tests {
         isi::kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
         },
-        peer::PeerId,
     };
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+    use iroha_model_base::peer::PeerId;
     use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
     const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
@@ -752,6 +754,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             )
             .expect("build manifest"),
         );
+        let initial_manifest: RawGenesisTransaction =
+            norito::json::from_str(&manifest_json).expect("decode original manifest");
+        assert!(initial_manifest.consensus_fingerprint().is_none());
         fs::write(&manifest, manifest_json.as_bytes()).expect("write manifest");
         fs::write(
             &private_key,
@@ -780,9 +785,55 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let wire = fs::read(&signed).expect("read signed output");
         let block = decode_framed_signed_block(&wire).expect("decode signed output");
         assert_eq!(
-            fs::read(bound).expect("read bound output"),
-            manifest_json.as_bytes()
+            fs::read(&manifest).expect("read unchanged input manifest"),
+            manifest_json.as_bytes(),
+            "the signing helper must not mutate the input manifest implicitly"
         );
+        let bound_manifest = RawGenesisTransaction::from_path(&bound).expect("read bound output");
+        let expected_manifest = initial_manifest.clone().with_consensus_meta();
+        assert!(bound_manifest.consensus_fingerprint().is_some());
+        assert_eq!(
+            norito::json::value::to_value(&bound_manifest).expect("bound manifest value"),
+            norito::json::value::to_value(&expected_manifest).expect("expected manifest value"),
+            "every original manifest field must survive canonical metadata binding"
+        );
+        let signed_metadata = iroha_genesis::signed_genesis_consensus_metadata(&block)
+            .expect("decode actual signed consensus metadata");
+        assert_eq!(
+            bound_manifest.consensus_fingerprint(),
+            Some(signed_metadata.consensus_fingerprint)
+        );
+        iroha_genesis::validate_prepared_genesis_bundle(
+            &wire,
+            &bound_manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .expect("published manifest must bind the exact signed bytes");
+        let missing_fingerprint = iroha_genesis::validate_prepared_genesis_bundle(
+            &wire,
+            &initial_manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .expect_err("the original missing-fingerprint manifest is not a bound output");
+        assert!(
+            missing_fingerprint
+                .to_string()
+                .contains("consensus fingerprint")
+        );
+        let mut mismatched_context = bound_manifest.sumeragi_v2_context_parameters();
+        mismatched_context.nexus_amx_context_hash[0] ^= 2;
+        let mismatched_manifest =
+            bound_manifest.with_sumeragi_v2_context_parameters(mismatched_context);
+        let mismatch = iroha_genesis::validate_prepared_genesis_bundle(
+            &wire,
+            &mismatched_manifest,
+            key_pair.public_key(),
+            block.hash(),
+        )
+        .expect_err("a changed manifest context must not validate against the signed body");
+        assert!(mismatch.to_string().contains("Sumeragi v2 context"));
         assert_eq!(
             fs::read_to_string(&expected_hash).expect("read exact hash"),
             format!("{}\n", NetworkId::from_genesis_hash(block.hash()))
@@ -833,7 +884,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             )
             .expect("build manifest"),
         );
-        fs::write(&manifest, manifest_json).expect("write manifest");
+        fs::write(&manifest, &manifest_json).expect("write manifest");
         fs::write(&bound, b"sentinel").expect("write bound sentinel");
         fs::write(
             &private_key,
@@ -850,7 +901,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ),
         )
         .expect("write config");
-        let _ = sign(vec![
+        let error = sign(vec![
             manifest.display().to_string(),
             "--out-file".to_owned(),
             temp.path()
@@ -867,6 +918,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             config.display().to_string(),
         ])
         .expect_err("missing output parent should fail");
+        assert!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+            "the failure must reach the missing output directory after successful signing: {error:#}"
+        );
         assert_eq!(
             fs::read(bound).expect("read bound sentinel"),
             b"sentinel",
@@ -875,6 +932,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert!(
             !expected_hash.exists(),
             "expected hash must only publish after the block and bound manifest"
+        );
+        assert_eq!(
+            fs::read_to_string(&manifest).expect("read original input manifest"),
+            manifest_json,
+            "failed output publication must preserve the original input manifest"
         );
     }
 }

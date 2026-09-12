@@ -8,8 +8,9 @@ use iroha_core::state::World;
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
-    domain::{Domain, DomainId},
+    domain::Domain,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_torii_shared::ErrorEnvelope;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tower::ServiceExt as _;

@@ -3,6 +3,8 @@
 use super::*;
 
 /// Closed response shared by both authenticated ledger-state endpoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ledger_state_finality::StateFinalityResponse")]
 #[derive(
     Debug,
     Clone,
@@ -12,6 +14,7 @@ use super::*;
     norito::derive::NoritoDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+
 pub(super) struct StateFinalityResponse {
     /// Requested one-based committed block height.
     pub(super) height: u64,

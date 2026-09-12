@@ -50,6 +50,26 @@ FAKE_FAUCET_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 FAKE_FAUCET_AMOUNT = "25000"
 
 
+def restart_fixture_account_controller(
+    value: str, *, expected_discriminant: int | None = None
+) -> bytes:
+    """Isolate account parsing in restart tests, admitting only fixed mock accounts."""
+
+    if value not in {
+        *FAKE_VALIDATOR_AUTHORITIES,
+        FAKE_FAUCET_AUTHORITY,
+        FEE_QUOTE_AUTHORITY,
+        OTHER_CANONICAL_AUTHORITY,
+    }:
+        raise ValueError("unexpected restart fixture account")
+    if expected_discriminant is not None and (
+        expected_discriminant != module.DEFAULT_CHAIN_DISCRIMINANT
+        or not value.startswith("test")
+    ):
+        raise ValueError("unexpected restart fixture discriminant")
+    return value.removeprefix("test").removeprefix("sora").encode("utf-8")
+
+
 def fake_fee_payment() -> dict[str, object]:
     return {
         "payer": "authority",
@@ -143,11 +163,25 @@ def fake_prepared_payload(
     transaction_hash: str | None,
 ) -> dict[str, object]:
     semantic_hash = "e" * 64
+    public_binding = {
+        "schema": "iroha.prepared-operation.binding.v1",
+        "kind": binding["kind"],
+        "semantic_hash_hex": semantic_hash,
+        "request_id": binding["idempotency_key"],
+        "execution_expires_at_unix_ms": binding["execution_expires_at_unix_ms"],
+    }
+    if tag in {"onboarding_prepared", "onboarding_proof_required"}:
+        receipt = fake_onboarding_receipt()
+        semantic_hash = receipt["plan_hash"][5:69].lower()
+        public_binding["semantic_hash_hex"] = semantic_hash
+        public_binding["execution_expires_at_unix_ms"] = min(
+            binding["execution_expires_at_unix_ms"], receipt["body"]["valid_until_ms"]
+        )
     if tag == "onboarding_prepared":
         assert transaction_hash is not None
         return {
-            "schema": "iroha.taira.prepared-transaction.v1",
-            "binding": binding,
+            "schema": "iroha.prepared-transaction.v1",
+            "binding": public_binding,
             "operation": "onboarding",
             "receipt": fake_onboarding_receipt(),
             "semantic_hash_hex": semantic_hash,
@@ -166,7 +200,7 @@ def fake_prepared_payload(
             "receipt": fake_onboarding_receipt(),
             "result": {
                 "schema": "iroha.accounts.onboard.prepare-proof-required.v1",
-                "binding": binding,
+                "binding": public_binding,
                 "operation": "onboarding",
                 "outcome": "ProofRequired",
                 "proof_kind": "account_alias_current_state",
@@ -180,8 +214,8 @@ def fake_prepared_payload(
     if tag == "faucet_prepared":
         assert transaction_hash is not None
         return {
-            "schema": "iroha.taira.prepared-transaction.v1",
-            "binding": binding,
+            "schema": "iroha.prepared-transaction.v1",
+            "binding": public_binding,
             "operation": "faucet",
             "claim": {
                 "account_id": "test-authority",
@@ -470,7 +504,7 @@ class FakeRuntime:
             option
             for _binary, _subcommands, options in module.INROU_CANARY_CLI_SURFACES
             for option in options
-        } | {"--public-root", "--json"}
+        } | {"--scope", "--public-root", "--json"}
         self.sumeragi_status_http = 401
         self.initial_sumeragi_transport_unavailable_once = False
         self.restart_sumeragi_transport_unavailable_once = False
@@ -1241,7 +1275,6 @@ class FakeRuntime:
                     self._advance_restarted_guest(index)
             if targeted:
                 self.targeted_restart_started = True
-                self.height += 1
         elif values[0] == "/bin/bash" and values[1].endswith("/stop.sh"):
             target = Path(str(kwargs["cwd"]))
             selector = values[2:]
@@ -2350,7 +2383,7 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(
             restart["local_placement"]["placement_incarnation"], "a" * 63 + "b"
         )
-        self.assertGreater(restart["height_after"], restart["height_before"])
+        self.assertEqual(restart["height_after"], restart["height_before"])
         self.assertNotEqual(
             restart["processes_after"][0], restart["processes_before"][0]
         )
@@ -2666,6 +2699,70 @@ class TairaDevnetTests(unittest.TestCase):
             self.assertEqual(
                 command[command.index("--faucet-amount") + 1],
                 FAKE_FAUCET_AMOUNT,
+            )
+
+    @mock.patch.object(module, "_I105_ACCOUNT_DECODER", restart_fixture_account_controller)
+    def test_idle_restart_preserves_height_without_submitting_work(self) -> None:
+        runtime = FakeRuntime()
+
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+
+        restart = report["inrou_restart"]
+        self.assertEqual(restart["height_after"], restart["height_before"])
+        target = self.root / "state" / "network"
+        start = ("/bin/bash", str(target / "start.sh"), "--peer-index", "0")
+        after_restart = runtime.commands[runtime.commands.index(start) + 1 :]
+        self.assertTrue(any("inrou-check" in command for command in after_restart))
+        self.assertFalse(
+            any(
+                "ping" in command or "--submit-prepared-envelope-fd" in command
+                for command in after_restart
+            )
+        )
+        self.assertEqual(
+            [row["app_data_marker_sha256"] for row in restart["inrou_check"]["replica_identities"]],
+            [row["app_data_marker_sha256"] for row in report["inrou_canary"]["replica_identities"]],
+        )
+
+    @mock.patch.object(module, "_I105_ACCOUNT_DECODER", restart_fixture_account_controller)
+    def test_restart_rejects_cluster_below_committed_floor(self) -> None:
+        runtime = FakeRuntime()
+
+        def run(command, **kwargs):
+            completed = runtime.run(command, **kwargs)
+            values = tuple(str(value) for value in command)
+            if (
+                values[0] == "/bin/bash"
+                and values[1].endswith("/start.sh")
+                and "--peer-index" in values
+            ):
+                runtime.height -= 1
+            return completed
+
+        args = self.up_args()
+        args.timeout_seconds = 0.01
+        with (
+            mock.patch.object(module.time, "sleep"),
+            self.assertRaisesRegex(module.DevnetError, "minimum_height="),
+        ):
+            module.up(args, run=run, request=runtime.request)
+        self.assertFalse(runtime.process_commands)
+
+    @mock.patch.object(module, "_I105_ACCOUNT_DECODER", restart_fixture_account_controller)
+    def test_restart_proof_rejects_regressed_retained_height(self) -> None:
+        runtime = FakeRuntime()
+        report = module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        restart = dict(report["inrou_restart"])
+        restart["height_after"] = restart["height_before"] - 1
+
+        with self.assertRaisesRegex(module.DevnetError, "preserve the committed cluster height"):
+            module.require_inrou_restart_proof(
+                self.root / "state" / "network",
+                report["torii_roots"][0].rstrip("/"),
+                report["inrou_canary"],
+                report["source_observation"],
+                self.rust_target,
+                restart,
             )
 
     def test_restart_proof_accepts_same_pid_only_with_new_start_time(self) -> None:
@@ -3153,6 +3250,75 @@ class TairaDevnetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(module.DevnetError, "substituted child"):
             module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_native_prepared_account_payloads_use_only_public_projection(self) -> None:
+        binding = {
+            "schema": "iroha.taira.public-reset.mutation-binding.v1",
+            "authorization_sha256": "a" * 64,
+            "authorization_nonce": "n" * 32,
+            "kind": "onboarding",
+            "phase": "canary",
+            "idempotency_key": "b" * 64,
+            "execution_expires_at_unix_ms": 9_999_999_999_999,
+        }
+        for tag, validator in (
+            ("onboarding_prepared", module._validate_prepared_onboarding_v1),
+            ("onboarding_proof_required", module._validate_prepared_onboarding_proof_required_v1),
+            ("faucet_prepared", module._validate_prepared_faucet_v1),
+        ):
+            with self.subTest(tag=tag):
+                root = {**binding, "kind": "faucet" if tag == "faucet_prepared" else "onboarding"}
+                payload = fake_prepared_payload(tag, root, root["kind"], "a" * 63 + "b")
+                validator(payload, "prepared", root)
+                public_payload = payload["result"] if tag == "onboarding_proof_required" else payload
+                self.assertNotEqual(public_payload["binding"], root)
+                public_payload["binding"] = root
+                with self.assertRaisesRegex(module.DevnetError, "exactly the V1 fields"):
+                    validator(payload, "prepared", root)
+
+    def test_public_prepared_binding_projects_only_native_operation_identity(self) -> None:
+        private_binding = {
+            "kind": "onboarding",
+            "authorization_sha256": "a" * 64,
+            "authorization_nonce": "n" * 32,
+            "phase": "canary",
+            "idempotency_key": "b" * 64,
+            "execution_expires_at_unix_ms": 200,
+        }
+        public_binding = {
+            "schema": "iroha.prepared-operation.binding.v1",
+            "kind": "onboarding",
+            "semantic_hash_hex": "c" * 64,
+            "request_id": "b" * 64,
+            "execution_expires_at_unix_ms": 100,
+        }
+        module._validate_public_prepared_binding_v1(
+            public_binding, "binding", private_binding, "c" * 64, 100
+        )
+        for field, value in (
+            ("request_id", "d" * 64),
+            ("semantic_hash_hex", "d" * 64),
+            ("execution_expires_at_unix_ms", 101),
+            ("kind", "faucet"),
+        ):
+            with self.subTest(field=field):
+                changed = {**public_binding, field: value}
+                with self.assertRaisesRegex(module.DevnetError, "substituted public"):
+                    module._validate_public_prepared_binding_v1(
+                        changed, "binding", private_binding, "c" * 64, 100
+                    )
+        for field in ("authorization_sha256", "authorization_nonce", "phase", "idempotency_key"):
+            with self.subTest(field=field):
+                changed = {**public_binding, field: private_binding[field]}
+                with self.assertRaisesRegex(module.DevnetError, "exactly the V1 fields"):
+                    module._validate_public_prepared_binding_v1(
+                        changed, "binding", private_binding, "c" * 64, 100
+                    )
+        faucet_root = {**private_binding, "kind": "faucet"}
+        faucet_public = {**public_binding, "kind": "faucet", "execution_expires_at_unix_ms": 200}
+        module._validate_public_prepared_binding_v1(
+            faucet_public, "binding", faucet_root, "c" * 64
+        )
 
     def test_prepared_inrou_envelope_v1_rejects_unknown_fields_recursively(
         self,
@@ -3883,7 +4049,7 @@ class TairaDevnetTests(unittest.TestCase):
         args.timeout_seconds = 0.01
 
         with mock.patch.object(module.time, "sleep", return_value=None):
-            with self.assertRaisesRegex(module.DevnetError, "required_above=0"):
+            with self.assertRaisesRegex(module.DevnetError, "minimum_height=1"):
                 module.up(args, run=runtime.run, request=runtime.request)
 
         self.assertFalse(any("--no-wait" in command for command in runtime.commands))
@@ -5009,6 +5175,15 @@ class TairaDevnetTests(unittest.TestCase):
             any("doctor" in command and "--help" not in command for command in runtime.commands)
         )
 
+    def test_full_doctor_command_uses_explicit_full_scope(self) -> None:
+        runtime = FakeRuntime()
+        target = self.root / "doctor"
+        target.mkdir()
+        module.run_full_doctor(target, Path("/fake/iroha"), "http://127.0.0.1:8080/", runtime.run)
+        command = runtime.commands[-1]
+        self.assertEqual(command[command.index("--scope") + 1], "full")
+        self.assertEqual(command[command.index("--public-root") + 1], "http://127.0.0.1:8080")
+
     def test_full_doctor_runs_after_mandatory_canary(self) -> None:
         runtime = FakeRuntime()
 
@@ -5028,6 +5203,7 @@ class TairaDevnetTests(unittest.TestCase):
             if "doctor" in command and "--help" not in command
         ]
         self.assertEqual(len(doctors), 1)
+        self.assertEqual(doctors[0][doctors[0].index("--scope") + 1], "full")
         deploy_index = next(
             index
             for index, command in enumerate(runtime.commands)

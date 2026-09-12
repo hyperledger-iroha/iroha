@@ -16,6 +16,8 @@ fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers(
         lane_entry.dataspace_id,
         lane_block_height,
     );
+    let mut block = block.as_ref().clone();
+    attach_ok_results_to_block(&mut block);
     let ownership = block
         .execution_context()
         .expect("execution context")
@@ -25,8 +27,7 @@ fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers(
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.store_block(block)
-        .expect("store canonical lane payload source");
+    store_finalized_fixture_block(&kura, Arc::new(block));
     let recovered = kura
         .recover_lane_block_payload(&proposal)
         .expect("recover exact execution input");
@@ -36,6 +37,8 @@ fn lane_execution_evidence_overrides_batched_fsync_and_reissues_failed_barriers(
             kura.persist_lane_block_execution_input(&recovered).is_err(),
             "injected {label} execution-input barrier failure must be reported"
         );
+        kura.recover_lane_consensus_sidecar_pairs_on_startup()
+            .expect("explicit startup owner resolves the interrupted pair before writer retry");
     }
     kura.persist_lane_block_execution_input(&recovered)
         .expect("execution-input retry must reissue every strict barrier");
@@ -81,6 +84,8 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         lane_entry.dataspace_id,
         lane_block_height,
     );
+    let mut block = block.as_ref().clone();
+    attach_ok_results_to_block(&mut block);
     let ownership = block
         .execution_context()
         .expect("execution context")
@@ -90,8 +95,7 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.store_block(block)
-        .expect("store block with lane artifact");
+    store_finalized_fixture_block(&kura, Arc::new(block));
     let recovered = kura
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload");
@@ -122,8 +126,8 @@ fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
         "lane execution input index file missing"
     );
     drop(kura);
-    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("reopen kura");
+    let (reloaded, _) =
+        reopen_test_kura_with_default_lane_geometry(&config, &lane_config).expect("reopen kura");
     assert_eq!(
         reloaded.read_lane_block_execution_input(lane_id, lane_block_height),
         Some(input)
@@ -143,6 +147,8 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
         lane_entry.dataspace_id,
         lane_block_height,
     );
+    let mut block = block.as_ref().clone();
+    attach_ok_results_to_block(&mut block);
     let ownership = block
         .execution_context()
         .expect("execution context")
@@ -152,8 +158,7 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.store_block(block)
-        .expect("store block with lane artifact");
+    store_finalized_fixture_block(&kura, Arc::new(block));
     let recovered = kura
         .recover_lane_block_payload(&proposal)
         .expect("recover executable lane payload");
@@ -266,10 +271,12 @@ fn lane_execution_sidecars_validate_without_recursive_prune_repair() {
             .is_none(),
         "nonrepair evidence validation must leave the missing lane artifact absent",
     );
+    kura.recover_lane_block_payload(&proposal)
+        .expect("explicit canonical payload recovery restores its lane artifact");
     assert!(
         kura.read_lane_block_artifact(lane_id, lane_block_height)
             .is_some(),
-        "the public repair-enabled reader must recover the missing lane artifact",
+        "explicit payload recovery must publish the missing lane artifact",
     );
     let mut merge_log = MergeLedgerLog::in_memory(1);
     merge_log.append_recovery_offset = Some(0);

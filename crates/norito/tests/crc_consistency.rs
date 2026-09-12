@@ -3,7 +3,8 @@ use norito::{
     NoritoDeserialize, NoritoSerialize, core as norito_core, crc64_fallback, decode_from_bytes,
     hardware_crc64, to_bytes,
 };
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.crc_consistency.Sample")]
 struct Sample {
     a: u64,
     b: String,

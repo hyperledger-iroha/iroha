@@ -80,10 +80,18 @@ pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
     fn handle(&self) -> &str;
     /// Return the live public qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the qualification request.
     fn qualification(
         &self,
     ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>;
     /// Sign one exact broker-validated canonical pulse payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
     fn sign_partial(
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
@@ -103,6 +111,10 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
     fn handle(&self) -> &str;
     /// Return the live public qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the qualification request.
     fn qualification(
         &self,
     ) -> Result<
@@ -110,6 +122,10 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Attest live custody for one exact validated public session and seat.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
     fn attest_partial_release_capability(
         &self,
         session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
@@ -119,6 +135,10 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Sign one exact broker-validated public release projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
     fn sign_projected_partial_release(
         &self,
         projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
@@ -330,7 +350,7 @@ mod stock_registry_tests {
     use super::*;
     #[test]
     fn standalone_registry_retains_exact_network_identity() {
-        let chain_id = iroha_data_model::ChainId::from("standalone-governance-test");
+        let chain_id = iroha_model_base::chain::ChainId::from("standalone-governance-test");
         let network_id = crate::runtime_provider_registry::runtime_provider_test_network_id();
         let registry =
             StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id.clone(), network_id);
@@ -374,14 +394,14 @@ mod stock_registry_tests {
 /// the broker handshake. Construction performs no I/O and stores no secret.
 #[derive(Clone, Debug)]
 pub struct StockGovernanceDagServiceRuntimeProviderRegistryV1 {
-    chain_id: iroha_data_model::ChainId,
+    chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
 }
 impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     /// Construct a standalone-service registry for one exact network.
     #[must_use]
     pub const fn new(
-        chain_id: iroha_data_model::ChainId,
+        chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
     ) -> Self {
         Self {
@@ -784,8 +804,10 @@ define_runtime_provider_backends_v1! {
         optional governance_dag_head_authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator> => pub fn with_governance_dag_head_authenticator(authenticator);
         /// Attach the deployment-owned Governance DAG sealed checkpoint store.
         optional governance_dag_checkpoint_store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore> => pub fn with_governance_dag_checkpoint_store(store);
-        /// Attach the deployment-owned stream-token Ed25519 signer.
-        optional stream_token_signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner> => pub fn with_stream_token_signer(signer);
+        /// Attach the deployment-owned opaque hardware operation client, never a trust anchor.
+        optional stream_token_hardware_client: Arc<dyn iroha_torii::sorafs::StreamTokenHardwareClientV1> => pub fn with_stream_token_hardware_client(client);
+        /// Attach the separately routed, independently authenticated finalized-state observer.
+        optional stream_token_state_observer: Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1> => pub fn with_stream_token_state_observer(observer);
         /// Attach the deployment-owned stream-token quota, sealed-sequence, and
         /// ordered callback-outbox provider.
         optional stream_token_gateway_admission: Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1> => pub fn with_stream_token_gateway_admission(provider);
@@ -907,7 +929,6 @@ impl RuntimeProviderBrokerBackendsV1 {
 
     pub(crate) fn contains_external_software_signer_v1(&self) -> bool {
         self.governance_dag_signer.is_some()
-            || self.stream_token_signer.is_some()
             || self.proof_outcome_transaction_signer.is_some()
             || self.repair_transaction_signer.is_some()
             || self.reserve_transaction_signer.is_some()

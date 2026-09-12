@@ -1,20 +1,20 @@
 //! JSON helpers for custom (de)serialization in data-model types.
 //!
 //! These helpers are intended for app-facing DTOs and are used with Norito's
-//! checked `#[cfg_attr(feature = "json", norito(json = "..."))]` attribute.
+//! checked `#[norito(json = "...")]` attribute.
 //! For base64 encoding, select `crate::json_helpers::base64_vec` on `Vec<u8>` fields.
-#[cfg(feature = "json")]
+
 use crate::soranet::privacy_metrics::SoranetPrivacyModeV1;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-#[cfg(feature = "json")]
+
 use norito::json::{
     self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser, Value,
     write_base64_json_to,
 };
-#[cfg(feature = "json")]
+
 use std::collections::BTreeMap;
 use std::{format, string::String, vec::Vec};
-#[cfg(feature = "json")]
+
 fn write_u128_decimal_string(
     mut value: u128,
     out: &mut dyn JsonWriteSink,
@@ -35,7 +35,7 @@ fn write_u128_decimal_string(
     }
     out.push('"')
 }
-#[cfg(feature = "json")]
+
 fn write_i128_decimal_string(
     value: i128,
     out: &mut dyn JsonWriteSink,
@@ -61,7 +61,6 @@ fn write_i128_decimal_string(
     out.push('"')
 }
 /// Serialize a `Vec<u8>` as a base64 string and deserialize from base64.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod base64_vec {
     use super::*;
@@ -114,7 +113,6 @@ pub mod base64_vec {
     }
 }
 /// Serialize signed 128-bit integers as decimal strings to satisfy JSON codec expectations.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod i128_string {
     use super::*;
@@ -136,7 +134,6 @@ pub mod i128_string {
 }
 /// Serialize unsigned 64-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod u64_string {
     use super::*;
@@ -206,7 +203,6 @@ pub mod u64_string {
 }
 /// Serialize unsigned 128-bit integers as canonical decimal strings and reject
 /// every non-canonical spelling on input.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod u128_string {
     use super::*;
@@ -237,7 +233,6 @@ pub mod u128_string {
     }
 }
 /// Helpers for fixed-size byte arrays (`[u8; N]`) and their container variants.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod fixed_bytes {
     use super::*;
@@ -380,7 +375,6 @@ pub mod fixed_bytes {
     }
 }
 /// Serialize fixed-size `u64` limb arrays as canonical JSON arrays.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod fixed_u64_limbs {
     use super::*;
@@ -414,7 +408,6 @@ pub mod fixed_u64_limbs {
     }
 }
 /// Serialize fixed-size `u32` limb arrays as canonical JSON arrays.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod fixed_u32_limbs {
     use super::*;
@@ -482,7 +475,6 @@ pub mod fixed_u32_limbs {
     }
 }
 /// Serialize fixed-size arrays of JSON values as canonical JSON arrays.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod fixed_array {
     use super::*;
@@ -525,7 +517,6 @@ pub mod fixed_array {
     }
 }
 /// Serialize and deserialize fixed-size byte arrays as hex strings.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod fixed_bytes_hex {
     use super::*;
@@ -608,7 +599,6 @@ pub mod fixed_bytes_hex {
     }
 }
 /// Serialize and deserialize a `SoraNet` privacy collector ID as one canonical lowercase hex value.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod soranet_privacy_collector_id {
     use super::*;
@@ -643,7 +633,6 @@ pub mod soranet_privacy_collector_id {
     }
 }
 /// Serialize and deserialize [`SoranetPrivacyModeV1`] values as their label strings.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod privacy_mode {
     use super::*;
@@ -672,7 +661,6 @@ pub mod privacy_mode {
     }
 }
 /// Helper that strips sensitive strings from JSON serialization while retaining internal storage.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod secret_string {
     use super::*;
@@ -696,11 +684,11 @@ pub mod secret_string {
     }
 }
 /// Serialize a map keyed by [`AccountId`] into a string-keyed JSON object.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod account_metadata_map {
     use super::*;
-    use crate::{account::AccountId, metadata::Metadata};
+    use crate::account::AccountId;
+    use iroha_model_base::metadata::Metadata;
     pub fn serialize(value: &BTreeMap<AccountId, Metadata>, out: &mut String) {
         let string_keyed: BTreeMap<String, Metadata> = value
             .iter()
@@ -775,7 +763,6 @@ pub mod account_metadata_map {
     }
 }
 /// Serialize Soracloud Inrou guest-image maps as string-keyed JSON objects.
-#[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod sora_inrou_guest_images_map {
     use super::*;
@@ -841,7 +828,7 @@ pub mod sora_inrou_guest_images_map {
             .collect()
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::soracloud::{
@@ -850,162 +837,111 @@ mod tests {
     use norito::json;
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::base64_vec",
-                bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::base64_vec",
+            bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
         )]
         data: Vec<u8>,
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedBytesWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_bytes",
-                bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_bytes",
+            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
         )]
         data: [u8; 4],
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_bytes::option",
-                bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_bytes::option",
+            bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
         )]
         optional: Option<[u8; 2]>,
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct ContainerHelpersWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::base64_vec::option",
-                bounded_with = "crate::json_helpers::base64_vec::option::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::base64_vec::option",
+            bounded_with = "crate::json_helpers::base64_vec::option::serialize_bounded"
         )]
         encoded: Option<Vec<u8>>,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_bytes::vec",
-                bounded_with = "crate::json_helpers::fixed_bytes::vec::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_bytes::vec",
+            bounded_with = "crate::json_helpers::fixed_bytes::vec::serialize_bounded"
         )]
         fixed: Vec<[u8; 2]>,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_bytes::option_vec",
-                bounded_with = "crate::json_helpers::fixed_bytes::option_vec::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_bytes::option_vec",
+            bounded_with = "crate::json_helpers::fixed_bytes::option_vec::serialize_bounded"
         )]
         optional_fixed: Option<Vec<[u8; 2]>>,
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct ScalarHelpersWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::u64_string",
-                bounded_with = "crate::json_helpers::u64_string::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::u64_string",
+            bounded_with = "crate::json_helpers::u64_string::serialize_bounded"
         )]
         count: u64,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::u64_string::option",
-                bounded_with = "crate::json_helpers::u64_string::option::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::u64_string::option",
+            bounded_with = "crate::json_helpers::u64_string::option::serialize_bounded"
         )]
         optional_count: Option<u64>,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::u128_string",
-                bounded_with = "crate::json_helpers::u128_string::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::u128_string",
+            bounded_with = "crate::json_helpers::u128_string::serialize_bounded"
         )]
         total: u128,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_bytes_hex",
-                bounded_with = "crate::json_helpers::fixed_bytes_hex::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_bytes_hex",
+            bounded_with = "crate::json_helpers::fixed_bytes_hex::serialize_bounded"
         )]
         digest: [u8; 4],
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_bytes_hex::option",
-                bounded_with = "crate::json_helpers::fixed_bytes_hex::option::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_bytes_hex::option",
+            bounded_with = "crate::json_helpers::fixed_bytes_hex::option::serialize_bounded"
         )]
         optional_digest: Option<[u8; 2]>,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::privacy_mode",
-                bounded_with = "crate::json_helpers::privacy_mode::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::privacy_mode",
+            bounded_with = "crate::json_helpers::privacy_mode::serialize_bounded"
         )]
         mode: SoranetPrivacyModeV1,
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::secret_string",
-                bounded_with = "crate::json_helpers::secret_string::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::secret_string",
+            bounded_with = "crate::json_helpers::secret_string::serialize_bounded"
         )]
         secret: String,
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito(deny_unknown_fields)]
     struct SoranetCollectorIdWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::soranet_privacy_collector_id",
-                bounded_with = "crate::json_helpers::soranet_privacy_collector_id::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::soranet_privacy_collector_id",
+            bounded_with = "crate::json_helpers::soranet_privacy_collector_id::serialize_bounded"
         )]
         collector_id: [u8; 32],
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedU64LimbsWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_u64_limbs",
-                bounded_with = "crate::json_helpers::fixed_u64_limbs::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_u64_limbs",
+            bounded_with = "crate::json_helpers::fixed_u64_limbs::serialize_bounded"
         )]
         limbs: [u64; 4],
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedU32LimbsWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_u32_limbs",
-                bounded_with = "crate::json_helpers::fixed_u32_limbs::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_u32_limbs",
+            bounded_with = "crate::json_helpers::fixed_u32_limbs::serialize_bounded"
         )]
         limbs: [u32; 4],
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct FixedStringArrayWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::fixed_array",
-                bounded_with = "crate::json_helpers::fixed_array::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::fixed_array",
+            bounded_with = "crate::json_helpers::fixed_array::serialize_bounded"
         )]
         values: [String; 2],
     }
@@ -1193,12 +1129,9 @@ mod tests {
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct I128Wrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::json_helpers::i128_string",
-                bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::json_helpers::i128_string",
+            bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
         )]
         value: i128,
     }
@@ -1230,10 +1163,7 @@ mod tests {
     }
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct InrouGuestImagesWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::sora_inrou_guest_images_map")
-        )]
+        #[norito(json = "crate::json_helpers::sora_inrou_guest_images_map")]
         guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
     }
     #[test]

@@ -611,6 +611,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::block::BlockHeader;
+    use iroha_model_base::domain::DomainId;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
     fn checked_keypair() -> KeyPair {

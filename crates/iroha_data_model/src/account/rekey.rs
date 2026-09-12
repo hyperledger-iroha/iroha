@@ -1,22 +1,30 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
-use super::{Account, AccountId, Name};
-use crate::{
-    alias_setup::AccountAliasName,
-    domain::DomainId,
-    error::ParseError,
-    nexus::{DataSpaceCatalog, DataSpaceId},
-};
+use super::{Account, AccountId};
+use crate::{alias_setup::AccountAliasName, nexus::DataSpaceCatalog};
 use core::fmt;
 use iroha_crypto::PublicKey;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::error::ParseError;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
 use thiserror::Error;
 /// Dataspace-scoped alias-domain segment used only inside account aliases.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
@@ -59,12 +67,23 @@ impl FromStr for AccountAliasDomain {
     }
 }
 /// Stable on-chain account alias that survives signatory rotation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::rekey::AccountAlias")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -254,15 +273,19 @@ mod tests {
 /// Entries are positional: entry `i` describes the transition from
 /// `previous_account_ids[i]` to the next account id in the record. Only an
 /// explicit [`Self::AccountIdRekey`] transition can carry controller continuity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::rekey::AccountRekeyTransitionProvenance")]
 pub enum AccountRekeyTransitionProvenance {
@@ -288,12 +311,18 @@ pub enum AccountRekeyRecordError {
     },
 }
 /// Record that tracks the active concrete account behind a stable account label.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::rekey::AccountRekeyRecord")]
 pub struct AccountRekeyRecord {
@@ -448,10 +477,10 @@ mod rekey_record_tests {
     fn alias() -> AccountAlias {
         AccountAlias::domainless(
             "wire".parse().expect("account alias label"),
-            crate::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn account_alias_json_requires_explicit_scope_fields() {
         let alias = alias();
@@ -518,7 +547,7 @@ mod rekey_record_tests {
             expected
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn rekey_record_json_requires_all_first_release_fields() {
         let record = AccountRekeyRecord::new(alias(), account_id());

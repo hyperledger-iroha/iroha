@@ -97,8 +97,8 @@ impl SoracloudRuntime for CountingSoracloudRuntime {
 fn seed_soracloud_mailbox_fixture(
     world: &mut World,
     state_bindings: Vec<SoraStateBindingV1>,
-) -> (iroha_data_model::name::Name, Hash) {
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid service name");
+) -> (iroha_model_base::name::Name, Hash) {
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid service name");
     let service_version = "2026.1".to_string();
     let bundle_hash = Hash::new(b"bundle:portal:2026.1");
     let bundle = SoraDeploymentBundleV1 {
@@ -833,7 +833,7 @@ fn validate_and_record_transactions_never_executes_local_soracloud_mailbox_runti
 #[test]
 fn validate_and_record_transactions_ignores_local_soracloud_mailbox_state_mutations() {
     let mut world = World::new();
-    let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid binding name");
+    let binding_name: iroha_model_base::name::Name = "vault".parse().expect("valid binding name");
     let state_key = "/state/private/patient-1".to_string();
     let payload = b"portal-runtime-state-payload".to_vec();
     let payload_commitment = Hash::new(&payload);

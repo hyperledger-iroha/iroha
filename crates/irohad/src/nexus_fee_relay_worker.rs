@@ -30,24 +30,23 @@ use iroha_data_model::{
         InstructionBox,
         nexus::{RegisterVerifiedFeeSponsorVaultAllocation, RegisterVerifiedLaneRelay},
     },
-    metadata::Metadata,
-    name::Name,
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, DataSpaceId, FeeSponsorAssetBudget,
-        FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
-        FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope,
-        MAX_ACTIVE_EXECUTION_LANES, ProofBlob,
+        AxtEffectBinding, AxtFastpqBinding, FeeSponsorAssetBudget, FeeSponsorEligibility,
+        FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey,
+        FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE,
+        LaneFastpqProofMaterial, LaneRelayEnvelope, MAX_ACTIVE_EXECUTION_LANES, ProofBlob,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
         fee_sponsor_vault_policy_commitment, fee_sponsor_vault_source_state_root,
         lane_relay_fastpq_claim_digest,
     },
-    state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
     numeric::{MAX_DECIMAL_SCALE, Numeric, Quantity, RoundingMode},
@@ -76,11 +75,14 @@ const WORKER_STATE_MAX_TOTAL_PROOF_BYTES: usize = 32 * 1024 * 1024;
 const WORKER_STATE_MAX_KEY_BYTES: usize = 4 * 1024;
 const WORKER_STATE_MAX_DECODE_ALLOCATED_BYTES: usize = 128 * 1024 * 1024;
 const WORKER_STATE_MAX_DECODE_DEPTH: usize = 32;
-#[derive(Clone, Debug, Default, Decode, Encode)]
+#[derive(Clone, Debug, Default, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableWorkerState")]
 struct DurableWorkerState {
     relays: BTreeMap<String, DurableRelayWork>,
     allocations: BTreeMap<String, DurableAllocationWork>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableRelayWork")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableRelayWork {
     envelope: LaneRelayEnvelope,
@@ -93,6 +95,8 @@ enum RelayAttemptDecision {
     Rejected,
     Ready(Box<LaneRelayEnvelope>),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableAllocationWork")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableAllocationWork {
     program_id: FeeSponsorProgramId,
@@ -117,7 +121,8 @@ struct AllocationCandidatePlanV1<'a> {
     expiry_height: u64,
     routes: &'a [(DataSpaceId, [u8; 32])],
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::FeeSponsorVaultLeaseBinding")]
 struct FeeSponsorVaultLeaseBinding {
     version: u8,
     program_id: FeeSponsorProgramId,
@@ -128,6 +133,8 @@ struct FeeSponsorVaultLeaseBinding {
     source_state_root: Hash,
     expires_at_height: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableWorkStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 enum DurableWorkStatus {
     Pending,
@@ -1699,10 +1706,11 @@ mod tests {
     use iroha_data_model::{
         Level,
         block::{BlockHeader, consensus::LaneBlockCommitment},
-        domain::DomainId,
         isi::Log,
-        nexus::{LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
+        nexus::{LaneFinalityAuthorityV1, LaneRelayEnvelope},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
     fn test_fastpq() -> Fastpq {
@@ -1752,7 +1760,8 @@ mod tests {
             lane_id: LaneId::new(3),
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(10),
-            tx_count: 1,
+            // No ordinary, Nexus fee, or flat Native AMX receipt contributes a source.
+            tx_count: 0,
             total_local_amount: "0".parse().expect("valid settlement quantity"),
             total_xor_due: "0".parse().expect("valid settlement quantity"),
             total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
@@ -1880,6 +1889,11 @@ mod tests {
                 },
             );
         }
+        crate::frame_test_support::assert_current_frame(
+            &durable,
+            "irohad::nexus_fee_relay_worker::DurableWorkerState",
+            "irohad::nexus_fee_relay_worker::DurableWorkerState",
+        );
         persist_durable_state(&path, &durable, 2).expect("persist bounded worker journal");
         let mut loaded = load_durable_state(&path, 1).expect("load protocol-bounded older journal");
         assert_eq!(loaded.relays.len(), 2);
@@ -2188,6 +2202,40 @@ mod tests {
         );
     }
     #[test]
+    fn lane_relay_fixture_rejects_invented_receipt_source_count() {
+        use iroha_data_model::nexus::{LaneRelayError, compute_settlement_hash};
+
+        let mut envelope = sample_envelope([0x42; 32]);
+        assert!(envelope.settlement_commitment.receipts.is_empty());
+        assert!(envelope.settlement_commitment.nexus_fee_receipts.is_empty());
+        assert!(
+            envelope
+                .settlement_commitment
+                .native_amx_receipts
+                .is_empty()
+        );
+        assert_eq!(envelope.settlement_commitment.tx_count, 0);
+        envelope.verify().expect("valid empty-source relay fixture");
+        envelope
+            .lane_finality_statement_hash()
+            .expect("empty-source fixture has a canonical finality statement");
+
+        envelope.settlement_commitment.tx_count = 1;
+        envelope.settlement_hash = compute_settlement_hash(&envelope.settlement_commitment)
+            .expect("rehash substituted transaction count");
+        envelope
+            .verify_settlement_hash()
+            .expect("tampered count is self-consistently hashed");
+        assert_eq!(
+            envelope.verify(),
+            Err(LaneRelayError::SettlementTxCountMismatch)
+        );
+        assert_eq!(
+            envelope.lane_finality_statement_hash(),
+            Err(LaneRelayError::SettlementTxCountMismatch)
+        );
+    }
+    #[test]
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
         let mut envelope = sample_envelope([0x42; 32]);
         attach_test_finality_authority(&mut envelope);
@@ -2214,6 +2262,51 @@ mod tests {
         assert_ne!(verified.proof_digest, Hash::new(b"test-only-digest"));
         Ok(())
     }
+    #[test]
+    fn fee_sponsor_lease_digest_binds_current_frame_and_source_height() {
+        let work = sample_allocation_work(7, DurableWorkStatus::Pending);
+        let mut binding = FeeSponsorVaultLeaseBinding {
+            version: 1,
+            program_id: work.program_id,
+            program_revision: work.program_revision,
+            asset_definition_id: work.asset_definition_id,
+            source_dataspace_id: work.source_dataspace_id,
+            source_height: work.source_height,
+            source_state_root: work.source_state_root,
+            expires_at_height: work.expires_at_height,
+        };
+        let encoded = crate::frame_test_support::assert_frame_encoding(
+            &binding,
+            "irohad::nexus_fee_relay_worker::FeeSponsorVaultLeaseBinding",
+            "irohad::nexus_fee_relay_worker::FeeSponsorVaultLeaseBinding",
+        );
+        let digest = fee_sponsor_vault_lease_id(
+            &binding.program_id,
+            binding.program_revision,
+            &binding.asset_definition_id,
+            binding.source_dataspace_id,
+            binding.source_height,
+            binding.source_state_root,
+            binding.expires_at_height,
+        )
+        .expect("lease digest");
+        assert_eq!(digest, Hash::new(encoded.as_slice()));
+        binding.source_height += 1;
+        assert_ne!(
+            digest,
+            fee_sponsor_vault_lease_id(
+                &binding.program_id,
+                binding.program_revision,
+                &binding.asset_definition_id,
+                binding.source_dataspace_id,
+                binding.source_height,
+                binding.source_state_root,
+                binding.expires_at_height
+            )
+            .expect("next-height lease digest")
+        );
+    }
+
     #[test]
     fn fee_sponsor_vault_allocation_worker_proof_verifies() -> Result<()> {
         let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());

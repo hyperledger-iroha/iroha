@@ -1,20 +1,18 @@
 //! Immutable pre-extraction foundational model frames and signing transcripts.
 
 use crate::{
-    ChainId,
     account::{
         AccountController, AccountId, MultisigMember, MultisigPolicy,
         address::{AccountAddress, ChainDiscriminantGuard},
     },
     asset::{AssetBalanceScope, AssetDefinitionId, AssetId},
-    domain::DomainId,
-    metadata::Metadata,
-    name::Name,
-    nexus::{DataSpaceId, LaneId, ShardId},
-    peer::PeerId,
-    state_path::StatePath,
 };
 use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::{DataSpaceId, LaneId, ShardId};
+use iroha_model_base::{chain::ChainId, metadata::Metadata};
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::{
@@ -28,14 +26,6 @@ fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
     case: &str,
     value: &T,
 ) -> Value {
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoSerialize>::schema_hash()
-    );
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoDeserialize>::schema_hash()
-    );
     let frame = norito::to_bytes(value).expect("encode original model frame");
     let decoded: T = norito::decode_from_bytes(&frame).expect("decode original model frame");
     assert_eq!(decoded.encode(), value.encode(), "bare payload: {case}");
@@ -57,14 +47,14 @@ fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
     norito::json!({
         "case": case,
         "nominal": (T::nominal_name()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "bare_hex": (hex::encode(value.encode())),
         "frame_hex": (hex::encode(frame)),
     })
 }
 
-pub(crate) fn envelopes<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
+fn envelopes<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
     records: &mut Vec<Value>,
     case: &str,
     value: &T,
@@ -176,146 +166,202 @@ fn storage_key<T: NoritoSerialize + mv::json::JsonKeyCodec>(
     entry.insert("storage_key_json".to_owned(), Value::from(encoded));
 }
 
+struct BaseModelFixture {
+    signer: KeyPair,
+    single: AccountId,
+    member: MultisigMember,
+    policy: MultisigPolicy,
+    multisig: AccountId,
+    name: Name,
+    state_path: StatePath,
+    domain: DomainId,
+    definition: AssetDefinitionId,
+    global_asset: AssetId,
+    scoped_asset: AssetId,
+    metadata: Metadata,
+}
+
+impl BaseModelFixture {
+    fn new() -> Self {
+        // Public test keys, never runtime signing material.
+        let signer = KeyPair::try_from_seed(
+            b"base model identity fixture A".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("deterministic fixture key");
+        let other = KeyPair::try_from_seed(
+            b"base model identity fixture B".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("second deterministic fixture key");
+        let single = AccountId::new(signer.public_key().clone());
+        let member = MultisigMember::new(signer.public_key().clone(), 2).expect("weighted member");
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                member.clone(),
+                MultisigMember::new(other.public_key().clone(), 1).expect("second member"),
+            ],
+        )
+        .expect("canonical multisignature policy");
+        let multisig = AccountId::new_multisig(policy.clone());
+        let name: Name = "café".parse().expect("exact NFC name");
+        let state_path: StatePath = "store/001122aabb".parse().expect("canonical state path");
+        let domain = DomainId::try_new("archive", "paynet").expect("qualified domain");
+        let definition = AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            "receipt".parse().expect("asset seed name"),
+        );
+        let global_asset = AssetId::new(definition.clone(), single.clone());
+        let scoped_asset = AssetId::with_scope(
+            definition.clone(),
+            multisig.clone(),
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            name.clone(),
+            Json::new(norito::json!({"count": 7, "ready": true})),
+        );
+        metadata.insert("alpha".parse().expect("metadata name"), Json::new("value"));
+        Self {
+            signer,
+            single,
+            member,
+            policy,
+            multisig,
+            name,
+            state_path,
+            domain,
+            definition,
+            global_asset,
+            scoped_asset,
+            metadata,
+        }
+    }
+
+    fn record_foundation(&self, records: &mut Vec<Value>) {
+        public(records, "name/nfc", &self.name, &self.signer);
+        public(records, "state-path", &self.state_path, &self.signer);
+        public(
+            records,
+            "metadata/empty",
+            &Metadata::default(),
+            &self.signer,
+        );
+        public(records, "metadata/ordered", &self.metadata, &self.signer);
+        public(
+            records,
+            "chain",
+            &ChainId::from("base-fixture-1"),
+            &self.signer,
+        );
+    }
+
+    fn record_accounts(&self, records: &mut Vec<Value>) {
+        public(records, "account/single", &self.single, &self.signer);
+        public(records, "account/multisig", &self.multisig, &self.signer);
+        public(
+            records,
+            "controller/single",
+            &AccountController::single(self.signer.public_key().clone()),
+            &self.signer,
+        );
+        public(
+            records,
+            "controller/multisig",
+            &AccountController::multisig(self.policy.clone()),
+            &self.signer,
+        );
+        public(records, "multisig-policy", &self.policy, &self.signer);
+        public(records, "multisig-member", &self.member, &self.signer);
+        public(
+            records,
+            "address/single",
+            &AccountAddress::from_account_id(&self.single).expect("single address"),
+            &self.signer,
+        );
+        public(
+            records,
+            "address/multisig",
+            &AccountAddress::from_account_id(&self.multisig).expect("multisig address"),
+            &self.signer,
+        );
+    }
+
+    fn record_assets(&self, records: &mut Vec<Value>) {
+        public(records, "domain", &self.domain, &self.signer);
+        public(records, "asset-definition", &self.definition, &self.signer);
+        public(
+            records,
+            "asset-scope/global",
+            &AssetBalanceScope::Global,
+            &self.signer,
+        );
+        public(
+            records,
+            "asset-scope/dataspace",
+            &AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+            &self.signer,
+        );
+        public(records, "asset/global", &self.global_asset, &self.signer);
+        public(records, "asset/dataspace", &self.scoped_asset, &self.signer);
+    }
+
+    fn record_topology(&self, records: &mut Vec<Value>) {
+        public(records, "dataspace", &DataSpaceId::new(7), &self.signer);
+        public(records, "lane", &LaneId::new(3), &self.signer);
+        public(records, "shard", &ShardId::new(24), &self.signer);
+        public(
+            records,
+            "peer",
+            &PeerId::new(self.signer.public_key().clone()),
+            &self.signer,
+        );
+    }
+
+    fn record_storage_keys(&self, records: &mut [Value]) {
+        storage_key(records, "name/nfc", &self.name);
+        storage_key(records, "state-path", &self.state_path);
+        storage_key(records, "account/single", &self.single);
+        storage_key(records, "account/multisig", &self.multisig);
+        storage_key(records, "domain", &self.domain);
+        storage_key(records, "asset-definition", &self.definition);
+        storage_key(records, "asset/global", &self.global_asset);
+        storage_key(records, "asset/dataspace", &self.scoped_asset);
+        storage_key(records, "dataspace", &DataSpaceId::new(7));
+        storage_key(records, "lane", &LaneId::new(3));
+    }
+
+    fn capture(self) -> Vec<Value> {
+        let mut records = Vec::new();
+        self.record_foundation(&mut records);
+        self.record_accounts(&mut records);
+        self.record_assets(&mut records);
+        self.record_topology(&mut records);
+        self.record_storage_keys(&mut records);
+
+        let map = BTreeMap::from([
+            (self.name, Json::new(7)),
+            (
+                "alpha".parse::<Name>().expect("map key"),
+                Json::new("value"),
+            ),
+        ]);
+        public(&mut records, "name-json-map", &map, &self.signer);
+        envelopes(
+            &mut records,
+            "mixed-identities",
+            &(self.single, vec![self.multisig], Some(self.state_path)),
+            &self.signer,
+        );
+        records
+    }
+}
+
 fn current_frames() -> Vec<Value> {
     let _context = ChainDiscriminantGuard::enter(369);
-    // Public test keys, never runtime signing material.
-    let signer = KeyPair::try_from_seed(
-        b"base model identity fixture A".to_vec(),
-        Algorithm::Ed25519,
-    )
-    .expect("deterministic fixture key");
-    let other = KeyPair::try_from_seed(
-        b"base model identity fixture B".to_vec(),
-        Algorithm::Ed25519,
-    )
-    .expect("second deterministic fixture key");
-    let single = AccountId::new(signer.public_key().clone());
-    let member = MultisigMember::new(signer.public_key().clone(), 2).expect("weighted member");
-    let policy = MultisigPolicy::new(
-        2,
-        vec![
-            member.clone(),
-            MultisigMember::new(other.public_key().clone(), 1).expect("second member"),
-        ],
-    )
-    .expect("canonical multisignature policy");
-    let multisig = AccountId::new_multisig(policy.clone());
-    let name: Name = "café".parse().expect("exact NFC name");
-    let state_path: StatePath = "store/001122aabb".parse().expect("canonical state path");
-    let domain = DomainId::try_new("archive", "paynet").expect("qualified domain");
-    let definition = AssetDefinitionId::derive_from_components(
-        domain.clone(),
-        "receipt".parse().expect("asset seed name"),
-    );
-    let global_asset = AssetId::new(definition.clone(), single.clone());
-    let scoped_asset = AssetId::with_scope(
-        definition.clone(),
-        multisig.clone(),
-        AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
-    );
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        name.clone(),
-        Json::new(norito::json!({"count": 7, "ready": true})),
-    );
-    metadata.insert("alpha".parse().expect("metadata name"), Json::new("value"));
-    let mut records = Vec::new();
-    public(&mut records, "name/nfc", &name, &signer);
-    public(&mut records, "state-path", &state_path, &signer);
-    public(
-        &mut records,
-        "metadata/empty",
-        &Metadata::default(),
-        &signer,
-    );
-    public(&mut records, "metadata/ordered", &metadata, &signer);
-    public(
-        &mut records,
-        "chain",
-        &ChainId::from("base-fixture-1"),
-        &signer,
-    );
-    public(&mut records, "account/single", &single, &signer);
-    public(&mut records, "account/multisig", &multisig, &signer);
-    public(
-        &mut records,
-        "controller/single",
-        &AccountController::single(signer.public_key().clone()),
-        &signer,
-    );
-    public(
-        &mut records,
-        "controller/multisig",
-        &AccountController::multisig(policy.clone()),
-        &signer,
-    );
-    public(&mut records, "multisig-policy", &policy, &signer);
-    public(&mut records, "multisig-member", &member, &signer);
-    public(
-        &mut records,
-        "address/single",
-        &AccountAddress::from_account_id(&single).expect("single address"),
-        &signer,
-    );
-    public(
-        &mut records,
-        "address/multisig",
-        &AccountAddress::from_account_id(&multisig).expect("multisig address"),
-        &signer,
-    );
-    public(&mut records, "domain", &domain, &signer);
-    public(&mut records, "asset-definition", &definition, &signer);
-    public(
-        &mut records,
-        "asset-scope/global",
-        &AssetBalanceScope::Global,
-        &signer,
-    );
-    public(
-        &mut records,
-        "asset-scope/dataspace",
-        &AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
-        &signer,
-    );
-    public(&mut records, "asset/global", &global_asset, &signer);
-    public(&mut records, "asset/dataspace", &scoped_asset, &signer);
-    public(&mut records, "dataspace", &DataSpaceId::new(7), &signer);
-    public(&mut records, "lane", &LaneId::new(3), &signer);
-    public(&mut records, "shard", &ShardId::new(24), &signer);
-    public(
-        &mut records,
-        "peer",
-        &PeerId::new(signer.public_key().clone()),
-        &signer,
-    );
-
-    storage_key(&mut records, "name/nfc", &name);
-    storage_key(&mut records, "state-path", &state_path);
-    storage_key(&mut records, "account/single", &single);
-    storage_key(&mut records, "account/multisig", &multisig);
-    storage_key(&mut records, "domain", &domain);
-    storage_key(&mut records, "asset-definition", &definition);
-    storage_key(&mut records, "asset/global", &global_asset);
-    storage_key(&mut records, "asset/dataspace", &scoped_asset);
-    storage_key(&mut records, "dataspace", &DataSpaceId::new(7));
-    storage_key(&mut records, "lane", &LaneId::new(3));
-
-    let map = BTreeMap::from([
-        (name, Json::new(7)),
-        (
-            "alpha".parse::<Name>().expect("map key"),
-            Json::new("value"),
-        ),
-    ]);
-    public(&mut records, "name-json-map", &map, &signer);
-    envelopes(
-        &mut records,
-        "mixed-identities",
-        &(single, vec![multisig], Some(state_path)),
-        &signer,
-    );
-    crate::id::base_wire_fixtures::append(&mut records, &signer);
-    records
+    BaseModelFixture::new().capture()
 }
 
 #[test]
@@ -355,6 +401,27 @@ fn base_model_frames_match_pre_extraction_goldens() {
             .filter(|record| record.get("storage_key_json").is_some())
             .count(),
         10
+    );
+    // Private codec records are checked inside iroha_model_base::chain, where
+    // their types remain private. Preserve every complete-capture assertion
+    // above and verify every retained public/aggregate record here.
+    let expected: Vec<_> = expected
+        .into_iter()
+        .filter(|record| {
+            let case = record
+                .get("case")
+                .and_then(Value::as_str)
+                .expect("fixture case");
+            !(case == "chain/private-text"
+                || case.starts_with("chain/private-text/")
+                || case == "chain/private-wire"
+                || case.starts_with("chain/private-wire/"))
+        })
+        .collect();
+    assert_eq!(
+        expected.len(),
+        175,
+        "all retained public and aggregate cases"
     );
     assert_eq!(current_frames(), expected);
 }

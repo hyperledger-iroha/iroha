@@ -75,11 +75,111 @@ fn historical_capacity_payload_for_kura(
         signer.private_key(),
     )
     .expect("historical capacity payload");
+    let payload = lifecycle_terminal_bound_payload_for_test(
+        &payload,
+        historical_capacity_lifecycle_context(&payload),
+        signer,
+    );
     (network_id, epoch, payload)
 }
-fn persist_historical_capacity_payload_fixture(kura: &Kura, payload: &LaneExecutablePayloadV1) {
-    kura.persist_lane_executable_payload(payload, payload.network_id, payload.epoch)
-        .expect("persist historical capacity payload dependency");
+/// Synthetic storage-fixture context; canonical-carrier tests authenticate full finality separately.
+fn historical_capacity_lifecycle_context(payload: &LaneExecutablePayloadV1) -> HeightContextId {
+    HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+        Hash::new_from_chunks(&[
+            b"iroha:kura:test:historical-capacity-lifecycle:v1\0",
+            payload.origin_proposal.proposal_hash.as_ref(),
+        ]),
+    ))
+}
+/// Bind fixture reservations to the signed lifecycle context used for durable custody.
+pub(crate) fn historical_capacity_bound_payload_for_fixture(
+    payload: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) -> LaneExecutablePayloadV1 {
+    lifecycle_terminal_bound_payload_for_test(
+        payload,
+        historical_capacity_lifecycle_context(payload),
+        signer,
+    )
+}
+/// Install payload dependencies through a signed Queue bootstrap before injecting storage faults.
+pub(crate) fn persist_historical_capacity_payload_fixture(
+    kura: &Kura,
+    payload_template: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) {
+    let network_id = payload_template.network_id;
+    let epoch = payload_template.epoch;
+    let height_context_id = historical_capacity_lifecycle_context(payload_template);
+    let local_peer = PeerId::new(signer.public_key().clone());
+    signed_lifecycle_attempt_fixture!(
+        "historical capacity signed custody";
+        network_id, epoch, height_context_id, payload_template, local_peer, signer;
+        payload, reservation_group, binding, activated, activate, _fixture_prepared_activate,
+        _fixture_live_activate, authentication_facts, sign_cursor
+    );
+    assert_eq!(
+        &payload, payload_template,
+        "custody preserves the exact signed dependency"
+    );
+    kura.bind_local_peer_id(local_peer.clone())
+        .expect("bind historical fixture owner");
+    let generation = kura
+        .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
+        .expect("claim historical fixture signing generation");
+    let prepared_activate = sign_cursor(
+        1,
+        None,
+        AutonomousLifecycleCursorPhaseV1::prepared(generation.generation(), activate)
+            .expect("prepare payload custody in the current process generation"),
+    );
+    let live_activate = sign_cursor(
+        2,
+        Some(prepared_activate.cursor_hash()),
+        AutonomousLifecycleCursorPhaseV1::live(generation.generation(), activated)
+            .expect("activate payload custody in the current process generation"),
+    );
+    let preimage = kura
+        .autonomous_lifecycle_bootstrap_signing_preimage_for_tests(
+            &generation,
+            &payload,
+            binding.clone(),
+            prepared_activate.clone(),
+            live_activate.clone(),
+            authentication_facts,
+        )
+        .expect("construct signed historical fixture bootstrap");
+    let signature = <[u8; 96]>::try_from(
+        Signature::try_new(signer.private_key(), &preimage)
+            .expect("sign historical fixture bootstrap")
+            .payload(),
+    )
+    .expect("historical fixture bootstrap uses a 96-byte BLS signature");
+    let authority = kura
+        .persist_autonomous_lifecycle_bootstrap_for_tests(
+            &generation,
+            &payload,
+            binding,
+            prepared_activate,
+            live_activate.clone(),
+            signature,
+            authentication_facts,
+        )
+        .expect("persist signed historical fixture bootstrap");
+    let permit = kura
+        .authenticate_autonomous_lifecycle_bootstrap_recovery_for_tests(
+            authority,
+            authentication_facts,
+        )
+        .expect("authenticate historical fixture bootstrap");
+    let AutonomousLifecycleBootstrapCompletionOutcome::Completed(completion) = kura
+        .complete_autonomous_lifecycle_bootstrap(permit)
+        .expect("complete historical fixture bootstrap")
+    else {
+        panic!("historical fixture payload is not terminal");
+    };
+    assert!(!completion.takeover_required());
+    assert_eq!(completion.cursor(), &live_activate);
 }
 fn historical_capacity_required_limit(kura: &Kura, additional_peak: u64) -> u64 {
     kura.refresh_disk_usage_bytes()
@@ -170,8 +270,8 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         record_one.clone(),
         record_other.clone(),
     ];
-    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("historical capacity Kura");
+    let (mut kura, _) =
+        open_historical_recovery_fixture(&config, &lane_config).expect("historical capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_one_height_one);
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_zero_height_one);
     for payload in [
@@ -179,7 +279,7 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         &lane_one_height_two,
         &lane_zero_height_one,
     ] {
-        persist_historical_capacity_payload_fixture(&kura, payload);
+        persist_historical_capacity_payload_fixture(&kura, payload, &signer);
     }
     let additional_peak = kura
         .historical_autonomous_recovery_batch_additional_peak_for_test(&records)
@@ -265,11 +365,11 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
         historical_autonomous_recovery_record_for_kura(&first_payload, &signer, b"restart-first");
     let second =
         historical_autonomous_recovery_record_for_kura(&second_payload, &signer, b"restart-second");
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("historical restart Kura");
+    let (kura, _) =
+        open_historical_recovery_fixture(&config, &lane_config).expect("historical restart Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
-    persist_historical_capacity_payload_fixture(&kura, &second_payload);
-    persist_historical_capacity_payload_fixture(&kura, &first_payload);
+    persist_historical_capacity_payload_fixture(&kura, &second_payload, &signer);
+    persist_historical_capacity_payload_fixture(&kura, &first_payload, &signer);
     let full_peak = kura
         .historical_autonomous_recovery_batch_additional_peak_for_test(&[
             first.clone(),
@@ -282,7 +382,7 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
         vec![HistoricalAutonomousLaneRecoveryPersistOutcome::Installed],
     );
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+    let (reopened, _) = open_historical_recovery_fixture(&config, &lane_config)
         .expect("reopen partial historical batch");
     let remaining_peak = reopened
         .historical_autonomous_recovery_batch_additional_peak_for_test(&[
@@ -349,11 +449,11 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
         &signer,
         b"append-crash-second",
     );
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+    let (kura, _) = open_historical_recovery_fixture(&config, &lane_config)
         .expect("historical append-crash Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
-    persist_historical_capacity_payload_fixture(&kura, &first_payload);
-    persist_historical_capacity_payload_fixture(&kura, &second_payload);
+    persist_historical_capacity_payload_fixture(&kura, &first_payload, &signer);
+    persist_historical_capacity_payload_fixture(&kura, &second_payload, &signer);
     assert_eq!(
         kura.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(&first))
             .expect("persist append-crash prefix record"),
@@ -384,7 +484,7 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
         "the restart-required live retry must be byte-immutable",
     );
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+    let (reopened, _) = open_historical_recovery_fixture(&config, &lane_config)
         .expect("startup repairs the historical execution-input append");
     assert!(
         !append_intent_path.exists(),
@@ -417,10 +517,10 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
     let record = historical_autonomous_recovery_record_for_kura(&payload, &signer, b"seal-temp");
     let seal_bytes = historical_autonomous_recovery_record_bytes(&record);
     let seal_len = u64::try_from(seal_bytes.len()).expect("historical seal length fits u64");
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("historical seal-temp Kura");
+    let (kura, _) =
+        open_historical_recovery_fixture(&config, &lane_config).expect("historical seal-temp Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    persist_historical_capacity_payload_fixture(&kura, &payload);
+    persist_historical_capacity_payload_fixture(&kura, &payload, &signer);
     let recovered = kura
         .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover seal-temp execution input");
@@ -434,6 +534,9 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
         seal_len,
         "the exact publication encoding is the one inode reserved for the no-clobber seal",
     );
+    let accounting_before = kura
+        .kura_disk_usage_bytes()
+        .expect("account before seal publication");
     kura.fail_next_atomic_write_after_temporary_sync_for_test();
     assert!(
         kura.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(&record))
@@ -469,20 +572,28 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
         seal_len,
         "the temporary inode carries exactly the admitted stable seal bytes",
     );
+    assert_eq!(
+        kura.kura_disk_usage_bytes()
+            .expect("account the interrupted physical publication")
+            .checked_sub(accounting_before),
+        Some(seal_len),
+        "the dedicated temporary inode must consume its exact reserved physical bytes",
+    );
     assert!(
-        kura.kura_disk_usage_bytes().is_err(),
-        "an orphan generic seal temp must make physical accounting fail closed",
+        kura.historical_autonomous_lane_recovery_records_bounded(1)
+            .is_err(),
+        "physical accounting cannot turn a temporary publication into usable recovery evidence",
     );
     let crashed_bytes = snapshot_regular_files_recursively(temp_dir.path());
     assert!(
         kura.persist_historical_autonomous_lane_recovery_records(std::slice::from_ref(&record))
             .is_err(),
-        "historical replay must reject an unclassified generic seal temp",
+        "historical replay must reject an unclassified dedicated seal temp",
     );
     assert_eq!(
         snapshot_regular_files_recursively(temp_dir.path()),
         crashed_bytes,
-        "rejection of generic seal residue must not mutate durable bytes",
+        "rejection of dedicated seal residue must not mutate durable bytes",
     );
 }
 #[test]
@@ -500,10 +611,10 @@ fn historical_recovery_acquires_prune_before_historical_mutation_lock() {
         &signer,
     );
     let record = historical_autonomous_recovery_record_for_kura(&payload, &signer, b"lock-order");
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+    let (kura, _) = open_historical_recovery_fixture(&config, &lane_config)
         .expect("historical lock-order Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    persist_historical_capacity_payload_fixture(&kura, &payload);
+    persist_historical_capacity_payload_fixture(&kura, &payload, &signer);
     let historical_guard = kura.historical_autonomous_recovery_mutation_lock.lock();
     let worker_kura = Arc::clone(&kura);
     let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
@@ -537,4 +648,54 @@ fn historical_recovery_acquires_prune_before_historical_mutation_lock() {
         .expect("historical worker finishes after lock release")
         .expect("historical worker persistence succeeds");
     worker.join().expect("historical worker joins");
+}
+
+#[test]
+fn historical_recovery_startup_rejects_payload_without_signed_lifecycle_custody() {
+    let temp = TempDir::new().expect("unowned historical dependency directory");
+    let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane = lane_config.entry(LaneId::new(1)).expect("secondary lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (_, _, payload) = historical_capacity_payload_for_kura(
+        lane.lane_id,
+        lane.dataspace_id,
+        1,
+        "unowned-history",
+        &signer,
+    );
+    let (kura, _) = open_historical_recovery_fixture(&config, &lane_config)
+        .expect("fresh historical dependency fixture");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    kura.persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
+        .expect("inject a payload without lifecycle custody");
+    let directory = lane.blocks_dir(temp.path()).join(LANE_ARTIFACTS_DIR_NAME);
+    let snapshot = || {
+        std::fs::read_dir(&directory)
+            .expect("fixture sidecars")
+            .map(|entry| {
+                let path = entry.expect("sidecar entry").path();
+                (
+                    path.file_name().expect("sidecar name").to_owned(),
+                    std::fs::read(&path).expect("sidecar bytes"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let before = snapshot();
+    drop(kura);
+    let error = open_historical_recovery_fixture(&config, &lane_config)
+        .err()
+        .expect("startup rejects unowned payload custody");
+    assert!(
+        error
+            .to_string()
+            .contains("lacks its exact lifecycle cursor"),
+        "{error}"
+    );
+    assert_eq!(
+        snapshot(),
+        before,
+        "rejection preserves every unowned dependency byte"
+    );
 }

@@ -8,9 +8,12 @@ use crate::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
-    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
+    prelude::{AssetDefinitionId, AssetId, NftId},
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     json::Json,
     numeric_abi::{DecimalValueV1, IntValueV1, QuantityValueV1},
@@ -93,7 +96,7 @@ fn decode_schema(
 }
 fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: norito::codec::Decode + norito::codec::Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
@@ -1564,7 +1567,7 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{bigint::BigInt, numeric::Quantity};
     use ivm_abi::state_value::{
         StateValueAtomV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,

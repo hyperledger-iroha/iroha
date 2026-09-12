@@ -4,6 +4,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(8);
 #[derive(Debug)]
 pub struct ManagedBlockStream {
     sender: broadcast::Sender<BlockStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<BlockStreamEvent>>>,
     shutdown: watch::Sender<bool>,
     worker: JoinHandle<()>,
     alias: Arc<str>,
@@ -13,19 +14,25 @@ impl ManagedBlockStream {
     ///
     /// The `alias` is used for diagnostics so UI layers can attribute log messages
     /// and reconnection notices to the originating peer.
-    pub fn spawn(handle: &Handle, alias: String, client: ToriiClient) -> Self {
+    pub fn spawn(handle: &Handle, alias: String, client: AccountClient) -> Self {
         Self::spawn_with_factory(handle, alias, move || {
             let client = client.clone();
-            async move { client.subscribe_block_stream().await }
+            async move {
+                client
+                    .blocks()
+                    .subscribe(NonZeroU64::MIN)
+                    .await
+                    .map_err(ToriiError::from)
+            }
         })
     }
     fn spawn_with_factory<F, Fut>(handle: &Handle, alias: impl Into<String>, factory: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
+        Fut: Future<Output = ToriiResult<iroha::client::streams::BlockStream>> + Send + 'static,
     {
         let (shutdown, mut shutdown_rx) = watch::channel(false);
-        let (sender, _) = broadcast::channel(128);
+        let (sender, initial_receiver) = broadcast::channel(128);
         let alias: Arc<str> = Arc::from(alias.into().into_boxed_str());
         let factory = Arc::new(factory);
         let run_factory = factory.clone();
@@ -36,6 +43,7 @@ impl ManagedBlockStream {
         });
         Self {
             sender,
+            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
             shutdown,
             worker,
             alias,
@@ -43,7 +51,11 @@ impl ManagedBlockStream {
     }
     /// Acquire a receiver that yields decoded block events with reconnection semantics.
     pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
-        self.sender.subscribe()
+        self.initial_receiver
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .unwrap_or_else(|| self.sender.subscribe())
     }
     /// Abort the reconnection loop and underlying subscription, if running.
     pub fn abort(&self) {
@@ -73,7 +85,7 @@ async fn run_managed_block_stream<F, Fut>(
     shutdown: &mut watch::Receiver<bool>,
 ) where
     F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
+    Fut: Future<Output = ToriiResult<iroha::client::streams::BlockStream>> + Send + 'static,
 {
     let mut backoff = INITIAL_BACKOFF;
     let mut has_connected = false;
@@ -81,16 +93,20 @@ async fn run_managed_block_stream<F, Fut>(
         if shutdown_requested(shutdown) {
             break;
         }
-        let subscription = match (factory.as_ref())().await {
+        let connected = tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            result = (factory.as_ref())() => result,
+        };
+        let subscription = match connected {
             Ok(subscription) => subscription,
             Err(err) => {
-                let _ = sender.send(BlockStreamEvent::DecodeError {
-                    error: BlockStreamDecodeError::new(
-                        BlockDecodeStage::Stream,
-                        0,
-                        err.to_string(),
-                    ),
-                });
+                let mut failure =
+                    BlockStreamDecodeError::new(BlockDecodeStage::Stream, None, err.to_string());
+                if let ToriiError::Sdk(source) = &err {
+                    failure.source = Some(Arc::clone(source));
+                }
+                let _ = sender.send(BlockStreamEvent::DecodeError { error: failure });
                 let _ = sender.send(BlockStreamEvent::Text {
                     text: format!(
                         "Block stream `{}` reconnecting after error: {err}",
@@ -135,7 +151,7 @@ async fn run_managed_block_stream<F, Fut>(
                     match item {
                         Ok(event) => {
                             let _ = sender.send(event.clone());
-                            if matches!(event, BlockStreamEvent::Closed) {
+                            if matches!(event, BlockStreamEvent::Closed | BlockStreamEvent::DecodeError { .. }) {
                                 break;
                             }
                         }
@@ -164,25 +180,32 @@ async fn run_managed_block_stream<F, Fut>(
 #[derive(Debug)]
 pub struct ManagedEventStream {
     sender: broadcast::Sender<EventStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<EventStreamEvent>>>,
     shutdown: watch::Sender<bool>,
     worker: JoinHandle<()>,
     alias: Arc<str>,
 }
 impl ManagedEventStream {
     /// Spawn a reconnection loop for `/v1/events/ws` using the provided runtime handle.
-    pub fn spawn(handle: &Handle, alias: String, client: ToriiClient) -> Self {
+    pub fn spawn(handle: &Handle, alias: String, client: AccountClient) -> Self {
         Self::spawn_with_factory(handle, alias, move || {
             let client = client.clone();
-            async move { client.subscribe_events_stream().await }
+            async move {
+                client
+                    .events()
+                    .subscribe(canonical_event_filters())
+                    .await
+                    .map_err(ToriiError::from)
+            }
         })
     }
     fn spawn_with_factory<F, Fut>(handle: &Handle, alias: impl Into<String>, factory: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
+        Fut: Future<Output = ToriiResult<iroha::client::streams::EventStream>> + Send + 'static,
     {
         let (shutdown, mut shutdown_rx) = watch::channel(false);
-        let (sender, _) = broadcast::channel(128);
+        let (sender, initial_receiver) = broadcast::channel(128);
         let alias: Arc<str> = Arc::from(alias.into().into_boxed_str());
         let factory = Arc::new(factory);
         let run_factory = factory.clone();
@@ -193,6 +216,7 @@ impl ManagedEventStream {
         });
         Self {
             sender,
+            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
             shutdown,
             worker,
             alias,
@@ -200,7 +224,11 @@ impl ManagedEventStream {
     }
     /// Acquire a receiver that yields decoded events with reconnection semantics.
     pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
-        self.sender.subscribe()
+        self.initial_receiver
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .unwrap_or_else(|| self.sender.subscribe())
     }
     /// Abort the reconnection loop and underlying subscription, if running.
     pub fn abort(&self) {
@@ -230,7 +258,7 @@ async fn run_managed_event_stream<F, Fut>(
     shutdown: &mut watch::Receiver<bool>,
 ) where
     F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ToriiResult<WsSubscription>> + Send + 'static,
+    Fut: Future<Output = ToriiResult<iroha::client::streams::EventStream>> + Send + 'static,
 {
     let mut backoff = INITIAL_BACKOFF;
     let mut has_connected = false;
@@ -238,16 +266,20 @@ async fn run_managed_event_stream<F, Fut>(
         if shutdown_requested(shutdown) {
             break;
         }
-        let subscription = match (factory.as_ref())().await {
+        let connected = tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            result = (factory.as_ref())() => result,
+        };
+        let subscription = match connected {
             Ok(subscription) => subscription,
             Err(err) => {
-                let _ = sender.send(EventStreamEvent::DecodeError {
-                    error: EventStreamDecodeError::new(
-                        EventDecodeStage::Stream,
-                        0,
-                        err.to_string(),
-                    ),
-                });
+                let mut failure =
+                    EventStreamDecodeError::new(EventDecodeStage::Stream, None, err.to_string());
+                if let ToriiError::Sdk(source) = &err {
+                    failure.source = Some(Arc::clone(source));
+                }
+                let _ = sender.send(EventStreamEvent::DecodeError { error: failure });
                 let _ = sender.send(EventStreamEvent::Text {
                     text: format!(
                         "Event stream `{}` reconnecting after error: {err}",
@@ -292,7 +324,7 @@ async fn run_managed_event_stream<F, Fut>(
                     match item {
                         Ok(event) => {
                             let _ = sender.send(event.clone());
-                            if matches!(event, EventStreamEvent::Closed) {
+                            if matches!(event, EventStreamEvent::Closed | EventStreamEvent::DecodeError { .. }) {
                                 break;
                             }
                         }

@@ -471,7 +471,7 @@ fn unique_invalid_body_validate_parent<'ledger>(
     ledger: &'ledger LifecycleLedgerV1,
     child: &LifecycleLedgerRecordV1,
 ) -> Option<&'ledger LifecycleLedgerRecordV1> {
-    let mut parents = ledger.records().iter().filter(|parent| {
+    let mut linked = ledger.records().iter().filter(|parent| {
         parent.owner() == child.owner()
             && parent.work_class() == Some(LifecycleWorkClass::Validate)
             && parent.terminal() == Some(Some(TerminalOutcome::Advanced))
@@ -483,8 +483,17 @@ fn unique_invalid_body_validate_parent<'ledger>(
                     child.ordinal(),
                 ))
     });
-    let parent = parents.next()?;
-    parents.next().is_none().then_some(parent)
+    if let Some(parent) = linked.next() {
+        return (linked.next().is_none()
+            && child.has_exact_invalid_body_validate_origin(ledger.context(), parent))
+        .then_some(parent);
+    }
+    let mut resolved = ledger
+        .records()
+        .iter()
+        .filter(|parent| child.has_exact_invalid_body_validate_origin(ledger.context(), parent));
+    let parent = resolved.next()?;
+    resolved.next().is_none().then_some(parent)
 }
 
 #[cfg(all(test, feature = "bls"))]
@@ -501,7 +510,8 @@ mod output_recovery_tests {
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use iroha_data_model::block::consensus_v2 as wire;
+    use iroha_model_base::peer::PeerId;
 
     fn verified_fixture() -> (VerifiedHeightContext, Vec<KeyPair>) {
         let mut keys = (0x91_u8..=0x94)
@@ -520,9 +530,7 @@ mod output_recovery_tests {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("cold-output-recovery-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -681,13 +689,39 @@ mod output_recovery_tests {
         certificate
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum InvalidBodyParentForTest {
+        Linked,
+        Resolved,
+        ResolvedSameOwner,
+        ResolvedWrongTerminal,
+    }
+
     fn invalid_body_ledger(
         verified: &VerifiedHeightContext,
         keys: &[KeyPair],
         parent_ordinal: u128,
         child_ordinal: u128,
         corrupt_certificate: bool,
+    ) -> (LifecycleLedgerV1, DurableBodyReceipt) {
+        invalid_body_ledger_with_origin(
+            verified,
+            keys,
+            parent_ordinal,
+            child_ordinal,
+            corrupt_certificate,
+            InvalidBodyParentForTest::Linked,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn invalid_body_ledger_with_origin(
+        verified: &VerifiedHeightContext,
+        keys: &[KeyPair],
+        parent_ordinal: u128,
+        child_ordinal: u128,
+        corrupt_certificate: bool,
+        origin: InvalidBodyParentForTest,
     ) -> (LifecycleLedgerV1, DurableBodyReceipt) {
         let round = wire::ConsensusRound {
             context_id: verified.context().id(),
@@ -789,7 +823,7 @@ mod output_recovery_tests {
                 &report_effect,
             )
             .expect("project cold invalid-body Report binding");
-        let report_candidate =
+        let mut report_candidate =
             super::super::replay_authority::exact_invalid_body_report_candidate_for_test(
                 verified,
                 &validate_replay,
@@ -803,6 +837,32 @@ mod output_recovery_tests {
         assert_eq!(validate_candidate.causal_root, report_candidate.causal_root);
         assert!(child_ordinal > parent_ordinal);
         let owner = OwnerId::new(validate_candidate.causal_root, parent_ordinal);
+        if matches!(
+            origin,
+            InvalidBodyParentForTest::Resolved | InvalidBodyParentForTest::ResolvedWrongTerminal
+        ) {
+            // This fixture tests the cold ledger boundary. The real owner test
+            // separately publishes this standalone row through the live registry.
+            report_candidate.causal_root = CausalRoot::new(LifecycleDigest::new(
+                *super::super::replay_authority::resolved_invalid_body_report_causal_key(
+                    owner.causal_root(),
+                    parent_ordinal
+                        + u128::from(origin == InvalidBodyParentForTest::ResolvedWrongTerminal),
+                    &report_candidate.replay_authority,
+                )
+                .expect("fixture carries the exact invalid-body source")
+                .as_ref(),
+            ));
+            report_candidate.reconstruction_source = report_candidate.causal_root.digest();
+        }
+        let report_owner = if matches!(
+            origin,
+            InvalidBodyParentForTest::Resolved | InvalidBodyParentForTest::ResolvedWrongTerminal
+        ) {
+            OwnerId::new(report_candidate.causal_root, child_ordinal)
+        } else {
+            owner
+        };
         let parent = LifecycleLedgerRecordV1::new(
             validate_candidate.key,
             owner,
@@ -813,15 +873,19 @@ mod output_recovery_tests {
             validate_candidate.reconstruction_source,
             validate_candidate.payload,
             validate_candidate.replay_authority,
-            DurableContinuation::successor(
-                DurableContinuationEdge::ValidateToInvalidBodyReport,
-                child_ordinal,
-            ),
+            if origin == InvalidBodyParentForTest::Linked {
+                DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToInvalidBodyReport,
+                    child_ordinal,
+                )
+            } else {
+                DurableContinuation::AdvancedNoSuccessor
+            },
         )
         .expect("construct cold invalid-body Validate parent");
         let child = LifecycleLedgerRecordV1::new(
             report_candidate.key,
-            owner,
+            report_owner,
             child_ordinal,
             report_candidate.work_class,
             report_candidate.stage,
@@ -1045,6 +1109,90 @@ mod output_recovery_tests {
         assert!(report.exactly_matches_rejected_body_outcome(
             &DurableBodyValidationOutcome::rejected_for_test(durable)
         ));
+    }
+
+    #[test]
+    fn cold_output_recovery_accepts_standalone_report_with_exact_terminal_rejection() {
+        let (verified, keys) = verified_fixture();
+        let (ledger, durable) = invalid_body_ledger_with_origin(
+            &verified,
+            &keys,
+            30,
+            33,
+            false,
+            InvalidBodyParentForTest::Resolved,
+        );
+        let before = norito::codec::Encode::encode(&ledger);
+        let recovered = PreparedLifecycleOutputRecoveryV1::assemble(
+            &ledger,
+            &verified,
+            RecoveredWalStartupProjectionV1::None,
+        )
+        .expect("authenticate independent Report beside inert terminal Validate");
+        assert_eq!(recovered.entries.len(), 1);
+        let report = recovered.entries.get(&33).expect("one executable Report");
+        assert!(report.authenticates_settlement(&verified));
+        assert!(report.exactly_matches_rejected_body_outcome(
+            &DurableBodyValidationOutcome::rejected_for_test(durable.clone()),
+        ));
+        let foreign = DurableBodyReceipt::for_test(
+            durable.context_id(),
+            durable.round(),
+            durable.subject(),
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign standalone report frame")),
+        );
+        assert!(!report.exactly_matches_rejected_body_outcome(
+            &DurableBodyValidationOutcome::rejected_for_test(foreign),
+        ));
+        assert_eq!(norito::codec::Encode::encode(&ledger), before);
+        assert_eq!(
+            ledger.records()[0].continuation(),
+            Some(DurableContinuation::AdvancedNoSuccessor)
+        );
+    }
+
+    #[test]
+    fn cold_output_recovery_rejects_standalone_report_without_exact_terminal_authority() {
+        let (verified, keys) = verified_fixture();
+        for (corrupt, origin) in [
+            (true, InvalidBodyParentForTest::Resolved),
+            (false, InvalidBodyParentForTest::ResolvedSameOwner),
+            (false, InvalidBodyParentForTest::ResolvedWrongTerminal),
+        ] {
+            let (ledger, _) =
+                invalid_body_ledger_with_origin(&verified, &keys, 40, 43, corrupt, origin);
+            assert!(
+                PreparedLifecycleOutputRecoveryV1::assemble(
+                    &ledger,
+                    &verified,
+                    RecoveredWalStartupProjectionV1::None,
+                )
+                .is_err()
+            );
+        }
+        let (ledger, _) = invalid_body_ledger_with_origin(
+            &verified,
+            &keys,
+            40,
+            43,
+            false,
+            InvalidBodyParentForTest::Resolved,
+        );
+        let missing_terminal = LifecycleLedgerV1::new(
+            ledger.context(),
+            43,
+            vec![ledger.records()[1].clone()],
+            BTreeMap::new(),
+        )
+        .expect("standalone report has an independent root");
+        assert!(
+            PreparedLifecycleOutputRecoveryV1::assemble(
+                &missing_terminal,
+                &verified,
+                RecoveredWalStartupProjectionV1::None,
+            )
+            .is_err()
+        );
     }
 
     #[test]

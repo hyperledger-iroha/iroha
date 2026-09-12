@@ -18,17 +18,14 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
-    ChainId, Registrable,
+    Registrable,
     account::Account,
     asset::{AssetDefinition, AssetDefinitionId},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     events::time::{ExecutionTime, Schedule, TimeEventFilter},
     isi::{InstructionBox, Register},
-    metadata::Metadata,
-    name::Name,
     nft::{Nft, NftId},
-    peer::PeerId,
     prelude::Repeats,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
@@ -39,6 +36,11 @@ use iroha_data_model::{
     },
     trigger::{Trigger, TriggerId, action::Action},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},
@@ -247,7 +249,10 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii subscription fixture");
     SubscriptionHarness {
@@ -511,3 +516,6 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
     assert_eq!(harness.queue.queued_len(), 0);
     harness.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

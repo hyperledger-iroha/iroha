@@ -28,10 +28,14 @@ mod model {
     use super::*;
     use crate::{consensus::NposConsensusEffects, da::commitment::DaCommitmentBundle};
     /// Core contents of a block.
-    #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        IntoSchema,
+        Decode,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[allow(clippy::redundant_pub_crate)]
     pub(crate) struct BlockPayload {
@@ -59,10 +63,15 @@ mod model {
         pub execution_context: Option<BlockExecutionContextBundle>,
     }
     /// Secondary block state resulting from execution.
-    #[derive(Debug, Clone, Default, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Default,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct BlockResult {
         /// Time-triggered entrypoints, forming the second half of the transaction entrypoints.
@@ -90,7 +99,7 @@ mod model {
         ///
         /// This sticky set authenticates transient same-block rotations that the
         /// final policy snapshot alone cannot reconstruct during Kura replay.
-        pub axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+        pub axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
         /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
         /// Every V1 result field is required; this field stays last to make truncated layouts fail
@@ -628,7 +637,9 @@ impl SignedBlock {
     }
     /// Sticky AXT authorization transitions captured during execution, when results are present.
     #[inline]
-    pub fn axt_transitioned_dataspaces(&self) -> Option<&BTreeSet<crate::nexus::DataSpaceId>> {
+    pub fn axt_transitioned_dataspaces(
+        &self,
+    ) -> Option<&BTreeSet<iroha_model_base::topology::DataSpaceId>> {
         self.result
             .as_ref()
             .map(|result| &result.axt_transitioned_dataspaces)

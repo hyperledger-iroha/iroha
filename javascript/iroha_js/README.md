@@ -116,13 +116,22 @@ that binary-only state. Remove that unverified leftover and rerun
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
-inside a clean registry installation. Registry consumers can load the portable browser exports and use operations
-that do not admit accounts, such as artifact hashing and unauthenticated
-transport. Account construction, I105/raw account decoding, controller/key
-admission, and account-dependent signing or deployment require the canonical
-Rust owner. Every browser account-admission entry point throws the explicit
-native-unavailable error before reading its input; there is no browser account
-parser. The same public exports and TypeScript types remain available. Node
+inside a clean registry installation. Browser account admission and the four
+instruction frame/archive APIs use the packaged Rust Wasm owner. Call
+`await initializeBrowserCodec()` from `@iroha/iroha-js/browser-codec` before
+using these synchronous APIs. Concurrent initialization shares one attempt;
+failed initialization can be retried. Early calls throw
+`ERR_IROHA_CODEC_NOT_READY` without permanently poisoning the runtime.
+Initialization accepts no custom binding or URL. It downloads the package-owned
+Wasm asset without credentials, with a 30-second timeout and a 64 MiB artifact
+download budget. This budget does not change transaction or account limits.
+Instruction JSON text reaches Rust unchanged, including exact large integer
+tokens. Object inputs and parsed decoder results reject unsafe integer or
+non-finite JavaScript numbers; use exact JSON text and frame decoding with
+`parseJson: false` when those values are needed. Finite fractional `Custom`
+JSON remains supported. Object `bigint` values require exact JSON text.
+Only public account data and instruction payloads enter this codec; signing
+keys remain with the application's local signing implementation. Node
 applications that use native APIs must
 provide a separately built and checksum-verified host through
 `IROHA_JS_NATIVE_DIR` before the first native-dependent call. The verified host
@@ -134,6 +143,13 @@ two portable, offline examples: `recipes/iso_bridge_builder.mjs` and
 `recipes/nexus_app_transfer.mjs`. The wider recipe catalog is kept in the
 source repository where its native and live-service prerequisites are
 available.
+
+`build:dist` can copy JavaScript sources without a Wasm build for ordinary
+development. When generated Wasm assets exist, it copies the complete pair
+atomically. `prepack` and `test:pack-install` require the real generated module
+and glue and verify initialization with all six owner methods. Browser release
+qualification additionally exercises the actual served asset and application
+callers; source-only distribution checks do not establish browser readiness.
 
 When publishing or testing the packaged layout, build the ESM dist tree:
 
@@ -426,8 +442,8 @@ import { generateKeyPair } from "@iroha/iroha-js/crypto";
 
 Use `@iroha/iroha-js/transaction-codec` in a Node runtime with the verified
 native account owner to build and finalize canonical transparent transfers.
-The browser bundle exposes the same API, but account admission is unavailable
-and account-dependent operations throw. This surface supports one
+The browser bundle exposes the same API after `initializeBrowserCodec()`
+completes. This surface supports one
 `Transfer::Asset` instruction, single-key Ed25519 I105 authorities, canonical
 asset identifiers, and accounts sharing one network prefix/chain discriminant.
 Every ordinary transaction carries a nominal `NetworkId`: the exact marked
@@ -3156,17 +3172,19 @@ unsigned transaction draft. The request contains the authority,
 `contract_address` or `contract_alias`, the explicit entrypoint, optional
 payload and metadata, typed `feePayment`, and an off-wire `draftIntent` built
 from the locally verified contract artifact. Private signing material and the
-intent are never sent to Torii. The client rejects the returned draft unless
-its exact network, authority, executable, metadata, quoted fee, creation time,
-TTL, nonce, and attachments match caller-trusted state. Contract drafts must
-carry the signature-bound `QueuePlanSynced` admission intent. Sign only after
-that validation succeeds, then submit the exact finalized transaction through
-the normal transaction route.
+intent are never sent to Torii. Contract drafts require the signature-bound
+`QueuePlanSynced` admission intent and canonical account HTTP authentication.
+The client rejects the returned draft unless its exact network, authority,
+executable, metadata, quoted fee, creation time, TTL, admission intent, nonce,
+and attachments match caller-trusted state. Sign only after that validation
+succeeds, then submit the exact finalized transaction through the normal
+transaction route.
 
 ```js
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
+  canonicalRequestAuth: { accountId: AUTHORITY_ACCOUNT_ID, privateKey: runtimePrivateKey },
   authToken: process.env.IROHA_TORII_AUTH_TOKEN,
   localSigningContext: new LocalSigningContext(
     NetworkId.parse(EXACT_NETWORK_ID_LITERAL),

@@ -20,8 +20,7 @@ use super::{
     transfer::TransferBox,
 };
 
-#[path = "../../tests/support/fixture_json.rs"]
-mod fixture_json;
+use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -107,8 +106,8 @@ where
     assert_eq!(matches.len(), 1, "exactly one captured type");
     let captured = matches[0];
     let hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(hash, <T as NoritoSerialize>::schema_hash());
-    assert_eq!(hash, <T as NoritoDeserialize>::schema_hash());
+    assert_eq!(hash, norito::schema::identity::frame_hash::<T>());
+    assert_eq!(hash, norito::schema::identity::frame_hash::<T>());
     assert_eq!(T::nominal_name(), T::frame_name());
     let mut seen = BTreeSet::new();
     let cases = captured
@@ -141,11 +140,11 @@ where
         ("nominal", Value::String(T::nominal_name())),
         (
             "serialize_hash",
-            Value::String(hex(&<T as NoritoSerialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         (
             "deserialize_hash",
-            Value::String(hex(&<T as NoritoDeserialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         ("cases", Value::Array(cases)),
     ])

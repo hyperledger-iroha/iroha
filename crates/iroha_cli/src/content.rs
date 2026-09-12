@@ -5,12 +5,13 @@ use iroha::data_model::{
     content::{ContentAuthMode, ContentBundleManifest, ContentCachePolicy},
     da::types::{BlobClass, RetentionPolicy},
     isi,
-    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    nexus::UniversalAccountId,
     prelude::*,
 };
 use iroha_config::parameters::{actual, defaults};
 use iroha_core::smartcontracts::isi::content::{hash_index, parse_tar_index};
 use iroha_crypto::Hash;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::{
     collections::BTreeMap,
     fs,

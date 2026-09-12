@@ -13,6 +13,8 @@ use norito::{
 /// Wallet signature used across Connect control and payload messages.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::WalletSignatureV1")]
 pub struct WalletSignatureV1 {
     /// Signature scheme used to produce the signature bytes.
     pub algorithm: Algorithm,
@@ -297,6 +299,8 @@ pub fn decode_connect_envelope_framed(bytes: &[u8]) -> Result<EnvelopeV1, Error>
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectRelayEnvelopeV1")]
 pub struct ConnectRelayEnvelopeV1 {
     /// Connect frame being relayed.
     pub frame: ConnectFrameV1,
@@ -313,6 +317,8 @@ pub struct ConnectRelayEnvelopeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectSessionClaimV1")]
 pub struct ConnectSessionClaimV1 {
     /// Connect session identifier.
     pub sid: [u8; 32],
@@ -339,6 +345,8 @@ pub struct ConnectSessionClaimV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectSessionRoleConsumedV1")]
 pub struct ConnectSessionRoleConsumedV1 {
     /// Connect session identifier.
     pub sid: [u8; 32],
@@ -349,6 +357,8 @@ pub struct ConnectSessionRoleConsumedV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectSessionTerminatedV1")]
 pub struct ConnectSessionTerminatedV1 {
     /// Connect session identifier.
     pub sid: [u8; 32],
@@ -359,6 +369,8 @@ pub struct ConnectSessionTerminatedV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref, clippy::large_enum_variant)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectP2pMessageV1")]
 pub enum ConnectP2pMessageV1 {
     /// Authenticated frame relay envelope.
     RelayEnvelope(ConnectRelayEnvelopeV1),
@@ -417,6 +429,8 @@ mod signature_tests {
 /// Message direction between roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Hash)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::Dir")]
 pub enum Dir {
     /// From application to wallet.
     AppToWallet,
@@ -426,6 +440,8 @@ pub enum Dir {
 /// Role of a WebSocket endpoint in a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::Role")]
 pub enum Role {
     /// Decentralized application (dApp) role.
     App,
@@ -723,7 +739,8 @@ fn decode_connect_frame_payload(bytes: &[u8]) -> Result<ConnectFrameV1, Error> {
     })
 }
 /// Top‑level frame routed over P2P and delivered over WS.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectFrameV1")]
 pub struct ConnectFrameV1 {
     /// 32‑byte session identifier.
     pub sid: [u8; 32],
@@ -739,6 +756,8 @@ pub struct ConnectFrameV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::large_enum_variant)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::FrameKind")]
 pub enum FrameKind {
     /// Unencrypted control messages needed to establish a secure channel.
     Control(ConnectControlV1),
@@ -749,6 +768,8 @@ pub enum FrameKind {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectControlV1")]
 pub enum ConnectControlV1 {
     /// Open a session from the application side (minimal plaintext).
     Open {
@@ -815,6 +836,8 @@ pub enum ConnectControlV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectCiphertextV1")]
 pub struct ConnectCiphertextV1 {
     /// Direction this ciphertext is intended for (binds to per‑direction key/nonce).
     pub dir: Dir,
@@ -830,6 +853,8 @@ pub struct ConnectCiphertextV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::EnvelopeV1")]
 pub struct EnvelopeV1 {
     /// Monotonic sequence matching the outer frame `seq`.
     pub seq: u64,
@@ -842,6 +867,8 @@ pub struct EnvelopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ConnectPayloadV1")]
 pub enum ConnectPayloadV1 {
     /// Encrypted control messages post-approval (e.g., Close/Reject).
     Control(ControlAfterKeyV1),
@@ -881,6 +908,8 @@ pub enum ConnectPayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ControlAfterKeyV1")]
 pub enum ControlAfterKeyV1 {
     /// Close the established session (encrypted control).
     ///
@@ -913,6 +942,8 @@ pub enum ControlAfterKeyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::AppMeta")]
 pub struct AppMeta {
     /// Application display name.
     pub name: String,
@@ -925,6 +956,8 @@ pub struct AppMeta {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::ServerEventV1")]
 pub enum ServerEventV1 {
     /// Deterministic block proof payload for light clients.
     BlockProofs {
@@ -940,6 +973,8 @@ pub enum ServerEventV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::Constraints")]
 pub struct Constraints {
     /// Exact target deployment identity derived from its genesis block.
     pub network_id: NetworkId,
@@ -948,6 +983,8 @@ pub struct Constraints {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::PermissionsV1")]
 pub struct PermissionsV1 {
     /// Allowed methods/payload kinds (upper‑snake or dotted paths).
     /// Examples: `SIGN_REQUEST_RAW`, `SIGN_REQUEST_TX`, `DISPLAY_REQUEST`.
@@ -961,6 +998,8 @@ pub struct PermissionsV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
 #[allow(clippy::size_of_ref)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::connect::SignInProofV1")]
 pub struct SignInProofV1 {
     /// App domain (host) expected by the wallet.
     pub domain: String,
@@ -979,7 +1018,8 @@ pub type ConnectP2pMessage = ConnectP2pMessageV1;
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf, PublicKey};
-    use iroha_data_model::{account::AccountId, block::BlockHeader, domain::DomainId};
+    use iroha_data_model::{account::AccountId, block::BlockHeader};
+    use iroha_model_base::domain::DomainId;
     use norito::core::{Error, header_flags};
     use rand::{Rng, SeedableRng};
     fn test_network_id(label: &[u8]) -> NetworkId {
@@ -1383,5 +1423,72 @@ mod tests {
             err,
             Error::ArchiveLengthExceeded { .. } | Error::LengthMismatch
         ));
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::AppMeta>(
+            "iroha_torii_shared::connect::AppMeta",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectCiphertextV1>(
+            "iroha_torii_shared::connect::ConnectCiphertextV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectControlV1>(
+            "iroha_torii_shared::connect::ConnectControlV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectFrameV1>(
+            "iroha_torii_shared::connect::ConnectFrameV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectP2pMessageV1>(
+            "iroha_torii_shared::connect::ConnectP2pMessageV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectPayloadV1>(
+            "iroha_torii_shared::connect::ConnectPayloadV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectRelayEnvelopeV1>(
+            "iroha_torii_shared::connect::ConnectRelayEnvelopeV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectSessionClaimV1>(
+            "iroha_torii_shared::connect::ConnectSessionClaimV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectSessionRoleConsumedV1>(
+            "iroha_torii_shared::connect::ConnectSessionRoleConsumedV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ConnectSessionTerminatedV1>(
+            "iroha_torii_shared::connect::ConnectSessionTerminatedV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::Constraints>(
+            "iroha_torii_shared::connect::Constraints",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ControlAfterKeyV1>(
+            "iroha_torii_shared::connect::ControlAfterKeyV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::Dir>(
+            "iroha_torii_shared::connect::Dir",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EnvelopeV1>(
+            "iroha_torii_shared::connect::EnvelopeV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FrameKind>(
+            "iroha_torii_shared::connect::FrameKind",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::PermissionsV1>(
+            "iroha_torii_shared::connect::PermissionsV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::Role>(
+            "iroha_torii_shared::connect::Role",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ServerEventV1>(
+            "iroha_torii_shared::connect::ServerEventV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SignInProofV1>(
+            "iroha_torii_shared::connect::SignInProofV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::WalletSignatureV1>(
+            "iroha_torii_shared::connect::WalletSignatureV1",
+        );
     }
 }

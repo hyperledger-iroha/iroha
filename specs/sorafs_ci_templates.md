@@ -49,7 +49,7 @@ scripts/release_sorafs_cli.sh \
   --external-signer /run/sorafs-release/ed25519-sign \
   --signing-public-key /run/sorafs-release/release.ed25519.pub \
   --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
-  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --release-manifest-verifier /opt/iroha/bin/iroha \
   --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
@@ -58,7 +58,7 @@ path and a new signature-output path and writes exactly 64 raw Ed25519 signature
 bytes. V1 requires the `authenticated_external_signer` provider with exact
 `software` backend. The wrapper copies the governed 32-byte raw public key,
 checks its reviewed SHA256 fingerprint, and verifies immutable snapshots with
-the exact `sorafs-validate` binary whose SHA256 was supplied. Successful output
+the exact `iroha` binary whose SHA256 was supplied. Successful output
 is `software-key-qualified`. Iroha exposes no HSM-specific adapter or future
 hardware-signing qualification mode; custody behind the authenticated external
 signer is deployment-owned.

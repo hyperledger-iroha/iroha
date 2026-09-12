@@ -869,8 +869,13 @@ fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once()
             .expect("first chunk admission minted its exact closed control")
             .close()
     );
-    retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
-        .expect("closed old writer retries the retained current chunk on the reconnect");
+    assert_eq!(
+        lane_work.effect_count(),
+        0,
+        "the retry must progress without a fresh adapter effect"
+    );
+    dispatch_lane_work_effects(&mut lane_work, &services, 1)
+        .expect("empty adapter dispatch retries the closed writer's exact chunk on the reconnect");
     assert_eq!(lane_work.effect_count(), 0);
     assert!(
         flush_control
@@ -880,13 +885,21 @@ fn runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once()
             .expect("reconnected admission minted its exact flush control")
             .flush()
     );
-    retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
-        .expect("writer flush advances exactly the reconnected source cursor");
+    dispatch_lane_work_effects(&mut lane_work, &services, 1)
+        .expect("empty adapter dispatch applies the exact reconnected writer-flush receipt");
     assert_eq!(lane_work.effect_count(), 0);
     assert!(
         !services
             .has_pending_exact_output()
             .expect("writer-flushed receipt is fully applied")
+    );
+    dispatch_lane_work_effects(&mut lane_work, &services, 1)
+        .expect("a later empty dispatch must not replay the completed chunk");
+    assert_eq!(lane_work.effect_count(), 0);
+    assert!(
+        !services
+            .has_pending_exact_output()
+            .expect("the completed retry remains retired")
     );
 }
 #[test]

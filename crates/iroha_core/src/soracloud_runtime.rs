@@ -8,9 +8,6 @@ use iroha_data_model::nexus::staking::PublicLaneValidatorStatus;
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
-    name::Name,
-    nexus::LaneId,
-    peer::PeerId,
     soracloud::{
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
         SoraConfigExportV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraInrouGuestIsaV1,
@@ -25,6 +22,9 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -224,6 +224,8 @@ pub fn soracloud_validator_has_active_peer_binding(
     })
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxDestinationFingerprintV1")]
 #[derive(Encode)]
 struct OrderedMailboxDestinationFingerprintV1 {
     service_name: Name,
@@ -231,6 +233,8 @@ struct OrderedMailboxDestinationFingerprintV1 {
     handler_name: Name,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxExecutorPreimageV1")]
 #[derive(Encode)]
 struct OrderedMailboxExecutorPreimageV1 {
     domain: String,
@@ -242,12 +246,16 @@ struct OrderedMailboxExecutorPreimageV1 {
     host: SoraRuntimeDeterministicValidatorHostV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxPayloadFingerprintV1")]
 #[derive(Encode)]
 struct OrderedMailboxPayloadFingerprintV1 {
     payload_bytes: u64,
     payload_commitment: Hash,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxMutationFingerprintV1")]
 #[derive(Encode)]
 struct OrderedMailboxMutationFingerprintV1 {
     schema_version: u16,
@@ -258,6 +266,8 @@ struct OrderedMailboxMutationFingerprintV1 {
     value_payload: Option<OrderedMailboxPayloadFingerprintV1>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxMessageFingerprintV1")]
 #[derive(Encode)]
 struct OrderedMailboxMessageFingerprintV1 {
     schema_version: u16,
@@ -276,6 +286,8 @@ struct OrderedMailboxMessageFingerprintV1 {
     expires_at_height: u64,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxReceiptFingerprintV1")]
 #[derive(Encode)]
 struct OrderedMailboxReceiptFingerprintV1 {
     mailbox_message_id: Option<Hash>,
@@ -290,6 +302,8 @@ struct OrderedMailboxReceiptFingerprintV1 {
     checkpoint_artifact_hash: Option<Hash>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxReceiptIdentityPreimageV1")]
 #[derive(Encode)]
 struct OrderedMailboxReceiptIdentityPreimageV1 {
     domain: String,
@@ -307,6 +321,8 @@ struct OrderedMailboxReceiptIdentityPreimageV1 {
     checkpoint_artifact_hash: Option<Hash>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxRuntimeStateFingerprintV1")]
 #[derive(Encode)]
 struct OrderedMailboxRuntimeStateFingerprintV1 {
     schema_version: u16,
@@ -317,6 +333,8 @@ struct OrderedMailboxRuntimeStateFingerprintV1 {
     materialized_bundle_hash: Hash,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::OrderedMailboxResultPreimageV1")]
 #[derive(Encode)]
 struct OrderedMailboxResultPreimageV1 {
     domain: String,
@@ -1369,6 +1387,8 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
 /// Shared Soracloud runtime handle type used across crate boundaries.
 pub type SharedSoracloudRuntimeHandle = Arc<dyn SoracloudRuntimeReadHandle>;
 /// Coarse execution failure category for embedded Soracloud runtime requests.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudRuntimeExecutionErrorKind")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudRuntimeExecutionErrorKind {
     /// The runtime cannot execute the request in the current node process.
@@ -1381,6 +1401,8 @@ pub enum SoracloudRuntimeExecutionErrorKind {
     Internal,
 }
 /// Structured error returned by the shared Soracloud runtime execution trait.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudRuntimeExecutionError {
     /// High-level error category.
@@ -1415,6 +1437,8 @@ impl std::fmt::Display for SoracloudRuntimeExecutionError {
 }
 impl std::error::Error for SoracloudRuntimeExecutionError {}
 /// Deterministic local read class for the Soracloud fast path.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudLocalReadKind")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudLocalReadKind {
     /// Static asset read bound to committed artifacts.
@@ -1423,6 +1447,8 @@ pub enum SoracloudLocalReadKind {
     Query,
 }
 /// Shared request envelope for deterministic local Soracloud reads.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudLocalReadRequest")]
 #[derive(Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadRequest {
     /// Authoritative height used for the local read snapshot.
@@ -1477,6 +1503,8 @@ impl std::fmt::Debug for SoracloudLocalReadRequest {
     }
 }
 /// Committed artifact/state binding attached to a certified local read response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudLocalReadBinding")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudLocalReadBinding {
@@ -1494,6 +1522,8 @@ pub struct SoracloudLocalReadBinding {
     pub artifact_hash: Option<Hash>,
 }
 /// Shared response envelope for deterministic local Soracloud reads.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::soracloud_runtime::SoracloudLocalReadResponse")]
 #[derive(Clone, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadResponse {
     /// Raw response bytes emitted by the runtime.
@@ -1715,9 +1745,7 @@ mod tests {
             FinalizedGlobalThresholdBeaconPulseV1, GLOBAL_THRESHOLD_BEACON_VERSION_V1,
             GlobalThresholdBeaconChainAnchorV1,
         },
-        metadata::Metadata,
         nexus::staking::PublicLaneValidatorRecord,
-        peer::PeerId,
         soracloud::{
             SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_MANIFEST_VERSION_V1,
@@ -1733,6 +1761,8 @@ mod tests {
         },
         sorafs::pin_registry::StorageClass,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
     use std::num::{NonZeroU16, NonZeroU64};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("Soracloud runtime fixture key generation should succeed")
@@ -2715,7 +2745,7 @@ mod tests {
         second_record.stake_account = second_validator.clone();
         second_record.peer_id = checked_peer_id();
         world.public_lane_validators_mut_for_testing().insert(
-            (iroha_data_model::nexus::LaneId::SINGLE, second_validator),
+            (iroha_model_base::topology::LaneId::SINGLE, second_validator),
             second_record,
         );
 

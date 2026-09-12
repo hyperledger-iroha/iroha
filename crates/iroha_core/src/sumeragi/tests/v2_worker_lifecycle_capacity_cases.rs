@@ -642,6 +642,38 @@ impl LifecycleValidateIoSnapshotV1 {
 }
 
 impl LifecyclePlannerIoFixture {
+    /// Verify durable bytes through their exclusive worker owner without
+    /// attempting a competing store open before the simulated crash.
+    pub(in crate::sumeragi) fn assert_owned_durable_body_for_test(
+        &self,
+        receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+        expected_wire: &[u8],
+    ) {
+        assert_eq!(
+            self.body_store
+                .receipt(receipt.round(), receipt.subject())
+                .as_ref(),
+            Some(receipt),
+            "the worker retains the exact fsynced body receipt",
+        );
+        assert_eq!(
+            self.body_store
+                .load_canonical_wire(receipt)
+                .expect("read the immutable frame through its owning store"),
+            expected_wire,
+        );
+    }
+
+    /// Execute the executor's genuine ordinary Store task against the owner-held store.
+    pub(in crate::sumeragi) fn execute_ordinary_body_store_for_test(
+        &mut self,
+        task: &crate::sumeragi::v2_effects::BodyStoreTask,
+    ) -> crate::sumeragi::v2_body_store::BodyStoreCompletion {
+        self.body_store
+            .execute_store_task(task)
+            .expect("persist the exact ordinary body before lifecycle Validate admission")
+    }
+
     /// Execute one locked-candidate lookup through the real durable store and
     /// settle its service-side acquisition state synchronously.
     pub(in crate::sumeragi) fn execute_one_locked_candidate_load(
@@ -731,6 +763,33 @@ impl LifecyclePlannerIoFixture {
         commitment: wire::ExecutionCommitment,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> usize {
+        self.execute_held_lifecycle_validate_result_fixture(
+            Ok::<_, String>(commitment),
+            output_guard,
+        )
+    }
+
+    /// Execute a genuine deterministic rejection through the durable body worker.
+    pub(in crate::sumeragi) fn execute_held_lifecycle_validate_rejection_fixture(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> usize {
+        self.execute_held_lifecycle_validate_result_fixture(
+            Err("deterministic terminal Validate regression rejection".to_owned()),
+            output_guard,
+        )
+    }
+
+    /// Execute the real held worker with one controlled semantic validation result.
+    /// Missing-sidecar tests retain the actual body, dispatch key and guarded completion.
+    pub(in crate::sumeragi) fn execute_held_lifecycle_validate_result_fixture<
+        E: super::super::v2_body_store::BodyValidationError,
+    >(
+        &mut self,
+        validation: Result<wire::ExecutionCommitment, E>,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> usize {
+        let mut validation = Some(validation);
         let task = self
             .held_validate
             .take()
@@ -742,7 +801,9 @@ impl LifecyclePlannerIoFixture {
             .dispatch
             .execute(&mut self.body_store, |_| {
                 callbacks = callbacks.saturating_add(1);
-                Ok::<_, String>(commitment)
+                validation
+                    .take()
+                    .expect("the real validator is called exactly once")
             })
             .unwrap_or_else(|(error, _)| panic!("execute held lifecycle Validate: {error}"));
         self.command_rx
@@ -1495,4 +1556,47 @@ fn unconsumed_certified_fetch_persistence_closes_output() {
     drop(transferred);
     assert!(!transferred_output.restart_required());
     assert!(transferred_output.acquire().is_some());
+}
+
+/// Bind synchronous test I/O to the same authenticated fair-ingress instance.
+pub(in crate::sumeragi) fn install_lifecycle_ingress_for_test(
+    services: &mut ProductionV2Services,
+    ingress: Arc<crate::sumeragi::FairV2Ingress>,
+) {
+    services.leader_wire_ingress = ingress;
+}
+
+impl LifecyclePlannerIoFixture {
+    /// Persist a genuinely queued recovered Decision response using the production task.
+    pub(in crate::sumeragi) fn execute_one_recovered_decision_fetch_for_test(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let V2IoCommand::PersistRecoveredDecisionFetchBody(task) = self
+            .command_rx
+            .try_recv()
+            .expect("one exact recovered Decision Fetch persistence command")
+        else {
+            panic!("the queue must retain the actual recovered response persistence task")
+        };
+        let key = task.dispatch_key();
+        let completion = task
+            .persist(&mut self.body_store)
+            .unwrap_or_else(|(error, _)| panic!("persist recovered Decision response: {error}"));
+        self.command_rx
+            .complete_recovered_decision_fetch_body(key, &completion)
+            .expect("retain the real response completion under its dedicated tracker");
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(Box::new(
+                GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1::new(
+                    completion,
+                    output_guard,
+                ),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish exactly one guarded recovered Fetch persistence result");
+    }
 }

@@ -78,6 +78,8 @@ const WEBHOOK_QUEUE_SCAN_WORK_ITEMS: usize = 1024;
 const WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS: usize = WEBHOOK_QUEUE_HARD_CAPACITY * 2;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const WEBHOOK_TEMP_FILE_RETRIES: usize = 32;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::webhook::WebhookCreate")]
 #[derive(
     Debug,
     Clone,
@@ -94,6 +96,8 @@ pub struct WebhookCreate {
     /// Uses the same JSON DSL as app-facing APIs (see `crate::filter::FilterExpr`).
     pub filter: Option<crate::filter::FilterExpr>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::webhook::WebhookEntry")]
 #[derive(
     Debug,
     Clone,
@@ -1998,6 +2002,8 @@ fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
     let mac = outer.finalize();
     hex::encode(mac)
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::webhook::PendingDelivery")]
 #[derive(
     Debug,
     Clone,
@@ -2421,7 +2427,7 @@ fn validate_webhook_filter_value(
         "tx_hash" => validate_canonical_webhook_id::<
             iroha_crypto::HashOf<iroha_data_model::transaction::signed::SignedTransaction>,
         >(field, value, "a canonical transaction hash"),
-        "peer_id" => validate_canonical_webhook_id::<iroha_data_model::peer::PeerId>(
+        "peer_id" => validate_canonical_webhook_id::<iroha_model_base::peer::PeerId>(
             field,
             value,
             "a canonical peer ID",
@@ -2430,7 +2436,7 @@ fn validate_webhook_filter_value(
             let Some(literal) = value.as_str() else {
                 return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
             };
-            let Some(id) = iroha_data_model::domain::DomainId::parse_fully_qualified(literal).ok()
+            let Some(id) = iroha_model_base::domain::DomainId::parse_fully_qualified(literal).ok()
             else {
                 return Err(invalid_webhook_filter_value(field, "a canonical domain ID"));
             };

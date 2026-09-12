@@ -16,10 +16,10 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
-    domain::DomainId,
     events::data::governance::GovernanceEvent,
     prelude::{Account, Domain},
 };
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 #[test]
 fn referendum_open_and_close_by_height() {

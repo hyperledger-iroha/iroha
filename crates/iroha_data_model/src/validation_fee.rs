@@ -1,17 +1,17 @@
 //! Validation-fee policy data shared by validators and clients.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     Level, NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     isi::{InstructionBox, Log},
-    name::Name,
     parameter::{CustomParameter, CustomParameterId},
     parliament_types::{GovernanceCertificateId, GovernanceCertificateV1, ProposalContentId},
     smart_contract::ContractAddress,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -458,8 +458,19 @@ impl core::fmt::Display for ValidationFeePolicyRegistryError {
 }
 impl std::error::Error for ValidationFeePolicyRegistryError {}
 /// Validation-fee charging mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "charging_mode",
     content = "value",
@@ -475,9 +486,18 @@ pub enum ValidationFeeChargingMode {
     PerQualifyingTransferInstruction,
 }
 /// Canonical Parliament certificate authorization for one enacted validation-fee proposal.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1")]
 pub struct ValidationFeeParliamentAuthorizationV1 {
@@ -490,7 +510,7 @@ pub struct ValidationFeeParliamentAuthorizationV1 {
     /// Complete private-ballot Parliament certificate retained for independent validation.
     pub governance_certificate: GovernanceCertificateV1,
     /// Height at which the certified proposal was appended to its governed registry.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
+    #[norito(json = "crate::json_helpers::u64_string")]
     pub enacted_at_height: u64,
 }
 impl ValidationFeeParliamentAuthorizationV1 {
@@ -532,9 +552,18 @@ impl ValidationFeeParliamentAuthorizationV1 {
 ///
 /// First-release registries retain this reference append-only. There is no
 /// physical lifecycle-retirement state or caller-supplied reference count.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleReferenceV1")]
 pub struct ValidationFeePayoutLifecycleReferenceV1 {
     /// Non-zero lifecycle seal bound into the proposal fingerprint.
@@ -558,9 +587,18 @@ impl ValidationFeePayoutLifecycleReferenceV1 {
     }
 }
 /// One entry in the registered validation-fee policy hash chain.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyRegistryEntryV1")]
 pub struct ValidationFeePolicyRegistryEntryV1 {
     /// Complete governed policy, retained so scheduled policies do not hide
@@ -595,9 +633,18 @@ impl ValidationFeePolicyRegistryEntryV1 {
 }
 /// On-ledger validation-fee policy registry used to reject rollback and
 /// skipped-version policy changes while retaining scheduled policy history.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1")]
 pub struct ValidationFeePolicyRegistryV1 {
     /// Registered policy chain in ascending, contiguous version order.
@@ -772,8 +819,18 @@ impl ValidationFeePolicyRegistryV1 {
     }
 }
 /// Valid registry facts bound into each block's synthetic witness write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotAvailableV1")]
@@ -789,17 +846,13 @@ pub struct ValidationFeePolicySnapshotAvailableV1 {
 }
 /// Registry availability committed by a validation-fee synthetic witness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "status",
-        content = "value",
-        rename_all = "SCREAMING_SNAKE_CASE",
-        deny_unknown_fields
-    ),
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[norito(
+    tag = "status",
+    content = "value",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    deny_unknown_fields
 )]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotStatusV1")]
 pub enum ValidationFeePolicySnapshotStatusV1 {
     /// Parliament has not enacted the first policy.
@@ -810,8 +863,18 @@ pub enum ValidationFeePolicySnapshotStatusV1 {
     Available(ValidationFeePolicySnapshotAvailableV1),
 }
 /// Canonical validation-fee registry commitment written into every block witness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1")]
@@ -889,8 +952,17 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
     }
 }
 /// Sparse-SMT proof that the validation-fee snapshot is an ordinary write.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyWitnessProofV1")]
@@ -1094,8 +1166,18 @@ fn validate_registry_entry_authorization(
     Ok(())
 }
 /// One exact recipient and share in the atomic treasury-payout effect plan.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutRecipientV1")]
@@ -1110,9 +1192,19 @@ pub struct ValidationFeeTreasuryPayoutRecipientV1 {
 /// The binding names one immutable contract image and entrypoint plus the complete
 /// six-transfer effect plan. It is part of policy hashing, authorization, registry
 /// validation, and Norito/JSON serialization.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1")]
 pub struct ValidationFeeTreasuryPayoutBindingV1 {
@@ -1216,9 +1308,19 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
     }
 }
 /// Exact-network validation-fee policy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyV1")]
 pub struct ValidationFeePolicyV1 {
@@ -1227,7 +1329,7 @@ pub struct ValidationFeePolicyV1 {
     /// Exact genesis-derived network identity bound into the policy.
     pub network_id: NetworkId,
     /// Monotonic policy version.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
+    #[norito(json = "crate::json_helpers::u64_string")]
     pub policy_version: u64,
     /// Previous policy hash for policy-chain validation.
     #[norito(required)]
@@ -1243,13 +1345,10 @@ pub struct ValidationFeePolicyV1 {
     /// Charging mode.
     pub charging_mode: ValidationFeeChargingMode,
     /// First height at which the policy is active.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
+    #[norito(json = "crate::json_helpers::u64_string")]
     pub effective_from_height: u64,
     /// Optional last active height.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::u64_string::option")
-    )]
+    #[norito(json = "crate::json_helpers::u64_string::option")]
     #[norito(required)]
     pub expires_after_height: Option<u64>,
     /// Explicit exemption classes recognized by this policy.
@@ -1434,8 +1533,9 @@ mod parliament_tests {
         TleSessionId, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         parliament_ballot_result_root_v1,
     };
-    use crate::{domain::DomainId, name::Name};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     const TEST_AUTHORIZATION_STRIDE: u64 = 10_000;
 
@@ -1483,18 +1583,12 @@ mod parliament_tests {
     fn proposal_operator() -> AccountId {
         account(7)
     }
-    fn authorization(
-        proposal_fingerprint: [u8; 32],
+    fn policy_jury_body(
+        governance_attempt_id: GovernanceAttemptId,
         marker: u8,
-    ) -> ValidationFeeParliamentAuthorizationV1 {
+        base: u64,
+    ) -> ParliamentBodyCertificateBindingV1 {
         let root = |offset: u8| [marker.wrapping_add(offset); 32];
-        let base = u64::from(marker)
-            .checked_mul(TEST_AUTHORIZATION_STRIDE)
-            .expect("test authorization base height");
-        let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
-        let governance_attempt_sequence = 0;
-        let governance_attempt_id =
-            GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
         let election_attempt_sequence = 0;
         let election_attempt_id = BodyElectionAttemptId::derive_v1(
             governance_attempt_id,
@@ -1548,58 +1642,73 @@ mod parliament_tests {
             outcome,
             result_height,
         );
-        let certified_at_height = result_height;
+        ParliamentBodyCertificateBindingV1 {
+            body_instance_id,
+            election_attempt_id,
+            election_attempt_sequence,
+            sortition_request_id: sortition_request.id,
+            sortition_request,
+            body: ParliamentBody::PolicyJury,
+            original_seats: tally.original_seats,
+            beacon_session_id,
+            beacon_pulse_id: BeaconPulseId::new(root(3)),
+            roster_root,
+            assignment_root: root(5),
+            result_root,
+            result_height,
+            public_finding: None,
+            ballot: Some(ParliamentBallotCertificateBindingV1 {
+                ballot_attempt_id,
+                ballot_attempt_sequence,
+                tle_session_id,
+                tle_key_session_id,
+                registration_root: root(9),
+                dropout_root: root(10),
+                survivor_root: root(11),
+                corpus_root: root(12),
+                no_recovery_root: root(13),
+                timed_commitment_root: root(14),
+                release_beacon_session_id,
+                registered_at_height: base + 3,
+                registration_close_height: base + 7,
+                survivor_freeze_height: base + 10,
+                commitment_close_height: base + 11,
+                registration_closed_at_height: base + 7,
+                survivors_frozen_at_height: base + 10,
+                commitment_closed_at_height: base + 11,
+                max_ballot_retries: 3,
+                max_corpus_entries: 3,
+                release_height,
+                opening_deadline_height: result_height,
+                release_pulse_id: BeaconPulseId::new(root(15)),
+                opening_height: release_height,
+                opening_root,
+                tally,
+                outcome,
+            }),
+        }
+    }
+    fn authorization(
+        proposal_fingerprint: [u8; 32],
+        marker: u8,
+    ) -> ValidationFeeParliamentAuthorizationV1 {
+        let root = |offset: u8| [marker.wrapping_add(offset); 32];
+        let base = u64::from(marker)
+            .checked_mul(TEST_AUTHORIZATION_STRIDE)
+            .expect("test authorization base height");
+        let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
+        let governance_attempt_sequence = 0;
+        let governance_attempt_id =
+            GovernanceAttemptId::derive_v1(proposal_content_id, governance_attempt_sequence);
+        let body = policy_jury_body(governance_attempt_id, marker, base);
+        let certified_at_height = body.result_height;
         let enact_at_height = base + 15;
         let governance_certificate = GovernanceCertificateV1 {
             proposal_content_id,
             governance_attempt_id,
             governance_attempt_sequence,
             risk_tier: RiskTierV1::Standard,
-            body_bindings: vec![ParliamentBodyCertificateBindingV1 {
-                body_instance_id,
-                election_attempt_id,
-                election_attempt_sequence,
-                sortition_request_id: sortition_request.id,
-                sortition_request,
-                body: ParliamentBody::PolicyJury,
-                original_seats: tally.original_seats,
-                beacon_session_id,
-                beacon_pulse_id: BeaconPulseId::new(root(3)),
-                roster_root,
-                assignment_root: root(5),
-                result_root,
-                result_height,
-                public_finding: None,
-                ballot: Some(ParliamentBallotCertificateBindingV1 {
-                    ballot_attempt_id,
-                    ballot_attempt_sequence,
-                    tle_session_id,
-                    tle_key_session_id,
-                    registration_root: root(9),
-                    dropout_root: root(10),
-                    survivor_root: root(11),
-                    corpus_root: root(12),
-                    no_recovery_root: root(13),
-                    timed_commitment_root: root(14),
-                    release_beacon_session_id,
-                    registered_at_height: base + 3,
-                    registration_close_height: base + 7,
-                    survivor_freeze_height: base + 10,
-                    commitment_close_height: base + 11,
-                    registration_closed_at_height: base + 7,
-                    survivors_frozen_at_height: base + 10,
-                    commitment_closed_at_height: base + 11,
-                    max_ballot_retries: 3,
-                    max_corpus_entries: 3,
-                    release_height,
-                    opening_deadline_height: result_height,
-                    release_pulse_id: BeaconPulseId::new(root(15)),
-                    opening_height: release_height,
-                    opening_root,
-                    tally,
-                    outcome,
-                }),
-            }],
+            body_bindings: vec![body],
             policy_version: 1,
             effect_preimage_hash: root(19),
             expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {

@@ -107,6 +107,33 @@ impl RuntimeEffectOwnership {
             .is_ok_and(|expected| expected == self.owner)
     }
 
+    /// Identify an exact single-effect periodic Broadcast without an Apply suffix.
+    pub(in crate::sumeragi) fn binds_single_periodic_retransmit_broadcast(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.exactly_binds_periodic_retransmit_broadcast(effect)
+            && self.binding.effect_count == 1
+            && self.binding.effect_position == 1
+            && self.binding.candidate_count == 0
+            && self.binding.candidate_position == 0
+    }
+
+    /// Identify a periodic Broadcast bound as the first of exactly two effects.
+    ///
+    /// This shape grants no Apply authority. The executor must still join the
+    /// retained second effect to the exact certificate and full batch binding.
+    pub(in crate::sumeragi) fn binds_periodic_retransmit_apply_prefix(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.exactly_binds_periodic_retransmit_broadcast(effect)
+            && self.binding.effect_count == 2
+            && self.binding.effect_position == 1
+            && self.binding.candidate_count == 1
+            && self.binding.candidate_position == 0
+    }
+
     /// Recheck the exact two-effect periodic batch edge from CommitQC
     /// Broadcast to its Decision Apply successor.
     pub(in crate::sumeragi) fn exactly_follows_two_effect_batch(

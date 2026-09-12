@@ -410,6 +410,8 @@ impl fmt::Display for ParliamentReducerErrorV1 {
 impl std::error::Error for ParliamentReducerErrorV1 {}
 
 /// Whether a body emits a public nonbinding finding or a private binding ballot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentDecisionModeV1")]
 #[derive(
     Clone,
     Copy,
@@ -432,6 +434,8 @@ pub enum ParliamentDecisionModeV1 {
 }
 
 /// One body required by the attempt's immutable policy pipeline.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::RequiredParliamentBodyV1")]
 #[derive(
     Clone,
     Copy,
@@ -537,6 +541,8 @@ pub(crate) fn parliament_attempt_policy_v1(
 }
 
 /// The single reducer object allowed to consume a finalized beacon pulse.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentPulseConsumerV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, JsonSerialize, JsonDeserialize,
 )]
@@ -549,6 +555,8 @@ enum ParliamentPulseConsumerV1 {
 }
 
 /// One globally unique threshold-beacon output slot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentPulseSlotV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct ParliamentPulseSlotV1 {
     beacon_session_id: BeaconSessionId,
@@ -640,6 +648,8 @@ impl norito::json::JsonObjectKeyOwned for ParliamentPulseSlotV1 {
 }
 
 /// Reducer-owned state for one body-election attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentElectionFailureKindV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "failure", content = "details", deny_unknown_fields)]
 pub enum ParliamentElectionFailureKindV1 {
@@ -658,6 +668,8 @@ pub enum ParliamentElectionFailureKindV1 {
 /// [`SortitionRequestV1`]. It freezes the exact empty or singleton candidate
 /// snapshot and the otherwise canonical request intent before any beacon slot
 /// is reserved or consumed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentSortitionCapacityFailureV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct ParliamentSortitionCapacityFailureV1 {
     body_election_attempt_id: BodyElectionAttemptId,
@@ -713,6 +725,8 @@ impl ParliamentSortitionCapacityFailureV1 {
 }
 
 /// Reducer-owned state for one body-election attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentElectionStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct ParliamentElectionStateV1 {
     attempt: iroha_data_model::governance::types::BodyElectionAttemptV1,
@@ -794,6 +808,8 @@ impl ParliamentElectionStateV1 {
 }
 
 /// Reducer-owned state for one sealed body instance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentBodyStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct ParliamentBodyStateV1 {
     instance: ParliamentBodyInstanceV1,
@@ -887,6 +903,8 @@ impl ParliamentBodyStateV1 {
 }
 
 /// Reducer-owned transcript bindings for one private ballot attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentBallotStateV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct ParliamentBallotStateV1 {
     attempt: ParliamentBallotAttemptV1,
@@ -1028,7 +1046,18 @@ impl ParliamentBallotStateV1 {
 }
 
 /// Deterministic aggregate state for one immutable proposal attempt.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::governance::parliament::ParliamentAttemptStateV1")]
 pub struct ParliamentAttemptStateV1 {
     attempt: GovernanceAttemptV1,
     /// Proposal-wide redraw units consumed before this attempt was created.
@@ -2589,14 +2618,12 @@ pub(crate) mod tests {
     use iroha_data_model::{
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, ContractEmergencyHoldProposalV1,
             DeployContractProposal, GovernanceExpectedHeadAbsentV1,
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
             parliament_ballot_participant_hash_v1,
         },
-        name::Name,
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             ValidationFeeChargingMode, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
@@ -2605,6 +2632,8 @@ pub(crate) mod tests {
             validation_fee_payout_min_xor, validation_fee_payout_recipient_share,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use rand::{SeedableRng as _, rngs::StdRng};
 
     use crate::{

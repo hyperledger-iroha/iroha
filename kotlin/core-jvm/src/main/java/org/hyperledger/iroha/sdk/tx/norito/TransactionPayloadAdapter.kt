@@ -589,22 +589,13 @@ internal class TransactionPayloadAdapter private constructor(
     }
 
     private class CustomInstructionAdapter : TypeAdapter<String> {
-        private val payloadFieldAdapter = object : TypeAdapter<String> {
-            override fun encode(encoder: NoritoEncoder, value: String) {
-                encodeSizedField(encoder, JSON_VALUE_ADAPTER, value)
-            }
-
-            override fun decode(decoder: NoritoDecoder): String =
-                decodeSizedField(decoder, JSON_VALUE_ADAPTER)
-        }
-
         override fun encode(encoder: NoritoEncoder, value: String) {
-            // CustomInstruction's derived field and Json's wire field are independently sized.
-            encodeSizedField(encoder, payloadFieldAdapter, value)
+            // This is CustomInstruction's field; JSON_VALUE_ADAPTER owns Json's wire field.
+            encodeSizedField(encoder, JSON_VALUE_ADAPTER, value)
         }
 
         override fun decode(decoder: NoritoDecoder): String =
-            decodeSizedField(decoder, payloadFieldAdapter)
+            decodeSizedField(decoder, JSON_VALUE_ADAPTER)
     }
 
     internal class LogInstructionValue(

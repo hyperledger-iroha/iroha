@@ -62,7 +62,7 @@ def test_reference_validator_exposes_only_exact_v1_selectors() -> None:
     """The reference CLI must not retain command, kind, profile, or flag aliases."""
 
     source = (
-        ROOT / "crates/sorafs_manifest/src/bin/sorafs-validate.rs"
+        ROOT / "crates/iroha_cli/src/commands/sorafs/toolkit/validation.rs"
     ).read_text(encoding="utf-8")
     production = source.split("#[cfg(test)]", 1)[0]
 
@@ -105,11 +105,16 @@ def test_reference_validator_exposes_only_exact_v1_selectors() -> None:
         for alias in aliases:
             assert f'"{alias}"' not in body
 
+    arguments = (
+        ROOT / "crates/iroha_cli/src/commands/sorafs/toolkit/validation/args.rs"
+    ).read_text(encoding="utf-8")
     for parser_name in ["PopArgs", "RepairArgs", "HedgingArgs", "OrderbookArgs"]:
-        parser_body = production.split(f"impl {parser_name}", 1)[1].split(
-            "#[derive(Debug, Default)]", 1
+        parser_body = arguments.split(f"pub struct {parser_name} {{", 1)[1].split(
+            "\n}", 1
         )[0]
         assert "set_payload" not in parser_body
+        assert "alias" not in parser_body
+        assert "input: Option<PathBuf>" in parser_body
 
 
 def test_retired_transparency_source_selector_and_aliases_stay_absent() -> None:

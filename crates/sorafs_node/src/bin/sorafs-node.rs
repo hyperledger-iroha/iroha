@@ -1,9 +1,7 @@
 //! Offline developer CLI helpers for inspecting the SoraFS storage backend.
 use iroha_config::base::util::Bytes;
-use iroha_data_model::{
-    account::{AccountId, address::AccountAddress},
-    peer::PeerId,
-};
+use iroha_data_model::account::{AccountId, address::AccountAddress};
+use iroha_model_base::peer::PeerId;
 use norito::json::{self, Map, Value};
 use sorafs_car::{
     CAR_PLAN_MAX_CHUNKS, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, DirectoryPayload,
@@ -601,28 +599,12 @@ fn verify_exact_preseed_artifact<P: PayloadSource>(
                 backend.root_dir().display()
             ));
         }
-        let mut expected = vec![
-            0_u8;
-            usize::try_from(planned_chunk.length).map_err(|_| {
-                "preseed chunk length exceeds host width".to_owned()
-            })?
-        ];
-        PayloadSource::read_exact(source, planned_chunk.offset, &mut expected)
-            .map_err(|error| format!("failed to read exact preseed chunk {index}: {error}"))?;
-        let actual = backend
-            .read_payload_range(stored.manifest_id(), planned_chunk.offset, expected.len())
-            .map_err(|error| format!("failed to re-read stored preseed chunk {index}: {error}"))?;
-        if actual != expected {
-            return Err(format!(
-                "preseed store {} retained different bytes at chunk {index}",
-                backend.root_dir().display()
-            ));
-        }
     }
-    source
-        .ensure_exhausted(artifact.plan.content_length)
-        .map_err(|error| format!("failed to revalidate exact preseed source length: {error}"))?;
-    Ok(())
+    let mut expected = OfflineSequentialPayloadReader::new(source, artifact.plan.content_length);
+    backend
+        .verify_offline_payload(stored.manifest_id(), &mut expected)
+        .map_err(|error| format!("failed to verify exact preseed payload: {error}"))?;
+    expected.finish()
 }
 
 fn ingest_preseed_artifact_into_store(
@@ -2093,6 +2075,90 @@ mod tests {
     use super::*;
     use std::fs::File;
     use tempfile::TempDir;
+    #[test]
+    fn exact_preseed_verification_streams_without_access_metadata_writes() {
+        use sorafs_car::{CarWriter, InMemoryPayload};
+        use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
+
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path().canonicalize().expect("canonical tempdir");
+        let payload: Vec<u8> = (0..ChunkProfile::DEFAULT.max_size + 4096)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let plan = CarBuildPlan::single_file(&payload).expect("plan");
+        assert!(plan.chunks.len() >= 2);
+        let mut chunks = ChunkStore::new();
+        chunks.ingest_plan(&payload, &plan).expect("chunk geometry");
+        let stats = CarWriter::new(&plan, &payload)
+            .expect("CAR writer")
+            .write_to(io::sink())
+            .expect("CAR stats");
+        let manifest = ManifestBuilder::new()
+            .root_cid(stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(stats.dag_codec))
+            .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(*chunks.por_tree().root())
+            .content_length(plan.content_length)
+            .car_digest(*stats.car_archive_digest.as_bytes())
+            .car_size(stats.car_size)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        let backend = StorageBackend::new(offline_ingest_storage_config(
+            root.join("store"),
+            4 * 1024 * 1024,
+        ))
+        .expect("backend");
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut payload.as_slice())
+            .expect("ingest");
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let metadata = stored
+            .manifest_path()
+            .parent()
+            .expect("manifest directory")
+            .join("metadata.to");
+        let index = backend.root_dir().join("index.norito");
+        let before_metadata = fs::read(&metadata).expect("metadata before");
+        let before_index = fs::read(&index).expect("index before");
+        let artifact = PreparedPreseedArtifact {
+            manifest_bytes: manifest.encode().expect("manifest bytes"),
+            manifest,
+            plan,
+            payload_source: IngestPayloadSource::File(root.join("unused-payload")),
+        };
+        verify_exact_preseed_artifact(&backend, &artifact, &mut InMemoryPayload::new(&payload))
+            .expect("exact multichunk verification");
+        assert_eq!(
+            fs::read(&metadata).expect("metadata after"),
+            before_metadata
+        );
+        assert_eq!(fs::read(&index).expect("index after"), before_index);
+        assert_eq!(
+            backend
+                .manifest(&manifest_id)
+                .expect("manifest")
+                .last_access(),
+            stored.last_access()
+        );
+        let mut wrong = payload.clone();
+        *wrong.last_mut().expect("last byte") ^= 1;
+        assert!(
+            verify_exact_preseed_artifact(&backend, &artifact, &mut InMemoryPayload::new(&wrong))
+                .is_err()
+        );
+        let mut wrong_geometry = artifact;
+        wrong_geometry.plan.chunks[1].offset += 1;
+        assert!(
+            verify_exact_preseed_artifact(
+                &backend,
+                &wrong_geometry,
+                &mut InMemoryPayload::new(&payload)
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn preseed_session_acknowledges_only_observed_eof() {
         let mut eof = &b""[..];

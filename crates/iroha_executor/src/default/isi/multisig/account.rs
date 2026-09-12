@@ -1,8 +1,9 @@
 //! Validation and execution logic of instructions for multisig accounts
 use super::*;
-use crate::data_model::{
-    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata, name::Name,
-};
+use crate::data_model::isi::error::InstructionExecutionError;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_smart_contract::data_model::{
     prelude::{FindAccounts, Grant, Register},
     query::prelude::{FindDomains, FindRoles, FindRolesByAccountId},
@@ -335,9 +336,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_model::{domain::DomainId, prelude::AccountId};
+    use crate::data_model::prelude::AccountId;
     use core::num::{NonZeroU16, NonZeroU64};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use std::collections::BTreeMap;
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

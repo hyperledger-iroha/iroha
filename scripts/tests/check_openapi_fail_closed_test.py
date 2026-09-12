@@ -30,6 +30,8 @@ GROUPED_PARITY_HARNESS = (
 )
 OPENAPI_GENERATOR_WRAPPER = REPO_ROOT / "ci" / "run_openapi_generator.sh"
 INTEGRATION_TESTS_BUILD = REPO_ROOT / "integration_tests" / "build.rs"
+TEST_SAMPLES_BUILD = REPO_ROOT / "crates" / "iroha_test_samples" / "build.rs"
+TEST_SAMPLES_LIBRARY = REPO_ROOT / "crates" / "iroha_test_samples" / "src" / "lib.rs"
 RELEASE_PROCESS_POLICY = (
     REPO_ROOT / "scripts" / "sumeragi_v2_release_process_policy.sh"
 )
@@ -432,7 +434,9 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         in owner["generator"]
     )
     assert '--output-dir "${IROHA_OPENAPI_STAGE}"' in owner["generator"]
-    assert '--output-dir="${IROHA_OPENAPI_STAGE}"' in owner["generator"]
+    assert 'sync-openapi.mjs' not in owner["generator"]
+    assert 'cp -R' not in owner["generator"]
+    assert 'existing empty' in owner["generator"]
     assert "absolute private /private/tmp <run>/artifacts/<stage> directory" in owner["generator"]
     assert "--reuse-canonical-spec" not in owner["generator"]
     assert "cargo run" not in owner["generator"]
@@ -444,6 +448,7 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         "scripts/seal_workspace_source.py",
         "scripts/sumeragi_v2_release_process_policy.sh",
         "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
+        "tools/openapi/scripts/generate-unsigned-openapi.mjs",
         "tools/openapi/scripts/verify-openapi-release-inputs.mjs",
         "xtask/src/openapi_git.rs",
     } <= set(owner["generator_sources"])
@@ -893,25 +898,20 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
 
 
 def test_sealed_openapi_builds_do_not_stage_integration_fixtures_into_source() -> None:
-    """OpenAPI-only xtask builds must leave their sealed source clone read-only."""
+    """Every fixture consumer writes only Cargo output, without an OpenAPI opt-out."""
 
     skip_env = "IROHA_INTEGRATION_TESTS_SKIP_PREBUILT_STAGE"
-    build_script = INTEGRATION_TESTS_BUILD.read_text(encoding="utf-8")
-    skip_check = (
-        f'if env::var(SKIP_PREBUILT_STAGE_ENV).ok().as_deref() == Some("1")'
-    )
-    assert f'const SKIP_PREBUILT_STAGE_ENV: &str = "{skip_env}";' in build_script
-    assert f'cargo:rerun-if-env-changed={{SKIP_PREBUILT_STAGE_ENV}}' in build_script
-    assert skip_check in build_script
-    assert build_script.index(skip_check) < build_script.index("let root = workspace_root();")
-    assert build_script.index(skip_check) < build_script.index(
-        'write_file_if_changed(&prebuilt_dir.join("build_config.toml")'
-    )
+    assert not INTEGRATION_TESTS_BUILD.exists()
+    build_script = TEST_SAMPLES_BUILD.read_text(encoding="utf-8")
+    sample_library = TEST_SAMPLES_LIBRARY.read_text(encoding="utf-8")
+    assert 'env::var_os("OUT_DIR")' in build_script
+    assert 'env!("OUT_DIR")' in sample_library
+    assert "crates/ivm/target/prebuilt" not in build_script
+    assert skip_env not in build_script
 
     for wrapper_path in (OPENAPI_GATE, OPENAPI_GENERATOR_WRAPPER):
         wrapper = wrapper_path.read_text(encoding="utf-8")
-        assert f"{skip_env}=1 \\\n" in wrapper, wrapper_path
-        assert wrapper.index(f"{skip_env}=1") < wrapper.index("run_cargo run")
+        assert skip_env not in wrapper, wrapper_path
 
 
 def test_openapi_process_control_scan_catches_reachable_mutations() -> None:

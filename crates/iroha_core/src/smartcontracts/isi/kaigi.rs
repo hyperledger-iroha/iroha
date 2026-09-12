@@ -35,9 +35,11 @@ use iroha_data_model::{
         KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
         kaigi_relay_metadata_key,
     },
-    prelude::{AccountId, Domain, DomainId, Json, Name},
+    prelude::{AccountId, Domain, Json},
     query::error::FindError,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use kaigi_zk::authorization_v1::KaigiAuthorizationActionV1;
 use mv::storage::StorageReadOnly;
 use privacy::PrivacyArtifacts;
@@ -3337,6 +3339,7 @@ mod tests {
         kaigi::{KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, NewKaigi},
         prelude::*,
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use std::str::FromStr;
     #[test]
@@ -3839,10 +3842,8 @@ mod tests {
     }
     #[test]
     fn persisted_account_id_rekey_history_survives_alias_reassignment() {
-        use iroha_data_model::{
-            account::rekey::{AccountAlias, AccountRekeyRecord},
-            nexus::DataSpaceId,
-        };
+        use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
         let (domain, retired, _) = sample_ids();
         let (active, _) = gen_account_in("nexus");
         let (new_alias_owner, _) = gen_account_in("nexus");
@@ -3913,10 +3914,10 @@ mod tests {
     }
     #[test]
     fn account_dependency_guard_and_rekey_graph_ignore_unrelated_oversized_history() {
-        use iroha_data_model::{
-            account::rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
-            nexus::DataSpaceId,
+        use iroha_data_model::account::rekey::{
+            AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance,
         };
+        use iroha_model_base::topology::DataSpaceId;
         let (domain, predecessor, _) = sample_ids();
         let (terminal, _) = gen_account_in("nexus");
         let (unrelated_predecessor, _) = gen_account_in("nexus");
@@ -3967,7 +3968,8 @@ mod tests {
     }
     #[test]
     fn rekey_record_removal_batches_maximum_lineage_component() {
-        use iroha_data_model::{account::rekey::AccountAlias, nexus::DataSpaceId};
+        use iroha_data_model::account::rekey::AccountAlias;
+        use iroha_model_base::topology::DataSpaceId;
 
         let (domain, _, _) = sample_ids();
         let accounts = synthetic_multisig_account_ids(crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT);
@@ -3991,7 +3993,8 @@ mod tests {
     }
     #[test]
     fn rekey_record_removal_bounds_selected_history_before_endpoint_collection() {
-        use iroha_data_model::{account::rekey::AccountAlias, nexus::DataSpaceId};
+        use iroha_data_model::account::rekey::AccountAlias;
+        use iroha_model_base::topology::DataSpaceId;
 
         let (domain, _, _) = sample_ids();
         let occurrences_per_alias = crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT / 2 + 1;
@@ -4023,7 +4026,8 @@ mod tests {
     }
     #[test]
     fn persisted_rekey_graph_accepts_small_disconnected_seed_components() {
-        use iroha_data_model::{account::rekey::AccountAlias, nexus::DataSpaceId};
+        use iroha_data_model::account::rekey::AccountAlias;
+        use iroha_model_base::topology::DataSpaceId;
 
         let (domain, _, _) = sample_ids();
         let first_accounts = synthetic_multisig_account_ids(3);
@@ -4053,7 +4057,8 @@ mod tests {
     }
     #[test]
     fn persisted_rekey_graph_bounds_aggregate_disconnected_component_work() {
-        use iroha_data_model::{account::rekey::AccountAlias, nexus::DataSpaceId};
+        use iroha_data_model::account::rekey::AccountAlias;
+        use iroha_model_base::topology::DataSpaceId;
 
         let (domain, _, _) = sample_ids();
         let occurrences_per_component = crate::sns::ACCOUNT_REKEY_LINEAGE_WORK_LIMIT / 2 + 1;
@@ -4090,10 +4095,8 @@ mod tests {
     }
     #[test]
     fn duplicate_rekey_edges_remain_supported_until_the_last_alias_is_removed() {
-        use iroha_data_model::{
-            account::rekey::{AccountAlias, AccountRekeyRecord},
-            nexus::DataSpaceId,
-        };
+        use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
         let (domain, predecessor, _) = sample_ids();
         let (terminal, _) = gen_account_in("nexus");
         with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&terminal), |stx| {
@@ -4147,10 +4150,8 @@ mod tests {
     }
     #[test]
     fn persisted_rekey_history_rejects_a_registered_predecessor() {
-        use iroha_data_model::{
-            account::rekey::{AccountAlias, AccountRekeyRecord},
-            nexus::DataSpaceId,
-        };
+        use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
         let (domain, predecessor, _) = sample_ids();
         let (terminal, _) = gen_account_in("nexus");
         with_seeded_kaigi_state_transaction(
@@ -4202,10 +4203,8 @@ mod tests {
     }
     #[test]
     fn account_registration_rejects_a_retired_rekey_predecessor() {
-        use iroha_data_model::{
-            account::rekey::{AccountAlias, AccountRekeyRecord},
-            nexus::DataSpaceId,
-        };
+        use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
         let (domain, predecessor, _) = sample_ids();
         let (terminal, _) = gen_account_in("nexus");
         with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&terminal), |stx| {
@@ -4230,10 +4229,8 @@ mod tests {
     }
     #[test]
     fn persisted_rekey_history_rejects_a_mismatched_storage_alias() {
-        use iroha_data_model::{
-            account::rekey::{AccountAlias, AccountRekeyRecord},
-            nexus::DataSpaceId,
-        };
+        use iroha_data_model::account::rekey::{AccountAlias, AccountRekeyRecord};
+        use iroha_model_base::topology::DataSpaceId;
         let (domain, predecessor, _) = sample_ids();
         let (terminal, _) = gen_account_in("nexus");
         with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&terminal), |stx| {
@@ -4430,9 +4427,9 @@ mod tests {
                 AccountAddress,
                 rekey::{AccountAlias, AccountRekeyRecord},
             },
-            nexus::DataSpaceId,
             sns::{NameControllerV1, NameRecordV1},
         };
+        use iroha_model_base::topology::DataSpaceId;
         let alias = AccountAlias::domainless(
             label.parse().expect("lineage alias label"),
             DataSpaceId::UNIVERSAL,
@@ -5518,7 +5515,7 @@ mod tests {
     #[test]
     fn relay_registration_enforces_allowlist() {
         let (domain, host, _) = sample_ids();
-        let (relay_id, _) = gen_account_in(domain.clone());
+        let (relay_id, _) = gen_account_in(domain.name());
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
@@ -5938,9 +5935,9 @@ mod tests {
     #[test]
     fn call_feedback_does_not_override_manifest_governance() {
         let (domain, host, _) = sample_ids();
-        let (relay_a, _) = gen_account_in(domain.clone());
-        let (relay_b, _) = gen_account_in(domain.clone());
-        let (relay_c, _) = gen_account_in(domain.clone());
+        let (relay_a, _) = gen_account_in(domain.name());
+        let (relay_b, _) = gen_account_in(domain.name());
+        let (relay_c, _) = gen_account_in(domain.name());
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)

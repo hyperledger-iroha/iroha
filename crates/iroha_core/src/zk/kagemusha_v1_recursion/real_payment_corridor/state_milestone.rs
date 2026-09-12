@@ -19,6 +19,10 @@ use crate::zk::{
             canonical_predecessor_conflict_nullifier_v1,
             canonical_prepared_one_use_authorization_digest_v1,
         },
+        transport_decider::{
+            KagemushaTransportDeciderParityWitnessV1, KagemushaTransportDeciderWitnessV1,
+            build_kagemusha_transport_decider_pair_v1,
+        },
         verify_kagemusha_mint_finality_helper_v1,
     },
     kagemusha_v1_state::{
@@ -40,7 +44,7 @@ use iroha_data_model::kagemusha::{
     KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentRuntimeV1,
     KagemushaTrustedCommitTimeV1,
 };
-use norito::NoritoSerialize;
+use norito::SerializePayload;
 
 #[path = "state_milestone/recovery_checkpoint.rs"]
 mod recovery_checkpoint;
@@ -430,13 +434,20 @@ impl KagemushaRecursiveVerifierV1 for DiagnosticVerifier<'_> {
     }
 }
 
-fn journal_message<T: NoritoSerialize>(domain: &[u8], statement: &T) -> Result<Vec<u8>, String> {
+// The diagnostic domains select fixed-v1 payloads; production journal frame types are separate.
+fn diagnostic_payload<T: SerializePayload>(value: &T) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut bytes).map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
+fn journal_message<T: SerializePayload>(domain: &[u8], statement: &T) -> Result<Vec<u8>, String> {
     let mut message = domain.to_vec();
-    message.extend(norito::encode_canonical(statement).map_err(|error| error.to_string())?);
+    message.extend(diagnostic_payload(statement)?);
     Ok(message)
 }
 
-fn sign_journal<T: NoritoSerialize>(key: &SigningKey, domain: &[u8], statement: &T) -> Vec<u8> {
+fn sign_journal<T: SerializePayload>(key: &SigningKey, domain: &[u8], statement: &T) -> Vec<u8> {
     device_signature(
         key,
         &journal_message(domain, statement).expect("diagnostic journal message"),
@@ -445,7 +456,7 @@ fn sign_journal<T: NoritoSerialize>(key: &SigningKey, domain: &[u8], statement: 
     .to_vec()
 }
 
-fn verify_journal<T: NoritoSerialize>(
+fn verify_journal<T: SerializePayload>(
     key: &KagemushaDevicePublicKeyV1,
     domain: &[u8],
     statement: &T,
@@ -750,7 +761,7 @@ fn diagnostic_enrollment_binding(
         account_id: material.recipient.clone(),
         runtime: KagemushaRetailEnrollmentRuntimeV1 {
             fi_id: "diagnostic-fi".parse().expect("fixed diagnostic FI name"),
-            ledger_dataspace_id: iroha_data_model::nexus::DataSpaceId::new(10),
+            ledger_dataspace_id: iroha_model_base::topology::DataSpaceId::new(10),
             authentication_namespace: "diagnostic-auth"
                 .parse()
                 .expect("fixed diagnostic authentication namespace"),
@@ -989,11 +1000,196 @@ fn send_preparation(
     (preparation, openings)
 }
 
+fn assert_altered_private_fold_proof_rejected(
+    state_keys: &StateKeys,
+    proof: &KagemushaGeneratedRecursiveStateProofV1,
+) {
+    let recovery_seed = test_only_recovery_seed();
+    let eq_history = proof
+        .eq_history
+        .to_native()
+        .expect("decode Eq private history for negative transport witness");
+    let ep_history = proof
+        .ep_history
+        .to_native()
+        .expect("decode Ep private history for negative transport witness");
+    let eq_fold = fold_kagemusha_eq_accumulators_v1(
+        &state_keys.eq.parameters,
+        &proof.eq_current_accumulator,
+        &proof.eq_history,
+        &recovery_seed,
+    )
+    .expect("construct Eq fold control for negative transport witness");
+    let ep_fold = fold_kagemusha_ep_accumulators_v1(
+        &state_keys.ep.parameters,
+        &proof.ep_current_accumulator,
+        &proof.ep_history,
+        &recovery_seed,
+    )
+    .expect("construct Ep fold control for negative transport witness");
+    let mut altered_eq_fold = eq_fold.proof().as_bytes().to_vec();
+    altered_eq_fold[64..96].fill(0xff);
+    let Err(error) = build_kagemusha_transport_decider_pair_v1(
+        &state_keys.eq.parameters,
+        &state_keys.ep.parameters,
+        KagemushaTransportDeciderWitnessV1 {
+            eq: KagemushaTransportDeciderParityWitnessV1 {
+                inner_protocol: &state_keys.eq_protocol,
+                inner_instances: &proof.eq_public_instances,
+                inner_proof: &proof.eq_inner_proof,
+                inner_history: &eq_history,
+                inner_history_fold_proof: &altered_eq_fold,
+                outer_instances: &proof.eq_transport_public_instances,
+            },
+            ep: KagemushaTransportDeciderParityWitnessV1 {
+                inner_protocol: &state_keys.ep_protocol,
+                inner_instances: &proof.ep_public_instances,
+                inner_proof: &proof.ep_inner_proof,
+                inner_history: &ep_history,
+                inner_history_fold_proof: ep_fold.proof().as_bytes(),
+                outer_instances: &proof.ep_transport_public_instances,
+            },
+        },
+    ) else {
+        panic!("the outer circuit builder accepted an altered Eq history-fold proof");
+    };
+    assert!(
+        error.contains("failed to fold current carrier into history"),
+        "unexpected altered-fold rejection: {error}",
+    );
+
+    let mut altered_ep_fold = ep_fold.proof().as_bytes().to_vec();
+    altered_ep_fold[64..96].fill(0xff);
+    let Err(error) = build_kagemusha_transport_decider_pair_v1(
+        &state_keys.eq.parameters,
+        &state_keys.ep.parameters,
+        KagemushaTransportDeciderWitnessV1 {
+            eq: KagemushaTransportDeciderParityWitnessV1 {
+                inner_protocol: &state_keys.eq_protocol,
+                inner_instances: &proof.eq_public_instances,
+                inner_proof: &proof.eq_inner_proof,
+                inner_history: &eq_history,
+                inner_history_fold_proof: eq_fold.proof().as_bytes(),
+                outer_instances: &proof.eq_transport_public_instances,
+            },
+            ep: KagemushaTransportDeciderParityWitnessV1 {
+                inner_protocol: &state_keys.ep_protocol,
+                inner_instances: &proof.ep_public_instances,
+                inner_proof: &proof.ep_inner_proof,
+                inner_history: &ep_history,
+                inner_history_fold_proof: &altered_ep_fold,
+                outer_instances: &proof.ep_transport_public_instances,
+            },
+        },
+    ) else {
+        panic!("the outer circuit builder accepted an altered Ep history-fold proof");
+    };
+    assert!(
+        error.contains("failed to fold current carrier into history"),
+        "unexpected altered-fold rejection: {error}",
+    );
+}
+
+fn assert_mixed_transport_pairs_rejected(
+    state_keys: &StateKeys,
+    first: &KagemushaGeneratedRecursiveStateProofV1,
+    second: &KagemushaGeneratedRecursiveStateProofV1,
+) {
+    assert!(paired_transport_boundary_accepts(
+        state_keys,
+        &second.proof,
+        second.proof.semantic_digest,
+        &second.eq_transport_public_instances,
+        &second.ep_transport_public_instances,
+    ));
+
+    let mut mixed = second.proof.clone();
+    mixed.eq_proof.clone_from(&first.proof.eq_proof);
+    mixed.eq_history.clone_from(&first.proof.eq_history);
+    assert!(
+        !paired_transport_boundary_accepts(
+            state_keys,
+            &mixed,
+            second.proof.semantic_digest,
+            &second.eq_transport_public_instances,
+            &second.ep_transport_public_instances,
+        ),
+        "the outer boundary must reject an old Eq proof/history mixed with a new Ep half",
+    );
+
+    mixed = second.proof.clone();
+    mixed.eq_proof.clone_from(&first.proof.eq_proof);
+    assert!(
+        !paired_transport_boundary_accepts(
+            state_keys,
+            &mixed,
+            second.proof.semantic_digest,
+            &second.eq_transport_public_instances,
+            &second.ep_transport_public_instances,
+        ),
+        "the outer boundary must reject an old Eq proof paired with current histories",
+    );
+
+    mixed = second.proof.clone();
+    mixed.ep_proof.clone_from(&first.proof.ep_proof);
+    mixed.ep_history.clone_from(&first.proof.ep_history);
+    assert!(
+        !paired_transport_boundary_accepts(
+            state_keys,
+            &mixed,
+            second.proof.semantic_digest,
+            &second.eq_transport_public_instances,
+            &second.ep_transport_public_instances,
+        ),
+        "the outer boundary must reject a new Eq half mixed with an old Ep proof/history",
+    );
+
+    mixed = second.proof.clone();
+    mixed.ep_proof.clone_from(&first.proof.ep_proof);
+    assert!(
+        !paired_transport_boundary_accepts(
+            state_keys,
+            &mixed,
+            second.proof.semantic_digest,
+            &second.eq_transport_public_instances,
+            &second.ep_transport_public_instances,
+        ),
+        "the outer boundary must reject an old Ep proof paired with current histories",
+    );
+
+    mixed = second.proof.clone();
+    mixed.eq_history.clone_from(&first.proof.eq_history);
+    assert!(
+        !paired_transport_boundary_accepts(
+            state_keys,
+            &mixed,
+            second.proof.semantic_digest,
+            &second.eq_transport_public_instances,
+            &second.ep_transport_public_instances,
+        ),
+        "the outer boundary must reject a current Eq proof with an old Eq history",
+    );
+
+    mixed = second.proof.clone();
+    mixed.ep_history.clone_from(&first.proof.ep_history);
+    assert!(
+        !paired_transport_boundary_accepts(
+            state_keys,
+            &mixed,
+            second.proof.semantic_digest,
+            &second.eq_transport_public_instances,
+            &second.ep_transport_public_instances,
+        ),
+        "the outer boundary must reject a current Ep proof with an old Ep history",
+    );
+}
+
 fn assert_state_mutations_rejected(
     keys: &StateKeys,
     proof: &KagemushaGeneratedRecursiveStateProofV1,
 ) {
     assert_transport_public_substitutions_rejected(keys, proof);
+    assert_altered_private_fold_proof_rejected(keys, proof);
     let eq_terminal = KagemushaEqAccumulatorV1::try_from_bytes(&proof.proof.eq_history)
         .expect("Eq terminal history");
     let ep_terminal = KagemushaEpAccumulatorV1::try_from_bytes(&proof.proof.ep_history)
@@ -1397,6 +1593,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
     ));
     recursive_verifier.retain_state(mint.clone());
     assert_state_mutations_rejected(&state_keys, &mint);
+    assert_mixed_transport_pairs_rejected(&state_keys, &bootstrap, &mint);
     let mint_authorization = TransitionAuthorizationV1::new(
         HardwareTransitionCertificateV1 {
             statement: mint_preview.transition.hardware_statement.clone(),
@@ -1549,6 +1746,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
     ));
     recursive_verifier.retain_state(send.clone());
     assert_state_mutations_rejected(&state_keys, &send);
+    assert_mixed_transport_pairs_rejected(&state_keys, &mint, &send);
     let public = candidate
         .candidate_public_inputs(artifacts, &send.proof)
         .expect("Core reconstructs candidate public inputs");
@@ -1911,6 +2109,54 @@ fn diagnostic_sender_openings_bind_original_predecessor_counters_and_commit_time
 
 #[test]
 fn diagnostic_provider_journal_signatures_bind_operation_and_exact_bytes() {
+    #[derive(norito::Encode)]
+    struct PayloadOnlyStatement {
+        operation: u16,
+        identity: [u8; 32],
+        amount: u128,
+    }
+    let statement = PayloadOnlyStatement {
+        operation: 1,
+        identity: [7; 32],
+        amount: 3,
+    };
+    let key = deterministic_signing_key(0x7100);
+    let signature = sign_journal(&key, RESERVATION_DOMAIN, &statement);
+    verify_journal(
+        &device_public_key(&key),
+        RESERVATION_DOMAIN,
+        &statement,
+        &signature,
+    )
+    .unwrap();
+    let mut expected = RESERVATION_DOMAIN.to_vec();
+    expected.extend(norito::codec::Encode::encode(&statement));
+    assert_eq!(
+        journal_message(RESERVATION_DOMAIN, &statement).unwrap(),
+        expected
+    );
+    assert!(
+        verify_journal(
+            &device_public_key(&key),
+            STAGE_DOMAIN,
+            &statement,
+            &signature
+        )
+        .is_err()
+    );
+    let changed = PayloadOnlyStatement {
+        amount: 4,
+        ..statement
+    };
+    assert!(
+        verify_journal(
+            &device_public_key(&key),
+            RESERVATION_DOMAIN,
+            &changed,
+            &signature
+        )
+        .is_err()
+    );
     let key = deterministic_signing_key(0x7100);
     let public = device_public_key(&key);
     let signature = sign_journal(&key, RESERVATION_DOMAIN, &(1_u16, [7_u8; 32], 3_u128));

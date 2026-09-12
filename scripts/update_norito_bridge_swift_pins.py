@@ -220,6 +220,7 @@ def _project(
     artifact_dir: Path,
     contents: bytes,
     *,
+    lockfile_path: Path,
     allow_dirty_source: bool = False,
 ) -> bytes:
     validator = _load_module(
@@ -232,6 +233,7 @@ def _project(
     try:
         payload = validator.validate(
             root=root,
+            lockfile_path=lockfile_path,
             xcframework=xcframework,
             manifest_path=manifest,
             manifest_link=link,
@@ -405,6 +407,7 @@ def _assert_loader_preimage(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--lockfile-path", required=True, type=Path)
     parser.add_argument("--artifact-dir", required=True, type=Path)
     parser.add_argument(
         "--allow-dirty-source",
@@ -434,6 +437,15 @@ def main() -> int:
             root,
             "--artifact-dir",
         )
+        source_seal = _load_module(
+            root / "scripts/norito_bridge_source_seal.py",
+            "norito_bridge_source_seal_for_pin_lock",
+        )
+        try:
+            selected_lock = source_seal.selected_lockfile_path(root, arguments.lockfile_path)
+            lock_identity = source_seal.lockfile_identity(selected_lock)
+        except RuntimeError as error:
+            raise PinOwnerError(str(error)) from error
         loader = root / LOADER_RELATIVE_PATH
         metadata, preimage = _regular_loader(loader)
         preimage_hash = _sha256(preimage)
@@ -449,9 +461,12 @@ def main() -> int:
                 root,
                 artifact_dir,
                 preimage,
+                lockfile_path=selected_lock,
                 allow_dirty_source=arguments.allow_dirty_source,
             )
             artifact_lock.assert_held()
+            if source_seal.lockfile_identity(selected_lock) != lock_identity:
+                raise PinOwnerError("selected Cargo lock changed during Swift pin projection")
             if arguments.check:
                 _assert_loader_preimage(loader, metadata, preimage)
                 if projected != preimage:

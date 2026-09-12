@@ -1,0 +1,217 @@
+{
+  "governance_enabled": true,
+  "json_enabled": true,
+  "records": [
+    {
+      "actual_type_name": "iroha_data_model::id::model::NetworkId",
+      "bare_hex": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "case": "network-id/root",
+      "deserialize_hash": "b0354af76ec38413ee36899dd141289c",
+      "frame_hex": "4e5254300000b0354af76ec38413ee36899dd141289c002000000000000000fc976653cca9ba8e00a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "header_flags": 0,
+      "json": "\"hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7\"",
+      "serialize_hash": "b0354af76ec38413ee36899dd141289c"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::id::model::NetworkId>",
+      "bare_hex": "00",
+      "case": "network-id/option-none",
+      "deserialize_hash": "8fbf99e8895f7e325bdd7c312dc0ee44",
+      "frame_hex": "4e52543000008fbf99e8895f7e325bdd7c312dc0ee44000100000000000000593f676473a1ad1f0000",
+      "header_flags": 0,
+      "json": "null",
+      "serialize_hash": "8fbf99e8895f7e325bdd7c312dc0ee44"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::id::model::NetworkId>",
+      "bare_hex": "0120a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "case": "network-id/option-some",
+      "deserialize_hash": "8fbf99e8895f7e325bdd7c312dc0ee44",
+      "frame_hex": "4e52543000008fbf99e8895f7e325bdd7c312dc0ee4400220000000000000003478970eaacfbb8020120a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "header_flags": 2,
+      "json": "\"hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7\"",
+      "serialize_hash": "8fbf99e8895f7e325bdd7c312dc0ee44"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::id::model::NetworkId>",
+      "bare_hex": "0000000000000000",
+      "case": "network-id/vec-empty",
+      "deserialize_hash": "a2c91ed713db12cddebd4a9bd9e1a456",
+      "frame_hex": "4e5254300000a2c91ed713db12cddebd4a9bd9e1a456000800000000000000c0ca824265736ab6000000000000000000",
+      "header_flags": 0,
+      "json": "[]",
+      "serialize_hash": "a2c91ed713db12cddebd4a9bd9e1a456"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::id::model::NetworkId>",
+      "bare_hex": "020000000000000020a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a520a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "case": "network-id/vec-two",
+      "deserialize_hash": "a2c91ed713db12cddebd4a9bd9e1a456",
+      "frame_hex": "4e5254300000a2c91ed713db12cddebd4a9bd9e1a456004a000000000000009958a47ef89f347302020000000000000020a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a520a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "header_flags": 2,
+      "json": "[\"hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7\",\"hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7\"]",
+      "serialize_hash": "a2c91ed713db12cddebd4a9bd9e1a456"
+    },
+    {
+      "actual_type_name": "iroha_crypto::hash::HashOf<iroha_data_model::id::model::NetworkId>",
+      "bare_hex": "f165aec8ea6821b12b7f3c14daf13892535f882c3c3e23a9d59f5b4195637bd5",
+      "case": "network-id/hash-of",
+      "deserialize_hash": "6942520f33b3bbcab9e0161681927daa",
+      "frame_hex": "4e52543000006942520f33b3bbcab9e0161681927daa0020000000000000000de0c8b14bfbb13c00f165aec8ea6821b12b7f3c14daf13892535f882c3c3e23a9d59f5b4195637bd5",
+      "header_flags": 0,
+      "json": "\"hash:F165AEC8EA6821B12B7F3C14DAF13892535F882C3C3E23A9D59F5B4195637BD5#AF6C\"",
+      "serialize_hash": "6942520f33b3bbcab9e0161681927daa"
+    },
+    {
+      "actual_type_name": "iroha_crypto::signature::SignatureOf<iroha_data_model::id::model::NetworkId>",
+      "bare_hex": "4000000000000000012f01df012d012201b001710166014f01b20189012b01da01f7015d01050173014e01560180016c0157010e01fa015601ea013e0119014e01aa01d901a601f00180017701b50152012701310115011901fa01ba01e901de01af01d5017f01c701c2012a01630185011d012e01da012201e4011401cd014c0116014801eb010f",
+      "case": "network-id/signature-of",
+      "deserialize_hash": "ba8db8128d3a12fb24aecbd8994d1374",
+      "frame_hex": "4e5254300000ba8db8128d3a12fb24aecbd8994d1374008800000000000000888b3ff3fdb60ad6024000000000000000012f01df012d012201b001710166014f01b20189012b01da01f7015d01050173014e01560180016c0157010e01fa015601ea013e0119014e01aa01d901a601f00180017701b50152012701310115011901fa01ba01e901de01af01d5017f01c701c2012a01630185011d012e01da012201e4011401cd014c0116014801eb010f",
+      "header_flags": 2,
+      "json": "\"2FDF2D22B071664FB2892BDAF75D05734E56806C570EFA56EA3E194EAAD9A6F08077B55227311519FABAE9DEAFD57FC7C22A63851D2EDA22E414CD4C1648EB0F\"",
+      "serialize_hash": "ba8db8128d3a12fb24aecbd8994d1374"
+    },
+    {
+      "actual_type_name": "iroha_data_model::escrow::EscrowId",
+      "bare_hex": "e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf",
+      "case": "escrow-id/root",
+      "deserialize_hash": "09050cdb540ea05531a6057e6d16945e",
+      "frame_hex": "4e525430000009050cdb540ea05531a6057e6d16945e0020000000000000008340a7dbdfb4d10e00e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf",
+      "header_flags": 0,
+      "json": "\"hash:E1AEB0F9F97F4E8D964C9136BC0FD1374AF02C8A9A2A61ADEA4A5692620D4BBF#711E\"",
+      "serialize_hash": "09050cdb540ea05531a6057e6d16945e"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::escrow::EscrowId>",
+      "bare_hex": "00",
+      "case": "escrow-id/option-none",
+      "deserialize_hash": "5a3304a54658f2474415d2a26ec43e9a",
+      "frame_hex": "4e52543000005a3304a54658f2474415d2a26ec43e9a000100000000000000593f676473a1ad1f0000",
+      "header_flags": 0,
+      "json": "null",
+      "serialize_hash": "5a3304a54658f2474415d2a26ec43e9a"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::escrow::EscrowId>",
+      "bare_hex": "0120e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf",
+      "case": "escrow-id/option-some",
+      "deserialize_hash": "5a3304a54658f2474415d2a26ec43e9a",
+      "frame_hex": "4e52543000005a3304a54658f2474415d2a26ec43e9a0022000000000000007c9048f8f9b19038020120e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf",
+      "header_flags": 2,
+      "json": "\"hash:E1AEB0F9F97F4E8D964C9136BC0FD1374AF02C8A9A2A61ADEA4A5692620D4BBF#711E\"",
+      "serialize_hash": "5a3304a54658f2474415d2a26ec43e9a"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::escrow::EscrowId>",
+      "bare_hex": "0000000000000000",
+      "case": "escrow-id/vec-empty",
+      "deserialize_hash": "1cd30c817a2d149edead2a9b15147b26",
+      "frame_hex": "4e52543000001cd30c817a2d149edead2a9b15147b26000800000000000000c0ca824265736ab6000000000000000000",
+      "header_flags": 0,
+      "json": "[]",
+      "serialize_hash": "1cd30c817a2d149edead2a9b15147b26"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::escrow::EscrowId>",
+      "bare_hex": "020000000000000020e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf20e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf",
+      "case": "escrow-id/vec-two",
+      "deserialize_hash": "1cd30c817a2d149edead2a9b15147b26",
+      "frame_hex": "4e52543000001cd30c817a2d149edead2a9b15147b26004a00000000000000ef8d81e4f466da2b02020000000000000020e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf20e1aeb0f9f97f4e8d964c9136bc0fd1374af02c8a9a2a61adea4a5692620d4bbf",
+      "header_flags": 2,
+      "json": "[\"hash:E1AEB0F9F97F4E8D964C9136BC0FD1374AF02C8A9A2A61ADEA4A5692620D4BBF#711E\",\"hash:E1AEB0F9F97F4E8D964C9136BC0FD1374AF02C8A9A2A61ADEA4A5692620D4BBF#711E\"]",
+      "serialize_hash": "1cd30c817a2d149edead2a9b15147b26"
+    },
+    {
+      "actual_type_name": "iroha_crypto::hash::HashOf<iroha_data_model::escrow::EscrowId>",
+      "bare_hex": "58a004e21f2f958ec4cb1975348c4991739fb4a62656aebf8ebefc3f1ed0ba97",
+      "case": "escrow-id/hash-of",
+      "deserialize_hash": "9a491aff7274b1ad3f12a687daae30b7",
+      "frame_hex": "4e52543000009a491aff7274b1ad3f12a687daae30b7002000000000000000dab275bd644231970058a004e21f2f958ec4cb1975348c4991739fb4a62656aebf8ebefc3f1ed0ba97",
+      "header_flags": 0,
+      "json": "\"hash:58A004E21F2F958EC4CB1975348C4991739FB4A62656AEBF8EBEFC3F1ED0BA97#40C6\"",
+      "serialize_hash": "9a491aff7274b1ad3f12a687daae30b7"
+    },
+    {
+      "actual_type_name": "iroha_crypto::signature::SignatureOf<iroha_data_model::escrow::EscrowId>",
+      "bare_hex": "400000000000000001b201e4015901d601cf0173014201ab0137011d01ff011101f201e9015701dc010101e2017f013701ee019e01a40112010f017b01b901bb01c601b801bf01a70165015601b901e401b70187019a013201dc011601c4014f011c01b7010a01cd01bf012b014801dc0124019f01f4012b019e01a4012f010b01db012f01b00108",
+      "case": "escrow-id/signature-of",
+      "deserialize_hash": "4d5c1545b45257575e71d44b6cc57126",
+      "frame_hex": "4e52543000004d5c1545b45257575e71d44b6cc5712600880000000000000058ff7f5c66ad1f6402400000000000000001b201e4015901d601cf0173014201ab0137011d01ff011101f201e9015701dc010101e2017f013701ee019e01a40112010f017b01b901bb01c601b801bf01a70165015601b901e401b70187019a013201dc011601c4014f011c01b7010a01cd01bf012b014801dc0124019f01f4012b019e01a4012f010b01db012f01b00108",
+      "header_flags": 2,
+      "json": "\"B2E459D6CF7342AB371DFF11F2E957DC01E27F37EE9EA4120F7BB9BBC6B8BFA76556B9E4B7879A32DC16C44F1CB70ACDBF2B48DC249FF42B9EA42F0BDB2FB008\"",
+      "serialize_hash": "4d5c1545b45257575e71d44b6cc57126"
+    },
+    {
+      "actual_type_name": "iroha_data_model::parliament_types::ProposalId",
+      "bare_hex": "02010002200020abababababababababababababababababababababababababababababababab",
+      "case": "proposal-id/root",
+      "deserialize_hash": "6be54e32e74a8e11e56a07bd0ff78b3d",
+      "frame_hex": "4e52543000006be54e32e74a8e11e56a07bd0ff78b3d002700000000000000ccc69ba0c73c15e20202010002200020abababababababababababababababababababababababababababababababab",
+      "header_flags": 2,
+      "json": "\"abababababababababababababababababababababababababababababababab\"",
+      "serialize_hash": "6be54e32e74a8e11e56a07bd0ff78b3d"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::parliament_types::ProposalId>",
+      "bare_hex": "00",
+      "case": "proposal-id/option-none",
+      "deserialize_hash": "61bd74f2eb44273a796a7108f22c5aa5",
+      "frame_hex": "4e525430000061bd74f2eb44273a796a7108f22c5aa5000100000000000000593f676473a1ad1f0000",
+      "header_flags": 0,
+      "json": "null",
+      "serialize_hash": "61bd74f2eb44273a796a7108f22c5aa5"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::parliament_types::ProposalId>",
+      "bare_hex": "012702010002200020abababababababababababababababababababababababababababababababab",
+      "case": "proposal-id/option-some",
+      "deserialize_hash": "61bd74f2eb44273a796a7108f22c5aa5",
+      "frame_hex": "4e525430000061bd74f2eb44273a796a7108f22c5aa5002900000000000000ef56d9dd2b178eaa02012702010002200020abababababababababababababababababababababababababababababababab",
+      "header_flags": 2,
+      "json": "\"abababababababababababababababababababababababababababababababab\"",
+      "serialize_hash": "61bd74f2eb44273a796a7108f22c5aa5"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::parliament_types::ProposalId>",
+      "bare_hex": "0000000000000000",
+      "case": "proposal-id/vec-empty",
+      "deserialize_hash": "098489e65e7978e335babfee8d3d74b7",
+      "frame_hex": "4e5254300000098489e65e7978e335babfee8d3d74b7000800000000000000c0ca824265736ab6000000000000000000",
+      "header_flags": 0,
+      "json": "[]",
+      "serialize_hash": "098489e65e7978e335babfee8d3d74b7"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::parliament_types::ProposalId>",
+      "bare_hex": "02000000000000002702010002200020abababababababababababababababababababababababababababababababab2702010002200020abababababababababababababababababababababababababababababababab",
+      "case": "proposal-id/vec-two",
+      "deserialize_hash": "098489e65e7978e335babfee8d3d74b7",
+      "frame_hex": "4e5254300000098489e65e7978e335babfee8d3d74b70058000000000000001f02ecd4e442ddd40202000000000000002702010002200020abababababababababababababababababababababababababababababababab2702010002200020abababababababababababababababababababababababababababababababab",
+      "header_flags": 2,
+      "json": "[\"abababababababababababababababababababababababababababababababab\",\"abababababababababababababababababababababababababababababababab\"]",
+      "serialize_hash": "098489e65e7978e335babfee8d3d74b7"
+    },
+    {
+      "actual_type_name": "iroha_crypto::hash::HashOf<iroha_data_model::parliament_types::ProposalId>",
+      "bare_hex": "a30ba8d25fdbe26e4a51614af2952bee890f68e1dd37a4af27eb639da38c7549",
+      "case": "proposal-id/hash-of",
+      "deserialize_hash": "75f6ae744c3f4a0bbef62f512d7c0cfd",
+      "frame_hex": "4e525430000075f6ae744c3f4a0bbef62f512d7c0cfd002000000000000000156c41eee28da90e00a30ba8d25fdbe26e4a51614af2952bee890f68e1dd37a4af27eb639da38c7549",
+      "header_flags": 0,
+      "json": "\"hash:A30BA8D25FDBE26E4A51614AF2952BEE890F68E1DD37A4AF27EB639DA38C7549#5CBB\"",
+      "serialize_hash": "75f6ae744c3f4a0bbef62f512d7c0cfd"
+    },
+    {
+      "actual_type_name": "iroha_crypto::signature::SignatureOf<iroha_data_model::parliament_types::ProposalId>",
+      "bare_hex": "4000000000000000016801cb013501ef01c4014001fe01a401c201f6019d013d015801c701300168014f013f011b0105014201d501d401f601d601d8018c01ce01d60176010101bc0101011a011801f501100164017b010f01fb012601df01eb01ba012001aa010d0159018d01a901ed017401c201f501150147018001e701c40198017e01db0106",
+      "case": "proposal-id/signature-of",
+      "deserialize_hash": "fed838aa0cd28cc73f86abce4ed9168a",
+      "frame_hex": "4e5254300000fed838aa0cd28cc73f86abce4ed9168a00880000000000000002c0fac51399c08b024000000000000000016801cb013501ef01c4014001fe01a401c201f6019d013d015801c701300168014f013f011b0105014201d501d401f601d601d8018c01ce01d60176010101bc0101011a011801f501100164017b010f01fb012601df01eb01ba012001aa010d0159018d01a901ed017401c201f501150147018001e701c40198017e01db0106",
+      "header_flags": 2,
+      "json": "\"68CB35EFC440FEA4C2F69D3D58C730684F3F1B0542D5D4F6D6D88CCED67601BC011A18F510647B0FFB26DFEBBA20AA0D598DA9ED74C2F5154780E7C4987EDB06\"",
+      "serialize_hash": "fed838aa0cd28cc73f86abce4ed9168a"
+    }
+  ],
+  "schema": 1
+}

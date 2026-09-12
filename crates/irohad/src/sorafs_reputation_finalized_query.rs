@@ -70,7 +70,7 @@ use iroha_data_model::{
         },
     },
 };
-use norito::core::{NoritoSerialize, SerializePayload};
+use norito::core::NoritoSerialize;
 use sorafs_node::reputation::{
     ReputationFinalizedIdentityV1,
     runtime::{
@@ -1939,7 +1939,7 @@ mod tests {
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-            iroha_data_model::ChainId::from("reputation-finalized-query-test"),
+            iroha_model_base::chain::ChainId::from("reputation-finalized-query-test"),
             network_id,
         ));
         let replay_plan =
@@ -1992,7 +1992,7 @@ mod tests {
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-            iroha_data_model::ChainId::from("reputation-finalized-query-test"),
+            iroha_model_base::chain::ChainId::from("reputation-finalized-query-test"),
             network_id,
         ));
         let replay_plan =

@@ -9,7 +9,7 @@ use crate::durable_transaction_forwarder::{
     DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     isi::{
         InstructionBox,
@@ -26,6 +26,7 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction},
 };
+use iroha_model_base::chain::ChainId;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{RepairReportV1, RepairSlashProposalV1, RepairTicketId};
 use std::{
@@ -129,7 +130,8 @@ pub enum RepairTransactionKindV1 {
 ///
 /// The forwarder validates the operation, its embedded canonical payloads, and its authority
 /// binding before persistence. It never creates or retains a private key.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::repair_transaction_forwarder::RepairOperationV1")]
 pub enum RepairOperationV1 {
     /// Admit one source-bound repair report.
     Submit(SubmitSorafsRepairTask),
@@ -426,7 +428,10 @@ struct StoredDeadRepairTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::repair_transaction_forwarder::RepairTransactionForwarderCheckpointV1"
+)]
 struct RepairTransactionForwarderCheckpointV1 {
     version: u8,
     next_sequence: u64,
@@ -1781,7 +1786,7 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        ChainId, Level, NetworkId,
+        Level, NetworkId,
         account::AccountId,
         block::BlockHeader,
         isi::{
@@ -1790,6 +1795,7 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
+    use iroha_model_base::chain::ChainId;
     use sorafs_manifest::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
         RepairManualCauseV1,
@@ -2316,7 +2322,15 @@ mod tests {
                 )),
             ),
         ];
+        crate::frame_test_support::assert_current_frame(
+            &RepairTransactionForwarderCheckpointV1::default(),
+            "sorafs_node::repair_transaction_forwarder::RepairTransactionForwarderCheckpointV1",
+        );
         for (public, legacy) in pairs {
+            crate::frame_test_support::assert_current_frame(
+                &public,
+                "sorafs_node::repair_transaction_forwarder::RepairOperationV1",
+            );
             assert_eq!(
                 norito::codec::Encode::encode(&public),
                 norito::codec::Encode::encode(&legacy)
@@ -2963,5 +2977,63 @@ mod tests {
                 .unwrap(),
             RepairTransactionEnqueueResultV1::Existing { .. }
         ));
+    }
+    #[test]
+    fn persisted_checkpoint_and_operation_frames_use_distinct_declared_identities() {
+        let signer = key(1);
+        let authority = AccountId::new(signer.public_key().clone());
+        let operation =
+            RepairOperationV1::Submit(submit_instruction(&signer, [0x91; 32], "REP-SCHEMA-FRAME"));
+        let directory = TempDir::new().unwrap();
+        let forwarder = RepairTransactionForwarder::open(directory.path(), policy()).unwrap();
+        let id = forwarder
+            .enqueue_unsigned_operation(authority, operation.clone(), &context(10, 0xA1))
+            .unwrap()
+            .operation_id();
+        let bytes = fs::read(
+            directory
+                .path()
+                .join(REPAIR_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1),
+        )
+        .unwrap();
+        let checkpoint =
+            decode_checkpoint(&bytes, policy()).expect("persisted canonical checkpoint");
+        assert_eq!(checkpoint.pending.len(), 1);
+        assert_eq!(checkpoint.pending[0].operation, operation);
+        assert_eq!(norito::to_bytes(&checkpoint).unwrap(), bytes);
+        let operation_bytes = norito::to_bytes(&operation).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<RepairOperationV1>(&operation_bytes).unwrap(),
+            operation
+        );
+        for (frame, identity) in [
+            (
+                bytes.as_slice(),
+                "sorafs_node::repair_transaction_forwarder::RepairTransactionForwarderCheckpointV1",
+            ),
+            (
+                operation_bytes.as_slice(),
+                "sorafs_node::repair_transaction_forwarder::RepairOperationV1",
+            ),
+        ] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        assert!(matches!(
+            norito::decode_from_bytes::<RepairTransactionForwarderCheckpointV1>(&operation_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            decode_checkpoint(&operation_bytes, policy()),
+            Err(RepairTransactionForwarderError::InvalidCheckpoint)
+        ));
+        drop(forwarder);
+        let reopened = RepairTransactionForwarder::open(directory.path(), policy()).unwrap();
+        assert_eq!(
+            reopened.operation_for_reconciliation(id).unwrap().operation,
+            operation
+        );
     }
 }

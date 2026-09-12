@@ -51,7 +51,7 @@ import org.hyperledger.iroha.android.alias.AccountFaucetPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
 import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
-import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.android.alias.PreparedOperationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -79,8 +79,8 @@ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
-import org.hyperledger.iroha.android.privacy.PrivacyNativeBridge;
-import org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridge;
+import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.NetworkContext;
@@ -498,8 +498,7 @@ public final class HttpClientTransport implements IrohaClient {
             manifest ->
                 PrivacyExact12CapabilityAdmissionV1.requireExact12CapabilityTupleV1(
                     manifest,
-                    org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.fromCanonicalLabel(
-                        protocolId.canonicalLabel())));
+                    protocolId));
   }
 
   /** Fetch and strictly decode exact-lane SCCP capability discovery. */
@@ -1080,7 +1079,8 @@ public final class HttpClientTransport implements IrohaClient {
       final String contractAlias,
       final String entrypoint,
       final Object payload,
-      final ContractCallDraftIntent draftIntent) {
+      final ContractCallDraftIntent draftIntent,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     final Map<String, Object> requestPayload =
         buildContractCallDraftPayload(
             authority,
@@ -1089,10 +1089,15 @@ public final class HttpClientTransport implements IrohaClient {
             contractAlias,
             entrypoint,
             payload);
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    if (!FeeQuoteResponse.sameFeeQuoteAccountIdentity(authority, canonicalAuth.accountId())) {
+      throw new IllegalArgumentException(
+          "canonicalAuth.accountId must identify the contract call authority");
+    }
     validateContractCallDraftIntent(requestPayload, draftIntent);
     final NetworkId expectedNetworkId = config.requireLocalSigningContext().networkId();
     final byte[] body = encodeJsonBody(requestPayload);
-    final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
+    final TransportRequest request = buildVpnRequest("POST", "/v1/contracts/call", body, canonicalAuth);
     return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call draft")
         .thenApply(
             response ->
@@ -1597,14 +1602,14 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<AccountOnboardingPrepareResponseV1> prepareSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 requestBody,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final FeePaymentIntent feePayment,
       final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
     AccountOnboardingReceiptVerifier.requireValidForRequest(
         requestBody, receipt, expectedNetworkId, expectedAuthority);
-    if (!TairaPublicResetMutationBindingV1.ONBOARDING.equals(binding.kind())) {
+    if (!PreparedOperationBindingV1.ONBOARDING.equals(binding.kind())) {
       throw new IllegalArgumentException("onboarding prepare requires an onboarding binding");
     }
     if (binding.executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
@@ -1651,7 +1656,7 @@ public final class HttpClientTransport implements IrohaClient {
           final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
           final AccountOnboardingPlanRequestV1 requestBody,
           final AccountOnboardingPlanReceiptV1 receipt,
-          final TairaPublicResetMutationBindingV1 binding,
+          final PreparedOperationBindingV1 binding,
           final String expectedAuthority,
           final NetworkId expectedNetworkId,
           final ToriiCanonicalRequestAuth canonicalAuth) {
@@ -1718,7 +1723,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<AccountFaucetPreparedTransactionV1>
       prepareAccountFaucetTransaction(
           final AccountFaucetClaimV1 claim,
-          final TairaPublicResetMutationBindingV1 binding,
+          final PreparedOperationBindingV1 binding,
           final FeePaymentIntent feePayment,
           final AccountFaucetPolicyV1 policy,
           final NetworkId expectedNetworkId) {
@@ -1726,7 +1731,7 @@ public final class HttpClientTransport implements IrohaClient {
     Objects.requireNonNull(feePayment, "feePayment");
     Objects.requireNonNull(policy, "policy");
     Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
-    if (!TairaPublicResetMutationBindingV1.FAUCET.equals(
+    if (!PreparedOperationBindingV1.FAUCET.equals(
         Objects.requireNonNull(binding, "binding").kind())) {
       throw new IllegalArgumentException("faucet prepare requires a faucet binding");
     }
@@ -3873,7 +3878,8 @@ public final class HttpClientTransport implements IrohaClient {
         decodeUnsignedDraftPayload(
             response.transactionPayloadB64(),
             response.signingMessageB64(),
-            "contract call draft");
+            "contract call draft",
+            TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
     final TransactionPayload expected =
         TransactionPayload.builder()
             .setNetworkId(expectedNetworkId)
@@ -3881,7 +3887,7 @@ public final class HttpClientTransport implements IrohaClient {
             .setCreationTimeMs(response.creationTimeMs())
             .setExecutable(Executable.contractCall(draftIntent.invocation()))
             .setFeePayment(responseFee)
-            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(draftIntent.metadata())
             .buildDecodedForCodec();
     if (!sameTransactionPayload(decoded, expected)) {
@@ -4044,7 +4050,8 @@ public final class HttpClientTransport implements IrohaClient {
         decodeUnsignedDraftPayload(
             response.transactionPayloadB64(),
             response.signingMessageB64(),
-            "multisig response");
+            "multisig response",
+            TransactionAdmissionIntent.ORDINARY);
     if (!response.feePayment().equals(decoded.feePayment())) {
       throw new IllegalStateException(
           "multisig response fee_payment does not match the transaction payload");
@@ -4125,7 +4132,8 @@ public final class HttpClientTransport implements IrohaClient {
   private static TransactionPayload decodeUnsignedDraftPayload(
       final String transactionPayloadB64,
       final String signingMessageB64,
-      final String context) {
+      final String context,
+      final TransactionAdmissionIntent expectedAdmissionIntent) {
     final byte[] transactionPayload;
     final byte[] signingMessage;
     try {
@@ -4150,7 +4158,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
     try {
       return NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
-          transactionPayload, TransactionAdmissionIntent.ORDINARY);
+          transactionPayload, expectedAdmissionIntent);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload",

@@ -5,8 +5,11 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     crypto::{KeyPair, PublicKey},
-    data_model::{account::Account, name::Name, prelude::*, query::parameters::SortOrder},
+    data_model::{account::Account, prelude::*, query::parameters::SortOrder},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;

@@ -1,5 +1,5 @@
 //! Tests for peer serialization
-#![cfg(feature = "json")]
+
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::Peer;
 use iroha_primitives::addr::SocketAddr;

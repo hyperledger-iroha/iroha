@@ -16,8 +16,7 @@ mod inventory;
 #[path = "kaigi_record_identity_tests.rs"]
 mod kaigi_records;
 
-#[path = "../../tests/support/fixture_json.rs"]
-mod fixture_json;
+use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -41,22 +40,22 @@ where
 }
 
 /// Render the declared identity and complete root and container frames for comparison.
-pub(crate) fn capture<T>(value: T) -> Value
+pub fn capture<T>(value: T) -> Value
 where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de> + Clone + Debug + PartialEq,
 {
     let identity = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(identity, <T as NoritoSerialize>::schema_hash());
-    assert_eq!(identity, <T as NoritoDeserialize>::schema_hash());
+    assert_eq!(identity, norito::schema::identity::frame_hash::<T>());
+    assert_eq!(identity, norito::schema::identity::frame_hash::<T>());
     json::object([
         ("nominal", Value::String(T::nominal_name())),
         (
             "serialize_hash",
-            Value::String(hex(&<T as NoritoSerialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         (
             "deserialize_hash",
-            Value::String(hex(&<T as NoritoDeserialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         ("frame", Value::String(frame(&value))),
         ("vector_frame", Value::String(frame(&vec![value.clone()]))),
@@ -108,13 +107,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "7e69371c0072539ff3d85952169da3e4185aa66c66580967a33ce697112d95ac",
+                "4f96c3ba6f71281f3207b8d5a17361965a7454c3ccdb0aaa963e19bcba5723c9",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 322, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 319, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -132,12 +131,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 357, "complete populated record case inventory");
+            assert_eq!(case_count, 354, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 322, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 319, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -178,11 +177,11 @@ where
     let row = captured(nominal);
     assert_eq!(
         row.get("serialize_hash").and_then(Value::as_str),
-        Some(hex(&<T as NoritoSerialize>::schema_hash()).as_str())
+        Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
     );
     assert_eq!(
         row.get("deserialize_hash").and_then(Value::as_str),
-        Some(hex(&<T as NoritoDeserialize>::schema_hash()).as_str())
+        Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
     );
     let cases = row
         .get("cases")

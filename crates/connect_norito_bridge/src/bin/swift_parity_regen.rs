@@ -11,13 +11,13 @@ use iroha_data_model::{
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
     isi::{Burn, InstructionBox, Mint, Transfer},
-    metadata::Metadata,
-    name::Name,
     transaction::{
         FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
         signed::TransactionPayload,
     },
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     codec::Encode,
@@ -1287,7 +1287,8 @@ fn run_with_options(fixtures_path: &Path, options: &Options) -> Result<(), Strin
 mod tests {
     use super::*;
     use iroha_crypto::Hash;
-    use iroha_data_model::{DomainId, transaction::Executable};
+    use iroha_data_model::transaction::Executable;
+    use iroha_model_base::domain::DomainId;
     use norito::json::Number;
     fn canonical_temp_root(directory: &tempfile::TempDir) -> PathBuf {
         fs::canonicalize(directory.path()).expect("canonical temporary directory")

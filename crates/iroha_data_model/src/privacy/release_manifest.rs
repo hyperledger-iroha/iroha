@@ -9,8 +9,9 @@ use super::{
     PrivacyReleaseArtifactDigestV1, PrivacySecurityClaimDigestV1, PrivacySecurityClaimV1,
     PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
 };
-use crate::{ChainId, NetworkId};
-#[cfg(feature = "json")]
+use crate::NetworkId;
+use iroha_model_base::chain::ChainId;
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{PublicKey, Signature};
 use iroha_schema::IntoSchema;
@@ -59,26 +60,36 @@ const DEPLOYMENT_QUALIFICATION_DIGEST_DOMAIN_V1: &[u8] =
 const DEPLOYMENT_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:privacy:exact12:deployment-signature:v1";
 
 /// One of the four mandatory release-evidence stages for every protocol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "stage", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "stage", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseStageV1")]
 pub enum PrivacyReleaseStageV1 {
     /// A canonical public statement is proved and independently verified.
-    #[cfg_attr(feature = "json", norito(rename = "positive-canonical-end-to-end"))]
+    #[norito(rename = "positive-canonical-end-to-end")]
     PositiveCanonicalEndToEnd,
     /// A structurally valid semantic public-input mutation rejects the proof.
-    #[cfg_attr(feature = "json", norito(rename = "public-statement-binding-mutation"))]
+    #[norito(rename = "public-statement-binding-mutation")]
     PublicStatementBindingMutation,
     /// Header corruption, interior corruption, and exact truncation all reject.
-    #[cfg_attr(feature = "json", norito(rename = "proof-corruption-and-truncation"))]
+    #[norito(rename = "proof-corruption-and-truncation")]
     ProofCorruptionAndTruncation,
     /// The closed first-release maximum relation shape is proved and verified.
-    #[cfg_attr(feature = "json", norito(rename = "maximum-shape-resource"))]
+    #[norito(rename = "maximum-shape-resource")]
     MaximumShapeResource,
 }
 
@@ -113,64 +124,84 @@ pub const fn privacy_exact12_release_proof_artifact_count_v1(
 }
 
 /// Kind of immutable executable artifact shipped by the release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseExecutableKindV1"
 )]
 pub enum PrivacyReleaseExecutableKindV1 {
     /// Native executable or library package.
-    #[cfg_attr(feature = "json", norito(rename = "binary"))]
+    #[norito(rename = "binary")]
     Binary,
     /// Immutable deployable container image.
-    #[cfg_attr(feature = "json", norito(rename = "container_image"))]
+    #[norito(rename = "container_image")]
     ContainerImage,
 }
 
 /// Closed SDK and tooling package matrix required by the release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "consumer", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "consumer", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSdkConsumerV1")]
 pub enum PrivacyReleaseSdkConsumerV1 {
     /// Kotlin/JVM SDK.
-    #[cfg_attr(feature = "json", norito(rename = "kotlin_jvm"))]
+    #[norito(rename = "kotlin_jvm")]
     KotlinJvm,
     /// Kotlin Android SDK.
-    #[cfg_attr(feature = "json", norito(rename = "kotlin_android"))]
+    #[norito(rename = "kotlin_android")]
     KotlinAndroid,
     /// Mirrored Java Android SDK.
-    #[cfg_attr(feature = "json", norito(rename = "java_android"))]
+    #[norito(rename = "java_android")]
     JavaAndroid,
     /// Swift SDK and C bridge.
-    #[cfg_attr(feature = "json", norito(rename = "swift_c_bridge"))]
+    #[norito(rename = "swift_c_bridge")]
     SwiftCBridge,
     /// JavaScript N-API package.
-    #[cfg_attr(feature = "json", norito(rename = "javascript_napi"))]
+    #[norito(rename = "javascript_napi")]
     JavascriptNapi,
-    /// Python PyO3 package.
-    #[cfg_attr(feature = "json", norito(rename = "python_pyo3"))]
+    /// Python `PyO3` package.
+    #[norito(rename = "python_pyo3")]
     PythonPyo3,
     /// C# package.
-    #[cfg_attr(feature = "json", norito(rename = "csharp"))]
+    #[norito(rename = "csharp")]
     CSharp,
     /// Command-line client.
-    #[cfg_attr(feature = "json", norito(rename = "cli"))]
+    #[norito(rename = "cli")]
     Cli,
-    /// OpenAPI schema package.
-    #[cfg_attr(feature = "json", norito(rename = "openapi"))]
+    /// `OpenAPI` schema package.
+    #[norito(rename = "openapi")]
     OpenApi,
     /// Genesis authoring tooling.
-    #[cfg_attr(feature = "json", norito(rename = "genesis_tooling"))]
+    #[norito(rename = "genesis_tooling")]
     GenesisTooling,
 }
 
@@ -191,34 +222,44 @@ impl PrivacyReleaseSdkConsumerV1 {
 }
 
 /// Closed deterministic hardware backend matrix.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "backend", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "backend", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseHardwareBackendV1"
 )]
 pub enum PrivacyReleaseHardwareBackendV1 {
     /// Portable scalar implementation.
-    #[cfg_attr(feature = "json", norito(rename = "scalar"))]
+    #[norito(rename = "scalar")]
     Scalar,
     /// x86-64 AVX2 implementation.
-    #[cfg_attr(feature = "json", norito(rename = "avx2"))]
+    #[norito(rename = "avx2")]
     Avx2,
     /// x86-64 AVX-512 implementation.
-    #[cfg_attr(feature = "json", norito(rename = "avx512"))]
+    #[norito(rename = "avx512")]
     Avx512,
-    /// AArch64 NEON implementation.
-    #[cfg_attr(feature = "json", norito(rename = "neon"))]
+    /// `AArch64` NEON implementation.
+    #[norito(rename = "neon")]
     Neon,
     /// Apple Metal implementation.
-    #[cfg_attr(feature = "json", norito(rename = "metal"))]
+    #[norito(rename = "metal")]
     Metal,
     /// NVIDIA CUDA implementation.
-    #[cfg_attr(feature = "json", norito(rename = "cuda"))]
+    #[norito(rename = "cuda")]
     Cuda,
 }
 
@@ -235,32 +276,39 @@ impl PrivacyReleaseHardwareBackendV1 {
 }
 
 /// Closed independent audit classes required for release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "audit_class", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "audit_class", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseAuditClassV1")]
 pub enum PrivacyReleaseAuditClassV1 {
     /// Cryptographic assumptions, relations, and reductions.
-    #[cfg_attr(feature = "json", norito(rename = "cryptographic"))]
+    #[norito(rename = "cryptographic")]
     Cryptographic,
     /// Implementation, parser, and side-channel review.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "implementation_parser_side_channel")
-    )]
+    #[norito(rename = "implementation_parser_side_channel")]
     ImplementationParserSideChannel,
     /// Build reproducibility and supply-chain review.
-    #[cfg_attr(feature = "json", norito(rename = "build_supply_chain"))]
+    #[norito(rename = "build_supply_chain")]
     BuildSupplyChain,
     /// Deployment topology and resource qualification.
-    #[cfg_attr(feature = "json", norito(rename = "deployment_resource"))]
+    #[norito(rename = "deployment_resource")]
     DeploymentResource,
     /// SDK trust-boundary and secret-locality review.
-    #[cfg_attr(feature = "json", norito(rename = "sdk_boundary"))]
+    #[norito(rename = "sdk_boundary")]
     SdkBoundary,
 }
 
@@ -276,34 +324,44 @@ impl PrivacyReleaseAuditClassV1 {
 }
 
 /// Role of a signature authorizing the portable release manifest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "role", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "role", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSignatureRoleV1"
 )]
 pub enum PrivacyReleaseSignatureRoleV1 {
     /// Release engineering owner.
-    #[cfg_attr(feature = "json", norito(rename = "release_engineering"))]
+    #[norito(rename = "release_engineering")]
     ReleaseEngineering,
     /// Cryptographic review owner.
-    #[cfg_attr(feature = "json", norito(rename = "cryptographic_review"))]
+    #[norito(rename = "cryptographic_review")]
     CryptographicReview,
     /// Implementation security owner.
-    #[cfg_attr(feature = "json", norito(rename = "implementation_security"))]
+    #[norito(rename = "implementation_security")]
     ImplementationSecurity,
     /// Build and supply-chain owner.
-    #[cfg_attr(feature = "json", norito(rename = "build_supply_chain"))]
+    #[norito(rename = "build_supply_chain")]
     BuildSupplyChain,
     /// Deployment and resource owner.
-    #[cfg_attr(feature = "json", norito(rename = "deployment_resource"))]
+    #[norito(rename = "deployment_resource")]
     DeploymentResource,
     /// SDK boundary owner.
-    #[cfg_attr(feature = "json", norito(rename = "sdk_boundary"))]
+    #[norito(rename = "sdk_boundary")]
     SdkBoundary,
 }
 
@@ -320,9 +378,18 @@ impl PrivacyReleaseSignatureRoleV1 {
 }
 
 /// Clean source, compiler, and lockfile identities used for the release build.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSourceIdentityV1"
@@ -341,9 +408,18 @@ pub struct PrivacyReleaseSourceIdentityV1 {
 }
 
 /// One executable or container image identity.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseExecutableArtifactV1"
@@ -358,9 +434,18 @@ pub struct PrivacyReleaseExecutableArtifactV1 {
 }
 
 /// Final binding for one of the twelve protocol engines.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseProtocolBindingV1"
@@ -389,9 +474,19 @@ pub struct PrivacyReleaseProtocolBindingV1 {
 }
 
 /// One of the exact 48 protocol-stage receipts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseStageReceiptV1")]
 pub struct PrivacyReleaseStageReceiptV1 {
@@ -414,9 +509,19 @@ pub struct PrivacyReleaseStageReceiptV1 {
 }
 
 /// One of the exact 54 proof artifacts retained by the release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseProofArtifactV1"
@@ -443,9 +548,18 @@ pub struct PrivacyReleaseProofArtifactV1 {
 }
 
 /// One exact SDK or tooling package built from the Rust-owned fixture corpus.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSdkPackageV1")]
 pub struct PrivacyReleaseSdkPackageV1 {
@@ -462,9 +576,19 @@ pub struct PrivacyReleaseSdkPackageV1 {
 }
 
 /// Deterministic output and runtime-self-test result for one hardware backend.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseHardwareResultV1"
@@ -485,9 +609,18 @@ pub struct PrivacyReleaseHardwareResultV1 {
 }
 
 /// Signed acceptance of one remaining Medium audit finding.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyAcceptedMediumDispositionV1"
@@ -504,9 +637,18 @@ pub struct PrivacyAcceptedMediumDispositionV1 {
 }
 
 /// One signed independent audit class.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseAuditV1")]
 pub struct PrivacyReleaseAuditV1 {
@@ -529,9 +671,18 @@ pub struct PrivacyReleaseAuditV1 {
 }
 
 /// One role-separated signature over the portable manifest digest.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::release_manifest::PrivacyReleaseSignatureV1")]
 pub struct PrivacyReleaseSignatureV1 {
@@ -544,10 +695,18 @@ pub struct PrivacyReleaseSignatureV1 {
 }
 
 /// Portable, self-authenticating first-release Exact12 manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-release-manifest.v1")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyExact12ReleaseManifestV1",
@@ -593,9 +752,19 @@ pub struct PrivacyExact12ReleaseManifestV1 {
 }
 
 /// One protocol activation height bound to the deployment transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentActivationV1"
@@ -608,9 +777,18 @@ pub struct PrivacyDeploymentActivationV1 {
 }
 
 /// One validator's restart and adversarial-canary evidence.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorCanaryV1"
@@ -639,9 +817,18 @@ pub struct PrivacyDeploymentValidatorCanaryV1 {
 }
 
 /// One validator signature over a deployment qualification digest.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyDeploymentValidatorSignatureV1"
@@ -654,10 +841,18 @@ pub struct PrivacyDeploymentValidatorSignatureV1 {
 }
 
 /// Network-bound four-validator deployment qualification.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-deployment-qualification.v1")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyExact12DeploymentQualificationV1",
@@ -671,7 +866,7 @@ pub struct PrivacyExact12DeploymentQualificationV1 {
     /// Target genesis-derived network identity.
     pub network_id: NetworkId,
     /// Exact target genesis hash; must equal the network identity bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub genesis_hash: [u8; 32],
     /// Portable release deployed to the target network.
     pub release_manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
@@ -702,10 +897,18 @@ pub struct PrivacyExact12DeploymentQualificationV1 {
 /// The record is a singleton in world state and is accepted only after Core
 /// validates it against the running chain, genesis, validator roster, ABI, and
 /// all twelve committed activations.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-qualification-record.v1")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::release_manifest::PrivacyExact12QualificationRecordV1",
@@ -752,9 +955,9 @@ struct AuditSignaturePayloadV1 {
     name = "iroha_data_model::privacy::release_manifest::MediumDispositionSignaturePayloadV1"
 )]
 struct MediumDispositionSignaturePayloadV1 {
-    finding_digest: PrivacyReleaseArtifactDigestV1,
-    disposition_digest: PrivacyReleaseArtifactDigestV1,
-    release_artifact_set_digest: PrivacyReleaseArtifactDigestV1,
+    finding: PrivacyReleaseArtifactDigestV1,
+    disposition: PrivacyReleaseArtifactDigestV1,
+    release_artifact_set: PrivacyReleaseArtifactDigestV1,
 }
 
 #[derive(Encode, norito::NoritoSchema)]
@@ -824,6 +1027,11 @@ pub fn privacy_exact12_syscall_list_digest_v1(syscalls: &[u32]) -> PrivacyReleas
 
 impl PrivacyReleaseSignatureV1 {
     /// Return the exact role-separated bytes that must be signed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the role and manifest-digest
+    /// payload cannot be serialized.
     pub fn signing_bytes(
         role: PrivacyReleaseSignatureRoleV1,
         manifest_digest: PrivacyExact12ReleaseManifestDigestV1,
@@ -840,13 +1048,18 @@ impl PrivacyReleaseSignatureV1 {
 
 impl PrivacyAcceptedMediumDispositionV1 {
     /// Return the exact artifact-bound bytes that the audit authority must sign.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the finding, disposition and
+    /// release-artifact digest payload cannot be serialized.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         signing_bytes(
             MEDIUM_DISPOSITION_SIGNATURE_DOMAIN_V1,
             &MediumDispositionSignaturePayloadV1 {
-                finding_digest: self.finding_digest,
-                disposition_digest: self.disposition_digest,
-                release_artifact_set_digest: self.release_artifact_set_digest,
+                finding: self.finding_digest,
+                disposition: self.disposition_digest,
+                release_artifact_set: self.release_artifact_set_digest,
             },
         )
     }
@@ -854,6 +1067,11 @@ impl PrivacyAcceptedMediumDispositionV1 {
 
 impl PrivacyReleaseAuditV1 {
     /// Return the exact release-artifact-bound audit bytes that must be signed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the audit class, report/artifact
+    /// digests and finding-count payload cannot be serialized.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         signing_bytes(
             AUDIT_SIGNATURE_DOMAIN_V1,
@@ -911,6 +1129,11 @@ impl PrivacyReleaseAuditV1 {
 
 impl PrivacyExact12ReleaseManifestV1 {
     /// Compute the digest of all non-audit release artifacts.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the normalized non-audit artifact
+    /// manifest cannot be serialized.
     pub fn computed_release_artifact_set_digest(
         &self,
     ) -> Result<PrivacyReleaseArtifactDigestV1, norito::Error> {
@@ -935,6 +1158,11 @@ impl PrivacyExact12ReleaseManifestV1 {
     }
 
     /// Compute the canonical digest of all five signed audit records.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the retained audit records,
+    /// including their signatures and accepted dispositions, cannot be serialized.
     pub fn computed_audit_bundle_digest(
         &self,
     ) -> Result<PrivacyAuditBundleDigestV1, norito::Error> {
@@ -943,6 +1171,11 @@ impl PrivacyExact12ReleaseManifestV1 {
     }
 
     /// Compute the portable manifest digest with its self-digest zeroed and approvals omitted.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the manifest with its self-digest
+    /// zeroed and release signatures removed cannot be serialized.
     pub fn computed_manifest_digest(
         &self,
     ) -> Result<PrivacyExact12ReleaseManifestDigestV1, norito::Error> {
@@ -959,6 +1192,19 @@ impl PrivacyExact12ReleaseManifestV1 {
     ///
     /// Returns a closed validation error without converting absent evidence into qualification.
     pub fn validate(&self) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
+        self.validate_release_inventory()?;
+        self.validate_protocol_bindings()?;
+        self.validate_stage_receipts()?;
+        self.validate_proof_artifacts()?;
+        self.validate_sdk_packages()?;
+        self.validate_hardware_results()?;
+        self.validate_audits_and_approvals()
+    }
+
+    // Establish identity and every exact count before indexed evidence validation.
+    fn validate_release_inventory(
+        &self,
+    ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         if self.version != PRIVACY_EXACT12_RELEASE_MANIFEST_VERSION_V1 {
             return Err(PrivacyExact12ReleaseManifestValidationErrorV1::Version);
         }
@@ -1004,7 +1250,12 @@ impl PrivacyExact12ReleaseManifestV1 {
         if self.release_signatures.len() != PrivacyReleaseSignatureRoleV1::ALL.len() {
             return Err(PrivacyExact12ReleaseManifestValidationErrorV1::ReleaseSignatureCount);
         }
+        Ok(())
+    }
 
+    fn validate_protocol_bindings(
+        &self,
+    ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         for (binding, expected) in self.protocols.iter().zip(PrivacyProtocolIdV1::ALL) {
             if binding.protocol_id != expected
                 || binding.proof_system_id != expected.expected_proof_system()
@@ -1025,11 +1276,13 @@ impl PrivacyExact12ReleaseManifestV1 {
                 return Err(PrivacyExact12ReleaseManifestValidationErrorV1::ProtocolBinding);
             }
         }
-        self.validate_stage_receipts()?;
-        self.validate_proof_artifacts()?;
-        self.validate_sdk_packages()?;
-        self.validate_hardware_results()?;
+        Ok(())
+    }
 
+    // Keep auditor and approver independence checks in the same authentication phase.
+    fn validate_audits_and_approvals(
+        &self,
+    ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         if self.release_artifact_set_digest.is_zero()
             || self.computed_release_artifact_set_digest().ok()
                 != Some(self.release_artifact_set_digest)
@@ -1231,6 +1484,11 @@ impl PrivacyExact12ReleaseManifestV1 {
 
 impl PrivacyDeploymentValidatorSignatureV1 {
     /// Return the exact seat-bound bytes that a deployment validator must sign.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the validator-index and
+    /// qualification-digest payload cannot be serialized.
     pub fn signing_bytes(
         validator_index: u16,
         qualification_digest: PrivacyExact12DeploymentQualificationDigestV1,
@@ -1247,6 +1505,11 @@ impl PrivacyDeploymentValidatorSignatureV1 {
 
 impl PrivacyExact12DeploymentQualificationV1 {
     /// Compute the exact ordered validator-roster digest.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the ordered validator public keys
+    /// cannot be serialized, including an invalid compact public-key representation.
     pub fn computed_validator_roster_digest(
         &self,
     ) -> Result<PrivacyReleaseArtifactDigestV1, norito::Error> {
@@ -1260,6 +1523,11 @@ impl PrivacyExact12DeploymentQualificationV1 {
     }
 
     /// Compute the deployment digest with its self-digest zeroed and quorum signatures omitted.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the canonical Norito encoding error if the qualification with its
+    /// self-digest zeroed and validator signatures removed cannot be serialized.
     pub fn computed_qualification_digest(
         &self,
     ) -> Result<PrivacyExact12DeploymentQualificationDigestV1, norito::Error> {

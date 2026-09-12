@@ -9,11 +9,58 @@ use std::{
     sync::{Arc, Barrier},
 };
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.decode_sequence_limits.WrappedSequence")]
 enum WrappedSequence {
     Direct(Vec<u16>),
     Boxed(Box<Vec<u16>>),
     Named { values: Vec<u16> },
 }
+// Preserve the named-variant codec regression while describing its actual
+// payload fields; the schema derive intentionally accepts only tuple variants.
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct NamedSequenceFields {
+    values: Vec<u16>,
+}
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for WrappedSequence {
+    fn type_name() -> String {
+        "WrappedSequence".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "Direct".to_owned(),
+                    discriminant: 0,
+                    ty: Some(std::any::TypeId::of::<Vec<u16>>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Boxed".to_owned(),
+                    discriminant: 1,
+                    ty: Some(std::any::TypeId::of::<Box<Vec<u16>>>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Named".to_owned(),
+                    discriminant: 2,
+                    ty: Some(std::any::TypeId::of::<NamedSequenceFields>()),
+                },
+            ],
+        }));
+        <Vec<u16>>::update_schema_map(map);
+        <Box<Vec<u16>>>::update_schema_map(map);
+        NamedSequenceFields::update_schema_map(map);
+    }
+}
+
 fn limits(max_sequence_elements: usize) -> DecodeLimits {
     DecodeLimits::new(
         max_sequence_elements,

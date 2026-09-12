@@ -13,7 +13,11 @@ use norito::codec::{Decode, Encode};
 use std::{io, net::AddrParseError};
 use thiserror::Error;
 mod dial_policy;
+#[cfg(test)]
+mod frame_identity_tests;
 pub mod network;
+#[cfg(test)]
+mod payload_codec_tests;
 pub mod peer;
 mod preauth;
 mod puzzle_work_admission;
@@ -54,7 +58,7 @@ pub type NetworkHandle<T> = network::NetworkBaseHandle<T, ChaCha20Poly1305>;
 /// Cryptographic identities with separate, validated protocol roles.
 ///
 /// The node identity is the BLS-normal consensus identity advertised as the
-/// [`iroha_data_model::peer::PeerId`]. The `SoraNet` transport identity is an
+/// [`iroha_model_base::peer::PeerId`]. The `SoraNet` transport identity is an
 /// independently scoped Ed25519 key used only by the post-quantum transport
 /// handshake. Network startup consumes that configured identity unchanged,
 /// creates a process-lifetime ML-DSA-65 online-authentication key, and authorizes
@@ -167,9 +171,9 @@ pub enum SoranetTransportDelegationError {
     #[error("SoraNet transport delegation peer mismatch (expected {expected}, found {found})")]
     PeerMismatch {
         /// Node identity selected by topology.
-        expected: iroha_data_model::peer::PeerId,
+        expected: iroha_model_base::peer::PeerId,
         /// Node identity authenticated by the delegation.
-        found: iroha_data_model::peer::PeerId,
+        found: iroha_model_base::peer::PeerId,
     },
     /// The delegated node identity was not BLS-normal.
     #[error("delegated node identity must be BLS-normal, found {found:?}")]
@@ -254,15 +258,24 @@ pub fn frame_queue_charge_for<E: aead::AeadCore>(plaintext_frame_bytes: usize) -
 pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
     //! are stable <https://github.com/rust-lang/rust/issues/41517>
-    use super::*;
     use aead::{Aead, AeadInOut, KeyInit};
     /// Shorthand for traits required for payload
     pub trait Pload:
-        Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
+        norito::NoritoSerialize
+        + for<'__frame> norito::NoritoDeserialize<'__frame>
+        + for<'a> norito::core::DecodeFromSlice<'a>
+        + Send
+        + Clone
+        + 'static
     {
     }
     impl<T> Pload for T where
-        T: Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
+        T: norito::NoritoSerialize
+            + for<'__frame> norito::NoritoDeserialize<'__frame>
+            + for<'a> norito::core::DecodeFromSlice<'a>
+            + Send
+            + Clone
+            + 'static
     {
     }
     /// Shorthand for traits required for encryptor type marker.
@@ -339,9 +352,9 @@ pub enum Error {
     /// Unexpected peer identity during handshake (expected {expected}, found {found})
     HandshakePeerMismatch {
         /// Peer identifier the outbound dial expected to authenticate.
-        expected: iroha_data_model::prelude::PeerId,
+        expected: iroha_model_base::peer::PeerId,
         /// Peer identifier actually authenticated by the signed handshake.
-        found: iroha_data_model::prelude::PeerId,
+        found: iroha_model_base::peer::PeerId,
     },
     /// Node identity handshakes require BLS-normal, but `{found:?}` was supplied locally
     HandshakeNodeAlgorithmMismatch {

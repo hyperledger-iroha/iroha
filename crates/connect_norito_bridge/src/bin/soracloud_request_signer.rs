@@ -4,7 +4,6 @@
 use iroha_crypto::{ExposedPrivateKey, Hash, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
-    name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_XOR_SCALE, SoraUploadedModelBundleV1,
@@ -14,6 +13,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{json, to_bytes};
 use std::{

@@ -319,7 +319,8 @@ struct StoredDeadLetterV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1")]
 struct ProofOutcomeOutboxCheckpointV1 {
     version: u8,
     next_sequence: u64,
@@ -1398,7 +1399,8 @@ mod tests {
             iroha_crypto::Hash::new(b"proof-outcome-forwarder-test"),
         ))
     }
-    #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+    #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_node::proof_outcome_forwarder::tests::NestedSourceDepthBomb")]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
     fn external_nested_source_frame(levels: usize) -> Vec<u8> {
         fn field(bytes: &[u8]) -> Vec<u8> {
@@ -1564,7 +1566,7 @@ mod tests {
         const SCHEMA_LEN: usize = 16;
         assert!(bytes.len() >= norito::core::Header::SIZE);
         bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN]
-            .copy_from_slice(&<T as norito::NoritoSerialize>::schema_hash());
+            .copy_from_slice(&norito::schema::identity::frame_hash::<T>());
     }
     fn checkpoint_with_corrupt_potr_source(
         receipt_payload: Vec<u8>,
@@ -1705,11 +1707,20 @@ mod tests {
                 .expect("canonical PoTR operation identity")
         );
         let claimed = outbox.claim_for_signing(operation, cursor(1, 1)).unwrap();
+        crate::frame_test_support::assert_current_frame(
+            &claimed.submission,
+            "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1",
+        );
         let transaction = signed_transaction(&claimed, 8);
         let hash = outbox
             .store_signed_transaction(operation, transaction.clone())
             .unwrap();
         assert_eq!(hash, *transaction.hash().as_ref());
+        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint,
+            "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1",
+        );
         assert_eq!(outbox.begin_submission(operation).unwrap(), transaction);
         outbox.mark_submitted(operation).unwrap();
         let pending = outbox.pending(8).unwrap().remove(0);
@@ -1913,10 +1924,18 @@ mod tests {
             ProofOutcomeOutbox::open(allocation_dir.path(), policy()),
             Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
+        assert_eq!(
+            <NestedSourceDepthBomb as norito::NoritoSchema>::frame_name(),
+            "sorafs_node::proof_outcome_forwarder::tests::NestedSourceDepthBomb",
+        );
         let mut shallow = NestedSourceDepthBomb(None);
         for depth in 0..4 {
             let _flags = norito::core::DecodeFlagsGuard::enter(0);
             let bytes = external_nested_source_frame(depth);
+            assert_eq!(
+                &bytes[6..22],
+                &norito::schema::identity::frame_hash::<NestedSourceDepthBomb>()
+            );
             assert_eq!(bytes, norito::to_bytes(&shallow).unwrap());
             norito::decode_from_bytes::<NestedSourceDepthBomb>(&bytes)
                 .expect("independent shallow wire must really decode");
@@ -2298,6 +2317,45 @@ mod tests {
         assert!(matches!(
             CheckpointWriterGuard::acquire(&hardlink),
             Err(CheckpointStoreError::Io)
+        ));
+    }
+
+    #[test]
+    fn checkpoint_schema_binds_durable_proof_outcomes_and_rejects_a_submission_frame() {
+        let directory = TempDir::new().unwrap();
+        let outbox = ProofOutcomeOutbox::open(directory.path(), policy()).unwrap();
+        let operation = outbox
+            .enqueue_potr(&signed_receipt(), [6; 32])
+            .unwrap()
+            .operation_id();
+        let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
+        let bytes = crate::schema_identity_test_support::assert_canonical_frame(
+            &checkpoint,
+            "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1",
+        );
+        let path = directory
+            .path()
+            .join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        drop(outbox);
+        let restored = ProofOutcomeOutbox::open(directory.path(), policy()).unwrap();
+        assert_eq!(restored.pending(8).unwrap()[0].operation_id, operation);
+        drop(restored);
+        let submission = &checkpoint.pending[0].submission;
+        let foreign = norito::encode_canonical(submission).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<SorafsProofOutcomeSubmissionV1>(&foreign).unwrap(),
+            *submission
+        );
+        assert!(matches!(
+            norito::decode_canonical::<ProofOutcomeOutboxCheckpointV1>(&foreign),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        std::fs::remove_file(&path).unwrap();
+        write_private_checkpoint(&path, &foreign);
+        assert!(matches!(
+            ProofOutcomeOutbox::open(directory.path(), policy()),
+            Err(ProofOutcomeOutboxError::InvalidCheckpoint)
         ));
     }
 }

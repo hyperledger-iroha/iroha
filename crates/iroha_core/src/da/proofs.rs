@@ -455,8 +455,8 @@ mod tests {
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::num::NonZeroU64;
     fn sample_record(lane: u32, manifest_tag: u8) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane).expect("lane fits in u8 for test record");

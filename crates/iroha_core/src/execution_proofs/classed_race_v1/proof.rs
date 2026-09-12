@@ -192,6 +192,10 @@ pub fn classed_race_profile_id_v1() -> Hash {
 }
 
 /// Portable public inputs to a self-hosted worker. Contains no custody signing keys.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::execution_proofs::classed_race_v1::proof::ClassedRaceProverRequestV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct ClassedRaceProverRequestV1 {
     /// Exact consensus-authenticated session claim, supplied independently by the caller.
@@ -207,6 +211,10 @@ pub struct ClassedRaceProverRequestV1 {
 }
 
 /// Complete canonical application payload inside the generic execution envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::execution_proofs::classed_race_v1::proof::ClassedRaceProofPayloadV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct ClassedRaceProofPayloadV1 {
     /// Exact frozen manifest.

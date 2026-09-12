@@ -30,6 +30,8 @@ pub(crate) const DA_COMMITMENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_COMMITMENT_PAGE_SIZE: usize = 100;
 const MAX_COMMITMENT_PAGE_SIZE: usize = 1_000;
 /// Canonical ledger tip that binds a DA list cursor to one immutable view.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaListSnapshot")]
 #[derive(
     Debug,
     Clone,
@@ -54,6 +56,8 @@ impl DaListSnapshot {
     }
 }
 /// Forward-only cursor for canonically ordered DA commitments.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListCursor")]
 #[derive(
     Debug,
     Clone,
@@ -72,6 +76,8 @@ pub struct DaCommitmentListCursor {
     pub after: DaCommitmentKey,
 }
 /// Request payload for bounded DA commitment traversal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListRequest")]
 #[derive(
     Debug,
     Default,
@@ -81,6 +87,7 @@ pub struct DaCommitmentListCursor {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct DaCommitmentListRequest {
     /// Maximum raw index rows to inspect; values above 1,000 are rejected.
     #[norito(default)]
@@ -90,6 +97,8 @@ pub struct DaCommitmentListRequest {
     pub cursor: Option<DaCommitmentListCursor>,
 }
 /// Exact selector used to generate one DA commitment proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentProofRequest")]
 #[derive(
     Debug,
     Default,
@@ -99,6 +108,7 @@ pub struct DaCommitmentListRequest {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct DaCommitmentProofRequest {
     #[norito(default)]
     pub manifest_hash: Option<ManifestDigest>,
@@ -110,6 +120,8 @@ pub struct DaCommitmentProofRequest {
     pub sequence: Option<u64>,
 }
 /// Response surface for DA commitment listings.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListResponse")]
 #[derive(
     Debug,
     Clone,
@@ -126,6 +138,8 @@ pub struct DaCommitmentListResponse {
     pub next_cursor: Option<DaCommitmentListCursor>,
 }
 /// Response surface for DA commitment proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentProofResponse")]
 #[derive(
     Debug,
     Clone,
@@ -139,6 +153,8 @@ pub struct DaCommitmentProofResponse {
     pub proof: DaCommitmentProof,
 }
 /// Verification response for a DA commitment Merkle proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentVerifyResponse")]
 #[derive(
     Debug,
     Clone,
@@ -478,8 +494,9 @@ mod tests {
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc};
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm, context: &str) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
@@ -1391,6 +1408,22 @@ mod tests {
     }
     #[tokio::test]
     async fn commitment_post_routes_reject_oversized_bodies() {
+        crate::frame_test_support::assert_current_frame(
+            &DaCommitmentListRequest {
+                limit: std::num::NonZeroU64::new(7),
+                ..Default::default()
+            },
+            "iroha_torii::da::commitments::DaCommitmentListRequest",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &DaCommitmentProofRequest {
+                lane_id: Some(3),
+                epoch: Some(7),
+                sequence: Some(11),
+                ..Default::default()
+            },
+            "iroha_torii::da::commitments::DaCommitmentProofRequest",
+        );
         use axum::{
             Router,
             body::Body,

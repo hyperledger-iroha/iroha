@@ -1,4 +1,4 @@
-//! Native-owned, bounded fresh observations before and after aggregate-state recovery.
+//! Test-only native-owned, bounded fresh observations before and after aggregate-state recovery.
 //!
 //! Read challenges are deliberately absent from the payment WAL. Recreating this owner requires
 //! fresh OS entropy and a new signed device response. A qualification observation authenticates
@@ -13,9 +13,7 @@ use std::{collections::BTreeMap, time::Duration};
 use super::initial_enrollment::FreshIssuerAdmissionV1;
 use super::native_deadline::NativeDeadlineV1;
 
-use iroha_core::zk::kagemusha_v1_state::{
-    KagemushaRecoveryEnrollmentBindingV1, KagemushaStateMachineV1, KagemushaStateV1,
-};
+use iroha_core::zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1,
     KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1, KagemushaEnabledProfileV1,
@@ -83,33 +81,6 @@ struct CatalogBindingsV1 {
 }
 
 impl CatalogBindingsV1 {
-    fn state_floor(&self, state: &KagemushaStateV1) -> Result<CoreEpochFloorV1> {
-        let enabled = self
-            .enabled_profiles
-            .iter()
-            .find(|enabled| enabled.hardware_profile_id == state.hardware_profile_id)
-            .ok_or(ObservationErrorV1::InvalidQualification)?;
-        if state.protocol_version != 1
-            || state.release_id != self.release_id
-            || state.device_policy_binding.hardware_policy_id != self.hardware_policy_digest
-            || state.suite_id != enabled.suite_id
-            || state.vk_digest != enabled.vk_digest
-            || state.policy_epoch != enabled.policy_epoch
-            || state.lane.network_id != self.wallet.network_id
-            || state.lane.device_lane_id != self.wallet.lane_id
-            || state.lane.asset != self.wallet.asset
-            || state.asset_incarnation != self.wallet.asset_incarnation
-            || state.lane.scale != self.wallet.scale
-        {
-            return Err(ObservationErrorV1::InvalidQualification);
-        }
-        Ok(CoreEpochFloorV1 {
-            generation: state.hardware_epoch.generation,
-            epoch_id: state.hardware_epoch.epoch_id,
-            key_reference: state.device_policy_binding.device_key_reference,
-        })
-    }
-
     fn validate(&self, qualification: &QualificationProjectionV1) -> Result<()> {
         let profile = &qualification.profile;
         let credential = &qualification.credential;
@@ -281,51 +252,8 @@ impl NativeStartupQualificationOwnerV1 {
         Ok(())
     }
 
-    /// Restore an observer around an actual authenticated Core wallet. The constructor cannot
-    /// accept a decoded host snapshot, selected credential or reply as the epoch floor.
-    pub(crate) fn from_state_machine<R, G, H>(
-        release: &KagemushaAuthenticatedReleaseV1,
-        machine: &KagemushaStateMachineV1<R, G, H>,
-        native_authorization_public_key: &KagemushaDevicePublicKeyV1,
-    ) -> Result<Self> {
-        let mut owner = Self::new(
-            release,
-            machine.enrollment_binding().clone(),
-            native_authorization_public_key,
-        )?;
-        owner.advance_from_state_machine(machine)?;
-        Ok(owner)
-    }
-
-    /// Apply a hardware-anchored restore or installed state transition before another read.
-    /// Only the opaque Core owner supplies this floor; no public state/host archive overload exists.
-    pub(crate) fn advance_from_state_machine<R, G, H>(
-        &mut self,
-        machine: &KagemushaStateMachineV1<R, G, H>,
-    ) -> Result<()> {
-        let next = self.catalog.state_floor(machine.state())?;
-        self.advance_validated_core_floor(
-            machine.enrollment_binding(),
-            next,
-            machine.accepted_credential_floor().credential,
-        )
-    }
-
-    /// Replace native catalog bindings after Core has installed that exact release. Preserve
-    /// both epoch and already accepted credential floors while discarding observation freshness.
-    pub(crate) fn repin_from_state_machine<R, G, H>(
-        &mut self,
-        release: &KagemushaAuthenticatedReleaseV1,
-        machine: &KagemushaStateMachineV1<R, G, H>,
-        native_authorization_public_key: &KagemushaDevicePublicKeyV1,
-    ) -> Result<()> {
-        let next = Self::from_state_machine(release, machine, native_authorization_public_key)?;
-        self.replace_validated_owner(next)
-    }
-
-    // Production reaches this only after from_state_machine has checked the authenticated
-    // release and actual Core owner. Keeping the replacement separate permits focused lifecycle
-    // tests without adding a public from-parts qualification or state-machine constructor.
+    // Preserve installed epoch and credential floors when testing catalog replacement.
+    // A qualified backend must validate the release and actual Core owner before replacement.
     fn replace_validated_owner(&mut self, mut next: Self) -> Result<()> {
         let next_floor = next
             .core_epoch_floor
@@ -602,8 +530,7 @@ impl NativeStartupQualificationOwnerV1 {
     }
 
     /// Native installed-state/catalog transitions must invalidate all outstanding observations
-    /// before publishing their new epoch. Catalog replacement uses repin_from_state_machine
-    /// to retain the prior credential and Core epoch floors.
+    /// before publishing their new epoch, retaining prior credential and Core epoch floors.
     pub(crate) fn invalidate(&mut self) {
         self.pending.clear();
         self.current = None;

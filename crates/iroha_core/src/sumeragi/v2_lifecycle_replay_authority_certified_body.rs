@@ -38,24 +38,24 @@ pub(in crate::sumeragi) struct AuthenticatedGenesisStoredReplayEvidenceV1 {
 ///
 /// Both subtypes carry a complete authenticated QC, but neither represents a
 /// certified Fetch response. Genesis bytes come from the opaque launch cut;
-/// protected-lock bytes were already made durable by an earlier Proposal
+/// protected body bytes were already made durable by an earlier Proposal
 /// pipeline whose live replay owner has since retired.
 #[derive(Clone, Debug)]
 enum AuthenticatedCertifiedLocalValidateFamilyV1 {
     Genesis(CertifiedBodyPipelineReplayFamilyV1),
-    ProtectedLock(CertifiedBodyPipelineReplayFamilyV1),
+    ProtectedBody(CertifiedBodyPipelineReplayFamilyV1),
 }
 
 impl AuthenticatedCertifiedLocalValidateFamilyV1 {
     const fn family(&self) -> &CertifiedBodyPipelineReplayFamilyV1 {
         match self {
-            Self::Genesis(family) | Self::ProtectedLock(family) => family,
+            Self::Genesis(family) | Self::ProtectedBody(family) => family,
         }
     }
 
     fn family_mut(&mut self) -> &mut CertifiedBodyPipelineReplayFamilyV1 {
         match self {
-            Self::Genesis(family) | Self::ProtectedLock(family) => family,
+            Self::Genesis(family) | Self::ProtectedBody(family) => family,
         }
     }
 
@@ -64,7 +64,7 @@ impl AuthenticatedCertifiedLocalValidateFamilyV1 {
             Self::Genesis(family) => {
                 authenticated_genesis_standalone_source(verified, &family.source)
             }
-            Self::ProtectedLock(family) => {
+            Self::ProtectedBody(family) => {
                 authenticated_refined_proposal_standalone_source(verified, &family.source)
             }
         }
@@ -471,13 +471,13 @@ impl LocalValidateReplayFamilyV1 {
 }
 
 impl LocalValidateReplayEvidenceV1 {
-    /// Reseal one historical protected-lock body whose original Proposal replay
-    /// owner retired before this exact Validate turn.
+    /// Reseal a protected durable body after its original Proposal replay retires.
     ///
-    /// The runtime binding must already carry the same Prepare statement. The
-    /// complete QC is retained in the certified replay source and is verified
-    /// again at lifecycle admission (and again by cold standalone recovery).
-    pub(in crate::sumeragi) fn from_exact_protected_lock_validate(
+    /// The runtime binding must carry the same Prepare or Commit statement.
+    /// The QC and body retain the same proposal round in a later active view.
+    /// Lifecycle admission and cold recovery reauthenticate the
+    /// complete QC against the frozen height before executing validation.
+    pub(in crate::sumeragi) fn from_exact_protected_body_validate(
         effect: &AdapterEffect,
         manifest: &wire::PayloadManifest,
         receipt: &DurableBodyReceipt,
@@ -494,8 +494,8 @@ impl LocalValidateReplayEvidenceV1 {
         };
         let statement = pending.candidate_statement()?;
         if !pending.exactly_binds_adapter_effect(effect)
-            || certificate.phase != wire::GlobalPhase::Prepare
             || certificate.round != *round
+            || certificate.proposal_round != *round
             || certificate.proposal_round != manifest.round
             || certificate.subject != *subject
             || manifest.round != *round
@@ -504,7 +504,7 @@ impl LocalValidateReplayEvidenceV1 {
             || statement.round() != certificate.round
             || statement.proposal_round() != certificate.proposal_round
             || statement.subject() != Some(certificate.subject)
-            || statement.phase() != Some(wire::GlobalPhase::Prepare)
+            || statement.phase() != Some(certificate.phase)
             || statement.execution_commitment() != Some(certificate.execution_commitment)
         {
             return None;
@@ -523,7 +523,7 @@ impl LocalValidateReplayEvidenceV1 {
         }
         let evidence = Self {
             family: LocalValidateReplayFamilyV1::AuthenticatedCertified(
-                AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedLock(family),
+                AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedBody(family),
             ),
             validate_pending: Arc::new(pending),
         };
@@ -826,7 +826,7 @@ impl DurableCertifiedFetchReplayProjectionV1 {
         owner: OwnerId,
     ) -> bool {
         let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Fetch.capacity_class(), 0);
-        candidate.key.phase() == LifecyclePhase::Fetch
+        candidate.key.phase().is_fetch()
             && candidate.causal_root == owner.causal_root()
             && candidate.work_class == LifecycleWorkClass::Fetch
             && candidate.stage
@@ -910,7 +910,7 @@ impl DurableCertifiedFetchReplayProjectionV1 {
         key: LifecycleKey,
         metadata: &mut DurableRecordMetadata,
     ) -> bool {
-        if key.phase() != LifecyclePhase::Fetch
+        if !key.phase().is_fetch()
             || metadata.payload != DurablePayloadReference::None
             || metadata.reconstruction_source != digest_from_hash(&self.causal_key)
             || metadata.continuation != super::schema::DurableContinuation::None
@@ -2022,6 +2022,7 @@ impl DurableValidateReplayEvidenceV1 {
             authority,
             validate_origin,
             report_pending: pending_fingerprint,
+            resolved_terminal: None,
         };
         evidence
             .exactly_matches(
@@ -2128,8 +2129,7 @@ fn body_stage_matches_record_shape(
         && shape.key.execution_commitment()
             == statement.execution_commitment().map(execution_commitment)
         && tag.height() == active_context.height()
-        && source.tag
-            == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+        && source.tag == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
         && digest_from_hash(pending.causal_lifecycle_key()) == record.owner.causal_root().digest()
         && record.key == shape.key
         && record.work_class == work_class
@@ -2144,7 +2144,93 @@ fn body_stage_matches_record_shape(
             == Some(body_frame.durable_reference())
         && installed_digest == digest_from_hash(pending.exact_effect_identity())
 }
+/// Canonical identity of an independent Report rooted in one unchanged terminal
+/// and rejection statement. Retry generations and equivalent QC signer sets do
+/// not change its semantic owner. The complete source is authenticated separately;
+/// this hash alone grants no authority.
+pub(super) fn resolved_invalid_body_report_causal_key(
+    terminal_root: CausalRoot,
+    terminal_ordinal: u128,
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<Hash> {
+    let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &authority.source else {
+        return None;
+    };
+    let mut preimage = b"iroha:sumeragi:v2:lifecycle:resolved-invalid-body-report:v1".to_vec();
+    preimage.extend_from_slice(terminal_root.digest().as_bytes());
+    preimage.extend_from_slice(&terminal_ordinal.to_le_bytes());
+    preimage.extend_from_slice(&source.certificate.round.encode());
+    preimage.extend_from_slice(&source.certificate.proposal_round.encode());
+    preimage.extend_from_slice(&source.certificate.subject.encode());
+    preimage.extend_from_slice(&source.certificate.execution_commitment.encode());
+    preimage.extend_from_slice(&source.outcome.encode());
+    Some(Hash::new(preimage))
+}
+
+fn resolved_invalid_body_report_pending(
+    authority: &LifecycleReplayAuthorityV1,
+    terminal: &super::ResolvedLifecycleValidateOutcomeV1,
+    effect: &AdapterEffect,
+) -> Option<PendingRuntimeEffectBinding> {
+    let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &authority.source else {
+        return None;
+    };
+    if !source.exactly_matches_rejected_body_outcome(terminal.rejected_body_outcome()?) {
+        return None;
+    }
+    let causal_key = resolved_invalid_body_report_causal_key(
+        terminal.terminal_causal_root(),
+        terminal.ordinal(),
+        authority,
+    )?;
+    if causal_key.as_ref() == terminal.terminal_causal_root().digest().as_bytes() {
+        return None;
+    }
+    PendingRuntimeEffectBinding::from_durable_lifecycle_output(
+        DurableLifecycleOutputPendingMintPermit::new(),
+        causal_key,
+        effect,
+    )
+}
+
 impl InvalidBodyReportReplayEvidenceV1 {
+    /// Normalize only an already sealed linked Report using its actual terminal
+    /// rejection. Every fallible check precedes changing either retained field.
+    pub(in crate::sumeragi) fn bind_resolved_report_pending(
+        &mut self,
+        terminal: Arc<super::ResolvedLifecycleValidateOutcomeV1>,
+        effect: &AdapterEffect,
+        linked_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        if self.resolved_terminal.is_some()
+            || !self.report_pending.exactly_matches(effect, linked_pending)
+        {
+            return None;
+        }
+        let pending = resolved_invalid_body_report_pending(&self.authority, &terminal, effect)?;
+        let fingerprint = DirectSignedPendingBindingV1::from_exact_effect(effect, &pending)?;
+        self.report_pending = fingerprint;
+        self.resolved_terminal = Some(terminal);
+        Some(pending)
+    }
+
+    /// Preserve the exact linked projection or derive the one closed independent
+    /// pending binding from its retained terminal and canonical Report source.
+    pub(in crate::sumeragi) fn project_report_pending(
+        &self,
+        effect: &AdapterEffect,
+        linked_pending: PendingRuntimeEffectBinding,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        if !linked_pending.exactly_binds_adapter_effect(effect) {
+            return None;
+        }
+        match &self.resolved_terminal {
+            None => Some(linked_pending),
+            Some(terminal) => {
+                resolved_invalid_body_report_pending(&self.authority, terminal, effect)
+            }
+        }
+    }
     /// Compare the complete body origin, rejection envelope, report effect,
     /// and causal binding without exposing any retained part.
     pub(in crate::sumeragi) fn exactly_matches(
@@ -2162,6 +2248,11 @@ impl InvalidBodyReportReplayEvidenceV1 {
         ) && self
             .report_pending
             .exactly_matches(report_effect, report_pending)
+            && self.resolved_terminal.as_ref().is_none_or(|terminal| {
+                resolved_invalid_body_report_pending(&self.authority, terminal, report_effect)
+                    .as_ref()
+                    == Some(report_pending)
+            })
             && exact_invalid_body_report_authority(
                 &self.validate_origin,
                 validate_effect,
@@ -2233,6 +2324,7 @@ impl InvalidBodyReportReplayEvidenceV1 {
             authority,
             validate_origin,
             report_pending,
+            resolved_terminal,
         } = self;
         let bound = match BoundAdapterEffectV1::bind_invalid_body_report(
             InvalidBodyReportBoundEffectPermit::new(),
@@ -2247,6 +2339,7 @@ impl InvalidBodyReportReplayEvidenceV1 {
                         authority,
                         validate_origin,
                         report_pending,
+                        resolved_terminal,
                     },
                     effect,
                     pending,
@@ -2255,6 +2348,7 @@ impl InvalidBodyReportReplayEvidenceV1 {
         };
         drop(validate_origin);
         drop(report_pending);
+        drop(resolved_terminal);
         Ok(PreparedLiveValidateReportRegistryWork::from_bound(
             permit, bound,
         ))
@@ -2306,7 +2400,7 @@ fn exact_invalid_body_report_authority(
         || certificate.subject != *subject
         || *report_subject != *subject
         || tag.height() != certificate.round.height
-        || tag.view() != certificate.round.view
+        || tag.view() < certificate.round.view
         || receipt.context_id() != round.context_id
         || receipt.round() != *round
         || receipt.subject() != *subject
@@ -2908,6 +3002,15 @@ fn exact_live_wal_replay_projection(
     if !wal_identity.is_exact() {
         return None;
     }
+    exact_persisted_wal_replay_projection(wal_identity.persisted_locator(), effect)
+}
+fn exact_persisted_wal_replay_projection(
+    locator: PersistedWalFrameLocatorV1,
+    effect: &AdapterEffect,
+) -> Option<LiveWalReplayProjectionV1> {
+    if !locator.is_exact() {
+        return None;
+    }
     let (tag, round, role, stage, action) = match effect {
         AdapterEffect::Sign {
             tag,
@@ -2984,7 +3087,7 @@ fn exact_live_wal_replay_projection(
     let context = replay_context(round);
     let replay_tag = ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get());
     let source = WalReplaySourceV1 {
-        locator: wal_identity.persisted_locator(),
+        locator,
         role,
         tag: replay_tag,
         action,
@@ -3180,7 +3283,7 @@ fn exact_recovered_wal_decision_fetch_authority(
                 certificate.round,
                 Some(certificate.proposal_round),
                 Some(block_subject(certificate.subject)),
-                LifecyclePhase::Fetch,
+                LifecyclePhase::FetchDecision,
                 Some(execution_commitment(certificate.execution_commitment)),
             )
     {
@@ -3413,7 +3516,7 @@ impl WalReplaySourceV1 {
                         certificate.round,
                         Some(certificate.proposal_round),
                         Some(block_subject(certificate.subject)),
-                        LifecyclePhase::Fetch,
+                        LifecyclePhase::FetchDecision,
                         Some(execution_commitment(certificate.execution_commitment)),
                     ),
                     LifecycleWorkClass::Fetch,
@@ -3459,12 +3562,20 @@ impl WalReplaySourceV1 {
             .ok_or(ReplayAuthorityValidationError::RecordMismatch)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::BodyPipelineReplaySourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct BodyPipelineReplaySourceV1 {
     tag: ReplayEventTagV1,
     origin: BodyPipelineOriginV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::BodyPipelineOriginV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum BodyPipelineOriginV1 {
@@ -3599,13 +3710,30 @@ impl BodyPipelineReplaySourceV1 {
             return Err(ReplayAuthorityValidationError::InvalidSource);
         }
         let (phase, work_class) = match requested_stage {
-            LifecycleStageKind::FetchBody if !recovered_decision => {
-                (LifecyclePhase::Fetch, LifecycleWorkClass::Fetch)
-            }
-            LifecycleStageKind::StoreBody => (LifecyclePhase::Store, LifecycleWorkClass::Store),
-            LifecycleStageKind::ValidateBody => {
-                (LifecyclePhase::Validate, LifecycleWorkClass::Validate)
-            }
+            LifecycleStageKind::FetchBody if !recovered_decision => (
+                if decision_owned {
+                    LifecyclePhase::FetchDecision
+                } else {
+                    LifecyclePhase::Fetch
+                },
+                LifecycleWorkClass::Fetch,
+            ),
+            LifecycleStageKind::StoreBody => (
+                if decision_owned {
+                    LifecyclePhase::StoreDecision
+                } else {
+                    LifecyclePhase::Store
+                },
+                LifecycleWorkClass::Store,
+            ),
+            LifecycleStageKind::ValidateBody => (
+                if decision_owned {
+                    LifecyclePhase::ValidateDecision
+                } else {
+                    LifecyclePhase::Validate
+                },
+                LifecycleWorkClass::Validate,
+            ),
             _ => return Err(ReplayAuthorityValidationError::RecordMismatch),
         };
         if local_body && requested_stage == LifecycleStageKind::FetchBody {
@@ -3643,6 +3771,10 @@ fn certified_sources_are_bounded_unique(certified_sources: &[PeerId]) -> bool {
             .len()
             == certified_sources.len()
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::InvalidBodyReplaySourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct InvalidBodyReplaySourceV1 {
@@ -3650,6 +3782,10 @@ struct InvalidBodyReplaySourceV1 {
     certificate: wire::QuorumCertificate,
     outcome: RejectedBodyOutcomeBindingV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::RejectedBodyOutcomeBindingV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct RejectedBodyOutcomeBindingV1 {
@@ -3740,6 +3876,10 @@ impl InvalidBodyReplaySourceV1 {
         ))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::CertifiedServeStorageSourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct CertifiedServeStorageSourceV1 {
@@ -3807,6 +3947,10 @@ impl CertifiedServeStorageSourceV1 {
         Ok(ReplayShape::new(key, work_class, requested_stage))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::ReplayPayloadBindingV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences)]
 enum ReplayPayloadBindingV1 {

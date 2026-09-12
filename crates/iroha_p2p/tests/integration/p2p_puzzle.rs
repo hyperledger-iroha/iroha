@@ -4,8 +4,9 @@ use iroha_config::parameters::{
     actual::{Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPuzzle},
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
-use iroha_data_model::prelude::{Peer, PeerId};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     NetworkHandle,
     network::message::{ClassifyTopic, Topic, UpdatePeers, UpdateTopology},
@@ -19,6 +20,8 @@ use std::{
     time::{Duration, Instant},
 };
 const PUZZLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p_puzzle::EmptyMsg")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct EmptyMsg;
 impl ClassifyTopic for EmptyMsg {

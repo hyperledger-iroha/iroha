@@ -124,7 +124,7 @@ fn is_strictly_ordered_v1<T: Ord>(values: &[T], maximum: usize) -> bool {
 impl PrivateSettlementAuditorBusinessPolicyV1 {
     fn validate(&self) -> Result<()> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
-            || self.exact_route.dataspace_id == iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+            || self.exact_route.dataspace_id == iroha_model_base::topology::DataSpaceId::UNIVERSAL
             || self.exact_route.lane_incarnation
                 == iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH])
             || self.exact_pool_id.is_zero()
@@ -978,10 +978,11 @@ mod tests {
     use iroha_data_model::{
         block::BlockHeader,
         nexus::{
-            DataSpaceId, LaneId, PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
+            PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
             PrivateSettlementHybridPublicKeyV1,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::cell::Cell;
 
     struct MockTransportV1 {
@@ -1057,7 +1058,7 @@ mod tests {
             .collect::<Vec<_>>();
         let validators = validator_keys
             .iter()
-            .map(|key| iroha_data_model::peer::PeerId::from(key.public_key().clone()))
+            .map(|key| iroha_model_base::peer::PeerId::from(key.public_key().clone()))
             .collect::<Vec<_>>();
         let validator_pops = validator_keys
             .iter()

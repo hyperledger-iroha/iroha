@@ -13,7 +13,6 @@ use clap::{Args as ClapArgs, Parser, Subcommand};
 use color_eyre::eyre::WrapErr as _;
 use iroha_genesis::init_instruction_registry;
 use std::{
-    fmt,
     io::{BufWriter, Write, stdout},
     process::ExitCode,
 };
@@ -56,50 +55,13 @@ const TOP_LEVEL_HELP: &str = concat!(
     "  kagami keys --algorithm bls_normal --pop --out-dir ./validator-custody\n",
     "  kagami advanced markdown-help\n",
 );
-/// Error requesting one deliberate non-default CLI exit status.
-///
-/// Security-sensitive publication commands use this after the publication point when durability
-/// cannot be established. Keeping the status typed lets the top-level command preserve the ordinary
-/// error path without collapsing a commit-uncertain result into a retryable exit code.
-#[derive(Debug)]
-pub(crate) struct ExplicitExitError {
-    code: u8,
-    message: String,
-}
-impl ExplicitExitError {
-    /// Construct one explicit CLI exit request with its operator-facing error.
-    pub(crate) fn new(code: u8, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-    const fn code(&self) -> u8 {
-        self.code
-    }
-}
-impl fmt::Display for ExplicitExitError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-impl std::error::Error for ExplicitExitError {}
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => error.downcast_ref::<ExplicitExitError>().map_or_else(
-            || {
-                eprintln!("{error:?}");
-                ExitCode::FAILURE
-            },
-            |explicit| {
-                // Explicit security outcomes are machine records. Do not wrap
-                // them in color-eyre's Debug report, which would make the
-                // documented status line unstable for operators and tooling.
-                eprintln!("{explicit}");
-                ExitCode::from(explicit.code())
-            },
-        ),
+        Err(error) => {
+            eprintln!("{error:?}");
+            ExitCode::FAILURE
+        }
     }
 }
 fn run() -> Outcome {

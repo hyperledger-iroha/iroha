@@ -9,6 +9,7 @@ use iroha_core::{
     state::{State as CoreState, World, WorldReadOnly},
 };
 use iroha_data_model::{NewAccount, prelude::*};
+use iroha_model_base::domain::DomainId;
 use nonzero_ext::nonzero;
 use std::{collections::HashSet, sync::Arc};
 use tower::ServiceExt as _; // for Router::oneshot

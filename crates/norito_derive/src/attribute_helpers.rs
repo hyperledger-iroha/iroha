@@ -5,7 +5,7 @@ fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
         // Parse exactly one attribute value. Parsing a free-form TokenStream here
         // consumes every remaining comma-separated item in the enclosing
         // `#[norito(...)]` list, which can silently hide a later option from a
-        // different derive (for example `tag = "kind", schema_name = "stable",
+        // different derive (for example `tag = "kind", content = "payload",
         // deny_unknown_fields`).
         meta.value()?.parse::<syn::Expr>()?;
     }

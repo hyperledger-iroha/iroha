@@ -33,6 +33,8 @@ const MAX_CONTEXT_PAYLOAD_BYTES: usize =
     MAX_CONTEXT_FIXED_BYTES + wire::MAX_VALIDATORS_PER_HEIGHT * MAX_CONTEXT_BYTES_PER_VALIDATOR;
 const MAX_CONTEXT_FRAME_BYTES: usize = HEADER_LEN + MAX_CONTEXT_PAYLOAD_BYTES;
 /// Canonical V1 context and PoPs required to reopen one reducer height.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_context_store::PersistedHeightContext")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PersistedHeightContext {
     format_version: u16,
@@ -1044,7 +1046,8 @@ pub(crate) enum V2ContextStoreError {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
+    use iroha_data_model::{NetworkId, block::BlockHeader};
+    use iroha_model_base::peer::PeerId;
     use std::sync::{Arc, Barrier};
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(

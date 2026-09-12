@@ -10,8 +10,7 @@ use iroha_data_model::{
     },
     asset::{AssetDefinitionId, AssetId},
     isi::alias_setup::{ConfigureAliasAutoRenew, RenewAliasLease},
-    metadata::Metadata,
-    nexus::{DataSpaceCatalog, DataSpaceId},
+    nexus::DataSpaceCatalog,
     permission::Permission,
     sns::{
         ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
@@ -22,6 +21,8 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
     CanResolveAccountAlias,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
@@ -171,7 +172,7 @@ fn expected_controller(owner: &AccountId) -> Result<NameControllerV1, AliasSetup
 fn validate_text_id_pair(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     target: &AliasTargetV1,
     now_ms: u64,
 ) -> Result<bool, AliasSetupError> {
@@ -631,12 +632,12 @@ fn ensure_active_parent_record(
 }
 fn validate_parent_resource(
     world: &impl WorldReadOnly,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
-    planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
+    planned_domains: &BTreeSet<iroha_model_base::domain::DomainId>,
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<(), AliasSetupError> {
-    let dataspace_is_planned = |name: &iroha_data_model::name::Name, id: DataSpaceId| {
+    let dataspace_is_planned = |name: &iroha_model_base::name::Name, id: DataSpaceId| {
         planned_dataspaces
             .get(name)
             .is_some_and(|planned| *planned == id)
@@ -989,7 +990,7 @@ pub fn classify_alias_intent_with_endorsement_policy(
 pub fn classify_alias_intent_with_planned_dataspaces(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<AliasPlanDispositionV1, AliasSetupError> {
@@ -1015,8 +1016,8 @@ pub fn classify_alias_intent_with_planned_dataspaces(
 pub fn classify_alias_intent_with_planned_parents(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
-    planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
+    planned_domains: &BTreeSet<iroha_model_base::domain::DomainId>,
     intent: &AliasIntentV1,
     now_ms: u64,
 ) -> Result<AliasPlanDispositionV1, AliasSetupError> {
@@ -1044,8 +1045,8 @@ pub fn classify_alias_intent_with_planned_parents(
 pub fn classify_alias_intent_with_planned_parents_and_endorsement_policy(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    planned_dataspaces: &BTreeMap<iroha_data_model::name::Name, DataSpaceId>,
-    planned_domains: &BTreeSet<iroha_data_model::domain::DomainId>,
+    planned_dataspaces: &BTreeMap<iroha_model_base::name::Name, DataSpaceId>,
+    planned_domains: &BTreeSet<iroha_model_base::domain::DomainId>,
     intent: &AliasIntentV1,
     now_ms: u64,
     default_domain_endorsement_required: bool,
@@ -1181,9 +1182,10 @@ mod tests {
             ResolvedDataSpaceV1, ResolvedDomainV1,
         },
         asset::{AssetDefinition, AssetDefinitionId},
-        nexus::{DataSpaceId, DataSpaceMetadata},
+        nexus::DataSpaceMetadata,
         sns::{NameControllerV1, NameRecordV1},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use norito::codec::Encode;
     use std::collections::BTreeSet;
     fn account(seed: u8) -> AccountId {
@@ -1238,7 +1240,7 @@ mod tests {
             .insert(record_storage_key(&selector), record.encode());
     }
     fn dynamic_dataspace_intent(owner: AccountId) -> AliasIntentV1 {
-        let name: iroha_data_model::name::Name = "paynet".parse().expect("dataspace name");
+        let name: iroha_model_base::name::Name = "paynet".parse().expect("dataspace name");
         let dataspace_id = crate::sns::dataspace_id_for_sns_alias(name.as_ref())
             .expect("deterministic dataspace id");
         AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
@@ -1423,7 +1425,7 @@ mod tests {
         validate_configured_alias_payment_asset(&world.view(), &target, &payment_asset.to_string())
             .expect("registered configured asset matches the seeded namespace policy");
         let other_asset = AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("fees", "universal")
+            iroha_model_base::domain::DomainId::try_new("fees", "universal")
                 .expect("alternate asset domain"),
             "other".parse().expect("alternate asset name"),
         );
@@ -1485,7 +1487,7 @@ mod tests {
         };
         let domain = AliasIntentV1::Domain(AliasDomainIntentV1 {
             domain: ResolvedDomainV1::new(
-                iroha_data_model::domain::DomainId::try_new(
+                iroha_model_base::domain::DomainId::try_new(
                     "banka",
                     parent.dataspace.canonical_name.clone(),
                 )
@@ -1522,7 +1524,7 @@ mod tests {
         let AliasIntentV1::Dataspace(parent) = parent else {
             unreachable!()
         };
-        let domain_id = iroha_data_model::domain::DomainId::try_new(
+        let domain_id = iroha_model_base::domain::DomainId::try_new(
             "protected",
             parent.dataspace.canonical_name.clone(),
         )
@@ -1568,7 +1570,7 @@ mod tests {
         let AliasIntentV1::Dataspace(parent_dataspace) = parent_dataspace else {
             unreachable!()
         };
-        let domain_id = iroha_data_model::domain::DomainId::try_new(
+        let domain_id = iroha_model_base::domain::DomainId::try_new(
             "banka",
             parent_dataspace.dataspace.canonical_name.clone(),
         )
@@ -1722,7 +1724,7 @@ mod tests {
             unreachable!()
         };
         insert_record(&mut world, &parent, owner.clone());
-        let domain_id = iroha_data_model::domain::DomainId::try_new(
+        let domain_id = iroha_model_base::domain::DomainId::try_new(
             "banka",
             &parent_value.dataspace.canonical_name,
         )
@@ -1907,7 +1909,7 @@ mod tests {
         let error = validate_alias_intent_authority(&world.view(), &operator, &domain_intent)
             .expect_err("dataspace scope must not widen into a domain-qualified alias");
         assert_eq!(error.code(), "alias.setup.authority_forbidden");
-        let domain = iroha_data_model::domain::DomainId::try_new("banka", "paynet")
+        let domain = iroha_model_base::domain::DomainId::try_new("banka", "paynet")
             .expect("canonical dynamic parent domain");
         world.account_permissions.insert(
             operator.clone(),

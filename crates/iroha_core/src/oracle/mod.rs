@@ -155,6 +155,8 @@ impl<'a> OracleAggregator<'a> {
     }
 }
 /// Key identifying a buffered observation window for `(feed, version, slot, request)`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::oracle::ObservationWindowKey")]
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
 )]
@@ -215,6 +217,8 @@ impl JsonKeyCodec for ObservationWindowKey {
     }
 }
 /// Buffered observations for a single `(feed, slot, request_hash)` window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::oracle::ObservationWindow")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -322,12 +326,12 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
-        name::Name,
         oracle::{
             AggregationRule, FeedConfigVersion, ObservationBody, ObservationOutcome,
             ObservationValue, OutlierPolicy, RiskClass,
         },
     };
+    use iroha_model_base::name::Name;
     use std::{num::NonZeroU64, str::FromStr};
     fn feed_id(name: &str) -> iroha_data_model::oracle::FeedId {
         iroha_data_model::oracle::FeedId(Name::from_str(name).expect("feed name"))

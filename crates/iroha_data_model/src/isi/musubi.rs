@@ -4,7 +4,6 @@
 //! Every mutable operation carries an explicit compare-and-set or policy
 //! revision, and Parliament recovery carries an exact action-bound decision.
 use super::*;
-use crate::error::ParseError;
 use crate::musubi::{
     ArchiveId, MUSUBI_MAX_PACKAGE_OWNERS_V1, MusubiAliasNameV1, MusubiArchiveCommitmentV1,
     MusubiArchiveLocationIdV1, MusubiGovernanceDecisionV1, MusubiNamespaceBindingV1,
@@ -15,12 +14,13 @@ use crate::musubi::{
     validate_musubi_account_id_v1,
 };
 use crate::sorafs::pin_registry::{ManifestDigest, ReplicationOrderId};
-#[cfg(feature = "json")]
+use iroha_model_base::error::ParseError;
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 isi! {
     /// Register one immutable namespace-to-home-dataspace binding.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RegisterMusubiNamespaceBindingV1")]
     pub struct RegisterMusubiNamespaceBindingV1 {
         /// Immutable namespace binding.
@@ -44,8 +44,8 @@ impl RegisterMusubiNamespaceBindingV1 {
 impl crate::seal::Instruction for RegisterMusubiNamespaceBindingV1 {}
 isi! {
     /// Register an immutable source archive commitment.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RegisterMusubiArchiveV1")]
     pub struct RegisterMusubiArchiveV1 {
         /// Complete commitment whose domain-separated hash is the archive id.
@@ -76,8 +76,8 @@ impl RegisterMusubiArchiveV1 {
 impl crate::seal::Instruction for RegisterMusubiArchiveV1 {}
 isi! {
     /// Register one immutable provider attestation for later compact location-set commitments.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RegisterMusubiProviderBundleAttestationV1")]
     pub struct RegisterMusubiProviderBundleAttestationV1 {
         /// Exactly one complete signed provider bundle-verification attestation.
@@ -119,8 +119,8 @@ impl RegisterMusubiProviderBundleAttestationV1 {
 impl crate::seal::Instruction for RegisterMusubiProviderBundleAttestationV1 {}
 isi! {
     /// Add or renew one `SoraFS` location for a registered archive.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::AddMusubiArchiveLocationV1")]
     pub struct AddMusubiArchiveLocationV1 {
         /// Registered archive identity.
@@ -173,8 +173,8 @@ impl AddMusubiArchiveLocationV1 {
 impl crate::seal::Instruction for AddMusubiArchiveLocationV1 {}
 isi! {
     /// Retire one archive location without changing archive or release identity.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RetireMusubiArchiveLocationV1")]
     pub struct RetireMusubiArchiveLocationV1 {
         /// Registered archive identity.
@@ -194,8 +194,8 @@ impl RetireMusubiArchiveLocationV1 {
 impl crate::seal::Instruction for RetireMusubiArchiveLocationV1 {}
 isi! {
     /// Claim an absent package if authorized and publish one immutable release.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::PublishMusubiReleaseV1")]
     pub struct PublishMusubiReleaseV1 {
         /// Exact canonical namespace whose immutable binding authorizes the package claim.
@@ -234,8 +234,8 @@ impl PublishMusubiReleaseV1 {
 impl crate::seal::Instruction for PublishMusubiReleaseV1 {}
 isi! {
     /// Yank or unyank an immutable release.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::SetMusubiReleaseYankV1")]
     pub struct SetMusubiReleaseYankV1 {
         /// Exact immutable release.
@@ -270,8 +270,8 @@ impl SetMusubiReleaseYankV1 {
 impl crate::seal::Instruction for SetMusubiReleaseYankV1 {}
 isi! {
     /// Replace the mutable package metadata projection.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::SetMusubiPackageMetadataV1")]
     pub struct SetMusubiPackageMetadataV1 {
         /// Stable package identity.
@@ -289,8 +289,8 @@ impl SetMusubiPackageMetadataV1 {
 impl crate::seal::Instruction for SetMusubiPackageMetadataV1 {}
 isi! {
     /// Invite an account to an owner or maintainer role.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::InviteMusubiPackageMaintainerV1")]
     pub struct InviteMusubiPackageMaintainerV1 {
         /// Stable package identity.
@@ -332,8 +332,8 @@ impl InviteMusubiPackageMaintainerV1 {
 impl crate::seal::Instruction for InviteMusubiPackageMaintainerV1 {}
 isi! {
     /// Accept a pending package role invitation as its invited account.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::AcceptMusubiPackageMaintainerV1")]
     pub struct AcceptMusubiPackageMaintainerV1 {
         /// Stable package identity.
@@ -351,8 +351,8 @@ impl AcceptMusubiPackageMaintainerV1 {
 impl crate::seal::Instruction for AcceptMusubiPackageMaintainerV1 {}
 isi! {
     /// Revoke a pending package role invitation as a current package owner.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RevokeMusubiPackageMaintainerInvitationV1")]
     pub struct RevokeMusubiPackageMaintainerInvitationV1 {
         /// Stable package identity.
@@ -370,8 +370,8 @@ impl RevokeMusubiPackageMaintainerInvitationV1 {
 impl crate::seal::Instruction for RevokeMusubiPackageMaintainerInvitationV1 {}
 isi! {
     /// Change an accepted package member's role.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::SetMusubiPackageMaintainerRoleV1")]
     pub struct SetMusubiPackageMaintainerRoleV1 {
         /// Stable package identity.
@@ -409,8 +409,8 @@ impl SetMusubiPackageMaintainerRoleV1 {
 impl crate::seal::Instruction for SetMusubiPackageMaintainerRoleV1 {}
 isi! {
     /// Remove an accepted package member while preserving the last owner.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RemoveMusubiPackageMaintainerV1")]
     pub struct RemoveMusubiPackageMaintainerV1 {
         /// Stable package identity.
@@ -444,8 +444,8 @@ impl RemoveMusubiPackageMaintainerV1 {
 impl crate::seal::Instruction for RemoveMusubiPackageMaintainerV1 {}
 isi! {
     /// Register a paid permanent global package alias.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RegisterMusubiAliasV1")]
     pub struct RegisterMusubiAliasV1 {
         /// Permanent lowercase ASCII kebab alias.
@@ -476,8 +476,8 @@ impl RegisterMusubiAliasV1 {
 impl crate::seal::Instruction for RegisterMusubiAliasV1 {}
 isi! {
     /// Apply an enacted Parliament package-owner recovery.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RecoverMusubiPackageV1")]
     pub struct RecoverMusubiPackageV1 {
         /// Enacted, action-digest-bound decision.
@@ -519,8 +519,8 @@ impl RecoverMusubiPackageV1 {
 impl crate::seal::Instruction for RecoverMusubiPackageV1 {}
 isi! {
     /// Apply an enacted Parliament retarget of a permanent alias.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::RetargetMusubiAliasV1")]
     pub struct RetargetMusubiAliasV1 {
         /// Enacted, action-digest-bound decision.
@@ -540,8 +540,8 @@ impl RetargetMusubiAliasV1 {
 impl crate::seal::Instruction for RetargetMusubiAliasV1 {}
 isi! {
     /// Apply an enacted Parliament artifact takedown.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::SetMusubiArtifactTakedownV1")]
     pub struct SetMusubiArtifactTakedownV1 {
         /// Enacted, action-digest-bound decision.
@@ -561,8 +561,8 @@ impl SetMusubiArtifactTakedownV1 {
 impl crate::seal::Instruction for SetMusubiArtifactTakedownV1 {}
 isi! {
     /// Replace the prospective registry admission and alias pricing policy.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::SetMusubiRegistryPolicyV1")]
     pub struct SetMusubiRegistryPolicyV1 {
         /// Enacted, action-digest-bound decision.
@@ -580,8 +580,8 @@ impl SetMusubiRegistryPolicyV1 {
 impl crate::seal::Instruction for SetMusubiRegistryPolicyV1 {}
 isi! {
     /// Assert an exact immutable release digest.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::musubi::AssertMusubiReleaseDigestV1")]
     pub struct AssertMusubiReleaseDigestV1 {
         /// Exact release identity.
@@ -738,7 +738,7 @@ impl_decode_musubi_instruction!(AssertMusubiReleaseDigestV1 {
     release: MusubiReleaseIdV1,
     expected_digest: MusubiReleaseDigestV1,
 });
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 pub(crate) mod generated_identity_values;
 #[cfg(test)]
 mod tests {
@@ -758,7 +758,6 @@ mod tests {
             MusubiResolutionProofV1, MusubiSemanticReleaseDigestV1, MusubiVerificationLockDigestV1,
             MusubiVerificationLockV1, musubi_provider_bundle_attestation_set_digest_v1,
         },
-        nexus::DataSpaceId,
         sorafs::{
             capacity::ProviderId,
             pin_registry::{
@@ -768,6 +767,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+    use iroha_model_base::topology::DataSpaceId;
     fn package() -> MusubiPackageIdV1 {
         MusubiPackageIdV1::new(
             DataSpaceId::new(7),
@@ -1012,7 +1012,7 @@ mod tests {
         assert!(ids.iter().all(|id| id.contains(".v1.")));
         assert!(!ids.contains(&"iroha.musubi.release.publish"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn v1_instruction_json_is_serializable_and_rejects_unknown_secret_fields() {
         let instruction = SetMusubiReleaseYankV1::new(

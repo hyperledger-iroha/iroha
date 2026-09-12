@@ -8,6 +8,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+iroha_model_base = { path = "../crates/iroha_model_base" }
 libfuzzer-sys = { version = "=0.4.10", features = ["arbitrary-derive"] }
 arbitrary = { version = "=1.4.2", features = ["derive"] }
 iroha_core = { path = "../crates/iroha_core" }

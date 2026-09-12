@@ -6,12 +6,10 @@
 //! deterministically without relying on out-of-band config. Public pin admission fees are computed
 //! here, while provider credit deposits, settlement, and slashing remain separate authority-checked
 //! ledger flows.
-#[cfg(feature = "json")]
+
+use crate::sorafs::{capacity::ProviderId, pin_registry::StorageClass};
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    metadata::Metadata,
-    sorafs::{capacity::ProviderId, pin_registry::StorageClass},
-};
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -35,10 +33,21 @@ const STORAGE_CLASSES: [StorageClass; 3] =
     [StorageClass::Hot, StorageClass::Warm, StorageClass::Cold];
 /// Pricing for a single storage class (GiB-month + egress).
 #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Ord, PartialOrd, Default,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    Ord,
+    PartialOrd,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::TierRate")]
 pub struct TierRate {
     /// Storage class the tier applies to.
@@ -64,9 +73,21 @@ impl TierRate {
     }
 }
 /// Collateral policy controlling minimum bonded amounts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::CollateralPolicy")]
 pub struct CollateralPolicy {
     /// Multiplier (in basis points) applied to monthly storage revenue.
@@ -107,9 +128,21 @@ impl Default for CollateralPolicy {
     }
 }
 /// Credit settlement configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::CreditPolicy")]
 pub struct CreditPolicy {
     /// Length of a settlement window (seconds).
@@ -144,9 +177,21 @@ impl Default for CreditPolicy {
     }
 }
 /// Commitment-based discount tier (e.g., loyalty or capacity commitment).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::CommitmentDiscountTier")]
 pub struct CommitmentDiscountTier {
     /// Minimum committed GiB·month required for the discount.
@@ -155,9 +200,21 @@ pub struct CommitmentDiscountTier {
     pub discount_bps: u16,
 }
 /// Discount schedule applied on top of base tier pricing.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::DiscountSchedule")]
 pub struct DiscountSchedule {
     /// Months of uninterrupted participation required for loyalty discount.
@@ -168,9 +225,20 @@ pub struct DiscountSchedule {
     pub commitment_tiers: Vec<CommitmentDiscountTier>,
 }
 /// Governance-controlled pricing schedule and credit policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::PricingScheduleRecord")]
 pub struct PricingScheduleRecord {
     /// Schema version (see [`PRICING_SCHEDULE_VERSION_V1`]).
@@ -188,7 +256,7 @@ pub struct PricingScheduleRecord {
     /// Optional discount schedule (commitment / loyalty).
     pub discounts: DiscountSchedule,
     /// Optional governance notes embedded with the schedule.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub notes: Option<String>,
 }
 impl PricingScheduleRecord {
@@ -726,9 +794,20 @@ pub enum PricingComputationError {
     Quantity(#[from] NumericOperationError),
 }
 /// Credit ledger record persisted for each provider.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pricing::ProviderCreditRecord")]
 pub struct ProviderCreditRecord {
     /// Provider identifier this credit entry belongs to.
@@ -752,13 +831,13 @@ pub struct ProviderCreditRecord {
     /// Epoch when the credit balance last fell below the alert threshold (if any).
     pub low_balance_since_epoch: Option<u64>,
     /// Total collateral held under a custody-backed slash lien for under-delivery.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub slashed: Quantity,
     /// Consecutive under-delivery strike counter.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub under_delivery_strikes: u32,
     /// Epoch (seconds) when the last penalty was applied.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub last_penalty_epoch: Option<u64>,
     /// Optional metadata annotations.
     pub metadata: Metadata,

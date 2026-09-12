@@ -19,10 +19,8 @@ use iroha_data_model::{
     account::{AccountAddress, AccountId, rekey::AccountAlias},
     alias_setup::{AccountAliasName, AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasTargetV1},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
-    domain::DomainId,
     isi::{alias_setup::EnsureAlias, register::RegisterBox},
-    metadata::Metadata,
-    nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+    nexus::{DataSpaceCatalog, DataSpaceMetadata},
     permission::Permission,
     sns::{
         AuctionKind, ControllerType, NameAuctionStateV1, NameControllerV1, NameRecordV1,
@@ -30,11 +28,14 @@ use iroha_data_model::{
         ReservedNameV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
         fixtures,
     },
-    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::state_path::StatePath;
+use iroha_model_base::topology::DataSpaceId;
 #[cfg(test)]
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -155,6 +156,8 @@ pub const ALIAS_AUTO_RENEW_FAILURES_EXHAUSTED_CODE: &str = "alias.auto_renew.fai
 const ALIAS_AUTO_RENEW_CURSOR_VERSION: u8 = 1;
 const ALIAS_AUTO_RENEW_STATE_PREFIX: &str = "sns/auto_renew/";
 const ALIAS_AUTO_RENEW_CURSOR_KEY: &str = "sns/auto_renew_cursor/v1";
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sns::AliasAutoRenewCursorV1")]
 #[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct AliasAutoRenewCursorV1 {
     version: u8,
@@ -776,7 +779,7 @@ pub(crate) fn process_alias_auto_renewals(state_block: &mut StateBlock<'_>) {
 pub fn selector_for_account_alias(
     alias: &AccountAlias,
     catalog: &DataSpaceCatalog,
-) -> Result<NameSelectorV1, iroha_data_model::error::ParseError> {
+) -> Result<NameSelectorV1, iroha_model_base::error::ParseError> {
     Ok(NameSelectorV1 {
         version: NameSelectorV1::VERSION,
         suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
@@ -2748,7 +2751,7 @@ fn resolve_active_dataspace_by_id(
     let mut resolution = catalog
         .by_id(dataspace_id)
         .map(|entry| {
-            if entry.alias.len() > iroha_data_model::name::MAX_NAME_BYTES {
+            if entry.alias.len() > iroha_model_base::name::MAX_NAME_BYTES {
                 return Err(SnsError::Conflict(format!(
                     "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: configured dataspace alias exceeds the canonical name limit"
                 )));
@@ -2772,7 +2775,7 @@ fn resolve_active_dataspace_by_id(
                     "dataspace SNS record contains trailing bytes".to_owned(),
                 ));
             }
-            if record.selector.label.len() > iroha_data_model::name::MAX_NAME_BYTES {
+            if record.selector.label.len() > iroha_model_base::name::MAX_NAME_BYTES {
                 return Err(SnsError::Internal(
                     "dataspace SNS record label exceeds the canonical name limit".to_owned(),
                 ));

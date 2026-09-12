@@ -16,8 +16,6 @@ use iroha_data_model::{
     account::AccountController,
     asset::{AssetBalanceScope, AssetDefinitionId},
     block::BlockHeader,
-    domain::DomainId,
-    name::Name,
     nexus::{
         AtomicPrivateSettlementV1, PRIVATE_SETTLEMENT_INPUT_SLOTS_V1,
         PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1, PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1,
@@ -31,6 +29,8 @@ use iroha_data_model::{
         PrivacyVerifierDigestV1,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use sha2::{Digest as _, Sha256};
 use std::{fmt, str::FromStr as _};
 use thiserror::Error;

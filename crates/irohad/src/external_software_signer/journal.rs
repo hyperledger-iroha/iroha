@@ -33,6 +33,8 @@ const AUDIT_RETENTION_LIMITS_V1: AuditRetentionLimitsV1 = AuditRetentionLimitsV1
     max_records: AUDIT_MAX_RECORDS_V1,
     max_total_bytes: AUDIT_MAX_TOTAL_BYTES_V1,
 };
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::journal::SoftwareSignerAuditEventV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum SoftwareSignerAuditEventV1 {
     Genesis {
@@ -67,7 +69,10 @@ pub(super) enum SoftwareSignerAuditEventV1 {
         reason_digest: [u8; 32],
     },
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::journal::SoftwareSignerAuditRecordBodyV1"
+)]
 struct SoftwareSignerAuditRecordBodyV1 {
     magic: [u8; 8],
     version: u16,
@@ -75,7 +80,8 @@ struct SoftwareSignerAuditRecordBodyV1 {
     predecessor_digest: [u8; 32],
     event: SoftwareSignerAuditEventV1,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::journal::SoftwareSignerAuditRecordV1")]
 struct SoftwareSignerAuditRecordV1 {
     body: SoftwareSignerAuditRecordBodyV1,
     record_digest: [u8; 32],
@@ -713,6 +719,38 @@ mod tests {
             rejected_request_digest: [0x33; 32],
         }
     }
+    #[test]
+    fn audit_frames_bind_body_and_record_owners() {
+        let body = SoftwareSignerAuditRecordBodyV1 {
+            magic: SIGNER_AUDIT_MAGIC_V1,
+            version: SIGNER_PROTOCOL_VERSION_V1,
+            sequence: 2,
+            predecessor_digest: [0x55; 32],
+            event: fixture_event(),
+        };
+        crate::frame_test_support::assert_current_frame(
+            &body,
+            "irohad::external_software_signer::journal::SoftwareSignerAuditRecordBodyV1",
+            "irohad::external_software_signer::journal::SoftwareSignerAuditRecordBodyV1",
+        );
+        let record_digest =
+            digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &body).expect("body digest");
+        let record = SoftwareSignerAuditRecordV1 {
+            body,
+            record_digest,
+            attestation: vec![0x66; 64],
+        };
+        let bytes = crate::frame_test_support::assert_current_frame(
+            &record,
+            "irohad::external_software_signer::journal::SoftwareSignerAuditRecordV1",
+            "irohad::external_software_signer::journal::SoftwareSignerAuditRecordV1",
+        );
+        assert!(matches!(
+            norito::decode_canonical::<SoftwareSignerAuditRecordBodyV1>(&bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     #[test]
     fn retention_limits_accept_boundary_and_reject_first_overflow() {
         let limits = AuditRetentionLimitsV1 {

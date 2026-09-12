@@ -12,7 +12,7 @@ use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// use std::convert::TryInto;
 ///
 /// use norito::{
-///     NoritoDeserialize, NoritoSerialize,
+///     DeserializePayload,
 ///     core::{Compression, Header, MAGIC, VERSION_MAJOR, VERSION_MINOR, header_flags},
 ///     crc64_fallback, from_bytes,
 ///     schema::SamplePayload,
@@ -34,7 +34,7 @@ use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// assert_eq!(header_bytes[5], VERSION_MINOR);
 /// assert_eq!(
 ///     &header_bytes[6..22],
-///     &<SamplePayload as NoritoSerialize>::schema_hash()
+///     &norito::schema::identity::frame_hash::<SamplePayload>()
 /// );
 /// assert_eq!(header_bytes[22], Compression::None as u8);
 /// let length = u64::from_le_bytes(header_bytes[23..31].try_into().unwrap());
@@ -53,10 +53,11 @@ use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// assert_eq!(body, EXPECTED_BODY);
 ///
 /// let archived = from_bytes::<SamplePayload>(&encoded).expect("decode sample payload");
-/// let decoded = <SamplePayload as NoritoDeserialize>::deserialize(archived);
+/// let decoded = <SamplePayload as DeserializePayload>::deserialize(archived);
 /// assert_eq!(decoded, payload);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::NoritoSchema, NoritoSerialize, NoritoDeserialize)]
+#[norito_schema(name = "norito::schema::SamplePayload")]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct SamplePayload {
     /// Payload schema version.
@@ -67,4 +68,32 @@ pub struct SamplePayload {
     pub label: String,
     /// Sample numeric items.
     pub items: Vec<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SamplePayload;
+
+    #[test]
+    fn sample_frame_matches_captured_protocol_bytes() {
+        let value = SamplePayload {
+            version: 7,
+            enabled: true,
+            label: "demo".into(),
+            items: vec![1, 2, 3],
+        };
+        let expected = include_bytes!("../../tests/fixtures/sample_payload_frame.norito");
+        assert_eq!(
+            crate::encode_canonical(&value).unwrap(),
+            expected.as_slice()
+        );
+        assert_eq!(
+            crate::schema::identity::frame_hash::<SamplePayload>(),
+            expected[6..22]
+        );
+        assert_eq!(
+            crate::decode_from_bytes::<SamplePayload>(expected).unwrap(),
+            value
+        );
+    }
 }

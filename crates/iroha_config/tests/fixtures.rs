@@ -841,12 +841,12 @@ fn nexus_profile_template_enables_multilane_defaults() {
     assert_eq!(
         lane_bindings,
         [
-            ("core", iroha_data_model::nexus::DataSpaceId::UNIVERSAL,),
+            ("core", iroha_model_base::topology::DataSpaceId::UNIVERSAL,),
             (
                 "governance",
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
-            ("zk", iroha_data_model::nexus::DataSpaceId::UNIVERSAL),
+            ("zk", iroha_model_base::topology::DataSpaceId::UNIVERSAL),
         ]
     );
     let dataspace_aliases: Vec<_> = config
@@ -858,11 +858,9 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .collect();
     assert_eq!(dataspace_aliases, ["universal"]);
     assert_eq!(config.nexus.routing_policy.rules.len(), 2);
-    assert!(
-        config.nexus.routing_policy.rules.iter().all(|rule| {
-            rule.dataspace == Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL)
-        })
-    );
+    assert!(config.nexus.routing_policy.rules.iter().all(|rule| {
+        rule.dataspace == Some(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
+    }));
     assert!(
         !config.nexus.lane_relay_emergency.enabled,
         "Nexus profile must leave lane relay emergency overrides disabled by default"
@@ -1102,7 +1100,7 @@ fn routing_policy_dataspace_resolution() {
         DataSpaceDescriptor, LaneDescriptor, Nexus, RouteMatcher, RoutingPolicy, RoutingRule,
     };
     use iroha_config_base::util::Emitter;
-    use iroha_data_model::nexus::DataSpaceId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
@@ -1284,7 +1282,7 @@ fn dataspace_fee_sponsor_program_id_parses() {
         DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
     };
     use iroha_config_base::util::Emitter;
-    use iroha_data_model::nexus::DataSpaceId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let program_id = format!(

@@ -16,6 +16,8 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
+iroha_model_base = { workspace = true }
+iroha_js_codec = { workspace = true }
 iroha_service_model = { workspace = true }
 napi = { version = "3.5.1", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-derive = { version = "3.3.2", default-features = false, features = ["type-def"] }

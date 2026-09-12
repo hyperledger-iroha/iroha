@@ -5,10 +5,11 @@
 //! frequent changes. The cryptographic proof plumbing (commitments, nullifier checks, Halo2
 //! verification) lives in the host runtime and the `iroha_zkp_halo2` crate.
 use super::Digest32;
-#[cfg(feature = "json")]
+
+use crate::account::AccountId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, metadata::Metadata};
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
+use iroha_model_base::metadata::Metadata;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 const LEAF_TAG_BLINDED_CID: &[u8] = b"soranet.ticket.body.blinded_cid.v1";
@@ -34,22 +35,45 @@ pub enum TicketCommitmentError {
     },
 }
 /// Errors raised during ticket signature verification.
+/// Detailed causes are owned out of line to keep the error compact on all targets.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TicketSignatureError {
     /// The embedded ticket commitment does not match the body.
     #[error(transparent)]
-    Commitment(#[from] TicketCommitmentError),
+    Commitment(Box<TicketCommitmentError>),
     /// Ticket issuer account is not single-signatory, so the embedded signature has no verifier.
     #[error("ticket issuer account has no single signatory")]
     MissingIssuerSignatory,
     /// The issuer signature is malformed or does not verify.
     #[error("ticket signature verification failed: {0}")]
-    Signature(#[from] iroha_crypto::Error),
+    Signature(#[source] Box<iroha_crypto::Error>),
+}
+impl From<TicketCommitmentError> for TicketSignatureError {
+    fn from(error: TicketCommitmentError) -> Self {
+        Self::Commitment(Box::new(error))
+    }
+}
+impl From<iroha_crypto::Error> for TicketSignatureError {
+    fn from(error: iroha_crypto::Error) -> Self {
+        Self::Signature(Box::new(error))
+    }
 }
 /// Ticket capability scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "scope", content = "value"))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "scope", content = "value")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -68,8 +92,19 @@ pub enum TicketScopeV1 {
     Admin,
 }
 /// Canonical ticket payload describing the blinded CID and policy window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -80,7 +115,7 @@ pub enum TicketScopeV1 {
 )]
 pub struct TicketBodyV1 {
     /// Blinded content identifier protected by the `SoraNet` salt schedule.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub blinded_cid: Digest32,
     /// Capability scope granted to the holder.
     pub scope: TicketScopeV1,
@@ -108,8 +143,19 @@ impl TicketBodyV1 {
     }
 }
 /// Ticket envelope bundling the body, cryptographic commitment, proof, and signature.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -122,15 +168,15 @@ pub struct TicketEnvelopeV1 {
     /// Canonical ticket body.
     pub body: TicketBodyV1,
     /// Commitment over ticket fields (exact hash computed in host runtime).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment: Digest32,
     /// Halo2 proof bytes verifying the commitment/nullifier constraints.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub zk_proof: Vec<u8>,
     /// Issuer signature sealing the ticket body + commitment.
     pub signature: Signature,
     /// Nullifier used to detect replay; actual validation occurs host-side.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub nullifier: Digest32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
@@ -253,7 +299,7 @@ impl TicketEnvelopeV1 {
             super::signature_for_public_key_algorithm(issuer_public_key, &self.signature)?;
         SignatureOf::<TicketSignaturePayloadV1>::from_signature(signature)
             .verify(issuer_public_key, &self.signature_payload())
-            .map_err(TicketSignatureError::Signature)
+            .map_err(TicketSignatureError::from)
     }
     fn signature_payload(&self) -> TicketSignaturePayloadV1 {
         TicketSignaturePayloadV1 {
@@ -323,8 +369,9 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, domain::DomainId};
+    use crate::account::AccountId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::codec::{Decode, Encode};
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -444,11 +491,12 @@ mod tests {
     fn ticket_signature_rejects_stale_commitment() {
         let mut ticket = signed_sample_envelope();
         ticket.body.max_uses += 1;
+        let expected = ticket.body.compute_commitment();
+        let actual = ticket.commitment;
         assert!(matches!(
             ticket.verify_signature(),
-            Err(TicketSignatureError::Commitment(
-                TicketCommitmentError::Mismatch { .. }
-            ))
+            Err(TicketSignatureError::Commitment(error))
+                if *error == (TicketCommitmentError::Mismatch { expected, actual })
         ));
     }
     #[test]
@@ -485,9 +533,8 @@ mod tests {
             assert!(
                 matches!(
                     ticket.verify_signature(),
-                    Err(TicketSignatureError::Signature(
-                        iroha_crypto::Error::BadSignature
-                    ))
+                    Err(TicketSignatureError::Signature(error))
+                        if *error == iroha_crypto::Error::BadSignature
                 ),
                 "{label} ticket signature R must fail Ed25519 admission"
             );

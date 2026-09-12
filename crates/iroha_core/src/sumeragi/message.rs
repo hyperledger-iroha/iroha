@@ -10,11 +10,11 @@ use iroha_data_model::{
             finality::V2FinalityArtifact,
         },
     },
-    peer::PeerId,
 };
 use iroha_macro::*;
+use iroha_model_base::peer::PeerId;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -24,7 +24,8 @@ use std::{
 };
 #[allow(clippy::enum_variant_names, clippy::large_enum_variant)]
 /// Messages used by peers to communicate during the consensus process.
-#[derive(Debug, Clone, Decode, Encode, FromVariant)]
+#[derive(Debug, Clone, Decode, Encode, FromVariant, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::BlockMessage")]
 pub enum BlockMessage {
     /// Advertisement that a peer durably retains a canonical committed block body.
     #[codec(index = 0)]
@@ -122,10 +123,8 @@ impl BlockMessage {
 }
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let mut cursor = bytes;
-        let value: Self = Decode::decode(&mut cursor)?;
+        let (value, consumed) = ncore::decode_field_prefix::<Self>(bytes)?;
         value.ensure_supported_wire_version()?;
-        let consumed = bytes.len().saturating_sub(cursor.len());
         Ok((value, consumed))
     }
 }
@@ -145,6 +144,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
 ///
 /// A network consumer must pair the decoded payload with its transport-authenticated peer
 /// through one of the identity-requiring `SumeragiHandle` entry points.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::BlockMessageWire")]
 #[derive(Clone)]
 pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
@@ -231,7 +232,7 @@ impl BlockMessageWire {
             });
         }
         let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
-        if schema != <BlockMessage as NoritoSerialize>::schema_hash().as_slice() {
+        if schema != norito::schema::identity::frame_hash::<BlockMessage>().as_slice() {
             return Err(ncore::Error::SchemaMismatch);
         }
         let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
@@ -282,7 +283,6 @@ impl From<BlockMessage> for BlockMessageWire {
         Self::new(message)
     }
 }
-impl NoritoSerialize for BlockMessageWire {}
 impl SerializePayload for BlockMessageWire {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.message.ensure_live_outbound()?;
@@ -295,7 +295,7 @@ impl SerializePayload for BlockMessageWire {
         Ok(())
     }
 }
-impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
+impl<'a> DeserializePayload<'a> for BlockMessageWire {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode canonical Sumeragi block message")
     }
@@ -363,6 +363,8 @@ pub const LANE_HISTORICAL_RECOVERY_VERSION_V1: u16 = 1;
 /// Every field is copied from one locally verified durable finality artifact.
 /// The execution commitment (and therefore `executed_block_wire_hash`) was
 /// signed by the exact CommitQC named by `finality_artifact_hash`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::CanonicalExecutedBlockNeedV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub struct CanonicalExecutedBlockNeedV1 {
@@ -386,6 +388,8 @@ pub struct CanonicalExecutedBlockNeedV1 {
 /// bind exact locally durable global finality and execution authority. The
 /// additional hashes prevent a response for another canonical body or READY
 /// payload from being correlated merely because it names the same height.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryKindV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryKindV1 {
     /// Rehydrate the result-bearing canonical block selected by global finality.
@@ -420,6 +424,8 @@ pub enum LaneHistoricalRecoveryKindV1 {
 /// mismatch. Lane-owned requests carry a complete certificate and exact signer
 /// PoPs. Certificate-free canonical-body repair carries no lane certificate;
 /// its kind binds exact global finality and execution authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryRequestV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct LaneHistoricalRecoveryRequestV1 {
     /// Current-only layout version.
@@ -460,6 +466,8 @@ impl LaneHistoricalRecoveryRequestV1 {
     }
 }
 /// Proof-carrying payload returned for one outstanding historical request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryPayloadV1 {
     /// Result-bearing canonical block plus its complete frozen finality proof.
@@ -500,6 +508,8 @@ pub enum LaneHistoricalRecoveryPayloadV1 {
     },
 }
 /// Versioned response to one exact outstanding historical recovery request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryResponseV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct LaneHistoricalRecoveryResponseV1 {
     /// Current-only layout version.
@@ -515,6 +525,8 @@ pub const KURA_REPLICA_ADVERT_VERSION_V1: u16 = 1;
 pub const MAX_KURA_REPLICA_ADVERT_WIRE_BYTES: usize = 16 * 1024;
 const KURA_REPLICA_ADVERT_SIGNATURE_BYTES: usize = 96;
 const KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:kura-replica-advert:v1";
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::KuraReplicaAdvertSignaturePreimageV1")]
 #[derive(Encode)]
 struct KuraReplicaAdvertSignaturePreimageV1 {
     domain: Vec<u8>,
@@ -534,6 +546,8 @@ struct KuraReplicaAdvertSignaturePreimageV1 {
 /// only when Kura independently revalidates the exact retained finality
 /// artifact and deterministically selects `keeper` from that artifact's
 /// CommitQC signers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::KuraReplicaAdvertV1")]
 #[derive(Debug, Clone, Decode, Encode, PartialEq, Eq)]
 pub struct KuraReplicaAdvertV1 {
     /// Advert layout version; must equal [`KURA_REPLICA_ADVERT_VERSION_V1`].
@@ -615,10 +629,16 @@ mod tests {
     use iroha_data_model::{
         block::consensus::{CertPhase, LaneBlockDescriptorV1},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        nexus::{DataSpaceId, LaneId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::{core as norito_core, decode_from_bytes};
     use std::sync::Arc;
+
+    fn encode_wire_payload(value: &BlockMessageWire) -> Result<Vec<u8>, norito_core::Error> {
+        let mut bytes = Vec::new();
+        norito::SerializePayload::serialize(value, &mut norito_core::Encoder::new(&mut bytes))?;
+        Ok(bytes)
+    }
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("Sumeragi message fixture key generation should succeed")
     }
@@ -699,6 +719,31 @@ mod tests {
             }),
         ))
     }
+    #[test]
+    fn captured_original_core_block_and_network_frames() {
+        use crate::frame_identity_tests::shapes;
+        let advert = signed_kura_replica_advert_fixture();
+        advert
+            .verify_keeper_signature()
+            .expect("existing signed advert is valid");
+        for (variant, message) in [
+            ("payload_chunk", sample_v2_message()),
+            (
+                "kura_replica_advert",
+                BlockMessage::KuraReplicaAdvert(advert),
+            ),
+        ] {
+            message
+                .ensure_live_outbound()
+                .expect("existing live message fixture");
+            shapes("block_message", variant, &message);
+            let wire = BlockMessageWire::try_preencoded(Arc::new(message))
+                .expect("existing live block pre-encoding");
+            let network = crate::NetworkMessage::SumeragiBlock(Arc::new(wire));
+            shapes("network_message", variant, &network);
+        }
+    }
+
     fn retagged_block_message_frame(tag: u32) -> Vec<u8> {
         let mut encoded = norito_core::to_bytes(&sample_v2_message())
             .expect("encode canonical Sumeragi v2 fixture");
@@ -913,7 +958,7 @@ mod tests {
         message.protocol_version = message.protocol_version.saturating_sub(1);
         let message = Arc::new(BlockMessage::V2(message));
         assert!(BlockMessageWire::try_preencoded(Arc::clone(&message)).is_err());
-        assert!(norito_core::to_bytes(&BlockMessageWire::new((*message).clone())).is_err());
+        assert!(encode_wire_payload(&BlockMessageWire::new((*message).clone())).is_err());
         let raw = norito_core::to_bytes(message.as_ref())
             .expect("encode non-canonical version as an adversarial raw fixture");
         assert!(
@@ -955,7 +1000,7 @@ mod tests {
         assert_eq!(wrapped_encoded[5], norito_core::VERSION_MINOR);
         assert_eq!(
             &wrapped_encoded[6..22],
-            <BlockMessage as NoritoSerialize>::schema_hash().as_slice()
+            norito::schema::identity::frame_hash::<BlockMessage>().as_slice()
         );
         assert_eq!(wrapped_encoded[22], norito_core::Compression::None as u8);
         assert!(LEN_OFF + 8 <= norito_core::Header::SIZE);
@@ -977,9 +1022,11 @@ mod tests {
         );
         assert_current_v2("decode_from_slice message", decoded.as_message());
         assert_eq!(decoded.encoded_len(), Some(wrapped_encoded.len()));
-        assert!(
-            norito_core::to_bytes(&decoded).is_ok(),
-            "a decoded current frame must remain canonically encodable"
+        assert_eq!(
+            encode_wire_payload(&decoded)
+                .expect("a decoded current frame must remain canonically encodable"),
+            wrapped_encoded,
+            "the wire wrapper emits the exact cached BlockMessage frame"
         );
         let decoded_via_decode: BlockMessageWire =
             Decode::decode(&mut wrapped_encoded.as_slice()).expect("decode block message wire");
@@ -988,7 +1035,11 @@ mod tests {
             decoded_via_decode.encoded_len(),
             Some(wrapped_encoded.len())
         );
-        assert!(norito_core::to_bytes(&decoded_via_decode).is_ok());
+        assert_eq!(
+            encode_wire_payload(&decoded_via_decode)
+                .expect("encode wrapper decoded through its payload codec"),
+            wrapped_encoded,
+        );
         let decoded_payload =
             decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
         assert_current_v2("cached payload", &decoded_payload);

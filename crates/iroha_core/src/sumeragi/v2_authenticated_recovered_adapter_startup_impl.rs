@@ -355,6 +355,43 @@ impl AuthenticatedRecoveredAdapterStartup {
                 )
             }
             RecoveredWalStartupAuthorityV1::PhaseVote(vote) => {
+                let terminal =
+                    super::v2_lifecycle_coordinator::resolved_phase_vote_outcome_from_storage(
+                        &verified,
+                        ledger_root,
+                        &body_store,
+                        &vote,
+                    )
+                    .map_err(|reason| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredParent(reason),
+                        )
+                    })?;
+                if let Some(terminal) = terminal {
+                    let projection = super::v2_runtime::project_recovered_resolved_phase_vote(
+                        &verified, vote, terminal,
+                    )
+                    .map_err(|_| {
+                        ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredParent(
+                                "terminal vote lost its exact WAL/body authority",
+                            ),
+                        )
+                    })?;
+                    return Self::open_recovered_control_projection_branch(
+                        verified,
+                        adapter,
+                        effects,
+                        projection,
+                        local_proposal_attempt,
+                        body_store,
+                        config,
+                        reply_route_source_capacity,
+                        ledger_root,
+                        payload_store_target,
+                        local_signer,
+                    );
+                }
                 let phase_startup = Self {
                     adapter,
                     effects,
@@ -724,7 +761,7 @@ impl AuthenticatedRecoveredAdapterStartup {
         verified: VerifiedHeightContext,
         adapter: SumeragiV2Adapter,
         effects: Vec<AdapterEffect>,
-        control: AuthenticatedRecoveredWalControlProjection,
+        control: AuthenticatedRecoveredWalStandaloneSignProjection,
         local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
         body_store: super::v2_body_store::RevalidatedV2BodyStore,
         config: &iroha_config::parameters::actual::SumeragiV2Config,

@@ -25,12 +25,9 @@ use iroha::{
         },
         isi::{Log, SetKeyValue},
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
-        metadata::Metadata,
-        nexus::{DataSpaceId, LaneCatalog, LaneId},
-        peer::PeerId,
+        nexus::LaneCatalog,
         prelude::{
-            FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
-            TransactionEntrypoint,
+            FindAccountById, HashOf, QueryBuilderExt, SignedTransaction, TransactionEntrypoint,
         },
         query::{
             CommittedTransaction, block::prelude::FindBlocks,
@@ -56,6 +53,10 @@ use iroha_core::{
     queue::{LaneQueueReservationKeyV1, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
@@ -2027,8 +2028,8 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
         .map(|(index, peer)| {
             let client = peer_client_with_timeout(peer);
             let status = client
-                .client()
-                .get_status()
+                .status()
+                .get()
                 .map_err(|err| eyre!("fetch peer {index} status failed: {err}"))?;
             let lanes = status
                 .teu_lane_commit
@@ -5072,6 +5073,7 @@ fn offline_kura_config(store_dir: PathBuf, blocks_in_memory: NonZeroUsize) -> Ku
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
@@ -5939,7 +5941,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
             && quorum_required == TOTAL_PEERS - 1,
         "four-peer release gate requires an exact three-validator quorum"
     );
-    let initial_height = submitters[0].client().get_status()?.blocks;
+    let initial_height = submitters[0].status().get()?.blocks;
     restart_four_peer_validator(
         &network,
         &runtime,
@@ -6083,7 +6085,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         &archive_a_paths[RECREATION_RESTART_PEER],
         &marker_b,
     )?;
-    let recreation_height = submitters[0].client().get_status()?.blocks;
+    let recreation_height = submitters[0].status().get()?.blocks;
     restart_four_peer_validator(
         &network,
         &runtime,
@@ -6124,7 +6126,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         quorum_required,
         STRICT_SCALE_OUT_WAIT_TIMEOUT,
     )?;
-    let pre_second_fault_height = submitters[0].client().get_status()?.blocks;
+    let pre_second_fault_height = submitters[0].status().get()?.blocks;
     restart_four_peer_validator(
         &network,
         &runtime,
@@ -6448,7 +6450,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
             .into(),
         EventFilterBox::Pipeline(MergeLedgerEventFilter::default().into()),
     ];
-    let mut events = rt.block_on(submitter.client().listen_for_events(filters))?;
+    let mut events = rt.block_on(submitter.account_client().events().subscribe(filters))?;
     let submitted_hash = submitter.submit_transaction(&target)?;
     ensure!(
         submitted_hash == target_hash,
@@ -6537,8 +6539,15 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         let result = tokio::time::timeout(MERGE_WAIT, wait)
             .await
             .map_err(|_| eyre!("timed out waiting for the target certified merge event"))?;
-        events.close().await;
-        result
+        let close = events.close().await;
+        match (result, close) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error.into()),
+            (Err(error), Err(close_error)) => {
+                Err(error.wrap_err(format!("event stream close failed: {close_error}")))
+            }
+        }
     })?;
     validate_merge_qc_evidence(&network.network_id(), &target_entry)?;
     let batch = target_entry
@@ -6986,8 +6995,9 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
     let post_close_entrypoint = post_close_transaction.hash_as_entrypoint();
     let mut post_close_events = rt.block_on(
         submitter
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(post_close_hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(post_close_hash)]),
     )?;
     ensure!(
         submitter.submit_transaction(&post_close_transaction)? == post_close_hash,
@@ -7031,8 +7041,15 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
         let result = tokio::time::timeout(SUBMISSION_READY_TIMEOUT, wait)
             .await
             .map_err(|_| eyre!("timed out waiting for post-close queued event"))?;
-        post_close_events.close().await;
-        result
+        let close = post_close_events.close().await;
+        match (result, close) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error.into()),
+            (Err(error), Err(close_error)) => {
+                Err(error.wrap_err(format!("event stream close failed: {close_error}")))
+            }
+        }
     })?;
     ensure!(
         queued_lane == BASE_LANE && queued_lane != TARGET_LANE,
@@ -7727,20 +7744,18 @@ mod tests {
     use iroha::{
         client::TxConfirmationStatus,
         crypto::Hash,
-        data_model::{
-            block::consensus::{
-                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
-                COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-            },
-            nexus::{DataSpaceId, LaneId},
+        data_model::block::consensus::{
+            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use norito::codec::Encode;
     use std::{collections::BTreeSet, fs, time::Duration};
     use tempfile::tempdir;

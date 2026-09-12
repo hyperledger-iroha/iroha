@@ -59,6 +59,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     for marker in [0x71, 0x72, 0x73] {
         state.push_block_hash_for_testing(dummy_block_hash(marker));
     }
+    seed_snapshot_genesis_resolver_checkpoint(&state);
     let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
     let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
     {
@@ -172,17 +173,17 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     .expect("extended lane catalog");
     let initial = LaneConfig::from_catalog(&initial_catalog);
     let extended = LaneConfig::from_catalog(&extended_catalog);
-    let initial_incarnations =
-        BTreeMap::from([(LaneId::SINGLE, Hash::new(b"snapshot-validation-primary"))]);
+    let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &initial)
+        .expect("create persistent Kura");
+    let state = state_factory_with_kura(Arc::clone(&kura));
+    let initial_incarnations = state.lane_incarnations_snapshot();
     let extended_incarnations = BTreeMap::from([
         (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
         (LaneId::new(1), Hash::new(b"snapshot-validation-secondary")),
     ]);
     let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let extended_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
-    let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &initial)
-        .expect("create persistent Kura");
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &extended,
@@ -207,7 +208,6 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     let journal_bytes_before = std::fs::read(kura.lane_geometry_journal_path())
         .expect("read exact geometry journal before rejected snapshot");
     assert_eq!(journal_before.1, vec!["catalog_published"]);
-    let state = state_factory_with_kura(Arc::clone(&kura));
     let mut noncanonical = exact_snapshot_payload_bytes(&state);
     noncanonical.insert(1, b' ');
     let key_pair = checked_random_snapshot_keypair();
@@ -442,7 +442,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura_and_chain(
         Arc::clone(&kura),
-        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+        iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     );
     let block =
         signed_block_with_transaction(accepted_log_transaction("exact-sccp-registry-snapshot"));
@@ -532,7 +532,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             }
             _ => unreachable!("closed test scope"),
         }
-        serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
+        serialized = snapshot_json_with_mutation(&serialized, &snapshot);
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
         let error = match try_read_snapshot(
@@ -662,7 +662,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura_and_chain(
             Arc::clone(&kura),
-            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
+            iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         let mut serialized = String::new();
         serialize_state_snapshot(&state, &mut serialized);
@@ -694,7 +694,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
                 );
             }
         }
-        serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
+        serialized = snapshot_json_with_mutation(&serialized, &snapshot);
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
         let result = try_read_snapshot(
@@ -921,7 +921,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
                 );
             }
         }
-        serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
+        serialized = snapshot_json_with_mutation(&serialized, &snapshot);
         let key_pair = checked_random_snapshot_keypair();
         write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
         let pointer_before =
@@ -1033,7 +1033,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
     );
 }
 #[tokio::test]
-async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
+async fn incompatible_sccp_caps_reject_snapshot_without_mutating_kura() {
     let tmp_root = tempdir().unwrap();
     let store_dir = tmp_root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
@@ -1041,41 +1041,6 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
     let key_pair = checked_random_snapshot_keypair();
     try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
         .expect("write exact SCCP snapshot");
-    // Keep every SCCP record/archive association exact so the configured-cap
-    // rejection is the first failing boundary, ahead of hash reconciliation.
-    let snapshot_bytes = std::fs::read(current_generation_artifact(&store_dir, SNAPSHOT_FILE_NAME))
-        .expect("snapshot bytes");
-    let mut snapshot_value: json::Value =
-        json::from_slice(&snapshot_bytes).expect("snapshot JSON parses");
-    let json::Value::Object(root) = &mut snapshot_value else {
-        panic!("snapshot root is an object");
-    };
-    let Some(json::Value::Array(block_hashes)) = root.get_mut("block_hashes") else {
-        panic!("snapshot block hashes are an array");
-    };
-    assert_eq!(block_hashes.len(), 1);
-    let forged_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
-    assert_ne!(
-        forged_hash,
-        state.latest_block_hash_fast().expect("fixture block hash")
-    );
-    block_hashes[0] = json::to_value(&forged_hash).expect("encode forged block hash");
-    let Some(json::Value::Object(runtime)) = root.get_mut("nexus_runtime") else {
-        panic!("snapshot Nexus runtime is an object");
-    };
-    let Some(json::Value::Array(history)) = runtime.get_mut("autoscale_sample_history") else {
-        panic!("snapshot autoscale sample history is an array");
-    };
-    let Some(json::Value::Object(latest_sample)) = history.last_mut() else {
-        panic!("snapshot autoscale sample history retains the latest block");
-    };
-    latest_sample.insert(
-        "block_hash".to_owned(),
-        json::to_value(&forged_hash).expect("encode forged autoscale sample hash"),
-    );
-    let mut forged_snapshot_bytes = Vec::new();
-    json::to_writer(&mut forged_snapshot_bytes, &snapshot_value).expect("encode forged snapshot");
-    write_snapshot_bundle_from_bytes(&store_dir, &forged_snapshot_bytes, &key_pair);
     let canonical_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
         .expect("canonical Kura hash");
@@ -1102,13 +1067,18 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
     ) {
-        Ok(_) => panic!("incompatible actual SCCP cap must fail before reconciliation"),
+        Ok(_) => panic!("incompatible actual SCCP cap must reject the authentic snapshot"),
         Err(error) => error,
     };
-    assert!(matches!(
-        error,
-        TryReadError::ZkConfigInstall(ZkConfigInstallError::SccpPendingUsageLimitExceeded { .. })
-    ));
+    assert!(
+        matches!(
+            error,
+            TryReadError::ZkConfigInstall(
+                ZkConfigInstallError::SccpPendingUsageLimitExceeded { .. }
+            )
+        ),
+        "unexpected snapshot capacity rejection: {error:?}"
+    );
     assert_eq!(kura.blocks_count(), 1, "rejected snapshot pruned Kura");
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(

@@ -1,13 +1,13 @@
 //! This module contains data and structures related only to smart contract execution
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
-    error::ParseError,
     id::NetworkId,
-    name::Name,
-    nexus::{DataSpaceCatalog, DataSpaceId},
+    nexus::DataSpaceCatalog,
 };
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -205,18 +205,34 @@ pub use self::model::*;
 mod model {
     use super::*;
     use derive_more::Display;
-    /// Canonical Bech32m-encoded public contract address.
+    /// Canonical contract alias: `name::namespace` or `name::dataspace.namespace`.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractAlias")]
     pub struct ContractAlias(pub(super) ConstString);
     /// Canonical Bech32m-encoded public contract address.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractAddress")]
     pub struct ContractAddress(pub(super) ConstString);
     /// Active smart-contract instance binding.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractInstance")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractInstance {
         /// Canonical deployed contract address.
@@ -227,10 +243,18 @@ mod model {
         pub code_hash: iroha_crypto::Hash,
     }
     /// Authority that controls the mutable lifecycle of a deployed contract.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "owner", content = "value", deny_unknown_fields)]
     pub enum ContractLifecycleOwnerV1 {
@@ -242,23 +266,39 @@ mod model {
         Parliament,
     }
     /// Immutable provenance payload for a direct contract deployment.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[norito(deny_unknown_fields)]
     pub struct DirectContractDeploymentOriginV1 {
         /// Account whose nonce derived the address.
         pub deployer: AccountId,
     }
     /// Immutable provenance payload for a Parliament contract deployment.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[norito(deny_unknown_fields)]
     pub struct ParliamentContractDeploymentOriginV1 {
         /// Account that submitted the proposal.
         pub proposer: AccountId,
@@ -268,10 +308,18 @@ mod model {
         pub governance_attempt_id: [u8; 32],
     }
     /// Immutable provenance of a contract address's first deployment.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "origin", content = "value", deny_unknown_fields)]
     pub enum ContractDeploymentOriginV1 {
@@ -283,10 +331,19 @@ mod model {
         Parliament(ParliamentContractDeploymentOriginV1),
     }
     /// Revocable authority delegated by an account owner to Parliament.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "delegation", content = "value", deny_unknown_fields)]
     pub enum ContractParliamentDelegationV1 {
@@ -298,10 +355,18 @@ mod model {
         Lifecycle,
     }
     /// Time-bounded containment imposed by the Parliament emergency corridor.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct ContractEmergencyHoldV1 {
         /// Non-zero digest of the incident evidence.
@@ -318,11 +383,21 @@ mod model {
         pub expires_at_height: u64,
     }
     /// Consensus-persisted ownership and lifecycle-control record for one contract address.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractLifecycleControlV1")]
     pub struct ContractLifecycleControlV1 {
         /// Exact persisted schema version; first-release snapshots require `1`.
         pub version: u16,
@@ -413,18 +488,17 @@ impl ContractLifecycleControlV1 {
         ) {
             return Err("Parliament contract origin identifiers must be non-zero");
         }
-        if let Some(hold) = &self.emergency_hold {
-            if hold.incident_digest == [0; 32]
+        if let Some(hold) = &self.emergency_hold
+            && (hold.incident_digest == [0; 32]
                 || hold.proposal_content_id == [0; 32]
                 || hold.governance_attempt_id == [0; 32]
                 || hold.reason.trim().is_empty()
                 || hold.imposed_at_height == 0
                 || hold.expires_at_height <= hold.imposed_at_height
                 || hold.expires_at_height - hold.imposed_at_height
-                    > MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1
-            {
-                return Err("invalid contract emergency hold");
-            }
+                    > MAX_CONTRACT_EMERGENCY_HOLD_BLOCKS_V1)
+        {
+            return Err("invalid contract emergency hold");
         }
         Ok(())
     }
@@ -620,7 +694,7 @@ impl AsRef<str> for ContractAlias {
         self.0.as_ref()
     }
 }
-impl norito::core::NoritoSerialize for ContractAlias {}
+
 impl norito::core::SerializePayload for ContractAlias {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -632,7 +706,8 @@ impl norito::core::SerializePayload for ContractAlias {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
+
+impl<'a> norito::core::DeserializePayload<'a> for ContractAlias {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ContractAlias deserialization must succeed for valid archives")
@@ -640,12 +715,12 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ContractAlias {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let value = <String as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let value = <String as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
         ContractAlias::from_str(&value)
-            .map_err(|err| norito::core::Error::Message(err.reason.into()))
+            .map_err(|err| norito::core::Error::Message(err.reason().into()))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ContractAlias {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -657,7 +732,7 @@ impl norito::json::FastJsonWrite for ContractAlias {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ContractAlias {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -801,7 +876,7 @@ impl AsRef<str> for ContractAddress {
         &self.0
     }
 }
-impl norito::core::NoritoSerialize for ContractAddress {}
+
 impl norito::core::SerializePayload for ContractAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -813,7 +888,8 @@ impl norito::core::SerializePayload for ContractAddress {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {
+
+impl<'a> norito::core::DeserializePayload<'a> for ContractAddress {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ContractAddress deserialization must succeed for valid archives")
@@ -821,7 +897,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for ContractAddress {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let value = <String as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let value = <String as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
         ContractAddress::from_str(&value)
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
@@ -833,7 +909,7 @@ impl FromStr for ContractAddress {
         Ok(Self(ConstString::from(value)))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ContractAddress {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -845,7 +921,7 @@ impl norito::json::FastJsonWrite for ContractAddress {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ContractAddress {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -857,7 +933,7 @@ impl norito::json::JsonDeserialize for ContractAddress {
         })
     }
 }
-#[cfg(feature = "json")]
+
 fn reserve_contract_json_decode(
     raw_bytes: usize,
     live_units: usize,
@@ -920,8 +996,9 @@ pub mod prelude {
 #[cfg(test)]
 mod contract_address_tests {
     use super::*;
-    use crate::{block::BlockHeader, id::ChainId};
+    use crate::block::BlockHeader;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::chain::ChainId;
     fn network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
@@ -1130,7 +1207,7 @@ mod contract_address_tests {
             assert!(raw.parse::<ContractAlias>().is_err(), "must fail: {raw}");
         }
     }
-    #[cfg(feature = "json")]
+
     fn assert_measured_json_decode<T>(json: &str)
     where
         T: norito::json::JsonDeserialize + core::fmt::Debug,
@@ -1158,7 +1235,7 @@ mod contract_address_tests {
         ));
         assert!(usage.total_allocated_bytes() < exact);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn contract_alias_and_address_json_decode_are_measured_exactly() {
         assert_measured_json_decode::<ContractAlias>("\"router::dex.universal\"");
@@ -1179,6 +1256,58 @@ mod contract_address_tests {
         let err = <ContractAlias as norito::codec::Decode>::decode(&mut invalid_bytes.as_slice())
             .expect_err("invalid alias literal must fail");
         assert!(err.to_string().contains("contract alias"));
+    }
+    #[test]
+    fn contract_instance_frame_preserves_address_alias_and_code_binding() {
+        let authority = checked_random_account_id();
+        let address = ContractAddress::derive(
+            &network_id(b"contract-instance-frame-test"),
+            &authority,
+            12,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        assert_eq!(
+            <ContractInstance as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::smart_contract::model::ContractInstance",
+        );
+        assert_eq!(
+            <ContractInstance as norito::NoritoSchema>::frame_name(),
+            "iroha_data_model::smart_contract::model::ContractInstance",
+        );
+        for alias in [
+            None,
+            Some("router::dex.universal".parse().expect("valid alias")),
+        ] {
+            let instance = ContractInstance {
+                contract_address: address.clone(),
+                contract_alias: alias,
+                code_hash: Hash::new(b"contract-instance-activated-code"),
+            };
+            let frame = norito::encode_canonical(&instance).expect("contract instance frame");
+            assert_eq!(
+                frame[6..22],
+                norito::schema::identity::frame_hash::<ContractInstance>()
+            );
+            let decoded: ContractInstance =
+                norito::decode_canonical(&frame).expect("instance roundtrip");
+            assert_eq!(decoded, instance);
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("re-encode instance"),
+                frame
+            );
+            let wrong_owner = norito::encode_canonical(&address).expect("different existing root");
+            assert!(matches!(
+                norito::decode_canonical::<ContractInstance>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(
+                norito::decode_canonical::<ContractInstance>(&frame[..frame.len() - 1]).is_err()
+            );
+            let mut trailing = frame;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<ContractInstance>(&trailing).is_err());
+        }
     }
     #[test]
     fn contract_address_norito_wire_is_validated_string_literal() {
@@ -1282,7 +1411,7 @@ pub mod manifest {
     //! Manifest metadata for IVM smart contracts. It can be attached to a transaction's `metadata`
     //! under a well-known key for admission-time checks. When attached or registered, a V1 manifest
     //! must carry both consensus-binding hashes.
-    #[cfg(feature = "json")]
+
     use crate::{
         DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
         DeriveJsonSerialize as DeriveJsonSer,
@@ -1290,14 +1419,14 @@ pub mod manifest {
     use crate::{
         account::AccountId,
         events::EventFilterBox,
-        metadata::Metadata,
         smart_contract::entrypoint::{EntrypointArgumentSchemaV1, EntrypointValueTypeV1},
         trigger::{TriggerId, action::Repeats},
     };
     use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
+    use iroha_model_base::metadata::Metadata;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
-    #[cfg(feature = "json")]
+
     use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
     /// Well-known metadata key used to attach a contract manifest.
     pub const MANIFEST_METADATA_KEY: &str = "contract_manifest";
@@ -1309,9 +1438,9 @@ pub mod manifest {
     /// fields are optional metadata.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(reuse_archived)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(DeriveFast, DeriveJsonSer, DeriveJsonDe)]
+    #[norito(deny_unknown_fields)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1320,6 +1449,8 @@ pub mod manifest {
         all(feature = "ffi_export", not(feature = "ffi_import")),
         ffi_type(opaque)
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::manifest::ContractManifest")]
     pub struct ContractManifest {
         /// Canonical source-level seiyaku name embedded by the compiler.
         #[norito(default)]
@@ -1362,10 +1493,22 @@ pub mod manifest {
         pub provenance: Option<ManifestProvenance>,
     }
     /// Bounded dynamic state access advertised by a compiler.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(deny_unknown_fields)]
+    #[norito(no_fast_from_json)]
     pub struct DynamicAccessHint {
         /// Canonical state-map base key, for example `state:Balances`.
         pub base_key: String,
@@ -1390,7 +1533,7 @@ pub mod manifest {
         #[norito(default)]
         pub dynamic_writes: Vec<DynamicAccessHint>,
     }
-    #[cfg(feature = "json")]
+
     impl FastJsonWrite for AccessSetHints {
         fn write_json(&self, out: &mut String) {
             out.push('{');
@@ -1429,7 +1572,7 @@ pub mod manifest {
             Ok(())
         }
     }
-    #[cfg(feature = "json")]
+
     impl JsonDeserialize for AccessSetHints {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             parser.skip_ws();
@@ -1491,10 +1634,22 @@ pub mod manifest {
         }
     }
     /// Signature metadata binding a manifest to an approved signer.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(deny_unknown_fields)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1510,9 +1665,21 @@ pub mod manifest {
         pub signature: Signature,
     }
     /// Declarative metadata for a compiled entrypoint.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1563,9 +1730,21 @@ pub mod manifest {
         pub triggers: Vec<TriggerDescriptor>,
     }
     /// Declarative parameter metadata for a public or view entrypoint.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1581,9 +1760,21 @@ pub mod manifest {
         pub type_name: String,
     }
     /// Declarative durable state schema advertised by a compiled contract.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1599,9 +1790,21 @@ pub mod manifest {
         pub type_name: String,
     }
     /// Stable application error code exposed by a compiled contract.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json, deny_unknown_fields))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json, deny_unknown_fields)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1619,8 +1822,12 @@ pub mod manifest {
     /// Exact nominal identity and finite variant schema of one Kotodama error type.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(decode_from_slice)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json, deny_unknown_fields))]
+    #[derive(DeriveFast, DeriveJsonSer, DeriveJsonDe)]
+    #[norito(no_fast_from_json, deny_unknown_fields)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor"
+    )]
     pub struct ContractErrorTypeDescriptor {
         /// Stable locked-package, source-unit and enum identity; never a linker ordinal.
         pub identity: String,
@@ -1677,9 +1884,21 @@ pub mod manifest {
         }
     }
     /// Localized message text for a specific language tag.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1695,9 +1914,21 @@ pub mod manifest {
         pub text: String,
     }
     /// Translation entry keyed by a stable message id.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1713,9 +1944,21 @@ pub mod manifest {
         pub translations: Vec<KotobaTranslation>,
     }
     /// Entrypoint callback target referenced by a trigger declaration.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1732,9 +1975,21 @@ pub mod manifest {
         pub entrypoint: String,
     }
     /// Declarative trigger metadata attached to an entrypoint.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1760,9 +2015,22 @@ pub mod manifest {
         pub callback: TriggerCallback,
     }
     /// Entry point category advertised by Kotodama.
-    #[derive(Debug, Clone, Copy, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[norito(tag = "kind", content = "value")]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -1783,9 +2051,21 @@ pub mod manifest {
         Kaizen,
     }
     /// Canonical payload signed to attest a manifest.
-    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
-    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Clone,
+        Encode,
+        Decode,
+        IntoSchema,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        DeriveFast,
+        DeriveJsonSer,
+        DeriveJsonDe,
+    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1793,6 +2073,10 @@ pub mod manifest {
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         ffi_type(opaque)
+    )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::smart_contract::manifest::ContractManifestSignaturePayload"
     )]
     pub struct ContractManifestSignaturePayload {
         /// Canonical source-level seiyaku name.
@@ -1875,7 +2159,7 @@ pub mod manifest {
                 .expect("contract manifest signing should succeed")
         }
     }
-    #[cfg(all(test, feature = "json"))]
+    #[cfg(test)]
     mod tests {
         use super::*;
         #[test]
@@ -1997,7 +2281,7 @@ pub mod manifest {
                 descriptor
             );
             for forged in [
-                json.replacen("{", "{\"unexpected\":true,", 1),
+                json.replacen('{', "{\"unexpected\":true,", 1),
                 json.replacen("\"name\":", "\"unexpected\":true,\"name\":", 1),
             ] {
                 assert!(norito::json::from_str::<ContractErrorTypeDescriptor>(&forged).is_err());
@@ -2194,5 +2478,35 @@ pub mod manifest {
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::manifest::ContractManifestSignaturePayload,
+        >("iroha_data_model::smart_contract::manifest::ContractManifestSignaturePayload");
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::smart_contract::manifest::ContractErrorTypeDescriptor,
+        >("iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::smart_contract::manifest::ContractManifest,
+        >("iroha_data_model::smart_contract::manifest::ContractManifest");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::smart_contract::model::ContractLifecycleControlV1,
+        >("iroha_data_model::smart_contract::model::ContractLifecycleControlV1");
     }
 }

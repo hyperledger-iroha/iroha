@@ -759,6 +759,8 @@ fn block_committed_transactions_with_merge(
 }
 
 /// Immutable canonical prefix bound to a Kaigi signal-history cursor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::tx::KaigiSignalHistoryAnchor")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct KaigiSignalHistoryAnchor {
     height: u64,
@@ -1850,11 +1852,14 @@ pub(crate) mod tests {
             MergeQuorumCertificate,
         },
         prelude::{
-            AccountId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, NetworkId, PeerId,
-            TransactionBuilder, TransactionEntrypoint, TransactionResult,
+            AccountId, DataTriggerSequence, InstructionBox, NetworkId, TransactionBuilder,
+            TransactionEntrypoint, TransactionResult,
         },
         transaction::error::TransactionRejectionReason,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::json::Json;
 
     #[test]
@@ -1874,7 +1879,7 @@ pub(crate) mod tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"kaigi-index-test")),
         );
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(norito::json!({

@@ -387,7 +387,7 @@ fn take_string_field(
         _ => Err(PredicateParseError::ExpectedString(section, field)),
     }
 }
-#[cfg(feature = "json")]
+
 fn next_sorted_index_by<T, F>(items: &[T], previous: Option<usize>, key: F) -> Option<usize>
 where
     F: for<'a> Fn(&'a T) -> &'a str + Copy,

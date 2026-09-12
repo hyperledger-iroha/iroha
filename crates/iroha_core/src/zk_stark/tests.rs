@@ -2,6 +2,8 @@
 //
 // Included by `zk_stark::tests` to preserve exact libtest names.
 use super::*;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::tests::RetiredSelectorParamsV0")]
 #[derive(norito::NoritoSerialize)]
 struct RetiredSelectorParamsV0 {
     version: u16,
@@ -100,12 +102,34 @@ fn stark_params_decoder_rejects_retired_hash_selector_wire() {
         hash_fn: 1,
         domain_tag: "iroha:test:retired-selector-wire".to_owned(),
     };
-    let bytes = norito::encode_canonical(&retired).expect("encode retired selector params");
+    let (payload, flags) = norito::codec::encode_with_header_flags(&retired);
+    let bytes = norito::core::frame_bare_with_header_flags::<StarkFriParamsV1>(&payload, flags)
+        .expect("frame retired parameter payload under the actual V1 owner");
+    let view = norito::core::from_bytes_view(&bytes).expect("valid frame and checksum");
+    assert_eq!(
+        view.schema(),
+        norito::schema::identity::frame_hash::<StarkFriParamsV1>(),
+        "rejection must exercise the retired payload, not an unrelated frame identity"
+    );
+    assert_eq!(view.as_bytes(), payload);
     assert!(
         norito::decode_canonical::<StarkFriParamsV1>(&bytes).is_err(),
         "the selector-free V1 decoder must reject pre-release selector-bearing parameters"
     );
 }
+#[test]
+fn captured_original_core_fp4_frames() {
+    use crate::frame_identity_tests::shapes;
+    for (variant, coefficients) in [("zero", [0; 4]), ("edge", [1, MOD_P_U64 - 1, 3, 4])] {
+        let value =
+            GoldilocksFp4V1::new(coefficients).expect("existing canonical coefficient fixture");
+        let shared = fastpq_prover::GoldilocksFp4V1::new(coefficients).unwrap();
+        assert_eq!(norito::codec::Encode::encode(&value), shared.to_le_bytes());
+        assert_eq!(norito::codec::Encode::encode(&value).len(), 32);
+        shapes("core_goldilocks_fp4", variant, &value);
+    }
+}
+
 #[test]
 fn fp4_wire_is_exactly_four_little_endian_coefficients() {
     use norito::{SerializePayload, codec::Encode, core::DecodeFromSlice};
@@ -157,8 +181,9 @@ fn fp4_wire_rejects_every_noncanonical_coefficient() {
 }
 #[test]
 fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::zk_stark::tests::fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema::RetiredStructFrame", frame = "iroha_core::zk_stark::GoldilocksFp4V1")]
     #[derive(norito::NoritoSerialize)]
-    #[norito(schema_name = "iroha_core::zk_stark::GoldilocksFp4V1")]
     struct RetiredStructFrame {
         c0: u64,
         c1: u64,
@@ -166,8 +191,8 @@ fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
         c3: u64,
     }
     assert_eq!(
-        <RetiredStructFrame as norito::NoritoSerialize>::schema_hash(),
-        <GoldilocksFp4V1 as norito::NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<RetiredStructFrame>(),
+        norito::schema::identity::frame_hash::<GoldilocksFp4V1>(),
         "payload rejection must not depend on a changed schema name"
     );
     let retired = RetiredStructFrame {
@@ -176,7 +201,16 @@ fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
         c2: 3,
         c3: 4,
     };
-    let framed = norito::to_bytes(&retired).expect("encode retired struct fixture");
+    let (payload, flags) = norito::codec::encode_with_header_flags(&retired);
+    let framed = norito::core::frame_bare_with_header_flags::<GoldilocksFp4V1>(&payload, flags)
+        .expect("frame the retired payload under the live scalar owner");
+    let view = norito::core::from_bytes_view(&framed).expect("valid retired frame/checksum");
+    assert_eq!(
+        view.schema(),
+        norito::schema::identity::frame_hash::<GoldilocksFp4V1>(),
+        "payload rejection must not depend on a changed schema name"
+    );
+    assert_eq!(view.as_bytes(), payload);
     assert!(norito::decode_from_bytes::<GoldilocksFp4V1>(&framed).is_err());
 }
 #[test]
@@ -533,6 +567,123 @@ fn generic_binding_verifying_key_rejects_domain_above_exact_root_cap() {
         error.contains("exact trace-root reconstruction limit"),
         "unexpected generic Binding verifier-key error: {error}"
     );
+}
+#[test]
+fn ivm_binding_verifying_key_rejects_domain_above_exact_root_cap() {
+    let circuit_id = format!(
+        "{}:{}",
+        crate::zk::ZK_BACKEND_STARK_FRI_V1,
+        crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID
+    );
+    let mut payload = StarkFriVerifyingKeyV1 {
+        version: 1,
+        circuit_id: circuit_id.clone(),
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2,
+        blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        fold_arity: 2,
+        queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+        merkle_arity: 2,
+    };
+    validate_stark_fri_canonical_verifying_key_payload(&payload, &circuit_id, "test")
+        .expect("the exact IVM binding reconstruction bound is admissible");
+    payload.n_log2 += 1;
+    let error = validate_stark_fri_canonical_verifying_key_payload(&payload, &circuit_id, "test")
+        .expect_err("oversized IVM binding verifier key must fail admission");
+    assert!(error.contains("exact trace-root reconstruction limit"));
+}
+#[test]
+fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
+    let backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;
+    let circuit = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = format!("{backend}:{circuit}");
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        domain_tag: "iroha:test:ivm-binding-statement".to_owned(),
+    };
+    let public_digest = test_digest(0x71);
+    let prove = |circuit_id: &str| {
+        prove_stark_fri_reserved_air_envelope_bytes(
+            params.clone(),
+            "IROHA-TEST-IVM-BINDING-STATEMENT".to_owned(),
+            circuit_id.to_owned(),
+            public_digest,
+        )
+        .expect("valid reserved binding AIR fixture")
+    };
+    let limits = StarkVerifierLimits::default();
+    let proof = prove(&circuit_id);
+    assert!(verify_stark_fri_ivm_execution_air_envelope_with_limits(
+        &proof,
+        &limits,
+        &public_digest,
+    ));
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&proof, &limits),
+        "generic verification must continue to reject the reserved IVM circuit"
+    );
+    assert!(!verify_stark_fri_ivm_execution_air_envelope_with_limits(
+        &proof,
+        &limits,
+        &test_digest(0x72),
+    ));
+    for alias in [
+        circuit.to_owned(),
+        format!("{backend}/{circuit}"),
+        format!("unrelated:{circuit}"),
+        format!("{backend}:generic-binding"),
+    ] {
+        assert!(
+            !verify_stark_fri_ivm_execution_air_envelope_with_limits(
+                &prove(&alias),
+                &limits,
+                &public_digest,
+            ),
+            "a valid proof under a different circuit must reject: {alias}"
+        );
+    }
+    let envelope: StarkVerifyEnvelopeV1 =
+        norito::decode_canonical(&proof).expect("decode canonical IVM binding fixture");
+    let mutations: [(&str, fn(&mut StarkVerifyEnvelopeV1)); 5] = [
+        ("trace root", |env| {
+            mutate_test_digest(&mut env.proof.air.as_mut().expect("AIR").trace_root);
+        }),
+        ("composition root", |env| {
+            mutate_test_digest(&mut env.proof.air.as_mut().expect("AIR").composition_root);
+        }),
+        ("opened row", |env| {
+            env.proof.air.as_mut().expect("AIR").openings[0].row[0] ^= 1;
+        }),
+        ("public digest", |env| {
+            mutate_test_digest(&mut env.proof.air.as_mut().expect("AIR").public_digest);
+        }),
+        (
+            "auxiliary composition",
+            attach_valid_auxiliary_composition_values,
+        ),
+    ];
+    for (label, mutate) in mutations {
+        let mut tampered = envelope.clone();
+        mutate(&mut tampered);
+        let bytes = norito::encode_canonical(&tampered).expect("encode tampered IVM proof");
+        assert!(
+            !verify_stark_fri_ivm_execution_air_envelope_with_limits(
+                &bytes,
+                &limits,
+                &public_digest,
+            ),
+            "IVM binding verifier accepted altered {label}"
+        );
+    }
+    assert!(verify_stark_fri_ivm_execution_air_envelope_with_limits(
+        &proof,
+        &limits,
+        &public_digest,
+    ));
 }
 #[test]
 fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {

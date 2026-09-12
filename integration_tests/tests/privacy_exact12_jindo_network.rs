@@ -18,7 +18,6 @@ use iroha_core::{
 use iroha_data_model::{
     Level,
     isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
-    metadata::Metadata,
     permission::Permission,
     privacy::{
         PrivacyCapabilityReadinessV1, PrivacyCapabilityRowV1, PrivacyCapabilityUnavailableReasonV1,
@@ -30,6 +29,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use std::{
     num::{NonZeroU32, NonZeroU64},
@@ -169,8 +169,9 @@ fn assert_exact_jindo_row(
 async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     let genesis = timeout(CANONICAL_GENESIS_FETCH_TIMEOUT, async {
         let mut blocks = client
-            .client()
-            .listen_for_blocks(NonZeroU64::MIN)
+            .account_client()
+            .blocks()
+            .subscribe(NonZeroU64::MIN)
             .await
             .wrap_err("subscribe to canonical block replay from genesis")?;
         blocks
@@ -247,8 +248,8 @@ async fn build_jindo_action(
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock is before the Unix epoch")?;
     let mut context = JindoPrivacyActionTransactionContextV1 {
-        network_id: client.client().network_id,
-        authority: client.client().account.clone(),
+        network_id: *client.client().network_id(),
+        authority: client.client().account().clone(),
         creation_time,
         time_to_live: Some(Duration::from_secs(3_600)),
         nonce: NonZeroU32::new(nonce),
@@ -306,7 +307,7 @@ async fn build_jindo_action(
         "Jindo fee quote changed after fixed-size proof regeneration"
     );
     let signed =
-        sign_prepared_jindo_privacy_action_v1(prepared, client.client().key_pair.private_key())
+        sign_prepared_jindo_privacy_action_v1(prepared, client.client().key_pair().private_key())
             .wrap_err("sign canonical native Jindo action")?;
     ensure!(
         signed.effect() == JindoPrivacyActionEffectV1::ActionVerificationAndFinalityOnly,

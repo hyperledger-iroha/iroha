@@ -117,15 +117,6 @@ impl JsonKeyCodec for crate::nexus::AxtHandleReplayKey {
         Ok(decoded)
     }
 }
-impl JsonKeyCodec for crate::domain::DomainId {
-    fn encode_json_key(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        crate::domain::DomainId::parse_fully_qualified(encoded)
-            .map_err(|err| json::Error::Message(err.to_string()))
-    }
-}
 impl JsonKeyCodec for crate::account::AccountId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
@@ -133,26 +124,6 @@ impl JsonKeyCodec for crate::account::AccountId {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         crate::account::AccountId::parse_encoded(encoded)
             .map_err(|err| json::Error::Message(err.to_string()))
-    }
-}
-impl JsonKeyCodec for crate::name::Name {
-    fn encode_json_key(&self, out: &mut String) {
-        json::write_json_string(self.as_ref(), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        encoded
-            .parse::<crate::name::Name>()
-            .map_err(|err| json::Error::Message(err.reason.into()))
-    }
-}
-impl JsonKeyCodec for crate::state_path::StatePath {
-    fn encode_json_key(&self, out: &mut String) {
-        json::write_json_string(self.as_ref(), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        encoded
-            .parse::<crate::state_path::StatePath>()
-            .map_err(|err| json::Error::Message(err.reason.into()))
     }
 }
 impl JsonKeyCodec for crate::proof::VerifyingKeyId {
@@ -200,7 +171,9 @@ impl JsonKeyCodec for crate::smart_contract::ContractAlias {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         encoded
             .parse()
-            .map_err(|err: crate::ParseError| json::Error::Message(err.reason.into()))
+            .map_err(|err: iroha_model_base::error::ParseError| {
+                json::Error::Message(err.reason().into())
+            })
     }
 }
 impl JsonKeyCodec for crate::smart_contract::ContractAddress {
@@ -289,26 +262,6 @@ impl JsonKeyCodec for crate::oracle::OracleChangeId {
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self)
-    }
-}
-impl JsonKeyCodec for crate::nexus::DataSpaceId {
-    fn encode_json_key(&self, out: &mut String) {
-        <u64 as JsonKeyCodec>::encode_json_key(&self.as_u64(), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        <u64 as JsonKeyCodec>::decode_json_key(encoded).map(Self::from)
-    }
-}
-impl JsonKeyCodec for crate::nexus::LaneId {
-    fn encode_json_key(&self, out: &mut String) {
-        <u64 as JsonKeyCodec>::encode_json_key(&u64::from(self.as_u32()), out);
-    }
-    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
-        <u64 as JsonKeyCodec>::decode_json_key(encoded).and_then(|value| {
-            u32::try_from(value)
-                .map(crate::nexus::LaneId::new)
-                .map_err(|_| json::Error::Message("lane id out of range".into()))
-        })
     }
 }
 impl JsonKeyCodec for crate::nexus::UniversalAccountId {
@@ -797,10 +750,10 @@ mod tests {
             ArchiveId, MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
             MusubiPackageScopeV1, MusubiProviderBundleAttestationKeyV1,
         },
-        nexus::DataSpaceId,
         sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
     };
     use iroha_crypto::KeyPair;
+    use iroha_model_base::topology::DataSpaceId;
     use mv::{
         json::JsonKeyCodec,
         storage::{Storage, StorageReadOnly},
@@ -811,7 +764,7 @@ mod tests {
     }
     #[test]
     fn governance_hash_ids_are_canonical_json_storage_keys() {
-        fn check<T>(key: T)
+        fn check<T>(key: &T)
         where
             T: JsonKeyCodec + core::fmt::Debug + PartialEq,
         {
@@ -819,13 +772,13 @@ mod tests {
             key.encode_json_key(&mut encoded);
             let mut parser = Parser::new(&encoded);
             let raw = parser.parse_string().expect("parse governance storage key");
-            assert_eq!(T::decode_json_key(&raw).expect("decode storage key"), key);
+            assert_eq!(&T::decode_json_key(&raw).expect("decode storage key"), key);
             assert!(T::decode_json_key(&raw.to_uppercase()).is_err());
         }
 
-        check(GovernanceAttemptId::new([0xab; 32]));
-        check(BallotAttemptId::new([0xbc; 32]));
-        check(TleKeySessionId::new([0xcd; 32]));
+        check(&GovernanceAttemptId::new([0xab; 32]));
+        check(&BallotAttemptId::new([0xbc; 32]));
+        check(&TleKeySessionId::new([0xcd; 32]));
     }
     #[test]
     fn account_id_json_key_codec_roundtrip() {

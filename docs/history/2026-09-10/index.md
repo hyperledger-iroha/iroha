@@ -1,0 +1,18 @@
+# Subsystem evidence recorded on 2026-09-10
+
+These results apply to their recorded source and artifacts, not the complete release.
+
+| Subsystem | Evidence |
+| --- | --- |
+| [Musubi SDK and resolver](musubi-sdk-and-resolver.md) | Iterative search and production-boundary coverage; the same-source SDK/Musubi checkpoint passes 802/386 library tests, strict library/test lint and all ten SDK doctests. |
+| [Name and StatePath boundary](model-base-name-state-path.md) | Physical base owner and canonical caller imports; owner/feature tests, captured wire fixtures and 34-package all-target checks with distinct source seals. Remaining model/runtime/memory qualification is open. |
+| [Metadata boundary](model-base-metadata.md) | Canonical base owner, migrated callers, FFI dispatch and one aggregate API declaration; all four owner feature selections, strict owner lint, aggregate/default/FFI suites and the 37-package consumer check pass. Developer runtime passes 90 SoraFS, ten Nexus, four streaming and one fetch test. Broader qualification remains open. |
+| [Chain label boundary](model-base-chain.md) | Base owner and canonical imports; four owner configurations, strict owner lint and the 43-package consumer check pass. One source passes 55 base, 3,692 aggregate, 802 SDK and 386 Musubi tests. Combined FFI separately passes 55 base and 3,692 aggregate tests. Wider qualification remains pending. |
+| [Mochi CLI and navigation owners](mochi-cli-owner.md) | Parser extraction preserves 362 production bodies and all 48 CLI tests; subsequent navigation ownership preserves all 181 GUI tests and adds two. All 183 rebuilt GUI tests and strict binary/test lint pass. The GUI ceiling tightens to 11,129 lines. |
+| [Domain identity boundary](model-base-domain.md) | Four owner configurations, strict owner lint, all dependency boundaries, the 46-package consumer check and composed base/aggregate/SDK/Musubi suites pass. Combined FFI, SDK/Musubi strict lint and model/SDK documentation tests pass. Broader aggregate strict lint reports 236 unresolved diagnostics. |
+| [Numeric topology boundary](model-base-topology.md) | Four owner configurations, strict owner lint, 20 dependency boundaries and the 47-package consumer check pass. Composed base/aggregate/SDK/Musubi suites, combined FFI, SDK/Musubi strict lint and model/SDK documentation tests pass. Wider qualification remains open. |
+| [Peer identity boundary](model-base-peer.md) | Four owner configurations, strict owner lint, compile-fail examples, 20 dependency boundaries, the 47-package consumer check and optional P2P QUIC check pass. Minimal production crypto features remain separate from the full-schema fixture selection. Composed suites pass 81 base, 3,694 aggregate, 802 SDK and 386 Musubi tests; combined FFI and model/SDK documentation pass. Aggregate strict lint retains 17 diagnostics. |
+| [Model validation and test ownership](model-validation-phases.md) | The final composition passes 3,718 default model, 183 fixture-group and 3,722 FFI model tests, strict library/test lint in both configurations, and all model file limits without exceptions. Broader release qualification remains open. |
+| [Explicit JSON context candidate](json-context-implementation.md) | Unapplied codec/derive/MV composition passes 1,499 runtime tests and strict library/test lint; all 13 positive and 22 negative compiler fixtures pass direct checks. Full UI harness ran out of disk space. Subsequent MV admission repairs pass 49 tests and strict lint. Final tree admission, examples/benchmarks and external callers remain pending. |
+
+[Current status](../../../status.md) · [History index](../README.md)

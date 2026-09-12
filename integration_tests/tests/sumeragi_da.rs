@@ -22,20 +22,21 @@ use iroha::{
         },
         block::{SignedBlock, decode_framed_signed_block},
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             Log, Mint, Register, SetParameter,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
-        nexus::LaneId,
         parameter::{CustomParameter, CustomParameterId, Parameter, TransactionParameter},
-        peer::PeerId,
         transaction::{Executable, SignedTransaction},
     },
 };
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
@@ -498,7 +499,7 @@ async fn wait_for_bridge_finality_proof(
 ) -> Result<BridgeFinalityProof> {
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join(&format!("v1/bridge/finality/{height}"))
         .wrap_err("construct bridge-finality URL")?;
     let request_timeout = timeout.min(Duration::from_secs(5));
@@ -1344,17 +1345,22 @@ async fn wait_for_exact_local_queue_replication(
                     });
                 let hash = submitted_hash;
                 async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        let blocks = client.client().get_status()?.blocks;
-                        let pipeline = client
-                            .client()
-                            .get_transaction_status_response_local(hash)?;
-                        Ok::<_, eyre::Report>((blocks, pipeline))
-                    })
-                    .await
-                    .wrap_err_with(|| {
-                        format!("join exact local queue observation for {mnemonic}")
-                    })?;
+                    let result = match client.client().status().get().await {
+                        Ok(status) => {
+                            let blocks = status.blocks;
+                            tokio::task::spawn_blocking(move || {
+                                let pipeline = client
+                                    .client()
+                                    .get_transaction_status_response_local(hash)?;
+                                Ok::<_, eyre::Report>((blocks, pipeline))
+                            })
+                            .await
+                            .wrap_err_with(|| {
+                                format!("join exact local queue observation for {mnemonic}")
+                            })?
+                        }
+                        Err(error) => Err(error.into()),
+                    };
                     Ok::<_, eyre::Report>((peer_index, mnemonic, result))
                 }
             });
@@ -1659,7 +1665,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         .await?;
 
         let client = network.client();
-        let admission_height = client.client().get_status()?.blocks.saturating_add(1);
+        let admission_height = client.client().status().get().await?.blocks.saturating_add(1);
         ensure!(
             admission_height == PACKET_LOSS_ADMISSION_HEIGHT,
             "packet-loss admission expected active height {PACKET_LOSS_ADMISSION_HEIGHT}, but the network opened {admission_height}"
@@ -1916,7 +1922,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         );
         for peer in &peers {
             ensure!(
-                peer.client().client().get_status()?.blocks < expected_height,
+                peer.status().await?.blocks < expected_height,
                 "{} committed before the three-of-six RS16 loss was healed",
                 peer.mnemonic()
             );
@@ -2147,7 +2153,7 @@ async fn authenticated_payload_chunk_hold_heals_and_converges_four_peers() -> Re
         );
         for peer in &peers {
             ensure!(
-                peer.client().client().get_status()?.blocks < expected_height,
+                peer.status().await?.blocks < expected_height,
                 "{} committed before the held body evidence capture fence was healed",
                 peer.mnemonic()
             );

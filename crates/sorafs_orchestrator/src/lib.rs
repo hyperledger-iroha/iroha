@@ -9405,7 +9405,7 @@ mod tests {
             &ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]),
         )
         .expect("sign stream token fixture");
-        let bytes = norito::to_bytes(&token).expect("encode token");
+        let bytes = norito::encode_canonical(&token).expect("encode token");
         BASE64_STANDARD.encode(bytes)
     }
     fn gateway_public_key_hex() -> String {

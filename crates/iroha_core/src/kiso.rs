@@ -687,9 +687,10 @@ mod tests {
         streaming::StreamingKeyMaterial,
     };
     use iroha_data_model::{
-        ChainId, block::BlockHeader, peer::Peer, sorafs::pricing::PricingScheduleRecord,
+        block::BlockHeader, peer::Peer, sorafs::pricing::PricingScheduleRecord,
     };
     use iroha_logger::Level;
+    use iroha_model_base::chain::ChainId;
     use iroha_primitives::addr::socket_addr;
     use iroha_torii_shared::configuration::{
         ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,
@@ -1325,6 +1326,7 @@ mod tests {
                     iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
                 fsync_mode: iroha_config::kura::FsyncMode::Batched,
                 fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             },
             sumeragi: Sumeragi::default(),

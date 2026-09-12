@@ -1,6 +1,6 @@
 //! Asset transfer control records used for account-scoped on-chain asset policy.
 use crate::asset::AssetDefinitionId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -19,27 +19,27 @@ pub const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1: usize = 512;
 /// Returns [`crate::error::ParseError`] when a provided reason is not canonical.
 pub fn validate_asset_transfer_availability_reason(
     reason: Option<&str>,
-) -> Result<(), crate::error::ParseError> {
+) -> Result<(), iroha_model_base::error::ParseError> {
     let Some(reason) = reason else {
         return Ok(());
     };
     if reason.is_empty() {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset-transfer availability reason must not be empty",
         ));
     }
     if reason.trim() != reason {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset-transfer availability reason must be unpadded",
         ));
     }
     if reason.len() > ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset-transfer availability reason exceeds maximum byte length",
         ));
     }
     if reason.chars().any(char::is_control) {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset-transfer availability reason must not contain control characters",
         ));
     }
@@ -50,11 +50,22 @@ pub fn validate_asset_transfer_availability_reason(
 /// This policy does not govern supply operations such as mint or burn. Holding
 /// limits independently govern every native credit, including mint.
 #[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value")]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferAvailability")]
 pub enum AssetTransferAvailability {
@@ -72,10 +83,22 @@ impl AssetTransferAvailability {
     }
 }
 /// Calendar window used for outbound transfer caps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "window", content = "value")]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlWindow")]
 pub enum AssetTransferControlWindow {
@@ -98,13 +121,13 @@ impl AssetTransferControlWindow {
     }
 }
 impl core::str::FromStr for AssetTransferControlWindow {
-    type Err = crate::error::ParseError;
+    type Err = iroha_model_base::error::ParseError;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_uppercase().as_str() {
             "DAY" => Ok(Self::Day),
             "WEEK" => Ok(Self::Week),
             "MONTH" => Ok(Self::Month),
-            _ => Err(crate::error::ParseError::new(
+            _ => Err(iroha_model_base::error::ParseError::new(
                 "asset transfer control window must be DAY, WEEK, or MONTH",
             )),
         }
@@ -116,9 +139,20 @@ impl core::fmt::Display for AssetTransferControlWindow {
     }
 }
 /// Configured cap for a specific calendar window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferLimit")]
 pub struct AssetTransferLimit {
@@ -129,9 +163,20 @@ pub struct AssetTransferLimit {
     pub cap_amount: Option<Quantity>,
 }
 /// Usage bucket tracking actual spent amount in a UTC calendar window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferUsageBucket")]
 pub struct AssetTransferUsageBucket {
@@ -143,9 +188,20 @@ pub struct AssetTransferUsageBucket {
     pub spent_amount: Quantity,
 }
 /// Control state for one `(account_id, asset_definition_id)` pair.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlRecord")]
 pub struct AssetTransferControlRecord {
@@ -222,9 +278,9 @@ impl AssetTransferControlRecord {
     /// Returns [`crate::error::ParseError`] when the record contains an empty
     /// policy, a non-canonical reason, duplicate or unordered windows, a
     /// cleared limit, or usage for a window without an active limit.
-    pub fn validate_canonical(&self) -> Result<(), crate::error::ParseError> {
+    pub fn validate_canonical(&self) -> Result<(), iroha_model_base::error::ParseError> {
         if self.is_empty() {
-            return Err(crate::error::ParseError::new(
+            return Err(iroha_model_base::error::ParseError::new(
                 "asset-transfer control stores must not persist empty records",
             ));
         }
@@ -233,12 +289,12 @@ impl AssetTransferControlRecord {
         let mut previous_limit = None;
         for limit in &self.limits {
             if previous_limit.is_some_and(|previous| previous >= limit.window) {
-                return Err(crate::error::ParseError::new(
+                return Err(iroha_model_base::error::ParseError::new(
                     "asset-transfer limit windows must be unique and strictly ordered",
                 ));
             }
             if limit.cap_amount.is_none() {
-                return Err(crate::error::ParseError::new(
+                return Err(iroha_model_base::error::ParseError::new(
                     "asset-transfer control stores must not persist cleared limits",
                 ));
             }
@@ -248,12 +304,12 @@ impl AssetTransferControlRecord {
         let mut previous_usage = None;
         for usage in &self.usages {
             if previous_usage.is_some_and(|previous| previous >= usage.window) {
-                return Err(crate::error::ParseError::new(
+                return Err(iroha_model_base::error::ParseError::new(
                     "asset-transfer usage windows must be unique and strictly ordered",
                 ));
             }
             if !self.limits.iter().any(|limit| limit.window == usage.window) {
-                return Err(crate::error::ParseError::new(
+                return Err(iroha_model_base::error::ParseError::new(
                     "asset-transfer usage must belong to an active limit window",
                 ));
             }
@@ -265,7 +321,7 @@ impl AssetTransferControlRecord {
 #[cfg(test)]
 mod availability_tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     fn definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -313,9 +369,21 @@ mod availability_tests {
     }
 }
 /// Account-scoped store of asset-transfer control entries.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlStoreV1")]
 pub struct AssetTransferControlStoreV1 {
@@ -333,9 +401,9 @@ impl AssetTransferControlStoreV1 {
     /// # Errors
     /// Returns [`crate::error::ParseError`] when records are duplicated,
     /// unordered, empty, or individually non-canonical.
-    pub fn validate_canonical(&self) -> Result<(), crate::error::ParseError> {
+    pub fn validate_canonical(&self) -> Result<(), iroha_model_base::error::ParseError> {
         if self.controls.is_empty() {
-            return Err(crate::error::ParseError::new(
+            return Err(iroha_model_base::error::ParseError::new(
                 "persisted asset-transfer control stores must not be empty",
             ));
         }
@@ -345,7 +413,7 @@ impl AssetTransferControlStoreV1 {
                 .as_ref()
                 .is_some_and(|previous| *previous >= &record.asset_definition_id)
             {
-                return Err(crate::error::ParseError::new(
+                return Err(iroha_model_base::error::ParseError::new(
                     "asset-transfer control records must have unique, strictly ordered asset definitions",
                 ));
             }
@@ -400,7 +468,7 @@ impl AssetTransferControlStoreV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
     struct ForgedAssetTransferLimit {

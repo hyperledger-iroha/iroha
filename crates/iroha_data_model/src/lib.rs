@@ -1,12 +1,8 @@
-//! Iroha Data Model contains structures for Domains, Peers, Accounts and Assets with simple,
-//! non-specific functions like serialization.
+//! Ledger identities, transactions, instructions, events, queries and protocol records.
 //!
-//! ## Note about IVM and deserialization
-//! Some structs perform validation during deserialization (e.g.
-//! `transaction::candidate::SignedTransactionCandidate`). However, when targeting the Iroha Virtual
-//! Machine (IVM), this validation is disabled. Validation inside the IVM is not necessary because
-//! it has already been performed on the host side, which is a trusted entity. This gives about 50%
-//! performance boost, see #4995.
+//! Binary and JSON codecs are part of the aggregate protocol model. JSON carries
+//! admission policies, consensus parameters and retained state, so its validation
+//! and canonical representations are available in every feature selection.
 #![allow(unexpected_cfgs)]
 #![allow(semicolon_in_expressions_from_macros)]
 #![cfg_attr(
@@ -23,13 +19,12 @@ extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
 // rather than silencing the lint at the crate root.
-use crate::name::Name;
 pub use iroha_crypto::PublicKey;
 pub use iroha_data_model_derive::model;
 pub use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 pub use norito::json::{JsonDeserialize, JsonSerialize};
-#[cfg(feature = "json")]
+
 pub use norito_derive::{
     FastJson as DeriveFastJson, FastJsonWrite as DeriveFastJsonWrite,
     JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
@@ -116,9 +111,9 @@ pub mod ipfs;
 /// Instruction-set interface (ISI) data types.
 pub mod isi;
 mod json_helpers;
-#[cfg(feature = "json")]
+
 mod json_key_codec;
-#[cfg(feature = "json")]
+
 mod json_object_key;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
@@ -130,14 +125,10 @@ pub mod kaigi;
 pub mod level;
 /// Merge-ledger data structures.
 pub mod merge;
-/// Generic metadata containers and helpers.
-pub mod metadata;
 /// Ministry transparency/governance payload types.
 pub mod ministry;
 /// Musubi package registry data types for Kotodama source packages.
 pub mod musubi;
-/// Name parsing and validation utilities.
-pub mod name;
 /// Nexus-lane scaffolding and identifiers.
 pub mod nexus;
 /// Non-fungible token structures and specs.
@@ -195,8 +186,6 @@ pub mod sorafs_uri;
 pub mod soranet;
 /// World state snapshot representations.
 pub mod state;
-/// Canonical logical paths for durable ledger state.
-pub mod state_path;
 /// Subscription metadata schemas for trigger-based billing.
 pub mod subscription;
 /// Taikai broadcast metadata and segment envelope types.
@@ -230,19 +219,33 @@ mod build_consts {
     include!(concat!(env!("OUT_DIR"), "/build_consts.rs"));
 }
 pub use build_consts::PRECOMPUTED_KEYWORDS;
-// Include API version.
-#[cfg(feature = "transparent_api")]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/transparent_api.rs"));
-#[cfg(not(feature = "transparent_api"))]
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/non_transparent_api.rs"
-));
+/// Whether the internal mutable model API is enabled.
+pub const TRANSPARENT_API: bool = cfg!(feature = "transparent_api");
+pub use crate::account::{Account, AccountId, NewAccount};
+pub use crate::block::SignedBlock;
+pub use crate::domain::{Domain, NewDomain};
+pub use crate::events::{EventBox, EventFilterBox, TriggeringEventType};
+pub use crate::executor::{Executor, ExecutorDataModel};
+pub use crate::ipfs::IpfsPath;
+pub use crate::nft::{NewNft, Nft, NftId};
+pub use crate::peer::Peer;
+pub use crate::permission::Permission;
+pub use crate::query::{
+    AnyQueryBox, CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox,
+    QueryOutputBatchBoxTuple, QueryRequest, QueryRequestWithAuthority, QueryResponse,
+    QuerySignature, QueryWithFilter, QueryWithParams, SignedQuery, SingularQueryBox,
+    SingularQueryOutputBox,
+};
+pub use crate::role::{NewRole, Role, RoleId};
+pub use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
 // Slice-based Norito decoders for model types used in packed sequences and
 // options. These forward to the archived Norito representation to avoid
 // duplicating decoding logic.
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod base_wire_fixtures;
+#[cfg(test)]
+#[path = "../tests/support/fixture_json.rs"]
+mod fixture_json;
 mod norito_slice_decode;
 /// Private module defining sealing traits for `iroha_data_model`.
 mod seal {
@@ -253,14 +256,13 @@ mod seal {
     /// Seals the [`crate::query::Query`](crate::query::Query) trait.
     pub trait Query {}
 }
-pub use error::{EnumTryAsError, ParseError};
+pub use error::EnumTryAsError;
 pub use errors::{
     AmxStage, CanonicalError, CanonicalErrorKind, CircuitBreakerKind, SettlementRouterOutage,
 };
 pub use executor::ValidationFail;
-pub use id::{ChainId, IdBox, NetworkId};
+pub use id::{IdBox, NetworkId};
 pub use level::Level;
-pub use nexus::{DataSpaceId, LaneId};
 /// Uniquely identifiable entity ([`domain::Domain`], [`account::Account`], etc.).
 /// This trait should always be derived with `IdEqOrdHash`.
 pub trait Identifiable: Ord + Eq {
@@ -278,10 +280,9 @@ pub trait Registrable {
 }
 /// Trait that marks the entity as having metadata.
 pub trait HasMetadata {
-    // type Metadata = metadata::Metadata;
     // Uncomment when stable.
     /// The metadata associated to this object.
-    fn metadata(&self) -> &metadata::Metadata;
+    fn metadata(&self) -> &iroha_model_base::metadata::Metadata;
 }
 /// Trait for objects that are registered by proxy.
 pub trait Registered: Identifiable {
@@ -305,22 +306,19 @@ mod ffi {
     #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
     use super::*;
     #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
-    iroha_ffi::handles! {
-        account::Account,
-        asset::value::Asset,
-        domain::Domain,
-        metadata::Metadata,
-        permission::Permission,
-        role::Role,
-    }
+    // Metadata moved to the base owner at ID 3. Keep every retained ID explicit
+    // across that gap; shrinking the old sequential list would renumber these types.
+    iroha_ffi::handles! { 0, account::Account, asset::value::Asset, domain::Domain }
+    #[cfg(any(feature = "ffi_export", feature = "ffi_import"))]
+    iroha_ffi::handles! { 4, permission::Permission, role::Role }
     #[cfg(feature = "ffi_import")]
     iroha_ffi::decl_ffi_fns! { link_prefix="iroha_data_model" Drop, Clone, Eq, Ord }
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
     iroha_ffi::def_ffi_fns! { link_prefix="iroha_data_model"
-        Drop: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
-        Clone: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
-        Eq: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
-        Ord: { account::Account, asset::value::Asset, domain::Domain, metadata::Metadata, permission::Permission, role::Role },
+        Drop: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
+        Clone: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
+        Eq: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
+        Ord: { account::Account, asset::value::Asset, domain::Domain, permission::Permission, role::Role },
     }
     // NOTE: Makes sure that only one `dealloc` is exported per generated dynamic library
     #[cfg(all(feature = "ffi_export", not(feature = "ffi_import")))]
@@ -332,7 +330,7 @@ mod ffi {
 pub mod prelude {
     //! Prelude: re-export of most commonly used traits, structs and macros in this crate.
     pub use super::{
-        ChainId, Decode, Encode, HasMetadata, IdBox, Identifiable, Level, NetworkId, Registrable,
+        Decode, Encode, HasMetadata, IdBox, Identifiable, Level, NetworkId, Registrable,
         ValidationFail,
         account::prelude::*,
         alias_setup::*,
@@ -351,18 +349,16 @@ pub mod prelude {
         ipfs::IpfsPath,
         isi::prelude::*,
         kaigi::prelude::*,
-        metadata::prelude::*,
-        name::prelude::*,
         nexus::{
-            DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
-            DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
+            DataSpaceCatalog, DataSpaceCatalogError, DataSpaceMetadata, DomainCommittee,
+            DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
             DomainEndorsementSignature, FeeDebitSource, FeeRejectionCode, FeeSponsorAssetBudget,
             FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow,
             FeeSponsorEligibility, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
             FeeSponsorProgram, FeeSponsorProgramActivation, FeeSponsorProgramId,
             FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
             FeeSponsorRule, FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVault,
-            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig, LaneId, LaneIdError,
+            FeeSponsorVaultKey, LaneCatalog, LaneCatalogError, LaneConfig,
             LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
             LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEnvelope,
             LaneRelayEnvelopeRef, LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
@@ -381,7 +377,6 @@ pub mod prelude {
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,
-        state_path::prelude::*,
         subscription::prelude::*,
         transaction::prelude::*,
         trigger::prelude::*,
@@ -407,8 +402,20 @@ pub mod prelude {
 #[cfg(test)]
 mod captured_schema_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
+mod frame_owner_identity_tests;
+
+#[cfg(test)]
 mod generic_identity_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod concrete_identity_tests;
+
+#[cfg(test)]
+mod manual_schema_identity;
+
+#[cfg(test)]
+mod registration_identity_tests;
+
+#[cfg(all(test, feature = "ffi_export", not(feature = "ffi_import")))]
+mod metadata_ffi_tests;

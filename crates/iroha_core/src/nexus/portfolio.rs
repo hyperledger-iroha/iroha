@@ -6,13 +6,14 @@ use crate::{
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetValue},
     nexus::{
-        DataSpaceCatalog, DataSpaceId, UniversalAccountId,
+        DataSpaceCatalog, UniversalAccountId,
         portfolio::{
             AccountPortfolio, AssetPosition, DataspacePortfolio, PortfolioTotals,
             UniversalPortfolio,
         },
     },
 };
+use iroha_model_base::topology::DataSpaceId;
 use mv::storage::StorageReadOnly;
 use std::collections::BTreeMap;
 /// Collect a deterministic UAID portfolio snapshot from the given state view.
@@ -170,10 +171,11 @@ mod tests {
         block::BlockHeader,
         common::Owned,
         domain::prelude::*,
-        metadata::Metadata,
         nexus::DataSpaceMetadata,
         prelude::*,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;

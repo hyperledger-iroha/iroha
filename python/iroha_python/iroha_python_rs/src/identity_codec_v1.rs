@@ -1,6 +1,8 @@
 //! Canonical identity validation and framed encoding for Python instruction codecs.
 
-use iroha_data_model::{account::AccountAddress, domain::DomainId, name::Name};
+use iroha_data_model::account::AccountAddress;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use pyo3::{
     Bound, Py, PyResult, Python,
     exceptions::{PyRuntimeError, PyValueError},
@@ -154,11 +156,14 @@ mod tests {
 
     #[test]
     fn oversized_identity_frame_is_rejected_before_output_allocation() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_python_rs::identity_codec_v1::tests::oversized_identity_frame_is_rejected_before_output_allocation::OversizedPayload"
+        )]
         struct OversizedPayload {
             serialization_passes: Cell<usize>,
         }
 
-        impl norito::NoritoSerialize for OversizedPayload {}
         impl norito::SerializePayload for OversizedPayload {
             fn serialize(
                 &self,

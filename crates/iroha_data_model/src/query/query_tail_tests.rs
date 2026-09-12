@@ -5,7 +5,6 @@ mod certified_merge_inclusion_tests {
         account::AccountId,
         block::CertifiedMergeLedgerReference,
         merge::{MergeQuorumCertificate, MergeSignerProof},
-        peer::PeerId,
         transaction::{
             TransactionBuilder,
             signed::{TransactionEntrypoint, TransactionResult},
@@ -13,6 +12,7 @@ mod certified_merge_inclusion_tests {
         trigger::DataTriggerSequence,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
+    use iroha_model_base::peer::PeerId;
     use norito::codec::DecodeAll as _;
     fn assert_committed_transaction_roundtrip(committed: &CommittedTransaction) {
         let encoded = committed.encode();
@@ -324,7 +324,7 @@ mod fault_injection_tests {
         assert_eq!(tx.result_proof, original_result_proof);
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::KeyPair;

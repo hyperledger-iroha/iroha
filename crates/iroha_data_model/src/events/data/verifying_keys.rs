@@ -22,6 +22,10 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::verifying_keys::model::VerifyingKeyEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::verifying_keys::model::VerifyingKeyEvent"
+    )]
     pub enum VerifyingKeyEvent {
         /// A verifying key record was registered.
         Registered(VerifyingKeyRegistered),
@@ -30,7 +34,19 @@ mod model {
     }
     /// Payload for a verifying key registration event.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::verifying_keys::model::VerifyingKeyRegistered"
     )]
     pub struct VerifyingKeyRegistered {
         /// Identifier of the verifying key (backend + name).
@@ -40,7 +56,19 @@ mod model {
     }
     /// Payload for a verifying key update event.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::verifying_keys::model::VerifyingKeyUpdated"
     )]
     pub struct VerifyingKeyUpdated {
         /// Identifier of the verifying key (backend + name).
@@ -49,7 +77,7 @@ mod model {
         pub record: crate::proof::VerifyingKeyRecord,
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     VerifyingKeyEvent,
     VerifyingKeyRegistered,
@@ -70,3 +98,6 @@ impl VerifyingKeyEventSet {
         Self::Updated
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

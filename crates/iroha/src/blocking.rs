@@ -1,15 +1,16 @@
 //! Explicit blocking facade for the asynchronous Iroha SDK transport.
 
-// TODO: Move the remaining synchronous read/query and WebSocket operations out
+// TODO: Move the remaining synchronous read/query operations out
 // of `client::Client`, then expose their canonical forms only through this facade.
 
+pub mod configuration;
+pub mod musubi;
+pub mod status;
+pub mod streams;
 mod subscriptions;
 pub use subscriptions::{AccountSubscriptions, Subscriptions};
 
-use std::{
-    future::Future,
-    sync::{Arc, Mutex},
-};
+use std::{future::Future, sync::Arc};
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{HashOf, KeyPair, PrivateKey};
@@ -18,12 +19,12 @@ use iroha_data_model::{
     account::AccountId,
     alias_setup::{AliasLifecycleTransactionPlanV1, AliasTransactionPlanV1},
     isi::{InstructionBox, SetParameter, register::RegisterBox},
-    metadata::Metadata,
     nexus::{LaneLifecycleParameterV1, LaneLifecyclePlan},
     parameter::Parameter,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_torii_shared::{
     FeeQuoteResponse, validation_fee_api::ValidationFeeProposalDraftRequestV1,
 };
@@ -70,7 +71,7 @@ pub enum BlockingCallError {
         /// Runtime kind observed by the SDK.
         flavor: AsyncRuntimeFlavor,
     },
-    /// The facade runtime was poisoned by an earlier panic or already shut down.
+    /// The facade runtime has already shut down.
     #[error("blocking Iroha SDK runtime is unavailable")]
     RuntimeUnavailable,
 }
@@ -100,13 +101,13 @@ pub(crate) fn reject_inside_async_runtime() -> std::result::Result<(), BlockingC
 
 #[derive(Debug)]
 struct RuntimeOwner {
-    runtime: Mutex<Option<tokio::runtime::Runtime>>,
+    runtime: Option<tokio::runtime::Runtime>,
     #[cfg(test)]
     runs: std::sync::atomic::AtomicUsize,
 }
 
 impl RuntimeOwner {
-    fn new() -> Result<Self> {
+    fn new() -> crate::Result<Self> {
         // Shared async clients can reuse HTTP connections opened by this facade
         // from another runtime. Their I/O drivers must keep running between
         // block_on calls; a current-thread runtime parks those drivers.
@@ -115,9 +116,11 @@ impl RuntimeOwner {
             .thread_name("iroha-sdk-blocking")
             .enable_all()
             .build()
-            .wrap_err("failed to build the blocking Iroha SDK runtime")?;
+            .map_err(|error| crate::Error::BlockingRuntimeConstruction {
+                details: error.to_string(),
+            })?;
         Ok(Self {
-            runtime: Mutex::new(Some(runtime)),
+            runtime: Some(runtime),
             #[cfg(test)]
             runs: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -125,11 +128,11 @@ impl RuntimeOwner {
 
     fn block_on<F: Future>(&self, future: F) -> std::result::Result<F::Output, BlockingCallError> {
         reject_inside_async_runtime()?;
-        let guard = self
+        // Tokio supports concurrent Runtime::block_on calls.
+        // A pending stream must not hold a lock over unrelated operations. This
+        // borrow keeps the owner alive; only exclusive Drop takes the runtime.
+        let runtime = self
             .runtime
-            .lock()
-            .map_err(|_| BlockingCallError::RuntimeUnavailable)?;
-        let runtime = guard
             .as_ref()
             .ok_or(BlockingCallError::RuntimeUnavailable)?;
         #[cfg(test)]
@@ -140,11 +143,7 @@ impl RuntimeOwner {
 
 impl Drop for RuntimeOwner {
     fn drop(&mut self) {
-        let runtime = self
-            .runtime
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let runtime = self.runtime.take();
         if let Some(runtime) = runtime {
             // This never blocks and is safe even if the final facade handle is
             // dropped while another Tokio runtime is entered.
@@ -178,10 +177,7 @@ impl AccountClient {
     /// # Errors
     /// Returns a structured error if the owned runtime cannot be constructed.
     pub fn from_client(client: AsyncAccountClient) -> crate::Result<Self> {
-        let runtime =
-            RuntimeOwner::new().map_err(|error| crate::Error::BlockingRuntimeConstruction {
-                details: error.to_string(),
-            })?;
+        let runtime = RuntimeOwner::new()?;
         Ok(Self {
             inner: client,
             runtime: Arc::new(runtime),
@@ -196,7 +192,7 @@ impl Client {
     /// Returns an error if account authority binding fails or the owned runtime
     /// cannot be created.
     pub fn new(configuration: Config) -> Result<Self> {
-        Self::from_client(AsyncClient::new(configuration))
+        Self::from_client(AsyncClient::builder(configuration).build()?)
     }
 
     /// Construct an isolated blocking context with a custom HTTP transport.
@@ -204,11 +200,15 @@ impl Client {
     /// # Errors
     /// Returns an error if account authority binding fails or the owned runtime
     /// cannot be created.
-    pub fn with_transport(
+    pub fn with_http_transport(
         configuration: Config,
         transport: Arc<dyn HttpTransport>,
     ) -> Result<Self> {
-        Self::from_client(AsyncClient::with_transport(configuration, transport))
+        Self::from_client(
+            AsyncClient::builder(configuration)
+                .http_transport(transport)
+                .build()?,
+        )
     }
 
     /// Wrap an asynchronous client context in the explicit blocking facade.
@@ -575,6 +575,20 @@ pub struct OperatorClient {
 }
 
 impl OperatorClient {
+    /// Own a blocking facade for an already bound asynchronous operator context.
+    ///
+    /// Account credentials are not required or inspected. Clones share the
+    /// facade's owned runtime and immutable operator context.
+    ///
+    /// # Errors
+    /// Returns a structured error if the owned runtime cannot be constructed.
+    pub fn from_client(client: AsyncOperatorClient) -> crate::Result<Self> {
+        Ok(Self {
+            inner: client,
+            runtime: Arc::new(RuntimeOwner::new()?),
+        })
+    }
+
     /// Inspect node-local proof retention configuration and live counters.
     ///
     /// # Errors
@@ -593,7 +607,9 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use iroha_data_model::{ChainId, metadata::Metadata, transaction::FeePaymentIntent};
+    use iroha_data_model::transaction::FeePaymentIntent;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
     use iroha_test_samples::gen_account_in;
     use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
@@ -681,7 +697,7 @@ mod tests {
                         observation: iroha_torii_shared::FeeQuoteObservation {
                             ledger_time_ms: 1,
                             next_block_height: 1,
-                            route_dataspace_id: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                         },
                         components: Vec::new(),
                         capacities: Vec::new(),
@@ -711,13 +727,13 @@ mod tests {
     ) {
         let async_sends = Arc::new(AtomicUsize::new(0));
         let runtime_threads = Arc::new(Mutex::new(Vec::new()));
-        let async_client = AsyncClient::with_transport(
-            config_factory(),
-            Arc::new(AsyncAcceptTransport {
+        let async_client = AsyncClient::builder(config_factory())
+            .http_transport(Arc::new(AsyncAcceptTransport {
                 async_sends: Arc::clone(&async_sends),
                 runtime_threads: Arc::clone(&runtime_threads),
-            }),
-        );
+            }))
+            .build()
+            .expect("valid client configuration");
         (
             Client::from_client(async_client).expect("blocking client"),
             async_sends,

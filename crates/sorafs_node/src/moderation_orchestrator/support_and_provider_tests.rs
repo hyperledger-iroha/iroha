@@ -3,7 +3,6 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     events::data::sorafs::SorafsModerationLedgerEvent,
-    metadata::Metadata,
     prelude::Json,
     sorafs::{
         moderation::{
@@ -25,6 +24,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::metadata::Metadata;
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
@@ -1178,7 +1178,7 @@ fn policy(revision: u64) -> ModerationLedgerPolicyV1 {
         predecessor_policy_digest: (revision > 1).then_some([0xA5; 32]),
         challenge_voting_asset_id:
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("sora", "universal")
+                iroha_model_base::domain::DomainId::try_new("sora", "universal")
                     .expect("governance domain"),
                 "xor".parse().expect("governance asset name"),
             ),

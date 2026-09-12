@@ -19,6 +19,77 @@ use std::{
 
 mod compress_selectors;
 
+/// Disjoint fixed-column modes, with constant taking precedence over binary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FixedColumnModeCounts {
+    pub(crate) constant: usize,
+    pub(crate) binary: usize,
+    pub(crate) raw: usize,
+}
+
+impl FixedColumnModeCounts {
+    pub(crate) fn total(self) -> usize {
+        self.constant + self.binary + self.raw
+    }
+
+    pub(crate) fn add(&mut self, other: Self) {
+        self.constant += other.constant;
+        self.binary += other.binary;
+        self.raw += other.raw;
+    }
+}
+
+/// Classifies the actual field values without evaluating rational assignments.
+#[derive(Debug)]
+pub(crate) struct FixedColumnModeAccumulator<F: Field> {
+    first: Option<Assigned<F>>,
+    constant: bool,
+    binary: bool,
+}
+
+impl<F: Field> FixedColumnModeAccumulator<F> {
+    pub(crate) fn new() -> Self {
+        Self {
+            first: None,
+            constant: true,
+            binary: true,
+        }
+    }
+
+    /// Zero multiplicities do not contribute a value to the column.
+    pub(crate) fn observe(&mut self, value: Assigned<F>, multiplicity: usize) {
+        if multiplicity == 0 {
+            return;
+        }
+        // Assigned equality includes zero denominators and equivalent fractions, so this
+        // requires neither individual inversions nor an expanded copy of the column.
+        let first = self.first.get_or_insert(value);
+        self.constant = self.constant && value == *first;
+        self.binary =
+            self.binary && (value == Assigned::Zero || value == Assigned::Trivial(F::ONE));
+    }
+
+    pub(crate) fn finish(self) -> FixedColumnModeCounts {
+        assert!(self.first.is_some(), "fixed-column domains are nonempty");
+        if self.constant {
+            FixedColumnModeCounts {
+                constant: 1,
+                ..Default::default()
+            }
+        } else if self.binary {
+            FixedColumnModeCounts {
+                binary: 1,
+                ..Default::default()
+            }
+        } else {
+            FixedColumnModeCounts {
+                raw: 1,
+                ..Default::default()
+            }
+        }
+    }
+}
+
 /// A column type
 pub trait ColumnType:
     'static + Sized + Copy + std::fmt::Debug + PartialEq + Eq + Into<Any>
@@ -2021,9 +2092,12 @@ impl<F: Field> ConstraintSystem<F> {
         degrees
     }
 
-    pub(crate) fn compressed_selector_columns(&self, selectors: &[Vec<bool>]) -> usize {
+    pub(crate) fn compressed_selector_modes(
+        &self,
+        selectors: &[Vec<bool>],
+    ) -> FixedColumnModeCounts {
         assert_eq!(selectors.len(), self.num_selectors);
-        compress_selectors::combination_count(
+        compress_selectors::combination_modes::<F>(
             &selectors
                 .iter()
                 .cloned()
@@ -2039,6 +2113,19 @@ impl<F: Field> ConstraintSystem<F> {
                 .collect::<Vec<_>>(),
             self.degree(),
         )
+    }
+
+    pub(crate) fn direct_selector_modes(&self, selectors: &[Vec<bool>]) -> FixedColumnModeCounts {
+        assert_eq!(selectors.len(), self.num_selectors);
+        let mut modes = FixedColumnModeCounts::default();
+        for selector in selectors {
+            let active = selector.iter().filter(|&&active| active).count();
+            let mut column = FixedColumnModeAccumulator::new();
+            column.observe(Assigned::Trivial(F::ONE), active);
+            column.observe(Assigned::Zero, selector.len() - active);
+            modes.add(column.finish());
+        }
+        modes
     }
 
     /// Returns a configure-only lower bound on the number of fixed columns produced by selector
@@ -2681,5 +2768,194 @@ mod query_index_tests {
         assert_eq!(cs.fixed_queries.len(), 2);
         assert_eq!(cs.instance_queries.len(), 2);
         assert_query_index_maps_match_vectors(&cs);
+    }
+}
+
+#[cfg(test)]
+mod fixed_column_mode_tests {
+    use super::*;
+    use halo2curves::pasta::{Fp, Fq};
+
+    fn materialized_modes<F: Field>(columns: &[Vec<F>]) -> FixedColumnModeCounts {
+        let mut modes = FixedColumnModeCounts::default();
+        for values in columns {
+            if values.iter().all(|value| value == &values[0]) {
+                modes.constant += 1;
+            } else if values
+                .iter()
+                .all(|value| *value == F::ZERO || *value == F::ONE)
+            {
+                modes.binary += 1;
+            } else {
+                modes.raw += 1;
+            }
+        }
+        modes
+    }
+
+    fn assigned_cases<F: Field>() {
+        let zero = F::ZERO;
+        let one = F::ONE;
+        let two = one + one;
+        let three = two + one;
+        let four = two + two;
+        let six = three + three;
+        let cases = [
+            (
+                vec![
+                    Assigned::Zero,
+                    Assigned::Trivial(zero),
+                    Assigned::Rational(one, zero),
+                    Assigned::Rational(zero, zero),
+                ],
+                (1, 0, 0),
+            ),
+            (
+                vec![
+                    Assigned::Trivial(one),
+                    Assigned::Rational(two, two),
+                    Assigned::Rational(three, three),
+                ],
+                (1, 0, 0),
+            ),
+            (
+                vec![
+                    Assigned::Trivial(two),
+                    Assigned::Rational(four, two),
+                    Assigned::Rational(six, three),
+                ],
+                (1, 0, 0),
+            ),
+            (
+                vec![
+                    Assigned::Rational(one, two),
+                    Assigned::Rational(two, four),
+                    Assigned::Rational(three, six),
+                ],
+                (1, 0, 0),
+            ),
+            (
+                vec![
+                    Assigned::Rational(one, zero),
+                    Assigned::Rational(two, two),
+                    Assigned::Trivial(zero),
+                    Assigned::Trivial(one),
+                ],
+                (0, 1, 0),
+            ),
+            (
+                vec![
+                    Assigned::Rational(one, two),
+                    Assigned::Zero,
+                    Assigned::Trivial(one),
+                ],
+                (0, 0, 1),
+            ),
+        ];
+        for (values, expected) in cases {
+            let mut accumulator = FixedColumnModeAccumulator::new();
+            for &value in &values {
+                accumulator.observe(value, 1);
+            }
+            let actual = accumulator.finish();
+            assert_eq!((actual.constant, actual.binary, actual.raw), expected);
+            let expanded = values.into_iter().map(Assigned::evaluate).collect();
+            assert_eq!(actual, materialized_modes(&[expanded]));
+        }
+    }
+
+    #[test]
+    fn assigned_modes_match_evaluated_rationals_in_both_pasta_fields() {
+        assigned_cases::<Fp>();
+        assigned_cases::<Fq>();
+    }
+
+    fn weighted_cases<F: Field>() {
+        let mut accumulator = FixedColumnModeAccumulator::new();
+        accumulator.observe(Assigned::Trivial(F::ONE + F::ONE), 0);
+        accumulator.observe(Assigned::Trivial(-F::ONE + F::ONE), 4);
+        accumulator.observe(Assigned::Rational(F::ONE, F::ZERO), 2);
+        assert_eq!(
+            accumulator.finish(),
+            FixedColumnModeCounts {
+                constant: 1,
+                binary: 0,
+                raw: 0
+            }
+        );
+        let mut accumulator = FixedColumnModeAccumulator::new();
+        accumulator.observe(Assigned::Trivial(-F::ONE + F::ONE), 1);
+        accumulator.observe(Assigned::Trivial((-F::ONE + F::ONE) + F::ONE), 3);
+        assert_eq!(
+            accumulator.finish(),
+            FixedColumnModeCounts {
+                constant: 0,
+                binary: 1,
+                raw: 0
+            }
+        );
+    }
+
+    #[test]
+    fn weighted_modes_ignore_absent_values_and_compare_field_values() {
+        weighted_cases::<Fp>();
+        weighted_cases::<Fq>();
+    }
+
+    fn strategy_cases<F: Field>() {
+        let mut cs = ConstraintSystem::<F>::default();
+        let advice = cs.advice_column();
+        let simple = [cs.selector(), cs.selector(), cs.selector()];
+        let _complex = cs.complex_selector();
+        cs.set_minimum_degree(4);
+        cs.create_gate("selector profile modes", |meta| {
+            simple.map(|selector| {
+                meta.query_selector(selector) * meta.query_advice(advice, Rotation::cur())
+            })
+        });
+        let cases = [
+            (
+                vec![
+                    vec![false; 4],
+                    vec![true; 4],
+                    vec![false; 4],
+                    vec![false, true, false, true],
+                ],
+                (1, 1, 0),
+                (3, 1, 0),
+            ),
+            (
+                vec![
+                    vec![true, false, false, false],
+                    vec![true, true, false, false],
+                    vec![false, false, true, false],
+                    vec![false; 4],
+                ],
+                (1, 1, 1),
+                (1, 3, 0),
+            ),
+        ];
+        for (selectors, compressed_expected, direct_expected) in cases {
+            let compressed = cs.compressed_selector_modes(&selectors);
+            let direct = cs.direct_selector_modes(&selectors);
+            assert_eq!(
+                (compressed.constant, compressed.binary, compressed.raw),
+                compressed_expected
+            );
+            assert_eq!(
+                (direct.constant, direct.binary, direct.raw),
+                direct_expected
+            );
+            let (_, compressed_values) = cs.clone().compress_selectors(selectors.clone());
+            let (_, direct_values) = cs.clone().directly_convert_selectors_to_fixed(selectors);
+            assert_eq!(compressed, materialized_modes(&compressed_values));
+            assert_eq!(direct, materialized_modes(&direct_values));
+        }
+    }
+
+    #[test]
+    fn selector_modes_match_both_materialization_strategies_in_both_fields() {
+        strategy_cases::<Fp>();
+        strategy_cases::<Fq>();
     }
 }

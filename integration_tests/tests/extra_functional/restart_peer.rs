@@ -5,6 +5,7 @@ use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha::{blocking::Client, crypto::KeyPair};
 use iroha_config_base::toml::WriteExt as _;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::{
@@ -220,7 +221,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
         iroha_executor_data_model::permission::account::CanManageAccountAlias {
             scope:
                 iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                    iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 ),
         };
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -243,12 +244,12 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let alias = iroha::data_model::account::rekey::AccountAlias::domainless(
         "merchant".parse()?,
-        iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let quantity = Quantity::from(321_u32);
     let client = network.client();
-    let setup_domain = domain_setup_instruction(&domain_id, &client.client().account)?;
+    let setup_domain = domain_setup_instruction(&domain_id, client.client().account())?;
     let setup_alias = account_alias_setup_instruction(
         "merchant@universal",
         &account_id,

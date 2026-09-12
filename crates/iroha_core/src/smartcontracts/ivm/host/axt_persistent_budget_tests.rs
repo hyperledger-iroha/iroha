@@ -140,6 +140,15 @@ fn snapshot_policy_accepts_base_plus_one_across_envelopes_but_rejects_gap() {
         }
     };
 
+    Arc::make_mut(host.axt_state.as_mut().expect("active AXT state"))
+        .record_touch(
+            dsid,
+            axt::TouchManifest {
+                read: Vec::new(),
+                write: Vec::new(),
+            },
+        )
+        .expect("record the envelope's exact empty touch manifest");
     let base_usage = usage_for(base_counter);
     host.enforce_axt_policy(&base_usage)
         .expect("snapshot base counter must be accepted");

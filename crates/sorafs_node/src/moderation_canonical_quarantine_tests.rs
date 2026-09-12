@@ -6,6 +6,7 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
     let replacement = test_key_wrapper(0x75, "software://sorafs/moderation/key-v2");
     let binding = test_key_provider_binding();
     let payload = vec![0xC3; 70_000];
+    let mut checked_current_owners = false;
     for seal_flags in
         (0..=u8::MAX).filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
     {
@@ -25,6 +26,60 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
         let envelope = decode_moderation_quarantine_object_envelope(&bytes, 8 * 1024 * 1024)
             .expect("recover canonical envelope");
         assert_eq!(norito::encode_canonical(&envelope).unwrap(), bytes);
+        if !checked_current_owners {
+            checked_current_owners = true;
+            // Only ciphertext and public metadata enter the shared assertion helper.
+            assert_eq!(
+                crate::frame_test_support::assert_current_frame(
+                    &envelope,
+                    "sorafs_node::moderation::ModerationQuarantineObjectEnvelopeV1"
+                ),
+                bytes
+            );
+            let metadata = quarantine_immutable_metadata_from_envelope(&envelope).unwrap();
+            crate::frame_test_support::assert_current_frame(
+                &metadata,
+                "sorafs_node::moderation::ModerationQuarantineImmutableMetadataV1",
+            );
+            let header = quarantine_aad_header_from_envelope(&envelope).unwrap();
+            crate::frame_test_support::assert_current_frame(
+                &header,
+                "sorafs_node::moderation::ModerationQuarantineAadHeaderV1",
+            );
+            let chunk = &envelope.chunks[0];
+            let chunk_aad = ModerationQuarantineChunkAadV1 {
+                header_digest: moderation_quarantine_aad_header_digest(&header).unwrap(),
+                index: chunk.index,
+                plaintext_offset: chunk.plaintext_offset,
+                plaintext_len: chunk.plaintext_len,
+            };
+            assert_eq!(
+                crate::frame_test_support::assert_current_frame(
+                    &chunk_aad,
+                    "sorafs_node::moderation::ModerationQuarantineChunkAadV1"
+                ),
+                moderation_quarantine_chunk_aad(
+                    chunk_aad.header_digest,
+                    chunk_aad.index,
+                    chunk_aad.plaintext_offset,
+                    chunk_aad.plaintext_len
+                )
+                .unwrap()
+            );
+            let mut wrong_owner = bytes.clone();
+            wrong_owner[6] ^= 1;
+            assert!(
+                decode_moderation_quarantine_object_envelope(&wrong_owner, 8 * 1024 * 1024)
+                    .is_err()
+            );
+            assert!(
+                decode_moderation_quarantine_object_envelope(
+                    &bytes[..bytes.len() - 1],
+                    8 * 1024 * 1024
+                )
+                .is_err()
+            );
+        }
         let expected_id = record.object_id;
         let expected_wrap_context = moderation_quarantine_wrap_context_digest(
             &quarantine_aad_header_from_envelope(&envelope).unwrap(),
@@ -53,7 +108,9 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
                 expected_wrap_context
             );
             assert_eq!(
-                open_moderation_quarantine_object(&restored, &record, &binding, &original).unwrap(),
+                open_moderation_quarantine_object(&restored, &record, &binding, &original)
+                    .unwrap()
+                    .as_slice(),
                 payload
             );
             assert_eq!(
@@ -64,8 +121,9 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
                     &original,
                     65_000..66_000
                 )
-                .unwrap(),
-                payload[65_000..66_000]
+                .unwrap()
+                .as_slice(),
+                &payload[65_000..66_000]
             );
             let (rebound_record, rebound_bytes) = rewrap_moderation_quarantine_object(
                 &restored,
@@ -96,7 +154,8 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
                     &binding,
                     &replacement
                 )
-                .unwrap(),
+                .unwrap()
+                .as_slice(),
                 payload
             );
             assert_eq!(norito::core::get_decode_flags(), read_flags);
@@ -339,7 +398,9 @@ fn quarantine_envelope_maximum_valid_schema_fits_derived_allocation_budget() {
     assert_eq!(envelope.wrapping_key_id, maximum_key_id);
     validate_quarantine_object_envelope(&envelope).unwrap();
     assert_eq!(
-        open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper).unwrap(),
+        open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper)
+            .unwrap()
+            .as_slice(),
         payload
     );
     drop(payload);

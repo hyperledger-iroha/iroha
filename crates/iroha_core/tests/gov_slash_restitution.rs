@@ -13,13 +13,14 @@ use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
 use iroha_executor_data_model::permission::governance::{
     CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
@@ -27,8 +28,8 @@ use nonzero_ext::nonzero;
 fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let alice_id = ALICE_ID.clone();
     let escrow_id = BOB_ID.clone();
-    let wonderland: iroha_data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let wonderland: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(wonderland.clone()).build(&alice_id);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&alice_id);
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&alice_id);

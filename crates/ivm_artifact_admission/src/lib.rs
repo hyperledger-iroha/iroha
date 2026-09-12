@@ -7,14 +7,14 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
-    domain::DomainId,
-    name::Name,
-    nexus::DataSpaceId,
     nft::NftId,
     prelude::{DecimalValueV1, IntValueV1, Json, QuantityValueV1},
     smart_contract::manifest::{ContractManifest, StateDescriptor},
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use ivm_abi::{
     SyscallPolicy, VMError,
     axt::{
@@ -28,9 +28,8 @@ use ivm_abi::{
         ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
     },
 };
-use norito::codec::{Decode, Encode};
 #[cfg(test)]
-use norito::{NoritoSerialize, SerializePayload};
+use norito::NoritoSerialize;
 use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.
@@ -460,7 +459,7 @@ fn decode_literal_table(
 }
 fn decode_canonical_literal_payload<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_canonical_norito(payload).map_err(|_| VMError::InvalidMetadata)
 }
@@ -722,7 +721,8 @@ pub fn verify_contract_artifact_json(artifact: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{nexus::LaneId, smart_contract::manifest::EntryPointKind};
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+    use iroha_model_base::topology::LaneId;
     use ivm_abi::{
         axt::{
             AssetHandle, AxtDescriptor, AxtTouchSpec, GroupBinding, HandleBudget, HandleSubject,

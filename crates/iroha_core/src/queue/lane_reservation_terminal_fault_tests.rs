@@ -134,7 +134,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
             .path()
             .join(format!("startup-terminal-fault-{terminal:?}.norito"));
         let plan_path = test_lane_reservation_plan_path(&dir);
-        let (keys, barrier) = {
+        let (keys, barrier, transactions) = {
             let queue = Arc::new(Queue::test(config_factory(), &time_source));
             queue
                 .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
@@ -203,20 +203,14 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                         .expect("persist release completion before startup-boundary crash");
                 }
             }
-            (keys, barrier)
+            let transactions = reserved
+                .iter()
+                .map(|reserved| reserved.as_accepted().clone())
+                .collect();
+            (keys, barrier, transactions)
         };
         if matches!(terminal, StartupTerminalAppend::ForgetCommitAfterProof) {
-            let block_header =
-                ValidBlock::new_dummy(&checked_random_queue_keypair().into_parts().1)
-                    .as_ref()
-                    .header();
-            let mut state_block = state.block(block_header);
-            state_block
-                .transactions
-                .insert_block(HashSet::from([keys[0].entrypoint_hash]), nonzero!(1_usize));
-            state_block
-                .commit()
-                .expect("commit exact startup-terminal identity");
+            commit_queue_plan_transactions_for_test(&state, transactions);
         }
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let replay = queue

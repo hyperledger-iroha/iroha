@@ -19,7 +19,6 @@ use iroha_crypto::{Hash, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
     prelude::NetworkId,
     privacy::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
@@ -37,6 +36,7 @@ use iroha_data_model::{
         signed::TransactionSignatureError,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_zkp_halo2::vega::{
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, MaskedRelaxedRandomErrorV1,
     MaskedRelaxedRandomSourceV1, ZK_AMS_ACTION_INDEX_V1, ZkAmsAdmissionPublicInputV1,
@@ -1387,6 +1387,8 @@ impl core::fmt::Debug for ZkAmsSeedSecretV1 {
         formatter.write_str("ZkAmsSeedSecretV1([REDACTED])")
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::zk_ams::ZkAmsLsagProofWireV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -1403,6 +1405,8 @@ impl Zeroize for ZkAmsLsagProofWireV1 {
         self.responses.zeroize();
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::zk_ams::ZkAmsAdmissionPossessionProofWireV1")]
 #[derive(
     Clone,
     Copy,
@@ -1436,6 +1440,8 @@ impl Zeroize for ZkAmsAdmissionPossessionProofWireV1 {
         self.response.zeroize();
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::zk_ams::ZkAmsBatchAdmissionProofWireV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -2804,7 +2810,6 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        metadata::Metadata,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
@@ -2813,14 +2818,23 @@ mod tests {
         },
         transaction::FeePaymentIntent,
     };
+    use iroha_model_base::metadata::Metadata;
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
     use rand_core_06::Error as RngError;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::zk_ams::tests::RetiredWireZkAmsBatchAdmissionProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct RetiredWireZkAmsBatchAdmissionProofV1 {
         version: u8,
         relation_proof: Vec<u8>,
         possession_proofs: Vec<Vec<u8>>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::zk_ams::tests::RetiredWireZkAmsOptionSlotsBatchAdmissionProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct RetiredWireZkAmsOptionSlotsBatchAdmissionProofV1 {
         version: u8,

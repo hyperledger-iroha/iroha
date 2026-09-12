@@ -1,4 +1,4 @@
-use super::public_musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES;
+use super::musubi::MAX_RESPONSE_BYTES as MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES;
 use iroha_data_model::{
     isi::musubi::PublishMusubiReleaseV1,
     musubi::{
@@ -20,67 +20,6 @@ use iroha_data_model::{
         validate_musubi_account_id_v1,
     },
 };
-#[test]
-fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
-    assert_eq!(
-        PublicMusubiQueryPathV1::ProviderBundleAttestation.path(),
-        "/v1/musubi/queries/provider-bundle-attestation"
-    );
-}
-#[test]
-fn public_musubi_query_signs_the_exact_fixed_route_and_body() {
-    let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
-    let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-    let query = norito::json!({"package": "apps.sora/demo"});
-    let client = client_with_base_url(base_url());
-    let result: PublicMusubiQueryResultV1<Value> =
-        with_mock_http(respond_with(&snapshots, response), |mock_transport| {
-            let client = client.clone().with_test_http_transport(mock_transport);
-            post_public_musubi_query_v1(
-                &client,
-                PublicMusubiQueryPathV1::ExactPackage,
-                &query,
-                Duration::from_secs(1),
-            )
-        })
-        .expect("public Musubi query");
-    assert!(matches!(result, PublicMusubiQueryResultV1::Found(_)));
-    let snapshot = snapshots.lock().expect("snapshot lock")[0].clone();
-    assert_eq!(snapshot.method, HttpMethod::POST);
-    assert_eq!(snapshot.url.path(), "/v1/musubi/queries/exact-package");
-    assert_eq!(
-        snapshot.max_response_bytes,
-        MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
-    );
-    assert_canonical_account_signed_json_request(&client, &snapshot);
-}
-#[test]
-fn public_musubi_query_rejects_legacy_witness_injection_before_dispatch() {
-    let mut client = client_with_base_url(base_url());
-    client
-        .headers
-        .insert("x-IROHA-witness".to_owned(), "legacy-witness".to_owned());
-    let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-    let stored = Arc::clone(&snapshots);
-    let error = with_mock_http(
-        move |snapshot| {
-            stored.lock().expect("snapshot lock").push(snapshot);
-            Ok(empty_response(StatusCode::OK))
-        },
-        |mock_transport| {
-            let client = client.clone().with_test_http_transport(mock_transport);
-            post_public_musubi_query_v1::<_, Value>(
-                &client,
-                PublicMusubiQueryPathV1::ExactPackage,
-                &norito::json!({"package": "apps.sora/demo"}),
-                Duration::from_secs(1),
-            )
-        },
-    )
-    .expect_err("legacy witness headers must fail before dispatch");
-    assert!(error.to_string().contains("authenticated Musubi client"));
-    assert!(snapshots.lock().expect("snapshot lock").is_empty());
-}
 #[test]
 #[allow(clippy::too_many_lines)]
 fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
@@ -417,43 +356,4 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
         full_dependency_json.len() <= MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES,
         "the fixed cap must retain headroom above this full-dependency exact-release fixture"
     );
-}
-#[test]
-fn public_musubi_query_surfaces_missing_and_stale_cursor() {
-    let query = norito::json!({"limit": 1_u64});
-    let client = client_with_base_url(base_url());
-    let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
-        respond_with(
-            &Arc::new(Mutex::new(Vec::new())),
-            empty_response(StatusCode::NOT_FOUND),
-        ),
-        |mock_transport| {
-            let client = client.clone().with_test_http_transport(mock_transport);
-            post_public_musubi_query_v1(
-                &client,
-                PublicMusubiQueryPathV1::Versions,
-                &query,
-                Duration::from_secs(1),
-            )
-        },
-    )
-    .expect("missing query result");
-    assert!(matches!(missing, PublicMusubiQueryResultV1::NotFound));
-    let stale: PublicMusubiQueryResultV1<Value> = with_mock_http(
-        respond_with(
-            &Arc::new(Mutex::new(Vec::new())),
-            empty_response(StatusCode::GONE),
-        ),
-        |mock_transport| {
-            let client = client.clone().with_test_http_transport(mock_transport);
-            post_public_musubi_query_v1(
-                &client,
-                PublicMusubiQueryPathV1::OrderedPrefix,
-                &query,
-                Duration::from_secs(1),
-            )
-        },
-    )
-    .expect("stale query result");
-    assert!(matches!(stale, PublicMusubiQueryResultV1::StaleCursor));
 }

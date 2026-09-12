@@ -102,7 +102,9 @@ pub const TON_NATIVE_MAX_BOC_BYTES_V1: usize = TON_MAX_BOC_BYTES;
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonBlockIdExtV1")]
 pub struct TonBlockIdExtV1 {
     /// Signed workchain identifier.
     pub workchain: i32,
@@ -130,7 +132,9 @@ pub struct TonBlockIdExtV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonValidatorV1")]
 pub struct TonValidatorV1 {
     /// Raw Ed25519 public key from `ValidatorDescr`.
     #[norito(with = "crate::json_utils::hex32")]
@@ -153,7 +157,9 @@ pub struct TonValidatorV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonValidatorSetV1")]
 pub struct TonValidatorSetV1 {
     /// Catchain sequence number used to derive this subset.
     pub catchain_seqno: u32,
@@ -173,7 +179,9 @@ pub struct TonValidatorSetV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonValidatorConfigV1")]
 pub struct TonValidatorConfigV1 {
     /// Inclusive UNIX activation time encoded by config 34.
     pub valid_since: u32,
@@ -197,7 +205,9 @@ pub struct TonValidatorConfigV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonNativeAnchorV1")]
 pub struct TonNativeAnchorV1 {
     /// Anchor schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -226,7 +236,9 @@ pub struct TonNativeAnchorV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonValidatorSignatureV1")]
 pub struct TonValidatorSignatureV1 {
     /// SHA-256 short id of boxed TL `pub.ed25519`.
     #[norito(with = "crate::json_utils::hex32")]
@@ -246,7 +258,9 @@ pub struct TonValidatorSignatureV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonOrdinaryBlockSignaturesV1")]
 pub struct TonOrdinaryBlockSignaturesV1 {
     /// Native catchain sequence number.
     pub catchain_seqno: u32,
@@ -266,7 +280,9 @@ pub struct TonOrdinaryBlockSignaturesV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonSimplexBlockSignaturesV1")]
 pub struct TonSimplexBlockSignaturesV1 {
     /// Native catchain sequence number.
     pub catchain_seqno: u32,
@@ -296,6 +312,8 @@ pub struct TonSimplexBlockSignaturesV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(tag = "finality", content = "signatures", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::ton_native::TonBlockSignaturesV1")]
 pub enum TonBlockSignaturesV1 {
     /// Ordinary catchain final signatures.
     Ordinary(TonOrdinaryBlockSignaturesV1),
@@ -313,7 +331,9 @@ pub enum TonBlockSignaturesV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonMasterchainBlockProofV1")]
 pub struct TonMasterchainBlockProofV1 {
     /// Native block identifier signed by validators.
     pub block_id: TonBlockIdExtV1,
@@ -335,7 +355,9 @@ pub struct TonMasterchainBlockProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonNativeFinalityProofV1")]
 pub struct TonNativeFinalityProofV1 {
     /// Proof schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -355,7 +377,9 @@ pub struct TonNativeFinalityProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonShardEventProofV1")]
 pub struct TonShardEventProofV1 {
     /// Shard block selected by the finalized masterchain `ShardHashes` tree.
     pub shard_block_id: TonBlockIdExtV1,
@@ -391,7 +415,9 @@ pub struct TonShardEventProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonNativeSourceProofV1")]
 pub struct TonNativeSourceProofV1 {
     /// Source-proof schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -411,7 +437,9 @@ pub struct TonNativeSourceProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::TonAccountStateOpeningV1")]
 pub struct TonAccountStateOpeningV1 {
     /// Shard block selected from the finalized masterchain `ShardHashes` tree.
     pub shard_block_id: TonBlockIdExtV1,
@@ -433,7 +461,9 @@ pub struct TonAccountStateOpeningV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ton_native::SccpTonBreakerObservationProofV1")]
 pub struct SccpTonBreakerObservationProofV1 {
     /// Proof schema version. Final V1 accepts exactly `1`.
     pub version: u8,
@@ -7024,7 +7054,7 @@ mod tests {
         let artifact_sha256: H256 = Sha256::digest(FIXTURE_BYTES).into();
         assert_eq!(
             artifact_sha256,
-            hex32("e2cb473512dd9ac5ae7e1d574c58917d3be0a967ca9a5163a118db5cd1f97206")
+            hex32("fd3f75b1baaed8619c9d13265a150c0b9f7d3dcc4964edbe64a2fd1c385a2cae")
         );
 
         let fixture = norito::json::from_str::<norito::json::Value>(
@@ -7038,11 +7068,11 @@ mod tests {
         let provenance = field(&fixture, "provenance");
         assert_eq!(
             text(provenance, "source_closure_sha256"),
-            "5279016991bda0143321e1fce35d55c97f51abe5dc2025fae466ee5ff7edf0f5"
+            "17c7b100c7b4e000ac7cbd4a6d2f0767acc45ecb01842075c276043782486b6f"
         );
         assert_eq!(
             text(provenance, "tolk_output_sha256"),
-            "96c75f40d9cf97a662e04a5deadb084c84f627d9a1e393fd750a2402961acc6b"
+            "99ad3105ee35debbf0373eeed999b33e6ef9df9637f3357bebf3c659487caab4"
         );
 
         let route = field(&fixture, "route");

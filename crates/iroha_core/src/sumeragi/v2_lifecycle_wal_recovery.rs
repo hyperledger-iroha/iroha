@@ -31,6 +31,7 @@ use crate::sumeragi::{
     },
 };
 use iroha_data_model::block::consensus_v2 as wire;
+include!("v2_lifecycle_control_continuation.rs");
 /// Why one recovered WAL vote could not join its exact Validate predecessor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecoveredWalVoteLifecycleRepairErrorKind {
@@ -71,19 +72,29 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalVoteProjection {
     parent: CandidateAdmission,
     child: CandidateAdmission,
 }
-/// Closed runtime projection of one recovered Proposal/Timeout control Sign.
+/// Closed runtime projection of a standalone recovered WAL Sign.
+/// Proposal/Timeout use their existing control authority. A phase vote additionally
+/// retains an actual terminal Validate result; it is never a linked repair.
 ///
 /// The complete WAL identity, canonical replay evidence, effect, pending
 /// owner, and logical candidate remain private to this module. Ledger and
 /// registry code receive only fixed comparison, staging, and splice oracles;
 /// there is no parts API.
 #[must_use = "a recovered control projection must enter exact storage recovery"]
-pub(in crate::sumeragi) struct AuthenticatedRecoveredWalControlProjection {
+pub(in crate::sumeragi) struct AuthenticatedRecoveredWalStandaloneSignProjection {
     wal_identity: RecoveredWalFrameIdentity,
-    replay_evidence: RecoveredWalControlReplayEvidenceV1,
+    origin: RecoveredStandaloneSignOriginV1,
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
+}
+enum RecoveredStandaloneSignOriginV1 {
+    Control(RecoveredWalControlReplayEvidenceV1),
+    ResolvedPhaseVote {
+        evidence: super::replay_authority::RecoveredWalVoteReplayEvidenceV1,
+        terminal: std::sync::Arc<super::work_registry::ResolvedLifecycleValidateOutcomeV1>,
+        prepare: Option<wire::QuorumCertificate>,
+    },
 }
 /// Opaque signed Broadcast successor of one recovered lifecycle Sign.
 ///
@@ -204,6 +215,19 @@ impl RecoveredLifecycleSignedBroadcastProjectionV1 {
                 (None, None) => true,
                 (Some(_), None) | (None, Some(_)) => false,
             }
+    }
+    /// Join the durable message, binding and admission while retaining a local
+    /// body-store output capability which is deliberately absent from LedgerV1.
+    /// Opaque-to-opaque equality still requires the same output-store instance.
+    pub(super) fn exactly_matches_durable_projection(&self, durable: &Self) -> bool {
+        durable.cold_proposal_output.is_none()
+            && self.effect == durable.effect
+            && self.pending == durable.pending
+            && self.candidate == durable.candidate
+            && self
+                .cold_proposal_output
+                .as_ref()
+                .is_none_or(|output| output.matches_broadcast(&self.effect))
     }
     /// Return the exact installed digest while retaining all replay authority.
     pub(super) fn digest(&self) -> super::LifecycleDigest {
@@ -952,7 +976,7 @@ pub(super) fn project_recovered_next_wal_vote_signed_broadcast_and_sign(
 /// or ordinal extraction surface.
 #[must_use = "the recovered control carrier must remain installed in the concrete registry"]
 pub(super) struct DurableRecoveredWalControlSignCarrierV1 {
-    projection: AuthenticatedRecoveredWalControlProjection,
+    projection: AuthenticatedRecoveredWalStandaloneSignProjection,
     owner: super::OwnerId,
     ordinal: u128,
     slot: super::PhysicalSlotId,
@@ -970,6 +994,7 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalDecisionFetchProjection 
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
+    apply_source_taken: bool,
 }
 /// Opaque first body-backed successor of one recovered WAL Decision Fetch.
 ///
@@ -1138,7 +1163,7 @@ pub(super) struct DurableRecoveredWalDecisionFetchCarrierV1 {
     slot: super::PhysicalSlotId,
     digest: super::LifecycleDigest,
 }
-impl AuthenticatedRecoveredWalControlProjection {
+impl AuthenticatedRecoveredWalStandaloneSignProjection {
     /// Seal the runtime-private recovered-frame projection.
     pub(in crate::sumeragi) fn from_runtime_projection(
         wal_identity: RecoveredWalFrameIdentity,
@@ -1149,28 +1174,131 @@ impl AuthenticatedRecoveredWalControlProjection {
     ) -> Self {
         Self {
             wal_identity,
-            replay_evidence,
+            origin: RecoveredStandaloneSignOriginV1::Control(replay_evidence),
             effect,
             pending,
             candidate: candidate.into_candidate(),
         }
     }
+    /// Seal the sole token-consuming resolved-result projection. This does not
+    /// publish anything; exact source-row checks precede all ledger admission.
+    pub(in crate::sumeragi) fn from_resolved_phase_vote(
+        _permit: crate::sumeragi::v2_runtime::RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        evidence: super::replay_authority::RecoveredWalVoteReplayEvidenceV1,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        candidate: CandidateAdmission,
+        terminal: std::sync::Arc<super::work_registry::ResolvedLifecycleValidateOutcomeV1>,
+        prepare: Option<wire::QuorumCertificate>,
+    ) -> Self {
+        Self {
+            wal_identity,
+            origin: RecoveredStandaloneSignOriginV1::ResolvedPhaseVote {
+                evidence,
+                terminal,
+                prepare,
+            },
+            effect,
+            pending,
+            candidate,
+        }
+    }
+    /// Rejoin the immutable result source before any standalone Sign ledger cut.
+    pub(super) fn source_matches_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
+        match &self.origin {
+            RecoveredStandaloneSignOriginV1::Control(_) => true,
+            RecoveredStandaloneSignOriginV1::ResolvedPhaseVote { terminal, .. } => {
+                ledger
+                    .records()
+                    .iter()
+                    .any(|record| terminal.matches_ledger_record(ledger.context(), record))
+                    && ledger
+                        .records()
+                        .iter()
+                        .filter(|record| self.names_record(record))
+                        .all(|record| {
+                            record.ordinal() > terminal.ordinal()
+                                && record.owner().causal_root() != terminal.terminal_causal_root()
+                        })
+            }
+        }
+    }
+    fn source_matches_coordinator(&self, coordinator: &super::LifecycleCoordinator) -> bool {
+        match &self.origin {
+            RecoveredStandaloneSignOriginV1::Control(_) => true,
+            RecoveredStandaloneSignOriginV1::ResolvedPhaseVote { terminal, .. } => {
+                terminal.matches_terminal(coordinator)
+            }
+        }
+    }
     /// Revalidate every nested authority without releasing any component.
-    pub(super) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
+    pub(in crate::sumeragi) fn is_exact(&self, verified: &VerifiedHeightContext) -> bool {
+        let origin_exact = match &self.origin {
+            RecoveredStandaloneSignOriginV1::Control(evidence) => {
+                evidence.exactly_matches_recovered_control(self.wal_identity, &self.effect)
+                    && evidence.project_recovered_control_candidate_for_comparison(
+                        verified,
+                        self.wal_identity,
+                        &self.effect,
+                        &self.pending,
+                        &self.candidate,
+                    )
+            }
+            RecoveredStandaloneSignOriginV1::ResolvedPhaseVote {
+                evidence,
+                terminal,
+                prepare,
+            } => {
+                let AdapterEffect::Sign {
+                    tag,
+                    request: crate::sumeragi::v2::SignRequest::Vote(vote),
+                } = &self.effect
+                else {
+                    return false;
+                };
+                let Some(validated) = terminal.validated_receipt() else {
+                    return false;
+                };
+                let certificate_exact = match vote.phase {
+                    wire::GlobalPhase::Prepare => {
+                        prepare.is_none() && tag.view() == vote.round.view
+                    }
+                    wire::GlobalPhase::Commit => {
+                        prepare.as_ref().is_some_and(|qc| {
+                            qc.phase == wire::GlobalPhase::Prepare
+                                && qc.round == vote.round
+                                && qc.proposal_round == vote.proposal_round
+                                && qc.subject == vote.subject
+                                && qc.execution_commitment == vote.execution_commitment
+                                && verified.verify_quorum_certificate(qc).is_ok()
+                        }) && tag.view() >= vote.round.view
+                    }
+                };
+                certificate_exact
+                    && vote.signature.is_empty()
+                    && tag.height() == vote.round.height
+                    && vote.round.context_id == verified.context().id()
+                    && vote.round.height == verified.context().height
+                    && usize::try_from(vote.signer)
+                        .is_ok_and(|i| i < verified.context().roster.len())
+                    && validated.durable().context_id() == vote.round.context_id
+                    && validated.durable().round() == vote.proposal_round
+                    && validated.durable().subject() == vote.subject
+                    && validated.execution_commitment() == vote.execution_commitment
+                    && terminal.terminal_causal_root() != self.candidate.causal_root
+                    && evidence.project_recovered_vote_candidate_for_comparison(
+                        verified,
+                        self.wal_identity,
+                        &self.effect,
+                        &self.pending,
+                        &self.candidate,
+                    )
+            }
+        };
         self.wal_identity.is_exact()
-            && self
-                .replay_evidence
-                .exactly_matches_recovered_control(self.wal_identity, &self.effect)
+            && origin_exact
             && self.pending.exactly_binds_adapter_effect(&self.effect)
-            && self
-                .replay_evidence
-                .project_recovered_control_candidate_for_comparison(
-                    verified,
-                    self.wal_identity,
-                    &self.effect,
-                    &self.pending,
-                    &self.candidate,
-                )
             && control_candidate_shape_is_exact(&self.candidate)
     }
     /// Compare the sealed candidate with one exact lifecycle context.
@@ -1221,6 +1349,12 @@ impl AuthenticatedRecoveredWalControlProjection {
             }
             super::LifecycleStageKind::SignTimeoutVote => {
                 Some(super::schema::DurableContinuationEdge::SignTimeoutToBroadcast)
+            }
+            super::LifecycleStageKind::SignPrepareVote => {
+                Some(super::schema::DurableContinuationEdge::SignPrepareToBroadcast)
+            }
+            super::LifecycleStageKind::SignCommitVote => {
+                Some(super::schema::DurableContinuationEdge::SignCommitToBroadcast)
             }
             _ => None,
         }
@@ -1363,7 +1497,7 @@ impl AuthenticatedRecoveredWalControlProjection {
         ledger: &super::ledger::LifecycleLedgerV1,
         ordinal: u128,
     ) -> bool {
-        if !self.belongs_to_context(ledger.context()) {
+        if !self.belongs_to_context(ledger.context()) || !self.source_matches_ledger(ledger) {
             return false;
         }
         let mut records = ledger
@@ -1461,6 +1595,7 @@ impl AuthenticatedRecoveredWalControlProjection {
             return false;
         };
         self.validates_installation(owner, ordinal, slot, digest)
+            && self.source_matches_coordinator(coordinator)
             && coordinator.fault.is_none()
             && coordinator.active_context.id() == self.candidate.key.context()
             && coordinator.active_context.height() == self.candidate.key.round().height()
@@ -1500,6 +1635,7 @@ impl AuthenticatedRecoveredWalControlProjection {
             return false;
         };
         self.validates_installation(owner, ordinal, slot, digest)
+            && self.source_matches_coordinator(coordinator)
             && coordinator.fault.is_none()
             && coordinator.active_context.id() == self.candidate.key.context()
             && coordinator.active_context.height() == self.candidate.key.round().height()
@@ -1608,10 +1744,17 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             .is_ok_and(|(observed, parent_ordinal, observed_child)| {
                 parent_ordinal == self.ordinal
                     && observed_child == child_ordinal
-                    && observed.exactly_matches(broadcast)
+                    && broadcast.exactly_matches_durable_projection(&observed)
             })
     }
 
+    /// Rejoin an inert terminal source beside this standalone Sign or Broadcast.
+    pub(super) fn source_matches_coordinator(
+        &self,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        self.projection.source_matches_coordinator(coordinator)
+    }
     /// Compare the current Ready record, metadata, indexes, geometry, and carrier.
     pub(super) fn matches_current_ready_record(
         &self,
@@ -1767,6 +1910,11 @@ impl DurableRecoveredWalControlSignCarrierV1 {
         recovery.owns_recovered_control_broadcast(&self.projection, broadcast)
     }
 }
+/// Non-clone permit for the Apply role of one authenticated recovered Decision.
+/// Only this module's checked projection handoff can mint it.
+pub(super) struct RecoveredDecisionApplySourceMintPermitV1 {
+    _private: (),
+}
 impl AuthenticatedRecoveredWalDecisionFetchProjection {
     /// Seal the runtime-private recovered Decision Fetch projection.
     pub(in crate::sumeragi) fn from_runtime_projection(
@@ -1782,6 +1930,7 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             effect,
             pending,
             candidate: candidate.into_candidate(),
+            apply_source_taken: false,
         }
     }
     /// Revalidate the complete nested authority against one verified height.
@@ -1801,6 +1950,106 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
                     &self.candidate,
                 )
             && decision_fetch_candidate_shape_is_exact(&self.candidate)
+    }
+    /// Bind the source role to the exact final frame of its owning adapter.
+    pub(in crate::sumeragi) fn exactly_matches_recovered_wal_record(
+        &self,
+        record: &crate::sumeragi::safety_wal::RecoveredRecord,
+    ) -> bool {
+        self.wal_identity.exactly_matches_record(record)
+    }
+    /// Transfer the independent Apply role once while retaining the Fetch's
+    /// existing owner. The full current certificate/tag and canonical pending
+    /// root are rechecked before the private mint is consumed.
+    pub(in crate::sumeragi) fn take_pending_apply_source(
+        &mut self,
+        verified: &VerifiedHeightContext,
+        tag: crate::sumeragi::v2_core::EventTag,
+        certificate: &wire::QuorumCertificate,
+    ) -> Option<super::replay_authority::SealedLiveWalPersistedEffectV1> {
+        if self.apply_source_taken
+            || !self.is_exact(verified)
+            || !matches!(&self.effect, AdapterEffect::FetchBody { tag: fetch_tag, round, subject, certificate: Some(fetch_certificate), .. }
+                if *fetch_tag == tag && fetch_certificate == certificate
+                    && *round == certificate.proposal_round && *subject == certificate.subject)
+        {
+            return None;
+        }
+        let effect = AdapterEffect::Apply {
+            tag,
+            subject: certificate.subject,
+            certificate: certificate.clone(),
+        };
+        let pending = self
+            .pending
+            .project_decision_fetch_apply_source(&self.effect, &effect)?;
+        let sealed = super::replay_authority::SealedLiveWalPersistedEffectV1::from_authenticated_recovered_decision(
+            RecoveredDecisionApplySourceMintPermitV1 { _private: () }, self.wal_identity, effect, pending,
+        )?;
+        self.apply_source_taken = true;
+        Some(sealed)
+    }
+    /// Match the body of a still-live ordinary carrier without treating it as
+    /// the current Decision Fetch. Full old-source and body-store custody is
+    /// authenticated separately by the ordinary body-pipeline census.
+    pub(super) fn names_retained_body_record(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let Some(key) = record.key() else {
+            return false;
+        };
+        record.terminal() == Some(None)
+            && matches!(
+                record.work_class(),
+                Some(
+                    super::LifecycleWorkClass::Fetch
+                        | super::LifecycleWorkClass::Store
+                        | super::LifecycleWorkClass::Validate
+                )
+            )
+            && matches!(
+                record.durable_payload(),
+                Some(DurablePayloadReference::BodyFrame(_))
+            )
+            && record.owner().causal_root() != self.candidate.causal_root
+            && key.context() == self.candidate.key.context()
+            && key.proposal_round() == self.candidate.key.proposal_round()
+            && key.subject() == self.candidate.key.subject()
+            && key.execution_commitment().is_none_or(|commitment| {
+                Some(commitment) == self.candidate.key.execution_commitment()
+            })
+    }
+    /// Select an obsolete ordinary body execution under this exact recovered
+    /// Decision. Its signed origin and body frame are authenticated separately
+    /// by the complete ledger/body-store census before retirement is staged.
+    pub(super) fn supersedes_retained_body_record(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let AdapterEffect::FetchBody { tag, .. } = &self.effect else {
+            return false;
+        };
+        let Some(key) = record.key() else {
+            return false;
+        };
+        let is_decided_body = key.proposal_round() == self.candidate.key.proposal_round()
+            && key.subject() == self.candidate.key.subject();
+        key.context() == self.candidate.key.context()
+            && record.terminal() == Some(None)
+            && matches!(
+                record.work_class(),
+                Some(
+                    LifecycleWorkClass::Fetch
+                        | LifecycleWorkClass::Store
+                        | LifecycleWorkClass::Validate
+                )
+            )
+            && matches!(
+                record.durable_payload(),
+                Some(DurablePayloadReference::BodyFrame(_))
+            )
+            && record.ordinary_body_is_obsolete_for_decision(*tag, is_decided_body)
     }
     /// Recheck that one closed Store/Validate/Apply lineage is the sole
     /// continuation of this exact payload-free Decision Fetch.
@@ -2060,6 +2309,15 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     /// Return whether one durable row names this exact Fetch key.
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)
+    }
+    /// Compare the exact Decision-WAL Fetch source independently of its owner
+    /// and terminal state. A corrupt current source cannot be dismissed as
+    /// unrelated history merely because its causal root was changed.
+    pub(super) fn names_replay_source(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        self.names_record(record) && record.replay_matches_candidate(&self.candidate)
     }
     /// Compare every persisted standalone admission field.
     pub(super) fn exactly_matches_record(
@@ -3210,7 +3468,7 @@ fn decision_fetch_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bo
         return false;
     };
     candidate.work_class == LifecycleWorkClass::Fetch
-        && candidate.key.phase() == super::LifecyclePhase::Fetch
+        && candidate.key.phase() == super::LifecyclePhase::FetchDecision
         && candidate.stage.kind() == LifecycleStageKind::FetchBody
         && candidate.initial_state == InitialLifecycleState::Ready
         && candidate.stage.predecessor_scope() == PredecessorScope::Independent
@@ -3243,6 +3501,16 @@ fn control_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bool {
             LifecycleWorkClass::SignTimeout,
             super::LifecyclePhase::Timeout,
             LifecycleStageKind::SignTimeoutVote,
+        )
+        | (
+            LifecycleWorkClass::SignVote,
+            super::LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        )
+        | (
+            LifecycleWorkClass::SignVote,
+            super::LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
         ) => true,
         _ => false,
     };
@@ -3781,7 +4049,7 @@ fn authenticate_recovered_wal_vote_lifecycle(
         let parent = projection.parent();
         let child = projection.child();
         if !candidate_shape_is_exact(parent, LifecycleWorkClass::Validate)
-            || parent.key.phase() != super::LifecyclePhase::Validate
+            || !parent.key.phase().is_validate()
             || parent.stage.kind() != LifecycleStageKind::ValidateBody
         {
             Err(RecoveredWalVoteLifecycleRepairErrorKind::InvalidParent)

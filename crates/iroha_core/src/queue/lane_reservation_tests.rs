@@ -629,13 +629,13 @@ fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
         Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
         &transaction,
     );
+    install_test_reservation_journal(&queue, &dir);
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let scope = lane_reservation_scope(&state, b"diagnostic-owner", b"diagnostic-proposal");
     assert!(
         !queue.lane_reservation_group_is_finalized_for_diagnostics(&[]),
         "an empty identity group cannot prove queue finalization"
     );
-    install_test_reservation_journal(&queue, &dir);
     let key = *queue
         .reserve_transactions_for_lane(&state, scope, nonzero!(1_usize))
         .expect("reserve diagnostic transaction")[0]
@@ -2493,7 +2493,7 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     let state = lane_reservation_test_state();
     let queue = Queue::test(config_factory(), &time_source);
     let dir = tempdir().expect("tempdir");
-    install_globally_certified_test_reservation_journals(&queue, &dir);
+    let reservation_path = install_globally_certified_test_reservation_journals(&queue, &dir);
     for _ in 0..3 {
         push_globally_bound_lane_reservation_candidate(
             &queue,
@@ -2553,17 +2553,21 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     );
     let durable_before = std::fs::read(dir.path().join("queue-plans-for-reservations.norito"))
         .expect("retain the exact QueuePlan tombstone history");
-    // Missing FIFO is valid only for the exact durable marked terminal cut.
+    let reservations_before =
+        std::fs::read(&reservation_path).expect("retain the complete reservation Commit prefix");
+    // Without the PlanTombstoned marker, the retained exact QueuePlan tombstone
+    // must remain available for preflight before any sibling cleanup effect.
     queue
         .lane_reservations
         .lock()
         .plan_tombstoned
         .retain(|key| key != &keys[0]);
+    let journal = queue.plan_journal.lock().take();
     assert!(matches!(
         queue.commit_lane_reservation_group(&keys),
-        Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash })
-            if hash == consumed
+        Err(LaneQueueReservationError::JournalNotInstalled)
     ));
+    *queue.plan_journal.lock() = journal;
     queue.lane_reservations.lock().plan_tombstoned.push(keys[0]);
     // An otherwise consumed member cannot retain another queue ownership index.
     queue.tx_encoded_len.insert(consumed, 1);
@@ -2573,6 +2577,11 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     ));
     queue.tx_encoded_len.remove(&consumed);
     assert_eq!(queue.lane_reservation_commit_barriers(), expected_barriers);
+    assert_eq!(
+        std::fs::read(&reservation_path).unwrap(),
+        reservations_before,
+        "missing terminal evidence must not advance any sibling reservation"
+    );
     assert_eq!(
         std::fs::read(dir.path().join("queue-plans-for-reservations.norito")).unwrap(),
         durable_before,
@@ -3181,7 +3190,7 @@ fn interleaved_reservation_batches_restore_one_global_fifo() {
     assert_eq!(queue.durable_plan_claims.len(), hashes.len());
 }
 #[test]
-fn empty_startup_reconciliation_receipt_publishes_with_gate_already_open() {
+fn empty_startup_reconciliation_receipt_opens_gate_only_after_completion() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let dir = tempdir().expect("empty startup-reconciliation journal directory");
@@ -3203,12 +3212,12 @@ fn empty_startup_reconciliation_receipt_publishes_with_gate_already_open() {
     let stale_receipt = checked_startup_reconciliation_receipt(&queue);
     assert!(receipt.initial_snapshot.is_empty());
     assert!(
-        !queue.lane_reservation_startup_reconciliation_pending(),
-        "an initially empty durable replay has no quarantined owner"
+        queue.lane_reservation_startup_reconciliation_pending(),
+        "an initially empty durable replay still requires exact startup completion"
     );
     queue
         .complete_lane_reservation_startup_reconciliation(receipt)
-        .expect("an exact empty replay receipt publishes the initial open gate once");
+        .expect("an exact empty replay receipt opens the startup gate once");
     assert!(!queue.lane_reservation_startup_reconciliation_pending());
     let observation = queue
         .observe_completed_lane_reservation_startup_reconciliation(&snapshot)

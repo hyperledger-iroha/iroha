@@ -56,11 +56,11 @@ fn stage_body_retirement(
         ),
         (
             LifecycleWorkClass::Fetch,
-            LifecyclePhase::Fetch,
+            LifecyclePhase::Fetch | LifecyclePhase::FetchDecision,
             LifecycleStageKind::FetchBody
         ) | (
             LifecycleWorkClass::Store,
-            LifecyclePhase::Store,
+            LifecyclePhase::Store | LifecyclePhase::StoreDecision,
             LifecycleStageKind::StoreBody
         )
     ) || lease.stage().predecessor_scope() != PredecessorScope::Independent

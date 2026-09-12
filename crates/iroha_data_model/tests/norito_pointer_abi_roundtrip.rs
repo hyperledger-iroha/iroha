@@ -2,12 +2,12 @@
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
-    domain::prelude::DomainId,
-    name::Name,
     nft::NftId,
     smart_contract::manifest::{AccessSetHints, ContractManifest},
 };
-use ivm::{PointerType, validate_tlv_bytes};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use ivm_abi::pointer_abi::{PointerType, validate_tlv_bytes};
 use norito::{
     codec::{Decode, Encode},
     decode_from_bytes, to_bytes,

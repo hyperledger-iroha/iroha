@@ -10,6 +10,8 @@ pub mod capacity;
 pub mod config;
 mod durable_transaction_forwarder;
 pub mod evidence_viewer;
+#[cfg(test)]
+mod frame_test_support;
 mod governance;
 mod governance_rooted_fs;
 pub mod governance_service;
@@ -1486,7 +1488,7 @@ fn set_local_no_follow_flag(options: &mut fs::OpenOptions) {
 fn set_local_no_follow_flag(_options: &mut fs::OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn local_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -3692,15 +3694,7 @@ impl Default for GovernanceOutboxRuntime {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct GcStorageIdentityV1 {
-    total_bytes: u64,
-    manifest_count: u64,
-    gc_freed_bytes_total: u64,
-    gc_evictions_total: u64,
-    manifest_set_digest: [u8; 32],
-    chunk_refcounts_digest: [u8; 32],
-}
+include!("lib/gc_storage_identity.rs");
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GcEvictionIntentV1 {
     version: u8,
@@ -4736,30 +4730,7 @@ struct AdmittedReputationSnapshotV1 {
     encoded_len: u64,
     envelope: SignedReputationSnapshotV1,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct AuxiliaryRuntimeCheckpointV5 {
-    version: u8,
-    capacity_runtime: CapacityRuntimeCheckpointV1,
-    por_tracker: por::PorTrackerCheckpointV1,
-    por_history: Vec<PorHistoryCheckpointEntryV1>,
-    gc_eviction_intent_next_sequence: u64,
-    gc_eviction_intents: Vec<GcEvictionIntentV1>,
-    gc_eviction_audit_links: Vec<GcEvictionAuditLinkV1>,
-    reputation_snapshots: Vec<AdmittedReputationSnapshotV1>,
-    latest_reputation_snapshot_id: Option<[u8; 16]>,
-    reputation_events: Vec<ReputationSnapshotEventV1>,
-    transparency_source_entries: Vec<TransparencyLedgerSourceEntry>,
-    privacy_source_events: Vec<PrivacyAggregateSourceEvent>,
-    privacy_source_event_receipts: Vec<transparency::PrivacySourceEventReceiptV1>,
-    privacy_publish_request_receipts: Vec<PrivacyPublishRequestReceiptV1>,
-    published_privacy_aggregate_cycles: Vec<[u8; 16]>,
-    privacy_composition_budget: PrivacyCompositionBudgetLedgerV1,
-    privacy_release_ledger: transparency::PrivacyReleaseLedgerV1,
-    transparency_leader_lease_fencing_floor: u64,
-    published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
-    governance_outbox_next_sequence: u64,
-    governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
-}
+include!("lib/auxiliary_runtime_checkpoint.rs");
 /// Unsigned deterministic reputation material intended for external governance signing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationSnapshotSigningMaterialV1 {
@@ -5334,7 +5305,7 @@ impl NodeHandle {
         publication.validate().map_err(|error| {
             GovernancePublishError::other(format!("invalid PoR challenge publication: {error}"))
         })?;
-        let encoded = norito::to_bytes(&publication).map_err(|error| {
+        let encoded = norito::encode_canonical(&publication).map_err(|error| {
             GovernancePublishError::other(format!("encode PoR challenge publication: {error}"))
         })?;
         self.enqueue_governance_outbox(GovernanceOutboxKindV1::PorChallengePublication, encoded)?;
@@ -5349,7 +5320,7 @@ impl NodeHandle {
         report.validate().map_err(|error| {
             GovernancePublishError::other(format!("invalid PoR weekly report: {error}"))
         })?;
-        let encoded = norito::to_bytes(&report).map_err(|error| {
+        let encoded = norito::encode_canonical(&report).map_err(|error| {
             GovernancePublishError::other(format!("encode PoR weekly report: {error}"))
         })?;
         self.enqueue_governance_outbox(GovernanceOutboxKindV1::PorWeeklyReport, encoded)?;
@@ -11136,352 +11107,9 @@ impl NodeHandle {
         }
         Ok(())
     }
-    /// Seal and store quarantined payload bytes in the local encrypted object store.
-    ///
-    /// The plaintext BLAKE3 digest must match the referenced quarantine record
-    /// subject digest. Successful writes persist an encrypted Norito envelope
-    /// and update the local object index checkpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if storage is disabled, the quarantine id is unknown,
-    /// the payload digest does not match the quarantine record, encryption or
-    /// filesystem persistence fails, or the object index lock is poisoned.
-    pub fn store_moderation_quarantine_object(
-        &self,
-        input: ModerationQuarantineObjectInput,
-    ) -> Result<ModerationQuarantineObjectRecord, ModerationQuarantineObjectError> {
-        let _mutation_guard = self
-            .runtime_mutation_lock
-            .lock()
-            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
-        self.ensure_durability_healthy().map_err(|message| {
-            ModerationQuarantineObjectError::Io {
-                path: "durability-state".to_owned(),
-                message,
-            }
-        })?;
-        let root = self
-            .moderation_quarantine_object_root
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
-        let input = normalize_moderation_quarantine_object_input(input)?;
-        let quarantine = self.moderation_quarantine_record_for_object(&input.quarantine_id)?;
-        let payload_digest = *blake3::hash(&input.payload).as_bytes();
-        if payload_digest != quarantine.subject_digest {
-            return Err(ModerationQuarantineObjectError::DigestMismatch {
-                quarantine_id_hex: hex::encode(input.quarantine_id),
-                expected_digest_hex: hex::encode(quarantine.subject_digest),
-                actual_digest_hex: hex::encode(payload_digest),
-            });
-        }
-        let key_wrapper = self
-            .moderation_quarantine_key_wrapper
-            .as_deref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
-        let key_provider_binding = self
-            .moderation_quarantine_key_provider_binding
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnqualified)?;
-        let mut objects = self
-            .moderation_quarantine_objects
-            .write()
-            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
-        let previous = objects.snapshot();
-        if let Some(existing) = objects.get(&input.quarantine_id) {
-            let (_, existing_envelope, _) =
-                self.read_moderation_quarantine_object_envelope(root, &existing)?;
-            let plaintext = open_moderation_quarantine_object(
-                &existing_envelope,
-                &existing,
-                key_provider_binding,
-                key_wrapper,
-            )?;
-            if existing.payload_digest != payload_digest
-                || existing.captured_at_unix != input.captured_at_unix
-                || existing.content_type.as_deref() != input.content_type.as_deref()
-                || existing.notes.as_deref() != input.notes.as_deref()
-                || plaintext.as_slice() != input.payload.as_slice()
-            {
-                return Err(ModerationQuarantineObjectError::ConflictingObject {
-                    quarantine_id_hex: hex::encode(input.quarantine_id),
-                });
-            }
-            return Ok(existing);
-        }
-        objects.ensure_insert_capacity(&input.quarantine_id)?;
-        let (record, envelope_bytes) =
-            seal_moderation_quarantine_object(input, key_provider_binding, key_wrapper)?;
-        let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
-        match fs::symlink_metadata(&envelope_path) {
-            Ok(_) => {
-                return Err(ModerationQuarantineObjectError::ConflictingObject {
-                    quarantine_id_hex: hex::encode(record.quarantine_id),
-                });
-            }
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(ModerationQuarantineObjectError::Io {
-                    path: envelope_path.display().to_string(),
-                    message: err.to_string(),
-                });
-            }
-        }
-        self.finish_local_checkpoint_write(
-            "moderation quarantine object envelope",
-            &envelope_path,
-            write_local_checkpoint_atomic_bounded(
-                &envelope_path,
-                &envelope_bytes,
-                self.config.runtime_retention().checkpoint_max_bytes(),
-            ),
-        )
-        .map_err(|err| ModerationQuarantineObjectError::Io {
-            path: envelope_path.display().to_string(),
-            message: err.to_string(),
-        })?;
-        let stored = match objects.insert(record) {
-            Ok(stored) => stored,
-            Err(err) => {
-                if let Err(cleanup) = remove_local_checkpoint_file_durably(&envelope_path) {
-                    let message = format!(
-                        "failed to remove quarantine envelope after rejected index insertion: {cleanup}"
-                    );
-                    self.mark_durability_unhealthy(message.clone());
-                    return Err(ModerationQuarantineObjectError::Io {
-                        path: envelope_path.display().to_string(),
-                        message,
-                    });
-                }
-                return Err(err);
-            }
-        };
-        let committed = objects.snapshot();
-        if let Err(err) = self.persist_moderation_quarantine_object_index_snapshot(&committed) {
-            if err.committed {
-                return Err(ModerationQuarantineObjectError::Io {
-                    path: "durability-state".to_owned(),
-                    message: err.to_string(),
-                });
-            }
-            if let Err(rollback) = objects.restore_snapshot(previous) {
-                let message = self.record_unrecoverable_rollback(
-                    "failed to roll back moderation quarantine object index checkpoint failure",
-                    rollback,
-                );
-                return Err(ModerationQuarantineObjectError::Io {
-                    path: "durability-state".to_owned(),
-                    message,
-                });
-            }
-            if let Err(cleanup) = remove_local_checkpoint_file_durably(&envelope_path) {
-                let message = self.record_unrecoverable_rollback(
-                    "failed to remove quarantine envelope after index checkpoint failure",
-                    cleanup,
-                );
-                return Err(ModerationQuarantineObjectError::Io {
-                    path: envelope_path.display().to_string(),
-                    message,
-                });
-            }
-            return Err(ModerationQuarantineObjectError::Io {
-                path: "durability-state".to_owned(),
-                message: err.to_string(),
-            });
-        }
-        Ok(stored)
-    }
-    /// Read and decrypt a local quarantine payload object.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if storage is disabled, the quarantine/object record is
-    /// missing, the envelope cannot be read or decoded, authentication fails,
-    /// or the decrypted payload no longer matches the quarantine record digest.
-    pub fn read_moderation_quarantine_object(
-        &self,
-        quarantine_id: [u8; 16],
-    ) -> Result<ModerationQuarantineObjectPayload, ModerationQuarantineObjectError> {
-        let root = self
-            .moderation_quarantine_object_root
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
-        let key_wrapper = self
-            .moderation_quarantine_key_wrapper
-            .as_deref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
-        let key_provider_binding = self
-            .moderation_quarantine_key_provider_binding
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnqualified)?;
-        let quarantine = self.moderation_quarantine_record_for_object(&quarantine_id)?;
-        let record = self
-            .moderation_quarantine_objects
-            .read()
-            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
-            .get(&quarantine_id)
-            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
-                quarantine_id_hex: hex::encode(quarantine_id),
-            })?;
-        let (_, envelope, _) = self.read_moderation_quarantine_object_envelope(root, &record)?;
-        let payload = open_moderation_quarantine_object(
-            &envelope,
-            &record,
-            key_provider_binding,
-            key_wrapper,
-        )?;
-        if *blake3::hash(&payload).as_bytes() != quarantine.subject_digest {
-            return Err(ModerationQuarantineObjectError::AuthenticationFailed {
-                quarantine_id_hex: hex::encode(quarantine_id),
-            });
-        }
-        Ok(ModerationQuarantineObjectPayload { record, payload })
-    }
-    /// Read and authenticate an inclusive-exclusive plaintext byte range.
-    ///
-    /// Only ciphertext chunks intersecting `start..end` are decrypted. Each
-    /// returned byte is independently authenticated against the immutable
-    /// object metadata, chunk index, offset, and length.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the range is invalid, storage or the runtime
-    /// quarantine-key wrapper is unavailable or unqualified, the object is
-    /// missing, or any envelope/chunk authentication check fails.
-    pub fn read_moderation_quarantine_object_range(
-        &self,
-        quarantine_id: [u8; 16],
-        start: u64,
-        end: u64,
-    ) -> Result<ModerationQuarantineObjectRangePayload, ModerationQuarantineObjectError> {
-        let root = self
-            .moderation_quarantine_object_root
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
-        let key_wrapper = self
-            .moderation_quarantine_key_wrapper
-            .as_deref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
-        let key_provider_binding = self
-            .moderation_quarantine_key_provider_binding
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnqualified)?;
-        self.moderation_quarantine_record_for_object(&quarantine_id)?;
-        let record = self
-            .moderation_quarantine_objects
-            .read()
-            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
-            .get(&quarantine_id)
-            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
-                quarantine_id_hex: hex::encode(quarantine_id),
-            })?;
-        let (_, envelope, _) = self.read_moderation_quarantine_object_envelope(root, &record)?;
-        let payload = open_moderation_quarantine_object_range(
-            &envelope,
-            &record,
-            key_provider_binding,
-            key_wrapper,
-            start..end,
-        )?;
-        Ok(ModerationQuarantineObjectRangePayload {
-            record,
-            start,
-            end,
-            payload,
-        })
-    }
-    /// Rewrap one object's DEK under the wrapper's current active key.
-    ///
-    /// The injected wrapper must remain able to unwrap the historical key handle stored in the
-    /// object envelope. Ciphertext chunks, object id, and the durable index stay byte-identical;
-    /// only the context-bound wrapped DEK and its non-secret key handle are atomically replaced.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if storage or the runtime quarantine-key wrapper is unavailable or
-    /// unqualified, the object is missing, old/new key operations fail, the replacement cannot be
-    /// authenticated, or the atomic write fails.
-    pub fn rewrap_moderation_quarantine_object_dek(
-        &self,
-        quarantine_id: [u8; 16],
-    ) -> Result<ModerationQuarantineObjectRecord, ModerationQuarantineObjectError> {
-        let _mutation_guard = self
-            .runtime_mutation_lock
-            .lock()
-            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
-        self.ensure_durability_healthy().map_err(|message| {
-            ModerationQuarantineObjectError::Io {
-                path: "durability-state".to_owned(),
-                message,
-            }
-        })?;
-        let root = self
-            .moderation_quarantine_object_root
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
-        let key_wrapper = self
-            .moderation_quarantine_key_wrapper
-            .as_deref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
-        let key_provider_binding = self
-            .moderation_quarantine_key_provider_binding
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnqualified)?;
-        self.moderation_quarantine_record_for_object(&quarantine_id)?;
-        let record = self
-            .moderation_quarantine_objects
-            .read()
-            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
-            .get(&quarantine_id)
-            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
-                quarantine_id_hex: hex::encode(quarantine_id),
-            })?;
-        let (envelope_path, envelope, original_bytes) =
-            self.read_moderation_quarantine_object_envelope(root, &record)?;
-        let (replacement_record, replacement_bytes) = rewrap_moderation_quarantine_object(
-            &envelope,
-            &record,
-            key_provider_binding,
-            key_wrapper,
-            key_provider_binding,
-            key_wrapper,
-        )?;
-        if replacement_record != record {
-            return Err(ModerationQuarantineObjectError::InvalidSnapshot {
-                message: "DEK rewrap changed immutable object index metadata".to_owned(),
-            });
-        }
-        if replacement_bytes == original_bytes {
-            return Ok(record);
-        }
-        let replacement_envelope = decode_moderation_quarantine_object_envelope(
-            &replacement_bytes,
-            self.config.runtime_retention().checkpoint_max_bytes(),
-        )
-        .map_err(|error| ModerationQuarantineObjectError::Codec {
-            message: error.to_string(),
-        })?;
-        open_moderation_quarantine_object(
-            &replacement_envelope,
-            &replacement_record,
-            key_provider_binding,
-            key_wrapper,
-        )?;
-        self.finish_local_checkpoint_write(
-            "moderation quarantine object DEK rewrap",
-            &envelope_path,
-            write_local_checkpoint_atomic_bounded(
-                &envelope_path,
-                &replacement_bytes,
-                self.config.runtime_retention().checkpoint_max_bytes(),
-            ),
-        )
-        .map_err(|error| ModerationQuarantineObjectError::Io {
-            path: envelope_path.display().to_string(),
-            message: error.to_string(),
-        })?;
-        Ok(record)
-    }
+}
+include!("lib/quarantine_object_io.rs");
+impl NodeHandle {
     /// Export local quarantine object index state, reporting lock failures.
     ///
     /// # Errors
@@ -12252,7 +11880,7 @@ impl NodeHandle {
                         err,
                     )
                 })?;
-            if *blake3::hash(&payload).as_bytes() != quarantine.subject_digest {
+            if *blake3::hash(payload.as_slice()).as_bytes() != quarantine.subject_digest {
                 return Err(NodeInitError::checkpoint(
                     "moderation quarantine object envelope",
                     &envelope_path,
@@ -16525,4 +16153,10 @@ fn moderation_evidence_viewer_error_from_object_error(
 #[cfg(test)]
 mod tests {
     include!("lib_tests.rs");
+    include!("lib/quarantine_plaintext_hygiene_tests.rs");
+    include!("lib/runtime_checkpoint_schema_tests.rs");
 }
+
+#[cfg(test)]
+#[path = "schema_identity_test_support.rs"]
+mod schema_identity_test_support;

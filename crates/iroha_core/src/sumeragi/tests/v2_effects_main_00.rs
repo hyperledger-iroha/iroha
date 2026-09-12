@@ -25,8 +25,8 @@ use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
     merge::MergeQuorumCertificate,
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use std::{
     collections::{BTreeMap, VecDeque},
     num::NonZeroU64,
@@ -194,7 +194,6 @@ struct FakeRuntime {
     exact_effect_batch_ownership: Option<(Vec<AdapterEffect>, Vec<RuntimeEffectOwnership>)>,
     retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
-    pending_live_decision_apply: Option<(EventTag, DurableDecision)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
     terminal_body_candidate_queries: Vec<RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
@@ -334,14 +333,6 @@ impl FakeRuntime {
     }
 }
 impl EffectRuntime for FakeRuntime {
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision: DurableDecision,
-    ) -> bool {
-        self.pending_live_decision_apply == Some((tag, decision))
-    }
-
     fn lifecycle_live_clocks_are_armed(&self) -> bool {
         self.live_clocks_armed
     }
@@ -1132,6 +1123,7 @@ struct FakeServices {
         CertifiedMergeLedgerReference,
     )>,
     apply_tasks: Vec<ApplyTask>,
+    apply_retry_blocked: bool,
     entered_views: Vec<EventTag>,
     entered_view_locks: Vec<Option<(wire::ConsensusRound, wire::BlockSubject)>>,
     equivocations: Vec<wire::SumeragiV2Equivocation>,
@@ -1370,6 +1362,13 @@ impl V2EffectServices for FakeServices {
         self.apply_tasks.push(task);
         Ok(())
     }
+    fn try_enqueue_apply(&mut self, task: ApplyTask) -> Result<bool, Self::Error> {
+        if self.apply_retry_blocked {
+            return Ok(false);
+        }
+        self.enqueue_apply(task)?;
+        Ok(true)
+    }
     fn entered_view(
         &mut self,
         tag: EventTag,
@@ -1576,6 +1575,14 @@ impl ProductionTransportFixture {
         local_role: Option<crate::sumeragi::v2_core::CommitteeRole>,
         queue_config: RuntimeQueueConfig,
     ) -> Self {
+        Self::new_with_local_role_at_view(local_role, queue_config, 0, true)
+    }
+    fn new_with_local_role_at_view(
+        local_role: Option<crate::sumeragi::v2_core::CommitteeRole>,
+        queue_config: RuntimeQueueConfig,
+        body_view: u64,
+        recover_initial_body: bool,
+    ) -> Self {
         let mut validator_keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1623,9 +1630,9 @@ impl ProductionTransportFixture {
         let local_validator = local_role.map(|role| {
             let committee = crate::sumeragi::v2_core::Committee::project_indices(
                 context.height,
-                0,
+                body_view,
                 context.roster.len(),
-                context.leader(0),
+                context.leader(body_view),
             )
             .expect("production transport committee geometry");
             (0..context.roster.len())
@@ -1633,14 +1640,14 @@ impl ProductionTransportFixture {
                 .find(|index| committee.role(*index) == Ok(role))
                 .expect("the requested fixture role exists in the frozen committee")
         });
-        let round = round(&context, 0);
+        let round = round(&context, body_view);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
             None,
             None,
             None,
             3_000,
-            0,
+            body_view,
         );
         let leader = context.leader(round.view);
         let leader_index = usize::try_from(leader).expect("production leader fits usize");
@@ -1688,7 +1695,9 @@ impl ProductionTransportFixture {
             directory.path().join("transport-regression-safety.wal"),
             verified,
             local_validator,
-            Generation::new(1),
+            // The real WAL must start with the same canonical seed used by
+            // production cold open. Durable lifecycle tags are never retagged.
+            Generation::INITIAL,
             [0x63; 32],
             AdapterFingerprints {
                 node: Hash::new(b"production transport node"),
@@ -1711,14 +1720,20 @@ impl ProductionTransportFixture {
         )
         .expect("serialized production runtime");
         assert!(startup_effects.is_empty());
-        runtime
-            .recover_validated_body(&manifest, &validated)
-            .expect("bind locally validated execution commitment");
+        if recover_initial_body {
+            runtime
+                .recover_validated_body(&manifest, &validated)
+                .expect("bind locally validated execution commitment");
+        }
         let requester_key = KeyPair::try_from_seed(vec![90; 32], Algorithm::BlsNormal)
             .expect("deterministic requester key");
         let responder_key = KeyPair::try_from_seed(vec![91; 32], Algorithm::BlsNormal)
             .expect("deterministic responder key");
-        let recovered_bodies = BTreeMap::from([((round, subject), (manifest.clone(), durable))]);
+        let recovered_bodies = if recover_initial_body {
+            BTreeMap::from([((round, subject), (manifest.clone(), durable))])
+        } else {
+            BTreeMap::new()
+        };
         let executor = V2EffectExecutor::with_runtime(
             runtime,
             recovered_bodies,

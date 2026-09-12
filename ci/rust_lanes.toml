@@ -1,5 +1,10 @@
 version = 1
 
+# These packages compile daemon executables even without an external-binary
+# requirement. Foundation-only PRs defer them along with node-launching tests;
+# their affected library dependencies and local CLI checks remain selected.
+daemon_packages = ["irohad"]
+
 # This manifest is intentionally exhaustive. `scripts/rust_ci.py validate` fails
 # whenever a workspace package is missing, duplicated, or no longer exists.
 [lanes.foundation]
@@ -16,6 +21,7 @@ packages = [
   "iroha_file_mmap",
   "iroha_i18n",
   "iroha_macro",
+  "iroha_model_base",
   "iroha_primitives",
   "iroha_primitives_derive",
   "iroha_schema",
@@ -138,16 +144,21 @@ packages = ["integration_tests"]
 
 # Only these package tests start external nodes. Sibling executable tests use
 # Cargo's CARGO_BIN_EXE_* paths and do not need downloaded release artifacts.
-# Authenticated message-control and Parliament signer daemons remain owned by
-# iroha_test_network's feature-isolated build/provenance protocol.
+# Authenticated message-control tests run under Cargo and cannot build child
+# programs. Their explicit artifact is built separately with the test feature;
+# it never replaces the shipping daemon. Qualified corridor bundles below keep
+# their own build and provenance protocols.
 [package_binaries]
-iroha_test_network = ["iroha3d", "iroha"]
+iroha_test_network = ["iroha3d", "iroha", "iroha3d_message_control"]
 izanami = ["iroha3d", "iroha"]
-integration_tests = ["iroha3d", "iroha"]
+integration_tests = ["iroha3d", "iroha", "iroha3d_message_control"]
 
 # Non-Cargo consumers participate in the same artifact-union calculation.
 # Package triggers use the expanded reverse-dependency closure. Unknown/shared
 # inputs and ci/full select every consumer; ordinary prose changes do not.
+# Ordinary foundation-only edits (including iroha_crypto and norito) run the
+# binary-free reverse closure and defer package-triggered external consumers.
+# Mixed source changes and direct consumer inputs retain their own selection.
 [consumers.consistency]
 packages = ["iroha_cli", "iroha_kagami", "iroha_swarm"]
 paths = ["defaults/**", "scripts/tests/consistency.sh"]
@@ -166,6 +177,27 @@ binaries = ["koto"]
 packages = ["irohad", "iroha_cli", "iroha_torii"]
 paths = ["pytests/iroha_cli_tests/**", "pytests/iroha_torii_tests/**"]
 binaries = ["iroha3d", "iroha", "kagami"]
+
+# These runners qualify their own source-bound or debug-only program bundles.
+# Empty downloaded-artifact lists are permitted only with an explicit runner;
+# CI must preserve those owners rather than substitute the PR shipping bundle.
+[consumers.sora_parliament_lifecycle]
+packages = ["integration_tests"]
+paths = ["crates/iroha_crypto/benches/parliament_crypto*", "dashboards/alerts/sora_parliament_rules.yml", "dashboards/alerts/tests/sora_parliament_rules.test.yml"]
+binaries = []
+qualified_runner = "ci/check_sora_parliament_lifecycle.sh"
+
+[consumers.nexus_cross_dataspace_localnet]
+packages = ["integration_tests"]
+paths = []
+binaries = []
+qualified_runner = "ci/check_nexus_cross_dataspace_localnet.sh"
+
+[consumers.nexus_cross_lane_proofs]
+packages = ["integration_tests"]
+paths = []
+binaries = []
+qualified_runner = "ci/check_nexus_cross_lane_proofs.sh"
 
 [paths]
 # Generated work products never seed a compile lane, including when nested in a

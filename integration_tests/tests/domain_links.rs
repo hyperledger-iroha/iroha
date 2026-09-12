@@ -3,6 +3,9 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{blocking::Client, data_model::prelude::*};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
@@ -44,7 +47,7 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     let client = network.client();
     let domain: DomainId = DomainId::try_new("receive-without-preregister", "universal")?;
     ensure_registered_domain(&client, &domain)?;
-    let source_account = client.client().account.clone();
+    let source_account = client.client().account().clone();
     let destination_asset = gen_account_in(&domain).0;
     let destination_nft = gen_account_in(&domain).0;
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(

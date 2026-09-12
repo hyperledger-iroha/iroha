@@ -1,13 +1,14 @@
 use crate::{Outcome, RunArgs};
 use clap::Subcommand;
 use color_eyre::eyre::eyre;
-use iroha_data_model::{nexus::DataSpaceId, prelude::RoleId};
+use iroha_data_model::prelude::RoleId;
 use iroha_genesis::RawGenesisTransaction;
+use iroha_model_base::topology::DataSpaceId;
 use std::io::{BufWriter, Write};
 
 pub(super) fn ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
     manifest: &RawGenesisTransaction,
-    topology: &[iroha_data_model::peer::PeerId],
+    topology: &[iroha_model_base::peer::PeerId],
 ) -> color_eyre::Result<()> {
     iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
         manifest.kagemusha_mint_finality_genesis_parameters(),
@@ -41,7 +42,7 @@ fn complete_test_genesis_builder(
     builder: iroha_genesis::GenesisBuilder,
 ) -> iroha_genesis::GenesisBuilder {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::peer::PeerId;
+    use iroha_model_base::peer::PeerId;
 
     let validators = (0_u8..4)
         .map(|index| {
@@ -60,7 +61,7 @@ fn complete_test_genesis_builder(
 /// Complete fixture context and mint-finality authority for the exact supplied peers.
 pub(crate) fn complete_test_genesis_builder_for_peers(
     builder: iroha_genesis::GenesisBuilder,
-    mut validators: Vec<iroha_data_model::peer::PeerId>,
+    mut validators: Vec<iroha_model_base::peer::PeerId>,
 ) -> iroha_genesis::GenesisBuilder {
     use iroha_data_model::{
         block::consensus_v2::SumeragiV2GenesisContextParameters,
@@ -121,7 +122,6 @@ mod authority_tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
         isi::kagemusha_v1::{
             KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
         },
@@ -129,9 +129,10 @@ mod authority_tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
-        peer::PeerId,
     };
     use iroha_genesis::GenesisBuilder;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use std::{num::NonZeroU64, path::PathBuf};
 
     fn test_peers(seed_prefix: u8) -> Vec<PeerId> {
@@ -246,7 +247,7 @@ pub use sign::{
 };
 mod validate;
 pub use generate::{ConsensusPolicy, generate_default, validate_consensus_mode};
-pub use npos::{ensure_npos_parameters, has_npos_parameters};
+pub use npos::ensure_npos_parameters;
 pub use profile::{
     GenesisProfile, PUBLIC_NEXUS_CHAIN_ID, PUBLIC_XOR_ALIAS, ProfileDefaults,
     TAIRA_XOR_ASSET_DEFINITION_ID, parse_vrf_seed_hex, profile_defaults, profile_requires_npos,

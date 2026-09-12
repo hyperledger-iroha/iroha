@@ -2125,7 +2125,7 @@ fn fhe_param_set_norito_rejects_retired_deprecation_layout() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn fhe_canonical_model_v1_json_is_closed_and_requires_explicit_keys() {

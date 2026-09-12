@@ -2,27 +2,34 @@
 
 #[test]
 fn captured_codec_schema_identities() {
-    crate::captured_schema_tests::assert_bidirectional::<super::TransferTranscript>(
+    crate::captured_schema_tests::Case::bidirectional::<super::TransferTranscript>(
         "iroha_data_model::fastpq::TransferTranscript",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::TransferDeltaTranscript>(
+    )
+    .check();
+    crate::captured_schema_tests::Case::bidirectional::<super::TransferDeltaTranscript>(
         "iroha_data_model::fastpq::TransferDeltaTranscript",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::TransferSmtWitness>(
+    )
+    .check();
+    crate::captured_schema_tests::Case::bidirectional::<super::TransferSmtWitness>(
         "iroha_data_model::fastpq::TransferSmtWitness",
-    );
+    )
+    .check();
     // The final V1 transition batch deliberately replaces the captured pre-release frame.
     // `transition_batch_schema_rejects_the_pre_release_header` covers its identity.
-    crate::captured_schema_tests::assert_bidirectional::<super::FastpqStateTransition>(
+    crate::captured_schema_tests::Case::bidirectional::<super::FastpqStateTransition>(
         "iroha_data_model::fastpq::FastpqStateTransition",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::FastpqOperationKind>(
+    )
+    .check();
+    crate::captured_schema_tests::Case::bidirectional::<super::FastpqOperationKind>(
         "iroha_data_model::fastpq::FastpqOperationKind",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::FastpqPublicInputs>(
+    )
+    .check();
+    crate::captured_schema_tests::Case::bidirectional::<super::FastpqPublicInputs>(
         "iroha_data_model::fastpq::FastpqPublicInputs",
-    );
-    crate::captured_schema_tests::assert_bidirectional::<super::TransferTranscriptBundle>(
+    )
+    .check();
+    crate::captured_schema_tests::Case::bidirectional::<super::TransferTranscriptBundle>(
         "iroha_data_model::fastpq::TransferTranscriptBundle",
-    );
+    )
+    .check();
 }

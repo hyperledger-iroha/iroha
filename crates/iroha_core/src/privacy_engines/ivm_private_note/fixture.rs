@@ -11,13 +11,13 @@ use crate::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
-    domain::DomainId,
     privacy::{
         IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyNullifierV1,
         PrivacyPoolIdV1, PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1,
     },
 };
+use iroha_model_base::domain::DomainId;
 use rand_core_06::{CryptoRng, RngCore};
 use std::str::FromStr as _;
 /// Complete fixture material kept behind `test` or release-evidence cfg.
@@ -81,7 +81,7 @@ fn release_asset_definition_id_v1() -> Result<AssetDefinitionId, IvmPrivateNoteR
     Ok(AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal")
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
-        iroha_data_model::name::Name::from_str("ivmnote")
+        iroha_model_base::name::Name::from_str("ivmnote")
             .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?,
     ))
 }

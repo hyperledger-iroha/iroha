@@ -16,7 +16,8 @@ fn site_fixture(root: &Path) -> (PathBuf, CarBuildPlan, Vec<u8>, ManifestV1) {
     (site, plan, payload, manifest)
 }
 
-fn manifest(plan: &CarBuildPlan, payload: &[u8]) -> ManifestV1 {
+/// Build a canonical manifest for exactly the supplied test plan and payload.
+pub(super) fn manifest(plan: &CarBuildPlan, payload: &[u8]) -> ManifestV1 {
     let mut reader = payload;
     let stats = CarStreamingWriter::new(plan)
         .write_from_reader(&mut reader, &mut io::sink())

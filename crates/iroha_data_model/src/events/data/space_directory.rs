@@ -23,6 +23,10 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryEvent"
+    )]
     pub enum SpaceDirectoryEvent {
         /// A manifest was activated for a UAID/dataspace pair.
         ManifestActivated(SpaceDirectoryManifestActivated),
@@ -36,9 +40,13 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryManifestActivated"
+    )]
     pub struct SpaceDirectoryManifestActivated {
         /// Dataspace hosting the manifest.
-        pub dataspace: crate::nexus::DataSpaceId,
+        pub dataspace: iroha_model_base::topology::DataSpaceId,
         /// UAID that owns the manifest.
         pub uaid: crate::nexus::UniversalAccountId,
         /// Canonical hash of the manifest payload.
@@ -54,9 +62,13 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryManifestExpired"
+    )]
     pub struct SpaceDirectoryManifestExpired {
         /// Dataspace hosting the manifest.
-        pub dataspace: crate::nexus::DataSpaceId,
+        pub dataspace: iroha_model_base::topology::DataSpaceId,
         /// UAID associated with the manifest.
         pub uaid: crate::nexus::UniversalAccountId,
         /// Canonical hash for the expired manifest.
@@ -69,9 +81,13 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::space_directory::model::SpaceDirectoryManifestRevoked"
+    )]
     pub struct SpaceDirectoryManifestRevoked {
         /// Dataspace hosting the manifest.
-        pub dataspace: crate::nexus::DataSpaceId,
+        pub dataspace: iroha_model_base::topology::DataSpaceId,
         /// UAID associated with the manifest.
         pub uaid: crate::nexus::UniversalAccountId,
         /// Canonical hash for the revoked manifest.
@@ -90,3 +106,6 @@ pub mod prelude {
         SpaceDirectoryManifestRevoked,
     };
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

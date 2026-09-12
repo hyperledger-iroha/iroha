@@ -716,10 +716,11 @@ mod tests {
             prelude::{BlobClass, DaStripeLayout},
             types::RetentionPolicy,
         },
-        domain::{Domain, DomainId},
-        nexus::{DataSpaceId, LaneId},
+        domain::Domain,
         role::RoleId,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::collections::BTreeMap;
     fn sample_manifest() -> ContentBundleManifest {
         ContentBundleManifest {
@@ -742,7 +743,7 @@ mod tests {
         account_id: &AccountId,
         uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
     ) -> std::sync::Arc<iroha_core::state::State> {
-        let domain_id: iroha_data_model::domain::DomainId =
+        let domain_id: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain");
         let domain = Domain::new(domain_id.clone()).build(account_id);
         let account = Account::new(account_id.clone())

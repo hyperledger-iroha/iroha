@@ -75,6 +75,8 @@ struct CachedResolverPageV1 {
     response: MusubiResolverIndexPageV1,
 }
 /// Complete coherent set of pages consumed by one successful graph collection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::registry_cache::ResolverIndexCacheSnapshotV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ResolverIndexCacheSnapshotV1 {
     network_id: NetworkId,
@@ -266,6 +268,8 @@ impl CommittedResolverSnapshotV1 {
     }
 }
 /// Strict first-release cache catalog.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::registry_cache::ResolverIndexCacheCatalogV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct ResolverIndexCacheCatalogV1 {
     schema: String,
@@ -953,18 +957,34 @@ fn validate_private_directory(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn captured_resolver_cache_frames_preserve_existing_fixture_bytes() {
+        let snapshot = image("apps.sora", 10, 10);
+        snapshot
+            .validate()
+            .expect("canonical existing snapshot fixture");
+        let catalog = ResolverIndexCacheCatalogV1::default();
+        catalog.validate().expect("canonical empty catalog");
+        crate::persistence_frame_fixture::assert_captured(
+            "musubi::registry_cache::ResolverIndexCacheSnapshotV1",
+            Some(&snapshot),
+        );
+        crate::persistence_frame_fixture::assert_captured(
+            "musubi::registry_cache::ResolverIndexCacheCatalogV1",
+            Some(&catalog),
+        );
+    }
+
     use super::*;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     use crate::{
         graph::resolve_workspace_offline_cached, resolver::ResolveModeV1, workspace::load_workspace,
     };
-    use iroha_data_model::{
-        musubi::{
-            MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiOrderedPackageEntryV1,
-            MusubiOrderedPrefixV1, MusubiPackageScopeV1, MusubiPageRequestV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        MusubiNamespaceBindingV1, MusubiNamespaceV1, MusubiOrderedPackageEntryV1,
+        MusubiOrderedPrefixV1, MusubiPackageScopeV1, MusubiPageRequestV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use tempfile::TempDir;
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"

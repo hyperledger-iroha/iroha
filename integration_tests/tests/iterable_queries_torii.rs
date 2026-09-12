@@ -4,6 +4,8 @@
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use std::{thread::sleep, time::Duration};
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test
 use iroha_data_model::query::dsl::SelectorTuple;
@@ -395,7 +397,7 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let torii = client.client().torii_url.clone();
+    let torii = client.client().endpoint().clone();
     let env_dir = network.env_dir().to_path_buf();
     // Register a by-call trigger with Exactly(1) repeat
     let trig_id: TriggerId = "qtrig_burn_then_exec".parse()?;

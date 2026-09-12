@@ -113,11 +113,19 @@ metadata archives plus the trusted resolved address, code hash, and request
 payload digest:
 
 ```python
-from iroha_torii_client import ContractCallDraftIntent, contract_payload_digest_hex
+from iroha_torii_client import (
+    ContractCallDraftIntent, ToriiCanonicalRequestAuth, contract_payload_digest_hex,
+)
 
 call_payload = {"amount": 1}
+contract_auth = ToriiCanonicalRequestAuth(
+    network_id=local_signing_context.network_id,
+    account_id=authority,
+    signer=sign_request_locally,  # Runtime-owned signer: bytes -> signature bytes.
+)
 
 draft = client.prepare_contract_call(
+    canonical_auth=contract_auth,  # ToriiCanonicalRequestAuth bound to authority and local network
     authority=authority,
     contract_alias="router::universal",
     entrypoint="increment",

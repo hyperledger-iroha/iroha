@@ -34,12 +34,18 @@ const BLOCK_MERKLE_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
 pub const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1: usize = 32 * 1024 * 1024;
 /// Merkle inclusion proof for a transaction entrypoint under an authenticated
 /// root-and-count commitment.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::proofs::BlockReceiptProof")]
 pub struct BlockReceiptProof {
     /// Hash of the transaction entrypoint proven to be part of the block.
@@ -75,12 +81,18 @@ impl BlockReceiptProof {
 }
 /// Merkle inclusion proof for a transaction execution result referenced by
 /// `BlockHeader::result_merkle_root`.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::proofs::ExecutionReceiptProof")]
 pub struct ExecutionReceiptProof {
     /// Hash of the execution result proven to be part of the block.
@@ -115,12 +127,18 @@ impl ExecutionReceiptProof {
     }
 }
 /// Combined entrypoint/result proofs for a transaction included in a block.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::proofs::BlockProofs")]
 pub struct BlockProofs {
     /// Height of the block containing the transaction.
@@ -369,7 +387,6 @@ mod tests {
     use super::*;
     use crate::{
         account::AccountId,
-        domain::DomainId,
         transaction::{
             TransactionResultInner,
             signed::{TransactionBuilder, TransactionResult},
@@ -385,13 +402,15 @@ mod tests {
                 ValidatorPower, Vote,
             },
         },
-        peer::PeerId,
         transaction::ExecutionStep,
         trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
     };
     #[cfg(feature = "transparent_api")]
     use iroha_crypto::{Algorithm, Signature, SignatureOf};
     use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
+    use iroha_model_base::domain::DomainId;
+    #[cfg(feature = "transparent_api")]
+    use iroha_model_base::peer::PeerId;
     #[cfg(feature = "transparent_api")]
     use iroha_primitives::const_vec::ConstVec;
     use norito::codec::DecodeAll as _;
@@ -567,17 +586,7 @@ mod tests {
         assert_eq!(decoded, proofs);
     }
     #[cfg(feature = "transparent_api")]
-    fn finalized_artifact_for_block(
-        block: &SignedBlock,
-        execution_commitment: &ExecutionCommitment,
-    ) -> V2FinalityArtifact {
-        let mut key_pairs = core::iter::repeat_with(|| {
-            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
-                .expect("generate checked finality fixture keypair")
-        })
-        .take(4)
-        .collect::<Vec<_>>();
-        key_pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    fn finality_context_for_block(block: &SignedBlock, key_pairs: &[KeyPair]) -> HeightContext {
         let roster = key_pairs
             .iter()
             .map(|key| ValidatorPower {
@@ -609,7 +618,7 @@ mod tests {
         let mint_finality_epoch_id = mint_finality_roster
             .finality_epoch_id()
             .expect("valid fixture mint-finality roster");
-        let context = HeightContext {
+        HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
@@ -634,7 +643,21 @@ mod tests {
                 max_chunk_count: 8,
             },
             leader_seed: [0xA7; 32],
-        };
+        }
+    }
+    #[cfg(feature = "transparent_api")]
+    fn finalized_artifact_for_block(
+        block: &SignedBlock,
+        execution_commitment: &ExecutionCommitment,
+    ) -> V2FinalityArtifact {
+        let mut key_pairs = core::iter::repeat_with(|| {
+            KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                .expect("generate checked finality fixture keypair")
+        })
+        .take(4)
+        .collect::<Vec<_>>();
+        key_pairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let context = finality_context_for_block(block, &key_pairs);
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),

@@ -23,21 +23,22 @@ use iroha_config::parameters::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    DataSpaceId, NetworkId,
+    NetworkId,
     account::AccountId,
     isi::InstructionBox,
-    nexus::{DataSpaceCatalog, LaneCatalog, LaneId, LaneVisibility},
-    peer::PeerId,
+    nexus::{DataSpaceCatalog, LaneCatalog, LaneVisibility},
     transaction::{
         SignedTransaction,
         signed::{TransactionAdmissionIntent, TransactionEntrypoint},
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -143,7 +144,7 @@ fn validate_queue_plan_gossip_certificate(
         PendingQueuePlanAdmissionDisposition::Applied => {
             QueuePlanGossipCertificateDisposition::Applied
         }
-        PendingQueuePlanAdmissionDisposition::Future
+        PendingQueuePlanAdmissionDisposition::Future { .. }
         | PendingQueuePlanAdmissionDisposition::DeferredCarrier
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
         | PendingQueuePlanAdmissionDisposition::Stale => {
@@ -2030,7 +2031,7 @@ impl TransactionGossiper {
                     }
                     Ok(validated) => Some(validated),
                     Err(error) => {
-                        iroha_logger::warn!(%entrypoint_hash, %error, "dropping unauthenticated QueuePlan transaction gossip");
+                        iroha_logger::warn!(%entrypoint_hash, %error, "rejecting QueuePlan transaction gossip");
                         continue;
                     }
                 },
@@ -2601,7 +2602,7 @@ impl TransactionGossiper {
                         iroha_logger::warn!(
                             %entrypoint_hash,
                             %error,
-                            "dropping unauthenticated QueuePlan transaction gossip"
+                            "rejecting QueuePlan transaction gossip"
                         );
                         continue;
                     }
@@ -2956,6 +2957,8 @@ pub(crate) fn dataspace_label(dataspace: DataSpaceId) -> String {
     dataspace.as_u64().to_string()
 }
 /// Message for gossiping batches of transactions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::TransactionGossip")]
 #[derive(Debug, Clone)]
 pub struct TransactionGossip {
     /// Batch of transactions.
@@ -3012,7 +3015,7 @@ fn len_prefixed_field_payload(bytes: &[u8], offset: usize) -> Result<(&[u8], usi
 }
 fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
@@ -3026,7 +3029,7 @@ fn decode_bounded_len_prefixed_sequence<T>(
     offset: usize,
 ) -> Result<(Vec<T>, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (sequence_len, _) = ncore::inspect_seq_len_slice(payload)?;
@@ -3054,7 +3057,6 @@ fn decode_transaction_gossip_payload(
         offset,
     ))
 }
-impl NoritoSerialize for TransactionGossip {}
 impl SerializePayload for TransactionGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
@@ -3080,7 +3082,7 @@ impl SerializePayload for TransactionGossip {
         gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
     }
 }
-impl<'a> NoritoDeserialize<'a> for TransactionGossip {
+impl<'a> DeserializePayload<'a> for TransactionGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode transaction gossip")
     }
@@ -3098,6 +3100,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for TransactionGossip {
     }
 }
 /// Gossip payload wrapper for transaction entrypoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::GossipTransaction")]
 #[derive(Debug)]
 pub struct GossipTransaction {
     entrypoint: Arc<OnceLock<Arc<TransactionEntrypoint>>>,
@@ -3266,7 +3270,7 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
         });
     }
     let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
-    if schema != <T as NoritoSerialize>::schema_hash().as_slice() {
+    if schema != norito::schema::identity::frame_hash::<T>().as_slice() {
         return Err(ncore::Error::SchemaMismatch);
     }
     let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
@@ -3510,7 +3514,6 @@ impl From<SignedTransaction> for GossipTransaction {
         }
     }
 }
-impl NoritoSerialize for GossipTransaction {}
 impl SerializePayload for GossipTransaction {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
@@ -3531,7 +3534,7 @@ impl SerializePayload for GossipTransaction {
             .checked_add(certificate_len)
     }
 }
-impl<'a> NoritoDeserialize<'a> for GossipTransaction {
+impl<'a> DeserializePayload<'a> for GossipTransaction {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode gossip transaction")
     }
@@ -3559,6 +3562,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     }
 }
 /// Visibility plane for transaction gossip frames.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::GossipPlane")]
 #[derive(Decode, Encode, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GossipPlane {
     /// Public lanes/dataspaces; broadcast is permitted.
@@ -3620,7 +3625,7 @@ fn gossip_vec_payload_len_exact<'a>(
 }
 fn gossip_encoded_vec_payload_len_exact<'a, T>(items: impl Iterator<Item = &'a T>) -> Option<usize>
 where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
 {
     let mut count = 0usize;
     let mut total = 0usize;
@@ -3641,6 +3646,8 @@ fn gossip_routes_payload_len(len: usize) -> Option<usize> {
     ncore::seq_len_prefix_len(len).checked_add(elems)
 }
 /// Lane/dataspace tags carried alongside gossiped transactions for visibility gating.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::GossipRoute")]
 #[derive(Debug, Clone, Copy, Decode, Encode)]
 pub struct GossipRoute {
     /// Lane assigned to the transaction at the sender.
@@ -3772,6 +3779,8 @@ fn partition_gossip_batch(
     }
 }
 #[cfg(test)]
+mod payload_codec_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::NetworkMessage;
@@ -3801,14 +3810,12 @@ mod tests {
         ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
-        DataSpaceId, Level,
+        Level,
         account::{AccountDetails, AccountId, AccountValue},
-        domain::{Domain, DomainId},
+        domain::Domain,
         identifier::IdentifierPolicyId,
         isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
-        nexus::{
-            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneVisibility,
-        },
+        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
         ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
         transaction::{
             TransactionBuilder,
@@ -3818,6 +3825,8 @@ mod tests {
             },
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::{addr::socket_addr, numeric::Quantity, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
@@ -4279,6 +4288,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4648,6 +4658,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4700,6 +4711,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4710,7 +4722,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -4814,6 +4826,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -5432,6 +5445,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -5442,7 +5456,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -5451,7 +5465,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             gossip_tick: 0,
             gossip_deferred: vec![
@@ -6162,6 +6176,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6172,7 +6187,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -6245,6 +6260,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6346,6 +6362,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,

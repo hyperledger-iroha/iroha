@@ -1,5 +1,5 @@
 import { normalizeContractErrorTypeV1 } from "./contractErrorTypes.js";
-import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
+import { createNoritoRecordDecoder, createNoritoRecordEncoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
 import {
@@ -441,27 +441,14 @@ export function createNoritoContractCodecs(
       "dynamic_reads",
       "dynamic_writes",
     ], context);
-    return encodeStructValue([
-      [encodeNoritoVec(value.read_keys ?? [], (entry, index) =>
-        encodeNoritoStringValue(assertNonEmptyString(entry, `${context}.read_keys[${index}]`)),
-      )],
-      [encodeNoritoVec(value.write_keys ?? [], (entry, index) =>
-        encodeNoritoStringValue(assertNonEmptyString(entry, `${context}.write_keys[${index}]`)),
-      )],
-      [encodeNoritoVec(value.dynamic_reads ?? [], (entry, index) =>
-        encodeDynamicAccessHintValue(entry, `${context}.dynamic_reads[${index}]`),
-      )],
-      [encodeNoritoVec(value.dynamic_writes ?? [], (entry, index) =>
-        encodeDynamicAccessHintValue(entry, `${context}.dynamic_writes[${index}]`),
-      )],
-    ]);
+    return encodeCanonicalRecordFields(value, context, AccessSetHintsValueFields);
   }
 
   const AccessSetHintsValueFields = [
-    ["read_keys", decodeStringValue, 2],
-    ["write_keys", decodeStringValue, 2],
-    ["dynamic_reads", decodeDynamicAccessHintValue, 2],
-    ["dynamic_writes", decodeDynamicAccessHintValue, 2],
+    ["read_keys", decodeStringValue, 2, encodeRequiredRecordString, 3],
+    ["write_keys", decodeStringValue, 2, encodeRequiredRecordString, 3],
+    ["dynamic_reads", decodeDynamicAccessHintValue, 2, encodeDynamicAccessHintValue, 3],
+    ["dynamic_writes", decodeDynamicAccessHintValue, 2, encodeDynamicAccessHintValue, 3],
   ];
 
   function decodeAccessSetHintsValue(payload, context) {
@@ -471,19 +458,14 @@ export function createNoritoContractCodecs(
   function encodeDynamicAccessHintValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["base_key", "key_type", "bound_kind", "max_keys"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.base_key, `${context}.base_key`))],
-      [encodeNoritoStringValue(assertNonEmptyString(value.key_type, `${context}.key_type`))],
-      [encodeNoritoStringValue(assertNonEmptyString(value.bound_kind, `${context}.bound_kind`))],
-      [encodeU32Value(value.max_keys, `${context}.max_keys`)],
-    ]);
+    return encodeCanonicalRecordFields(value, context, DynamicAccessHintValueFields);
   }
 
   const DynamicAccessHintValueFields = [
-    ["base_key", decodeStringValue, 0],
-    ["key_type", decodeStringValue, 0],
-    ["bound_kind", decodeStringValue, 0],
-    ["max_keys", decodeU32Value, 0],
+    ["base_key", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["key_type", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["bound_kind", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["max_keys", decodeU32Value, 0, encodeU32Value, 0],
   ];
 
   function decodeDynamicAccessHintValue(payload, context) {
@@ -667,15 +649,12 @@ export function createNoritoContractCodecs(
   function encodeEntrypointParamDescriptorValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["name", "type_name"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-      [encodeNoritoStringValue(assertNonEmptyString(value.type_name, `${context}.type_name`))],
-    ]);
+    return encodeCanonicalRecordFields(value, context, EntrypointParamDescriptorValueFields);
   }
 
   const EntrypointParamDescriptorValueFields = [
-    ["name", decodeStringValue, 0],
-    ["type_name", decodeStringValue, 0],
+    ["name", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["type_name", decodeStringValue, 0, encodeRequiredRecordString, 0],
   ];
 
   function decodeEntrypointParamDescriptorValue(payload, context) {
@@ -687,17 +666,11 @@ export function createNoritoContractCodecs(
       rejectType(`${context} must contain a fields array`);
     }
     assertOnlyObjectKeys(value, ["fields"], context);
-    return encodeStructValue([
-      [
-        encodeNoritoVec(value.fields, (field, index) =>
-          encodeEntrypointArgumentFieldValue(field, `${context}.fields[${index}]`),
-        ),
-      ],
-    ]);
+    return encodeCanonicalRecordFields(value, context, EntrypointArgumentSchemaValueFields);
   }
 
   const EntrypointArgumentSchemaValueFields = [
-    ["fields", decodeEntrypointArgumentFieldValue, 2],
+    ["fields", decodeEntrypointArgumentFieldValue, 2, encodeEntrypointArgumentFieldValue, 2],
   ];
 
   function decodeEntrypointArgumentSchemaValue(payload, context) {
@@ -707,15 +680,12 @@ export function createNoritoContractCodecs(
   function encodeEntrypointArgumentFieldValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["name", "ty"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-      [encodeEntrypointValueTypeValue(value.ty, `${context}.ty`)],
-    ]);
+    return encodeCanonicalRecordFields(value, context, EntrypointArgumentFieldValueFields);
   }
 
   const EntrypointArgumentFieldValueFields = [
-    ["name", decodeStringValue, 0],
-    ["ty", decodeEntrypointValueTypeValue, 0],
+    ["name", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["ty", decodeEntrypointValueTypeValue, 0, encodeEntrypointValueTypeValue, 0],
   ];
 
   function decodeEntrypointArgumentFieldValue(payload, context) {
@@ -728,13 +698,7 @@ export function createNoritoContractCodecs(
     }
     assertOnlyObjectKeys(value, ["nodes"], context);
     analyzeEntrypointValueTypeV1(value, context);
-    return encodeStructValue([
-      [
-        encodeNoritoVec(value.nodes, (node, index) =>
-          encodeEntrypointValueTypeNodeValue(node, `${context}.nodes[${index}]`),
-        ),
-      ],
-    ]);
+    return encodeCanonicalRecordFields(value, context, CanonicalEncodingFields5);
   }
 
   function decodeEntrypointValueTypeValue(payload, context) {
@@ -867,21 +831,12 @@ export function createNoritoContractCodecs(
       rejectType(`${context} must contain a fields array`);
     }
     assertOnlyObjectKeys(value, ["name", "fields"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-      [
-        encodeNoritoVec(value.fields, (field, index) =>
-          encodeNoritoStringValue(
-            assertNonEmptyString(field, `${context}.fields[${index}]`),
-          ),
-        ),
-      ],
-    ]);
+    return encodeCanonicalRecordFields(value, context, EntrypointStructTypeNodeValueFields);
   }
 
   const EntrypointStructTypeNodeValueFields = [
-    ["name", decodeStringValue, 0],
-    ["fields", decodeStringValue, 2],
+    ["name", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["fields", decodeStringValue, 2, encodeRequiredRecordString, 2],
   ];
 
   function decodeEntrypointStructTypeNodeValue(payload, context) {
@@ -891,13 +846,11 @@ export function createNoritoContractCodecs(
   function encodeEntrypointListTypeNodeValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["capacity"], context);
-    return encodeStructValue([
-      [encodeU8Value(value.capacity, `${context}.capacity`)],
-    ]);
+    return encodeCanonicalRecordFields(value, context, EntrypointListTypeNodeValueFields);
   }
 
   const EntrypointListTypeNodeValueFields = [
-    ["capacity", decodeU8Value, 0],
+    ["capacity", decodeU8Value, 0, encodeU8Value, 0],
   ];
 
   function decodeEntrypointListTypeNodeValue(payload, context) {
@@ -960,19 +913,12 @@ export function createNoritoContractCodecs(
   function encodeStateDescriptorValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["name", "type_name"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
-      [
-        encodeNoritoStringValue(
-          assertNonEmptyString(value.type_name, `${context}.type_name`),
-        ),
-      ],
-    ]);
+    return encodeCanonicalRecordFields(value, context, StateDescriptorValueFields);
   }
 
   const StateDescriptorValueFields = [
-    ["name", decodeStringValue, 0],
-    ["type_name", decodeStringValue, 0],
+    ["name", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["type_name", decodeStringValue, 0, encodeRequiredRecordString, 0],
   ];
 
   function decodeStateDescriptorValue(payload, context) {
@@ -1036,19 +982,12 @@ export function createNoritoContractCodecs(
   function encodeKotobaTranslationEntryValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["msg_id", "translations"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.msg_id, `${context}.msg_id`))],
-      [
-        encodeNoritoVec(value.translations ?? [], (entry, index) =>
-          encodeKotobaTranslationValue(entry, `${context}.translations[${index}]`),
-        ),
-      ],
-    ]);
+    return encodeCanonicalRecordFields(value, context, KotobaTranslationEntryValueFields);
   }
 
   const KotobaTranslationEntryValueFields = [
-    ["msg_id", decodeStringValue, 0],
-    ["translations", decodeKotobaTranslationValue, 2],
+    ["msg_id", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["translations", decodeKotobaTranslationValue, 2, encodeKotobaTranslationValue, 3],
   ];
 
   function decodeKotobaTranslationEntryValue(payload, context) {
@@ -1058,15 +997,12 @@ export function createNoritoContractCodecs(
   function encodeKotobaTranslationValue(value, context) {
     assertPlainObjectValue(value, context);
     assertOnlyObjectKeys(value, ["lang", "text"], context);
-    return encodeStructValue([
-      [encodeNoritoStringValue(assertNonEmptyString(value.lang, `${context}.lang`))],
-      [encodeStringValue(value.text, `${context}.text`)],
-    ]);
+    return encodeCanonicalRecordFields(value, context, KotobaTranslationValueFields);
   }
 
   const KotobaTranslationValueFields = [
-    ["lang", decodeStringValue, 0],
-    ["text", decodeStringValue, 0],
+    ["lang", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["text", decodeStringValue, 0, encodeStringValue, 0],
   ];
 
   function decodeKotobaTranslationValue(payload, context) {
@@ -1233,7 +1169,15 @@ export function createNoritoContractCodecs(
   }
 
 
-  return [
+
+function encodeRequiredRecordString(value, context) { return encodeNoritoStringValue(assertNonEmptyString(value, context)); }
+const encodeCanonicalRecordFields = /* @__PURE__ */ createNoritoRecordEncoder(
+  encodeStructValue, encodeOptionValue, encodeNoritoVec,
+);
+const CanonicalEncodingFields5 = [
+  ["nodes", , , encodeEntrypointValueTypeNodeValue, 2],
+];
+return [
     encodeContractManifestSignaturePayloadValue,
     encodeContractManifestValue,
     decodeContractManifestValue,

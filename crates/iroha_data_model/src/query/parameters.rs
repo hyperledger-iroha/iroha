@@ -2,10 +2,10 @@
 //!
 //! They are used together with [`QueryBox`](crate::query::QueryBox) to
 //! configure execution of trait-object queries.
-use crate::name::Name;
 use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use iroha_version::{Decode, Encode};
 use nonzero_ext::nonzero;
@@ -25,12 +25,21 @@ mod model {
     /// The server binds a stored cursor to the authority that started the query.
     /// A continuation request must be signed by that same authority; unknown,
     /// expired, and foreign cursor identifiers are reported identically.
-    #[derive(Debug, Clone, PartialEq, Eq, Getters, Encode, Decode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Getters,
+        Encode,
+        Decode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::parameters::model::ForwardCursor")]
     pub struct ForwardCursor {
         /// Opaque 256-bit query ID encoded as canonical lowercase hexadecimal.
         /// The value identifies process-local server state and must not be parsed,
@@ -61,10 +70,8 @@ mod model {
         IntoSchema,
         Constructor,
         Getters,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get_copy = "pub")]
     #[display(
@@ -72,6 +79,8 @@ mod model {
         offset,
         limit.map_or(".inf".to_owned(), |n| n.to_string())
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::parameters::model::Pagination")]
     pub struct Pagination {
         /// limit of indexing
         pub limit: Option<NonZeroU64>,
@@ -79,11 +88,21 @@ mod model {
         pub offset: u64,
     }
     /// Struct for sorting requests
-    #[derive(Debug, Clone, Default, PartialEq, Eq, Decode, Encode, IntoSchema, Constructor)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Default,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::query::parameters::model::Sorting")]
     pub struct Sorting {
         /// Sort query result using [`Name`] of the key in metadata.
         pub sort_by_metadata_key: Option<Name>,
@@ -92,13 +111,16 @@ mod model {
         pub order: Option<SortOrder>,
     }
     /// Sorting order. Defaults to `Asc`.
-    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[derive(
+        Debug, Clone, Copy, Default, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "iroha_data_model::query::parameters::model::SortOrder")]
     pub enum SortOrder {
         #[default]
         Asc,
         Desc,
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonSerialize for SortOrder {
         fn json_serialize(&self, out: &mut String) {
             let label = match self {
@@ -118,7 +140,7 @@ mod model {
             norito::json::write_json_string_to(label, out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonDeserialize for SortOrder {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
@@ -133,12 +155,21 @@ mod model {
     }
     /// Structure for query fetch size parameter encoding/decoding
     #[derive(
-        Debug, Default, Clone, Copy, PartialEq, Eq, Constructor, Decode, Encode, IntoSchema,
+        Debug,
+        Default,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        Constructor,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[norito_schema(name = "iroha_data_model::query::parameters::model::FetchSize")]
     pub struct FetchSize {
         /// Inner value of a fetch size.
         ///
@@ -146,11 +177,21 @@ mod model {
         pub fetch_size: Option<NonZeroU64>,
     }
     /// Parameters that can modify iterable query execution.
-    #[derive(Debug, Clone, PartialEq, Eq, Default, Constructor, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Default,
+        Constructor,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::query::parameters::model::QueryParams")]
     pub struct QueryParams {
         pub pagination: Pagination,
         pub sorting: Sorting,
@@ -214,7 +255,7 @@ pub mod prelude {
     //! Prelude: re-export most commonly used traits, structs and macros from this module.
     pub use super::{FetchSize, Pagination, Sorting};
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use norito::json;

@@ -45,7 +45,7 @@ use iroha_config::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, IntoKeyValue, Level, Registrable,
+    IntoKeyValue, Level, Registrable,
     account::{AccountDetails, AccountId, AccountValue},
     asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -55,13 +55,15 @@ use iroha_data_model::{
     },
     consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
     isi::Log,
-    nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
-    peer::PeerId,
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
     transaction::{
         FeePaymentIntent, TransactionBuilder,
         signed::{FeeChargeKind, FeeChargeLimit, TransactionEntrypoint},
     },
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::{
@@ -108,6 +110,7 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
@@ -723,6 +726,9 @@ fn reserve_lifecycle_replica_retirement_payload(
     crate::lane_consensus::LaneExecutablePayloadV1,
     Vec<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
 ) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(state);
+    }
     let (_, _, template) = lifecycle_payload_for_validators_with_count_and_lane(
         producer_signer,
         context,
@@ -824,6 +830,9 @@ fn lifecycle_payload_with_exact_ordinary_fifo(
     crate::lane_consensus::LaneExecutablePayloadV1,
     Vec<crate::torii_proxy::QueuePlanAdmissionBindingV1>,
 ) {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(state);
+    }
     let lane_incarnation = state
         .lane_incarnations_snapshot()
         .get(&LaneId::new(1))
@@ -2404,7 +2413,10 @@ fn exercise_nonproducer_retired_attempt_startup(
     }
     assert!(commit_barriers_before.is_empty());
     assert!(release_barriers_before.is_empty());
-    assert_eq!(precrash_quarantine, !queue_snapshot_before.is_empty());
+    assert!(
+        precrash_quarantine,
+        "every reopened Queue remains quarantined until State/Kura reconciliation",
+    );
     drop(generation_one);
     drop(state);
     drop(kura);
@@ -2457,7 +2469,10 @@ fn exercise_nonproducer_retired_attempt_startup(
     );
     assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
     let quarantine_before = queue.lane_reservation_startup_reconciliation_pending();
-    assert_eq!(quarantine_before, !queue_snapshot_before.is_empty());
+    assert!(
+        quarantine_before,
+        "empty replay must retain the same startup fence as replay with owners",
+    );
     let recovered = reconcile_autonomous_lifecycle_startup(
         &restarted_state,
         &queue,

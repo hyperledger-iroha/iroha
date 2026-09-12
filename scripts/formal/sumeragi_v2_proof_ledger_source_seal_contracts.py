@@ -515,7 +515,7 @@ self.transport
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::into_retained_merge_sidecars"),
         """
-if self.has_pending_committed_output_handoff() {
+if self.has_pending_committed_output_handoff()? {
     return Err(V2LaneWorkError::InvalidContext(
         "retained merge-sidecar handoff still owns committed lane output".to_owned(),
     ));
@@ -576,594 +576,6 @@ Ok(retained)
         errors,
     )
 
-_KURA_PRODUCTION_COMPONENT_FILES = (
-    "kura/startup_finality_support.rs",
-    "kura/bound_progress_and_retained_support.rs",
-    "kura/autonomous_reservation_bounds.rs",
-    "kura/certified_bundle_capacity_reservation_types.rs",
-    "kura/prune_commit_merge_support.rs",
-    "kura/merge_ledger_latest_execution_index.rs",
-    "kura/replica_advert_and_body_status.rs",
-    "kura/retired_pipeline_roster_rejection.rs",
-    "kura/retained_finality_replica_authority.rs",
-    "kura/queue_plan_admission_batch.rs",
-    "kura/wsv_checkpoint_read_helpers.rs",
-    "kura/durable_block_and_atomic_sidecar_io.rs",
-    "kura/prune_intent_publication.rs",
-    "kura/prune_recovery_capacity.rs",
-    "kura/block_store_definition_and_test_controls.rs",
-    "kura/startup_finality_session_reads.rs",
-    "kura/pipeline_and_lane_artifacts.rs",
-    "kura/canonical_autonomous_replica.rs",
-    "kura/autonomous_terminal_capacity.rs",
-    "kura/autonomous_publication_temp_recovery.rs",
-    "kura/historical_autonomous_recovery_temp_reconciliation.rs",
-    "kura/hot_path_capacity_preflight.rs",
-    "kura/autonomous_execution_view_capacity.rs",
-    "kura/certified_bundle_capacity.rs",
-    "kura/lane_artifact_budget.rs",
-    "kura/autonomous_lifecycle_terminal_outcomes.rs",
-    "kura/autonomous_release_authority.rs",
-    "kura/autonomous_retired_attempt.rs",
-    "kura/autonomous_application_evidence.rs",
-    "kura/indexed_sidecar_io.rs",
-    "kura/consensus_storage_reads.rs",
-    "kura/indexed_sidecar_rewrite.rs",
-    "kura/lane_history_compaction.rs",
-    "kura/prune_block_store_tail.rs",
-    "kura/test_fault_injection_state.rs",
-    "kura/test_fault_injection_controls.rs",
-    "kura/file_error_support.rs",
-)
-
-_REVIEWED_RUST_INCLUDE_MANIFESTS = {
-    'crates/iroha_core/src/block.rs': (
-        'block/autonomous_merge_carrier_content_tests.rs',
-        'block/exact_quorum_cardinality_tests.rs',
-        'block/autonomous_anchor_network_tests.rs',
-        'block/sccp_soracloud_validation_tests.rs',
-        'block/canonical_genesis_validation_tests.rs',
-        'block/genesis_validation_regression_tests.rs',
-        'block/axt_shared_budget_across_envelopes_test.rs',
-        'block/scheduler_variant_tests.rs',
-        'block/validation_native_amx_test_support.rs',
-        'block/native_amx_receipt_regression_tests.rs',
-        'block/native_amx_exact_quorum_cardinality_tests.rs',
-        'block/native_amx_and_dag_tests.rs',
-        'block/sequential_rejected_pipeline_trigger_tests.rs',
-        'block/tx_order_validation_revalidation_test.rs',
-        'block/rejected_live_batch_fee_tests.rs',
-        'block/fee_admission_tests.rs',
-        'block/bootstrap_and_genesis_tests.rs',
-    ),
-    'crates/iroha_config/src/parameters/actual.rs': (
-        'actual/torii_sccp_replay_archive.rs',
-        'actual/torii_tx_history.rs',
-        'actual/torii_http_transport.rs',
-        'actual/torii_mcp_profile.rs',
-        'actual/kagemusha.rs',
-        'actual/tests.rs',
-    ),
-    'crates/iroha_config/src/parameters/actual/tests.rs': (
-        'sora_profile_discovery_disabled_test.rs',
-        'sora_profile_runtime_tests.rs',
-    ),
-    'crates/iroha_config/src/parameters/user.rs': (
-        'user/kura.rs',
-        'user_soranet_handshake_tests.rs',
-        'user/torii_peer_geo.rs',
-        'user/torii_soranet_privacy_ingest.rs',
-        'user/torii_sccp_replay_archive.rs',
-        'user/torii_tx_history.rs',
-        'user/sorafs_moderation_query_bound_tests.rs',
-        'user/governance_dag_head_mode_tests.rs',
-        'user/zk_prover_report_retention_tests.rs',
-        'user/zk_attachment_retention_tests.rs',
-        'user/query_fanout_memory_tests.rs',
-        'user/app_routed_read_body_timeout_tests.rs',
-        'user/torii_api_connect_exactness_tests.rs',
-        'user/operator_signature_body_timeout_tests.rs',
-        'user/verified_source_ingress_tests.rs',
-        'user/iso_bridge_store_memory_tests.rs',
-        'user/kura_and_snapshot_tests.rs',
-        'user/runtime_tail_tests.rs',
-    ),
-    'crates/iroha_data_model/src/block/consensus_v2.rs': (
-        'consensus_v2_tests.rs',
-    ),
-    'crates/iroha_data_model/src/block/consensus_v2_tests.rs': (
-        'consensus_v2_json_tests.rs',
-    ),
-    'crates/iroha_core/src/kura.rs': (
-        *_KURA_PRODUCTION_COMPONENT_FILES,
-        'kura/tests/00_bounded_sidecar_read_tests.rs',
-        'kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs',
-        'kura/tests/01_prune_capacity_support.rs',
-        'kura/tests/01a_retained_eviction_and_rewrite_tail.rs',
-        'kura/tests/02_replacement_and_preflight.rs',
-        'kura/tests/02a_fresh_single_lane_preflight.rs',
-        'kura/tests/03_preflight_and_merge_entry.rs',
-        'kura/tests/03a_preflight_and_merge_entry_tail.rs',
-        'kura/tests/04_merge_log_and_associations.rs',
-        'kura/tests/04b_merge_artifact_budget.rs',
-        'kura/tests/04c_canonical_association_capacity.rs',
-        'kura/tests/04d_prune_intent_capacity.rs',
-        'kura/tests/05_merge_resolution_and_eviction.rs',
-        'kura/tests/05a_replica_advert_and_body_eviction.rs',
-        'kura/tests/06_eviction_and_autonomous_lanes.rs',
-        'kura/tests/07a_autonomous_reservation_reconciliation_support.rs',
-        'kura/tests/07_autonomous_lanes_and_sidecars.rs',
-        'kura/tests/07b_autonomous_reservation_reconciliation_tests.rs',
-        'kura/tests/07c_lane_execution_sidecar_tests.rs',
-        'kura/tests/07d_strict_lane_ownership_barrier_tests.rs',
-        'kura/tests/07e_autonomous_lifecycle_and_canonical_artifact_tests.rs',
-        'kura/tests/07e_autonomous_publication_temp_recovery_tests.rs',
-        'kura/tests/07e_terminal_capacity_hardening_tests.rs',
-        'kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs',
-        'kura/tests/07g_claim_capacity_preflight_tests.rs',
-        'kura/tests/07h_autonomous_execution_view_capacity_tests.rs',
-        'kura/tests/07i_historical_autonomous_batch_capacity_tests.rs',
-        'kura/tests/07j_certified_bundle_capacity_tests.rs',
-        'kura/tests/07k_historical_atomic_temp_recovery_tests.rs',
-        'kura/tests/07l_pending_canonical_capacity_tests.rs',
-        'kura/tests/07m_canonical_autonomous_replica_tests.rs',
-        'kura/tests/08_lane_receipts_and_artifacts.rs',
-        'kura/tests/08a_certified_lane_block_read_tests.rs',
-        'kura/tests/08b_lane_history_compaction_capacity_tests.rs',
-        'kura/tests/09_lane_artifacts_and_fastpq.rs',
-        'kura/tests/10_native_amx_and_roster.rs',
-        'kura/tests/10b_native_amx_prepublication_transition.rs',
-        'kura/tests/11_roster_and_progress_sidecars.rs',
-        'kura/tests/12_sidecar_index_and_pruning.rs',
-        'kura/tests/13_manifests_and_fsync.rs',
-    ),
-    'crates/iroha_core/src/kura/autonomous_application_evidence.rs': (
-        'passive_diagnostic_reads.rs',
-    ),
-    'crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs': (
-        '10c_native_amx_latest_index_support_and_bounds.rs',
-    ),
-    'crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs': (
-        'autonomous_merge_bundle_support.rs',
-        'autonomous_reservation_types.rs',
-        'autonomous_reservation_inventory.rs',
-        'autonomous_reservation_classifier.rs',
-        'historical_autonomous_recovery.rs',
-        'native_amx_participant_application_artifacts.rs',
-    ),
-    'crates/iroha_core/src/kura/lane_geometry.rs': (
-        'lane_geometry/bootstrap_path_safety.rs',
-        'lane_geometry/bootstrap_relabel.rs',
-        'lane_geometry/catalog_validation.rs',
-        'lane_geometry/retirement_bounds.rs',
-        'lane_geometry_tests/00_support.rs',
-        'lane_geometry/native_amx_retained_window_tests.rs',
-        'lane_geometry_tests/00_retirement.rs',
-        'lane_geometry_tests/01_retirement_and_recovery.rs',
-        'lane_geometry_tests/02_geometry_moves_and_journal.rs',
-        'lane_geometry_tests/03_gc_and_startup.rs',
-    ),
-    'crates/iroha_core/src/merge_sidecar.rs': (
-        'merge_sidecar_signing_guard_tests.rs',
-    ),
-    'crates/iroha_core/src/queue.rs': (
-        'queue/canonical_terminal_cleanup.rs',
-        'queue/nexus_reconfigure_manifest_reload_tests.rs',
-        'queue/privacy_governance_compliance_tests.rs',
-        'queue/plan_journal_startup_atomicity_tests.rs',
-        'queue/global_guard_claim_conflict_tests.rs',
-        'queue/transaction_guard_return_tests.rs',
-        'queue/queue_metadata_and_admission_tests.rs',
-        'queue/instruction_and_state_routing_tests.rs',
-        'queue/kagemusha_top_up_admission_tests.rs',
-        'queue/routing_batch_admission_tests.rs',
-        'queue/config_factory_test_support.rs',
-        'queue/teu_limit_and_backlog_tests.rs',
-        'queue/routing_projection_resilience_tests.rs',
-        'queue/capacity_and_concurrency_tests.rs',
-        'queue/pressure_resync_tests.rs',
-        'queue/expiry_tracking_tests.rs',
-        'queue/inflight_tracking_tests.rs',
-        'queue/lane_reservation_tests.rs',
-        'queue/lane_reservation_terminal_fault_tests.rs',
-        'queue/reservation_recovery_tests.rs',
-    ),
-    'crates/iroha_core/src/queue/instruction_and_state_routing_tests.rs': (
-        'gossip_routing_metadata_tests.rs',
-        'gossip_route_validation_tests.rs',
-        'drain_revalidation_tests.rs',
-    ),
-    'crates/iroha_core/src/queue/lane_reservation_tests.rs': (
-        'lane_reservation_core_tests.rs',
-    ),
-    'crates/iroha_core/src/queue/reservation_recovery_tests.rs': (
-        'retired_release_snapshot_recovery_tests.rs',
-        'native_amx_reservation_tests.rs',
-    ),
-    'crates/iroha_core/src/queue/journal.rs': (
-        'journal_reservation_commit_preflight.rs',
-        'journal_direct_file_io.rs',
-        'plan_journal_bounds_tests.rs',
-        'plan_journal_replay_tests.rs',
-    ),
-    'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
-        'host/axt_persistent_budget_tests.rs',
-        'host/axt_unanchored_admission_tests.rs',
-        'host/core_codec_and_contract_tests.rs',
-        'host/core_query_execution_tests.rs',
-        'host/core_query_pagination_tests.rs',
-        'host/nested_contract_state_and_rollback_tests.rs',
-        'host/zk_verification_tests.rs',
-        'host/prepared_public_arguments_tests.rs',
-        'host/pointer_abi_validation_tests.rs',
-        'host/pointer_abi_and_sm_tests.rs',
-    ),
-    'crates/iroha_core/src/state.rs': (
-        'state/vpn_lease_validation.rs',
-        'state/axt_handle_budget.rs',
-        'state/zk_asset_state.rs',
-        'state/restored_staking_owner_tests.rs',
-        'state/confidential_policy_transition_index_tests.rs',
-        'state/passive_lane_diagnostic_methods.rs',
-        'state/runtime_configuration.rs',
-        'state/lane_lifecycle_support.rs',
-        'state/diagnostic_state_generation.rs',
-        'state/autonomous_predecessor_application.rs',
-        'state/state_commit_lock_order_tests.rs',
-        'state/transfer_transcript_tests.rs',
-        'state/block_proof_tests.rs',
-        'state/range_bounds.rs',
-        'state/deserialize_core.rs',
-        'state/deserialize_world.rs',
-        'state/default_oracle.rs',
-    ),
-    'crates/iroha_core/src/snapshot.rs': (
-        'snapshot/support_policy_tests.rs',
-        'snapshot/write_roundtrip_tests.rs',
-        'snapshot/reconciliation_generation_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/evidence.rs': (
-        'evidence/missing_signer_pop_test.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/serviced_candidate_store.rs': (
-        'serviced_candidate_store_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/serviced_candidate_store_cases.rs': (
-        'serviced_candidate_store/body_terminal_recovery_tests.rs',
-        'serviced_candidate_store_tail_tests.rs',
-    ),
-    'crates/iroha_p2p/src/network.rs': (
-        'network/admission.rs',
-        'network/best_effort_admission.rs',
-        'network/reliable_actor.rs',
-        'network/handle_update_tests.rs',
-        'network/queue_depth_tests.rs',
-    ),
-    'crates/iroha_p2p/src/peer.rs': (
-        'peer_handshake_config_tests.rs',
-        'peer_state_tests.rs',
-        'peer_consensus_mode_test.rs',
-        'peer_tests.rs',
-    ),
-    'crates/irohad/src/main.rs': (
-        'main/shared_sorafs_provider_cache_tests.rs',
-        'main/runtime_deps.rs',
-        'sumeragi_lane_relay_item.rs',
-        'main/online_peers_provider.rs',
-        'main/resolved_genesis_trust_anchor_wrong_hash_test.rs',
-        'main_tests/governance_dag_publisher_binding_signer.rs',
-        'main/governance_dag_launcher_tests.rs',
-        'main/runtime_budget_and_config_tests.rs',
-        'main/startup_tail_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/mod.rs': (
-        'fair_v2_ingress_leader_wire_identity.rs',
-        'fair_v2_ingress_selector.rs',
-        'tests/queue_plan_admission_handoff.rs',
-        'tests/mod_authoritative_runtime_gate_01_support.rs',
-        'tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs',
-        'tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs',
-        'tests/mod_authoritative_runtime_gate_04_routes_and_dequeue.rs',
-        'tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs',
-        'tests/mod_authoritative_runtime_gate_06_source_isolation.rs',
-        'tests/mod_authoritative_runtime_gate_07_wire_bounds.rs',
-        'tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs',
-        'tests/mod_authoritative_runtime_gate_09_checked_dequeue.rs',
-        'tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/status.rs': (
-        'status/test_guards.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2.rs': (
-        'v2_adapter_persistence_and_wal_types.rs',
-        'v2_recovered_decision_validate_adapter_startup.rs',
-        'v2_authenticated_recovered_adapter_startup_impl.rs',
-        'v2_verified_height_context_recovered_output_auth.rs',
-        'v2_adapter_equivocation_evidence.rs',
-        'v2_ready_durable_validate_adapter_preview.rs',
-        'v2_recovered_lifecycle_sign_completion.rs',
-        'v2_wire_registry_and_authentication.rs',
-        'tests/v2_adapter_leader_wire_consumer.rs',
-        'tests/v2_adapter_main_00.rs',
-        'tests/v2_adapter_main_01.rs',
-        'tests/v2_adapter_main_02.rs',
-        'tests/v2_adapter_main_03.rs',
-        'tests/v2_adapter_main_04.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_recovery.rs': (
-        'v2_recovery_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs': (
-        'v2_lifecycle_coordinator_state_helpers.rs',
-        'tests/v2_lifecycle_coordinator_explorer_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs': (
-        'v2_lifecycle_launch_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs': (
-        'v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs',
-        'v2_lifecycle_launch_pending_kura_source_tests.rs',
-        'v2_lifecycle_launch_recovered_sign_settlement_source_tests.rs',
-        'v2_lifecycle_launch_recovered_fetch_source_tests.rs',
-        'v2_lifecycle_launch_certified_response_retry_source_tests.rs',
-        'v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs': (
-        'v2_lifecycle_ledger_operations.rs',
-        'v2_lifecycle_ledger_store.rs',
-        'v2_lifecycle_ledger_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests.rs': (
-        'v2_lifecycle_ledger_tests_durable_recovery_01.rs',
-        'v2_lifecycle_ledger_tests_durable_recovery_02.rs',
-        'v2_lifecycle_ledger_tests_frame_and_store.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs': (
-        'tests/v2_lifecycle_projection_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs': (
-        'tests/v2_lifecycle_scheduler_completion_cases.rs',
-        'tests/v2_lifecycle_scheduler_certified_serve_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs': (
-        'v2_lifecycle_replay_authority_recovered_decision_validate.rs',
-        'v2_lifecycle_replay_authority_live_wal.rs',
-        'v2_lifecycle_replay_authority_certified_serve.rs',
-        'v2_lifecycle_replay_authority_certified_body.rs',
-        'v2_lifecycle_replay_authority_payload_projection.rs',
-        'v2_lifecycle_replay_authority_output_recovery.rs',
-        'tests/v2_lifecycle_replay_authority_fixtures.rs',
-        'tests/v2_lifecycle_replay_authority_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs': (
-        'v2_lifecycle_work_registry_validate_recovery_registry_impl.rs',
-        'v2_lifecycle_work_registry_validate_recovery_parent.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs': (
-        'v2_lifecycle_work_registry_validate_recovery_census_impl.rs',
-        'v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs',
-        'v2_lifecycle_work_registry_validate_completion_impl.rs',
-        'v2_lifecycle_work_registry_access_impl.rs',
-        'v2_lifecycle_work_registry_validate_recovery_execution_impl.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs': (
-        'v2_lifecycle_work_registry_body_validate_carriers.rs',
-        'v2_lifecycle_work_registry_pre_admission.rs',
-        'v2_lifecycle_work_registry_live_wal_sign.rs',
-        'v2_lifecycle_work_registry_output.rs',
-        'v2_lifecycle_work_registry_live_validate_children.rs',
-        'v2_lifecycle_work_registry_recovered_wal.rs',
-        'v2_lifecycle_work_registry_validate_recovery.rs',
-        'v2_lifecycle_work_registry_validate_execution.rs',
-        'v2_lifecycle_work_registry_validate_sidecar.rs',
-        'v2_lifecycle_work_registry_body_retirement.rs',
-        'tests/v2_lifecycle_work_registry_00.rs',
-        'tests/v2_lifecycle_work_registry_01.rs',
-        'tests/v2_lifecycle_work_registry_02.rs',
-        'tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs',
-        'tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs',
-        'tests/v2_lifecycle_work_registry_validate_sidecar_cases.rs',
-        'tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs',
-        'tests/v2_lifecycle_work_registry_exact_registry_cases.rs',
-        'tests/v2_lifecycle_work_registry_recovery_surface_cases.rs',
-        'tests/v2_lifecycle_work_registry_replay_evidence_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs': (
-        'v2_lifecycle_work_registry_validate_apply_cases.rs',
-        'v2_lifecycle_work_registry_validate_completion_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs': (
-        'v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_runtime.rs': (
-        'v2_runtime_lifecycle_ordinal_source.rs',
-        'v2_runtime_durable_recovery_pending.rs',
-        'v2_runtime_effect_ownership_core_impl.rs',
-        'v2_runtime_effect_ownership_rebind_impl.rs',
-        'v2_runtime_ready_validate_publication.rs',
-        'v2_runtime/network_ingress_classification.rs',
-        'tests/v2_runtime_pending_binding_cases.rs',
-        'tests/v2_runtime_main_00.rs',
-        'tests/v2_runtime_main_01.rs',
-        'tests/v2_runtime_main_02.rs',
-        'tests/v2_runtime_main_03.rs',
-        'tests/v2_runtime_main_04.rs',
-        'tests/v2_runtime_main_05.rs',
-        'tests/v2_runtime_main_06.rs',
-        'tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs',
-        'tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_worker.rs': (
-        'v2_worker_completion.rs',
-        'v2_worker_io_execution.rs',
-        'v2_worker_exact_output.rs',
-        'v2_worker_services.rs',
-        'v2_worker_services_impl.rs',
-        'tests/v2_worker_main_00.rs',
-        'tests/v2_worker_main_01.rs',
-        'tests/v2_worker_lifecycle_capacity_cases.rs',
-        'tests/v2_worker_equivocation_fixture.rs',
-        'v2_worker/applied_height_handoff_tests.rs',
-        'v2_worker/queue_plan_admission_handoff_tests.rs',
-        'v2_worker/upstream_reply_route_test.rs',
-        'tests/v2_worker_main_02.rs',
-        'tests/v2_worker_main_04.rs',
-        'tests/v2_worker_main_05.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs': (
-        'v2_worker/exact_output_rollover_claim.rs',
-        'v2_worker/queue_plan_admission_handoff.rs',
-        'v2_worker/exact_output_pending_state.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_worker_exact_output.rs': (
-        'v2_worker/autonomous_lane_output_reconstruction.rs',
-        'v2_worker/kura_replica_advert_refresh.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs': (
-        'v2_worker/pending_kura_apply_io_snapshot.rs',
-        'v2_worker/current_lane_output_rollover_claim.rs',
-        'v2_worker/production_services_drop_impl.rs',
-        'v2_worker/effect_services_impl.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_runner.rs': (
-        'v2_runner/lifecycle_terminal_recovery.rs',
-        'v2_runner/decided_lane_recovery.rs',
-        'v2_runner/outer_ingress_cursor.rs',
-        'v2_runner/finalized_output_rollover.rs',
-        'v2_runner/canonical_recovery_ingress.rs',
-        'v2_runner/reply_route_retention.rs',
-        'v2_runner/merge_sidecar_recovery.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_runner_tests.rs': (
-        'tests/v2_runner_unsealed_00.rs',
-        'tests/v2_runner_unsealed_01.rs',
-        'tests/v2_runner_unsealed_02.rs',
-        'tests/v2_runner_upstream_recovery.rs',
-        'tests/v2_runner_lifecycle_startup_order.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_apply.rs': (
-        'v2_apply/autonomous_recovery_types.rs',
-        'v2_apply/historical_autonomous_recovery.rs',
-        'v2_apply/reconciliation_authority.rs',
-        'v2_apply/committed_carrier_cleanup.rs',
-        'v2_apply/error_recovery.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_core/reducer.rs': (
-        'reducer/prepare_certificate_handling.rs',
-        'tests/reducer_timeout_and_projection.rs',
-        'tests/v2_core_reducer_primitive_projection.rs',
-        'reducer/counterfeit_boundary_capability_test.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_core/refinement.rs': (
-        'refinement/leader_wire_admission_trace_projection.rs',
-        'refinement/first_release_witness.rs',
-        'refinement/volatile_summary_well_formed.rs',
-        'refinement/post_carrier_transition.rs',
-        'refinement_constructor_test_helpers.rs',
-        'refinement/transition_gate_tail.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_core/refinement_cases.rs': (
-        'refinement_cases/effect_candidate.rs',
-        'refinement_cases/terminal_body_pipeline.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_core/tests.rs': (
-        'tests/committee_fallback_and_retransmit.rs',
-        'tests/v2_core_view_zero_parent_binding.rs',
-        'tests/empty_replay_resume_test.rs',
-        'tests/delayed_prepare_qc_cache_bounds.rs',
-        'tests/v2_core_terminal_transactionality.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_effects.rs': (
-        'v2_effects_recovered_fetch_and_pipeline_types.rs',
-        'v2_effects_recovered_lifecycle_output_service.rs',
-        'v2_effects_lifecycle_admission_settlement.rs',
-        'v2_effects_body_retirement.rs',
-        'v2_effects_runner_decision_cleanup_plan.rs',
-        'v2_effects_test_consumer_wrappers.rs',
-        'tests/v2_effects_main_00.rs',
-        'tests/v2_effects_main_01.rs',
-        'tests/v2_effects_main_02.rs',
-        'tests/v2_effects_main_03.rs',
-        'tests/v2_effects_main_04.rs',
-        'tests/v2_effects_main_05.rs',
-        'tests/v2_effects_03_locked_body_and_sidecar.rs',
-        'tests/v2_effects_certified_body_fence_supersession.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
-        'v2_lane_work/canonical_executed_block_application_repair.rs',
-        'v2_lane_work/queue_plan_admission_handoff.rs',
-        'v2_lane_work/signing_authority_tests.rs',
-        'v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs',
-        'v2_lane_work/typed_finality_handoff_tests.rs',
-        'v2_lane_work/terminal_retirement_journal_failure_test.rs',
-        'tests/v2_lane_work_native_signing_guard.rs',
-        'v2_lane_work/native_amx_route_and_receipt_tests.rs',
-        'tests/v2_lane_work_observer_role.rs',
-        'tests/v2_lane_work_native_body_recovery.rs',
-        'tests/v2_lane_work_lifecycle_and_recovery_cases.rs',
-        'v2_lane_work/strict_historical_read_tests.rs',
-        'v2_lane_work/strict_volatile_owner_tests.rs',
-        'v2_lane_work/strict_receipt_gate_tests.rs',
-        'v2_lane_work/canonical_executed_block_recovery_drift_test.rs',
-        'v2_lane_work/historical_recovery_and_carrier_tests.rs',
-        'v2_lane_work_autonomous_ready_durability_tests.rs',
-        'v2_lane_work/autonomous_retirement_and_merge_tests.rs',
-        'v2_lane_work/queue_plan_admission_handoff_tests.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs': (
-        'v2_lane_work_effect_queue.rs',
-    ),
-    'integration_tests/tests/sumeragi_v2_runner.rs': (
-        'sumeragi_v2_runner/prepare_qc_split_tests.rs',
-        'sumeragi_v2_runner/status_validation_helpers.rs',
-        'sumeragi_v2_runner/status_set_validation.rs',
-    ),
-    'integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs': (
-        'restart_timing_test.rs',
-    ),
-    'crates/iroha_sumeragi_core/src/verus_proofs.rs': (
-        'verus_proofs/production_transition_contracts.rs',
-        'verus_proofs/in_flight_first_release_proofs.rs',
-        'verus_proofs/production_kernel_tail.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs': (
-        'v2_adapter_activation_context.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_adapter_main_03.rs': (
-        'v2_adapter_04_wal_recovery.rs',
-        'v2_adapter_04b_lifecycle_startup.rs',
-        'v2_adapter_05_direct_lifecycle.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle.rs': (
-        'v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs': (
-        'v2_adapter_04_wal_recovery_decision_classifier_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs': (
-        'v2_adapter_04b_lifecycle_startup_tail.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs': (
-        'v2_adapter_01_replay_and_registry.rs',
-        'v2_adapter_02_view_and_lock_progress.rs',
-        'v2_adapter_03_tc_and_terminal_ingress.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs': (
-        'v2_worker_reply_route_cases.rs',
-        'v2_worker_backpressure_cases.rs',
-        'v2_worker_recovered_lifecycle_output_cases.rs',
-        'v2_worker_nonzero_view_restart.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_worker_backpressure_cases.rs': (
-        'v2_worker_backpressure_retirement_cases.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs': (
-        'v2_effects_kura_tip_replay.rs',
-        'v2_effects_01_view_churn_and_runtime_steps.rs',
-        'v2_effects_highest_prepare_retention.rs',
-        'v2_effects_02_admission_handoffs.rs',
-    ),
-}
 def _read_reviewed_rust_source_fixture(
     repo_root: Path,
     relative: str,
@@ -3457,7 +2869,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "f160be0e0bcce5a09813d9b1ce971c361991bff4ac9a33469a5130bbd11b80f6"
     ),
     "autonomous_lane_output_has_durable_reconstruction_source": (
-        "0d806079c721d886405ad801b9fcb145b81387c2b9bc757534c82a4295a60e82"
+        "69bfd9d27c487fad2d01e11204e181754ed1021ce3ab5364a85f3a9e9c153b38"
     ),
     "take_attempt": "acc18d3997a0cc6fcca4926b72a63fedf5d0987ecb33c1114e93e0da3b2254d7",
     "mark_admitted": "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c",
@@ -3502,7 +2914,7 @@ _APPLIED_HEIGHT_TICKETLESS_FINALITY_STRUCT_SHA256 = {
 }
 
 _PRODUCTION_INGRESS_EFFECTS_RECONCILIATION_ITEM_SHA256 = {
-    "predecessor_remains_exact": "25b34301a52484cdc357afb8790ad65a11096a0cf45e86b2fd4f097b44d731f3",
+    "predecessor_remains_exact": "5227b69d9a76243043cbce01ba48eb7a220938f94032ab75df28879ad9c3db62",
     "released_validate_preflight": "b129214d21f293964bde4b78d22345940da76ee918487c5158d945f4b09c0721",
     "validate_body": "009ec775fb5138577ee239bd82c95ceacfb96b2079a1fba0fb902021768df3f1",
     "test_executor_owners_empty": "55afb20b7ef738199aa104e6db1f5fc1e82b524f439b7c738fef2b8a91c28dc7",
@@ -3641,10 +3053,10 @@ _APPLIED_HEIGHT_PREDECESSOR_DURABILITY_HANDOFF_TEST_SHA256 = {
         "6180ebcb3f417cf30d175305545bb980449b99f50bcf74ec300198e15bad5881"
     ),
     "applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output": (
-        "63da596c965313f6d1670a4dde34f5b4886f7dd8983ac32d8a969f57636d869f"
+        "af8c9c7aed14ad05554568535bfb3f7736fbb68b1baef3c51e54415f6ce385a9"
     ),
     "applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate": (
-        "64d78dacb9ebb2a99b8d48aff8202bb62aedd080450360bcbccc1d57e9c9cba3"
+        "d6a2222a93ef67b78fc2dd8768ff60452afc78096599554a5adacfbd07c22e0b"
     ),
 }
 
@@ -3912,25 +3324,32 @@ Self {
     native_amx_signing_guard_limits,
 }
 """
-_PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS = """
-match dispatch_lane_work_effect_from_snapshot(services, next_effect, queue_plan_sources.as_mut(),)? {
-    LaneWorkEffectDispatch::Complete => {
-        dispatched = dispatched.saturating_add(1);
-    }
-    LaneWorkEffectDispatch::SourceRetained(effect) => {
-        if effect.retries_from_native_catalog_after_source_retention() {
-            continue;
+_PRODUCTION_RUNNER_SOURCE_RETAINED_DISPATCH_TOKENS = """match dispatch_lane_work_effect_from_snapshot(
+            services,
+            next_effect,
+            queue_plan_sources.as_mut(),
+        )? {
+            LaneWorkEffectDispatch::Complete => {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
+                dispatched = dispatched.saturating_add(1);
+            }
+            LaneWorkEffectDispatch::SourceRetained(effect) => {
+                if effect.retries_from_native_catalog_after_source_retention() {
+                    let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
+                    // The compact body/peer catalog remains the source owner.
+                    // Free this bounded delivery slot so the next cadence can
+                    // rotate past a worker-saturated or silent peer.
+                    continue;
+                }
+                if !lane_work.rotate_next_effect() {
+                    return Err(V2RunnerError::Service(
+                        "lane-work scheduler could not retain a source-backpressured sidecar effect"
+                            .to_owned(),
+                    ));
+                }
+            }
         }
-        if !lane_work.requeue_effect(effect) {
-            return Err(V2RunnerError::Service(
-                "lane-work scheduler could not retain a source-backpressured sidecar effect"
-                    .to_owned(),
-            ));
-        }
-    }
-}
-apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
-"""
+        apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;"""
 
 # Complete item seals for the process-local positive validation memo used by
 # execution-bearing merge candidates.  These are deliberately separate from
@@ -3940,7 +3359,7 @@ apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
 # unchanged.  Relay/drain candidates continue through the live validator.
 _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
     "V2LaneWorkAdapter::mark_global_body_locked": (
-        "fa19a22ac3e2e8027daccca4545d066928aaac5b6ab3ee0fbb529012a0fe1070"
+        "65e206bcb8a1103890de075b511c915d1f2a69dc47594fc6f7ea97eb3e6bd2eb"
     ),
     "V2LaneWorkAdapter::retain_merge_sidecars_for_global_view_guarded": (
         "cf843d6a420cd3f4e466c03b03e906b2be2792f446b0e2fade9ffc9d06b28831"
@@ -3949,7 +3368,7 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "158719d3bf443fb55ec5a1930ad47b18bc31f814793dd12c95166aecd53378e6"
     ),
     "V2LaneWorkAdapter::validate_merge_candidate_for_active_round": (
-        "6a895b88dd30b2080f134d8f9a67a188726ccb1c3b7f8875f882dbda81fa84f4"
+        "26db87bffa9322377b7deada5806513fc351ea14ac3c4fdc898a394634d4d89b"
     ),
     "V2LaneWorkAdapter::merge_execution_candidate_validation_memo": (
         "cd51dc01cb4eff2b917d3a444a590f6ea99c0984e498a6800f420468a99f5d51"
@@ -3961,7 +3380,7 @@ _PRODUCTION_MERGE_EXECUTION_CACHE_ITEM_SHA256 = {
         "e3b505c8d734dda676fba19fb76f33cb708eda4f007c2a8abb999dba45b40d8e"
     ),
     "V2LaneWorkAdapter::refresh_merge_candidates": (
-        "30fa486a8a0e3cfa8176f511b84bdccd3e7ad25f78c19a987f9101ac6657a107"
+        "6f6336cbbbb88cb43a93b37edeecd263ab62a3efd00ac8e57e19f28ef9efd665"
     ),
 }
 
@@ -4087,10 +3506,23 @@ let digest = crate::merge::merge_qc_message_digest(
         validation_item,
         """
 #[cfg(test)]
-self.merge_candidate_validation_checks.set(
-    self.merge_candidate_validation_checks.get().saturating_add(1),
-);
-if candidate.execution_batch.is_none() {
+        self.merge_candidate_validation_checks.set(
+            self.merge_candidate_validation_checks
+                .get()
+                .saturating_add(1),
+        );
+        // A positive result belongs to one exact body and committed State generation.
+        // Kura publishes before State, so authenticated forward progress defers both
+        // execution candidates and relay/drain candidates without erasing authorization.
+        let state_view_generation = self.state.state_view_generation();
+        if self
+            .merge_parent_frontier_at_generation(state_view_generation)
+            .map_err(MergeCandidateValidationError::Frontier)?
+            == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeCandidateValidation::Deferred);
+        }
 """,
         "merge validation accounting must remain test-only before the unchanged live validator dispatch",
         errors,
@@ -4100,14 +3532,21 @@ if candidate.execution_batch.is_none() {
         validation_item,
         """
 if candidate.execution_batch.is_none() {
-            return self
-                .state
-                .validate_merge_candidate_for_global_round(
-                    candidate,
-                    parent_header,
-                    active_view,
-                    self.context.mode,
-                )
+            let validation = self.state.validate_merge_candidate_for_global_round(
+                candidate,
+                parent_header,
+                active_view,
+                self.context.mode,
+            );
+            if self
+                .merge_parent_frontier_at_generation(state_view_generation)
+                .map_err(MergeCandidateValidationError::Frontier)?
+                == MergeCandidateValidation::Deferred
+            {
+                self.validated_merge_execution_candidate = None;
+                return Ok(MergeCandidateValidation::Deferred);
+            }
+            return validation
                 .map(|()| MergeCandidateValidation::Ready)
                 .map_err(|error| MergeCandidateValidationError::Invalid(error.to_string()));
         }
@@ -4338,7 +3777,6 @@ execution_candidate.or_else(|| {
     refresh_item = items.get("refresh_merge_candidates")
     refresh_authority_clauses = (
         ("""
-self.queue_plan_admission_handoff_retry_required = false;
         if !self.voting_enabled {
             self.merge_entries.clear();
             self.merge_claims.clear();
@@ -4550,10 +3988,10 @@ self.retain_native_amx_for_global_view(view)?;
 # Typed transient-frontier outcomes never confer signing or publication authority.
 # These caller seals are separate from the existing cache and global ACK inventories.
 _PRODUCTION_MERGE_FRONTIER_DEFERRAL_ITEM_SHA256 = {'defer_merge_candidate_work': '4a48a4a3afe761e5b2a0de2a8a413812bb59579131e67f12ef738919d6dc3613',
- 'authorize_local_merge_claim': 'e85e10a023322546e13ef8ad8d71ba6d91307ffaf77b007f275794ab15603253',
+ 'authorize_local_merge_claim': '2692fba717e2c89c29cc713cec0038e1295d5d04944bb9b89d7b07e0fecd0ba2',
  'accept_merge_signature': 'db8ddd45d7d6298e24f801a45006cbcc3238b1f72049ed05835201b346126ceb',
  'prepare_certified_execution_carrier': '7e8174dac126b8c2800d28efbba4e22e4d5a5d7259bb8ca09c7f9e2cb355209a',
- 'prepare': 'd43e16b68e0e2961e1c87c0e540a8c2f524b9b0b206c9dc13857ba41ddd2c060',
+ 'prepare': '658859b95c600cad04880d758bb1ef5a9e655c17cf49f2cd3e9a7209297d229b',
  'defer_merge_frontier': '061aac13eb01958d1665afea6ca200f570abb9d50e3d7a4401dd61dcbfae31a3'}
 
 _MERGE_FRONTIER_DEFERRAL_OWNERS = {'decode_and_validate_leader_candidate': ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
@@ -4701,7 +4139,7 @@ if self.merge_parent_frontier_at_generation(state_view_generation).map_err(Merge
  self.validated_merge_execution_candidate = None;
  return Ok(MergeCandidateValidation::Deferred);
 }
-""", 3),
+""", 4),
     ('validate_merge_candidate_for_active_round', 'memo derivation errors are classified only after the frontier recheck', """
 let validated = self.merge_execution_candidate_validation_memo(candidate,parent_header,active_view,state_view_generation,);
 """, 1),
@@ -4795,6 +4233,21 @@ let validation_generation = self.state.state_view_generation();
             self.validated_merge_execution_candidate = None;
             return Ok(LocalMergeAuthorization::Deferred);
         }
+        // Consume the validated generation while committed publication is excluded.
+        // Keep the cross-layer lock order State, then Kura; full validation runs before
+        // these leases so it never recursively acquires the publication locks.
+        let state = Arc::clone(&self.state);
+        let state_publication_lease = state.consensus_publication_lease();
+        let kura = Arc::clone(&self.kura);
+        let kura_publication_lease = kura.canonical_publication_lease();
+        if self
+            .merge_parent_frontier_at_generation(validation_generation)
+            .map_err(MergeSidecarError::SigningGuard)?
+            == MergeCandidateValidation::Deferred
+        {
+            self.validated_merge_execution_candidate = None;
+            return Ok(LocalMergeAuthorization::Deferred);
+        }
         // This successful stable observation authorizes one exact durable decision.
         // Once authorize succeeds, later frontier movement can stop continuation but
         // cannot erase that decision or convert any persistence failure into deferral.
@@ -4803,6 +4256,8 @@ let validation_generation = self.state.state_view_generation();
             .expect("merge signing guard checked above")
             .authorize(durable_context, message_digest, candidate)?;
         self.merge_claims.entry(claim_key).or_insert(message_digest);
+        drop(kura_publication_lease);
+        drop(state_publication_lease);
         Ok(LocalMergeAuthorization::Authorized)
 """, 1),
     ('refresh_merge_candidates', 'durable authorized bytes and validation errors stay fatal', """
@@ -4815,9 +4270,16 @@ if let Some((digest, candidate, bytes)) = authorized_candidate.as_ref() {
             );
             if *digest != recomputed || *bytes != candidate.canonical_bytes() {
                 return Err(V2LaneWorkError::SigningGuard(
-                    "durable merge candidate bytes differ from its exact global-round authority"
+                    "durable merge candidate canonical bytes or digest differ from its exact global round"
                         .to_owned(),
                 ));
+            }
+            // Preserve the actual rejection at the fail-stop boundary. A
+            // frontier race, invalid execution and damaged signing record
+            // require different repairs; collapsing them loses that evidence.
+            #[cfg(test)]
+            if let Some(publish) = self.before_authorized_merge_revalidation.take() {
+                publish();
             }
             match self.validate_merge_candidate_for_active_round(
                 candidate,
@@ -4919,6 +4381,16 @@ match self.authorize_local_merge_claim(&candidate, active_view, local_index, dig
             }
             #[cfg(test)]
             self.run_merge_frontier_test_hook(MergeFrontierTestPhase::Authorized);
+            #[cfg(test)]
+            if let Some(publish) = self.before_local_merge_publication_lease.take() {
+                publish();
+            }
+            // Durable authorization can survive a later publication, but signing
+            // requires another stable observation held through the private-key action.
+            let state = Arc::clone(&self.state);
+            let state_publication_lease = state.consensus_publication_lease();
+            let kura = Arc::clone(&self.kura);
+            let kura_publication_lease = kura.canonical_publication_lease();
             if self
                 .merge_parent_frontier_at_generation(refresh_generation)
                 .map_err(V2LaneWorkError::SigningGuard)?
@@ -4939,6 +4411,8 @@ match self.authorize_local_merge_claim(&candidate, active_view, local_index, dig
                 .signatures
                 .insert(local_index, payload);
             self.push_effect(V2LaneWorkEffect::BroadcastMerge(share));
+            drop(kura_publication_lease);
+            drop(state_publication_lease);
             #[cfg(test)]
             self.run_merge_frontier_test_hook(MergeFrontierTestPhase::Signed);
             if self
@@ -5045,9 +4519,9 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "be6dab607a9d6656ec34deb79c2cc0aff0e75d59731c290051e0f6dc10ba6bd5",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
     "V2LaneWorkAdapter::new_with_output_guard_and_transport": "017c1afe0515ff169d85bd9fd1a9ba86689ea35405952fe7647c66f42dabc8dd",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "9a0c7279278653b1925ff5c801aa903db15f55bb6f26590ea95060f30c0641d9",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "67a13a6263ad5152b2ff1442958173e17df0be6e636a24bb75010647b89c33b4",
     "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
-    "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
+    "V2LaneWorkAdapter::into_retained_merge_sidecars": "06eaad5f62f4aaf7e8175008a511110dcb3469099716961acb6fda4c5506b40a",
     "V2LaneWorkAdapter::accept_relay_message": "87420fc8a24b8fb713af40ba5ba2f2df0efa3a04cf2893b087b2f221f34a0603",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "8e348b518da26f91fff8840d1e5bf4016d783fef4720bc275baba90ebe14a0bd",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar_request": "ed8044d26e471a3c866147d4f694819179081bcda9a0fb5129ca1b3ea4ba8741",
@@ -5070,13 +4544,13 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "d4529f8571223adf943e5ed147663df6d0078fcb4fea3b3d94c84797eb263473",
     "V2LaneWorkAdapter::persist_anchored_sessions": "7ab8795c69064a7ed9c81c943183e539466009197e7caf12b823e51d9c3b5bc9",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "9a40579664a5c2306d65100830e7d247a7d89b3c301492d99a635951b4ecaa56",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "02cb63d69246bcd9dd2dab336aa688e5e4de86bebf816d682cb3866b2de7de25",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
     "V2LaneWorkAdapter::drain_effects": "478982ec7c7cec9990a70993011e34e0cf79f57fb903b3c7cbabc040052b1aba",
-    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "9a952a9ee41d5ad85c2b18ccd9ea270745f06cb4a27e49550c6eeee4189733b4",
-    "V2LaneWorkAdapter::preflight_effect_insertion": "a2b3369f2c20c49bfa9e30bb6dc2b66c466aec9e83bf6793b49a7966ea7163e0",
+    "V2LaneWorkAdapter::proposal_predecessor_is_ready_for_progress": "73835515f534dd991fc70b65067135da93b06c78271574c45361f9a71999204b",
+    "V2LaneWorkAdapter::preflight_effect_insertion": "942b6c7c9a795e6c5a4032f122def6de644ee48cbc6eddd50fb11f84952260df",
     "V2LaneWorkAdapter::push_effect": "8974bca860609c853efe07e78397cb4be80e8bf1a688831bf1c28b1807293441",
     "V2LaneWorkAdapter::schedule_retransmission": "7468d25a90d61258242527880622e74ff38143c0f75c2e7bf572c9792c9f6232",
     "V2LaneWorkAdapter::schedule_retransmission_at": "a9e4128e377ee1c42117c7ed71511da09d7471778e3210ca362ef89dcb2c4439",
@@ -5091,48 +4565,80 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
 
-_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """
-fn preflight_effect_insertion(
-    &mut self,
-    effect: &V2LaneWorkEffect,
-) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
-    let predecessor_ready = match effect {
-        V2LaneWorkEffect::PostLaneBlock { message, .. } => { self.outbound_lane_message_predecessor_is_ready(message) }
-        V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => { self.proposal_predecessor_is_ready_for_progress(&certificate.proposal) }
-        _ => true,
-    };
-    if !predecessor_ready { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    if !lane_work_effect_reply_routes_have_valid_shape(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    let key = lane_work_effect_key(effect);
-    if self.effect_keys.contains(&key) {
-        return Err(if self.effects.iter_mut()
-            .find(|queued| lane_work_effect_key(queued) == key)
-            .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
-        {
-            LaneWorkEffectInsertionOutcome::Duplicate
-        } else {
-            LaneWorkEffectInsertionOutcome::Rejected
-        },);
-    }
-    if !lane_work_effect_reply_routes_are_valid(effect) { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    let ordinary_capacity = self.limits.effect_capacity.get();
-    let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
-        || self.effects.iter().any(Self::is_autonomous_new_view_progress_effect);
-    let admission_capacity = ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
-    if self.effects.len() >= admission_capacity { return Err(LaneWorkEffectInsertionOutcome::Rejected); }
-    Ok(key)
-}
-"""
+_PRODUCTION_LANE_EFFECT_PREFLIGHT_EXACT_SOURCE = """    fn preflight_effect_insertion(
+        &mut self,
+        effect: &V2LaneWorkEffect,
+    ) -> Result<Hash, LaneWorkEffectInsertionOutcome> {
+        let predecessor_ready = match effect {
+            V2LaneWorkEffect::PostLaneBlock { message, .. } => {
+                self.outbound_lane_message_predecessor_is_ready(message)
+            }
+            V2LaneWorkEffect::PostDurableLaneCertificate { certificate, .. } => {
+                self.durable_lane_certificate_source_is_ready(&certificate.proposal)
+            }
+            _ => Ok(true),
+        };
+        let predecessor_ready = match predecessor_ready {
+            Ok(ready) => ready,
+            Err(_) => {
+                self.output_guard.close_admission_for_restart();
+                return Err(LaneWorkEffectInsertionOutcome::Rejected);
+            }
+        };
+        if self.output_guard.restart_required() {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        if !predecessor_ready {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        if !lane_work_effect_reply_routes_have_valid_shape(effect) {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        let key = lane_work_effect_key(effect);
+        if self.effect_keys.contains(&key) {
+            return Err(
+                if self
+                    .effects
+                    .iter_mut()
+                    .find(|queued| lane_work_effect_key(queued) == key)
+                    .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, effect))
+                {
+                    LaneWorkEffectInsertionOutcome::Duplicate
+                } else {
+                    LaneWorkEffectInsertionOutcome::Rejected
+                },
+            );
+        }
+        if !lane_work_effect_reply_routes_are_valid(effect) {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        let ordinary_capacity = self.limits.effect_capacity.get();
+        let autonomous_new_view_progress = Self::is_autonomous_new_view_progress_effect(effect)
+            || self
+                .effects
+                .iter()
+                .any(Self::is_autonomous_new_view_progress_effect);
+        // Retain one bounded autonomous pacemaker occurrence beyond the
+        // ordinary lane-output bound. Without this reserve, a continuously
+        // full delivery queue can reject every due NewView fanout before it
+        // acquires retry ownership, permanently pinning the lane cursor.
+        let admission_capacity =
+            ordinary_capacity.saturating_add(usize::from(autonomous_new_view_progress));
+        if self.effects.len() >= admission_capacity {
+            return Err(LaneWorkEffectInsertionOutcome::Rejected);
+        }
+        Ok(key)
+    }"""
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "claim_runner_lifecycle_process_generation": "b64000d4de72d6fd8bb94cc4030275581abd249677a3de70881253e7c11dd8fc",
     "preflight_finalized_lane_rollover": (
-        "377bab393a67c8a10387071fa9081188bc58a180583c83a5e086768627dad344"
+        "80206d548b9f1dc3d400714a4e9b16382ad63b7b0d3bbe54960f92e99e778d86"
     ),
     # Approved together with the exact-output alias after the focused
     # non-descent and handoff mutations passed against the reconciled component.
     "rollover_finalized_height_outputs": (
-        "166ff3834f05f2d869afd0612943bc0911736e090cd6ea69900501914483aa88"
+        "fa3768e011f61c3a4d5e8e167f848c23d4d03d5b7be0bf38e7836e9c79bed034"
     ),
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "6597822785d94c22554d152b4c403b425c7a11aab1a19059fac41368332202b2",
@@ -5144,22 +4650,22 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "apply_retired_historical_recovery_requests": "01305939d7475cf01935b15f2c66bb6a9654089bccee669a850fd5a839fe3cb0",
     "apply_retired_merge_sidecar_requests": "9ca51c80ef5198d6ab06ab076ffa7d4719972cf109c868f25437a3f59acf7539",
     "apply_obsolete_merge_sidecar_generation_hints": "44717ca91e2245b1ba30d5582531944ce6729077406cbbd81fc1564a612f9078",
-    "service_historical_recovery_tick": "9da507c57b6959b167766c376f6bfa2c3625a94e189175809755c3821d5aa0c8",
+    "service_historical_recovery_tick": "74a3691e11241708ce8302d3687271b3122b0fcc96be527edcbbd6adc5ec9bef",
     "apply_acknowledged_merge_sidecar_closes": "87b4efe9a37159d6ba9e6c6f9c992f49afcf6d3727d83e10cf54ec6c367e9dd5",
     "dispatch_lane_work_effects": "a26b7238a9a62db73e31134d6b6722ccf22577166cfead1d881f863040d4f139",
-    "dispatch_lane_work_effects_with_progress": "fe8d818dddcded043dd5cbeabe8559bf24c08a74d7d15714f0fbc9e785c27260",
+    "dispatch_lane_work_effects_with_progress": "b557590fe60e21b20603acf0133a6e6b267ba46d280e9707dbe601b6693794b6",
     "drain_finalized_lane_work_output": "361854f94116cf4f6d807283597bad898bfce88889c16ef69dfd7fd8e392f62f",
     "retain_active_owned_reply_routes": "bafe4c316b7d50e5b89bb9468dcf47271985b5f17f8277cb7c70bac5df74be87",
     "retain_active_owned_reply_routes_with_snapshot_hook": "4c941bd7f4f914f2fbe919467ac791f7c9fbeb25a663a043cc3ec3b42a263043",
     "dispatch_lane_work_effect": "a49cda3f020e0f2f577bdbd7e1c8e9b17fa529290a9115755c5665713973c278",
-    "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
+    "dispatch_lane_work_effect_from_snapshot": "67eb228eb61521404de40ec97b845b307df4c81e47793ba9f8929ef753904d11",
 }
 
 _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
-    "ordinary_loop": "e208cf5dfa1fd996bc137433d953dbe0ca60238fa901c8491c6a40272c10bc16",
+    "ordinary_loop": "8237c66bbcd94c915b00ed1c9c26c70f1515b65e7c2c8a33e0cacf79d4eb8d95",
     "pending_loop": "f5a66ac1013261981500568d175c6985481de1bc1f2a9b76a73f1cd31e2590c6",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "f6e4b3996761cd2aa9fb9ec3d7635a4f081bf2261e16fc60cd4d5e342c4b2359",
+    "ordinary_active": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
     "pending_active": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3adf384d9eb315ac86726a07929fb0cc6c713a7e547e484a5a70a5a4c7eaba5"
@@ -5201,7 +4707,7 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "f6e4b3996761cd2aa9fb9ec3d7635a4f081bf2261e16fc60cd4d5e342c4b2359",
+    "ordinary:run_lifecycle_active_height": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
     "pending:run_pending_active_height": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
     "height:drain_lifecycle_v2_ingress": "6e86bd3de1bea9a61393d81b9deb82a21d9b705ccb52d441f36e9c14b8dd2151",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
@@ -5446,7 +4952,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     "ProductionV2Services::can_retain_lane_work_effect_from_snapshot": "8bbf87be5675b7014d08b93630e4426ba77de26915cbfb20cb6cf817e26943ef",
 }
 _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256 = {
-    "durable_history_source_covers": "b36e5a9289ccbb8bb5fe964c93d239f15109b4832b40ce41a36696230ec301a2",
+    "durable_history_source_covers": "258c2502d05ee91ca86e2b992a651ff49b429244cfc3f110b26df5146439d2f7",
     "queue_plan_admission_reconstruction_covers": "1cd167989e8fca4abb7cf25e9bf470b7fa660a596c7afc3eeb0c819cb2c730e3",
 }
 # Typed semantic claims are the production authority which lets exact output
@@ -5544,7 +5050,7 @@ _EXACT_OUTPUT_ROLLOVER_CLAIM_IMPL_ITEMS = frozenset(
 # reconstruct lane-local output at global-height retirement.  Bind its exact
 # Kura/application source commitment and its winning/non-winning validators.
 _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
-    "durable_historical_lane_output_source_hash": "d6f14857c39045bdb388095d00ad11d99be5af7aa3cd84c789569eab24148e8b",
+    "durable_historical_lane_output_source_hash": "f4b1077940c7d299656898d5087b8bcd512bbf703d65126a5cc4d453ca471c34",
     "durable_historical_lane_verification_pops": "090336f96d80a1ea90e51a2ea2cf4161aca46057c6e11c87cefeeb24c18b36ee",
     "covered_source_hash": (
         "3ac2d2397d5fe256dc01b92458007f9e63c25af50b0cff7be83c0e9e830782e8"
@@ -5565,13 +5071,13 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "ec480ca71d859f5b27fcc31731a1bc2ebb02ee8d5002475d53d3ed14109c94c2"
     ),
     "durable_lane_rollover_authority": (
-        "a53980d94acca89b68aee28407335285078d911ab038476394e157a6ef782cb7"
+        "3656a93162632594cb03b0c07b24bd210236b418a88c211d7c54e3869a564717"
     ),
     "serve_durable_lane_certificate": (
         "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
     ),
     "reconstruct_durable_lane_certificate": (
-        "229bc98b62691be671374442c767ceba685f07a49612bd6f662cb67eddf236f1"
+        "345ca55b09a570e46728dbae478a5d7e6745d41ea764ed075202e0b0d1d5e0e3"
     ),
     "reply_routes_are_live_for_peer": (
         "cdca18bef9df99c77e3698622c9cf6941dd249967bb587f60e9fd381a4f8b235"
@@ -5627,18 +5133,18 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "select_blocked_ordinary_lane_local_ingress": "cf0b52b8280f229dae97589635f302efc2699477e95fc8655514193d193af94f",
     "drain_blocked_ordinary_lane_local_ingress": "8dfeff4b021eccf527f9be785d0a7573f3bfc2d837844cdae3474ec663559657",
     "preflight_finalized_lane_rollover": (
-        "377bab393a67c8a10387071fa9081188bc58a180583c83a5e086768627dad344"
+        "80206d548b9f1dc3d400714a4e9b16382ad63b7b0d3bbe54960f92e99e778d86"
     ),
     # Bound after the exact-output handoff mutation survived refreshing this
     # helper's own token digest.
     "rollover_finalized_height_outputs": (
-        "166ff3834f05f2d869afd0612943bc0911736e090cd6ea69900501914483aa88"
+        "fa3768e011f61c3a4d5e8e167f848c23d4d03d5b7be0bf38e7836e9c79bed034"
     ),
     "dispatch_lane_work_effects": "a26b7238a9a62db73e31134d6b6722ccf22577166cfead1d881f863040d4f139",
-    "dispatch_lane_work_effects_with_progress": "fe8d818dddcded043dd5cbeabe8559bf24c08a74d7d15714f0fbc9e785c27260",
+    "dispatch_lane_work_effects_with_progress": "b557590fe60e21b20603acf0133a6e6b267ba46d280e9707dbe601b6693794b6",
     "drain_finalized_lane_work_output": "361854f94116cf4f6d807283597bad898bfce88889c16ef69dfd7fd8e392f62f",
     "dispatch_lane_work_effect": "a49cda3f020e0f2f577bdbd7e1c8e9b17fa529290a9115755c5665713973c278",
-    "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
+    "dispatch_lane_work_effect_from_snapshot": "67eb228eb61521404de40ec97b845b307df4c81e47793ba9f8929ef753904d11",
 }
 
 _PRODUCTION_BLOCKED_ORDINARY_LANE_LOCAL_HEIGHT_ITEM_SHA256 = {
@@ -5934,7 +5440,7 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
         "112bfa93dd0a1b7de78b2c35d25e0b5ce32ba441575980e781b93db4ce302ce8"
     ),
     "worker::sweep_buffered_payload_chunk_lifecycles": (
-        "04d1c1e43bd4c41a0061d7585580907e6d8e4a1d5a2403c06bda1234b3ee51f7"
+        "683af7bc2783a7f73009e106c6b002a1af7a98d52dab75158c16a1fc275f9a9f"
     ),
     "worker::replay_buffered_chunks": (
         "1259249ed54174dfcecffbacb6e2f70b3a5fbf31e59bd088f6160d3148648920"

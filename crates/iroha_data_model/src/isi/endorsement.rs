@@ -1,41 +1,68 @@
 use super::*;
 /// Register a domain endorsement committee.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::endorsement::RegisterDomainCommittee")]
 pub struct RegisterDomainCommittee {
     /// Committee configuration to register.
     pub committee: crate::nexus::DomainCommittee,
 }
 /// Set or replace the endorsement policy for a domain.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy")]
 pub struct SetDomainEndorsementPolicy {
     /// Domain requiring endorsements.
-    pub domain: crate::domain::DomainId,
+    pub domain: iroha_model_base::domain::DomainId,
     /// Policy to apply.
     pub policy: crate::nexus::DomainEndorsementPolicy,
 }
 /// Submit an endorsement for a protected domain.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    getset::Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[getset(get = "pub")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::endorsement::SubmitDomainEndorsement")]
 pub struct SubmitDomainEndorsement {
     /// Endorsement to validate and record.
     pub endorsement: crate::nexus::DomainEndorsement,
@@ -71,7 +98,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetDomainEndorsementPolicy {
             return super::decode_packed_instruction_payload::<Self>(bytes);
         }
         let mut offset = 0usize;
-        let domain = super::decode_aos_canonical_field::<crate::domain::DomainId>(
+        let domain = super::decode_aos_canonical_field::<iroha_model_base::domain::DomainId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -108,15 +135,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SubmitDomainEndorsement {
 mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use crate::{
-        domain::DomainId,
-        metadata::Metadata,
-        nexus::{
-            DOMAIN_ENDORSEMENT_VERSION_V1, DomainCommittee, DomainEndorsement,
-            DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
-        },
+    use crate::nexus::{
+        DOMAIN_ENDORSEMENT_VERSION_V1, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
+        DomainEndorsementScope, DomainEndorsementSignature,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked endorsement ISI fixture keypair")
@@ -209,6 +234,24 @@ mod tests {
             SubmitDomainEndorsement {
                 endorsement: endorsement(),
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::RegisterDomainCommittee>(
+            "iroha_data_model::isi::endorsement::RegisterDomainCommittee",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SetDomainEndorsementPolicy>(
+            "iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy",
+        );
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SubmitDomainEndorsement>(
+            "iroha_data_model::isi::endorsement::SubmitDomainEndorsement",
         );
     }
 }

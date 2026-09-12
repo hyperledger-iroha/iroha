@@ -7,7 +7,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalancePolicy, AssetDefinition},
     isi::{ExecuteTrigger, Grant, InstructionBox, Register, RegisterBox, SetKeyValue, Unregister},
-    metadata::Metadata,
     nft::{Nft, NftId},
     permission::Permission,
     subscription::{
@@ -22,6 +21,7 @@ use iroha_data_model::{
     trigger::{Trigger, TriggerId},
 };
 use iroha_executor_data_model::permission::trigger::CanExecuteTrigger;
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::json::Json;
 use iroha_torii_shared::subscriptions::{
     SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1, SubscriptionActionRequest, SubscriptionActionResponse,
@@ -311,10 +311,10 @@ fn billing_trigger(
     )
 }
 
-pub(super) fn create(
+fn validate_create_binding(
     request: &SubscriptionCreateRequest,
     response: &SubscriptionCreateResponse,
-) -> Result<Vec<InstructionBox>> {
+) -> Result<()> {
     const OP: &str = "subscriptions.prepare";
     require(
         response.version == SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
@@ -360,15 +360,32 @@ pub(super) fn create(
             "usage_trigger_id",
         )?;
     }
+    Ok(())
+}
+
+fn validate_initial_subscription(
+    request: &SubscriptionCreateRequest,
+    response: &SubscriptionCreateResponse,
+) -> Result<bool> {
+    const OP: &str = "subscriptions.prepare";
     let state = &response.resulting_subscription;
     require(
-        state.subscriber == request.authority && state.plan_id == request.plan_id,
+        state.subscriber == request.authority,
         OP,
         "resulting_subscription_identity",
     )?;
     require(
-        state.billing_trigger_id == response.billing_trigger_id
-            && state.next_charge_ms == response.first_charge_ms,
+        state.plan_id == request.plan_id,
+        OP,
+        "resulting_subscription_identity",
+    )?;
+    require(
+        state.billing_trigger_id == response.billing_trigger_id,
+        OP,
+        "resulting_subscription_billing",
+    )?;
+    require(
+        state.next_charge_ms == response.first_charge_ms,
         OP,
         "resulting_subscription_billing",
     )?;
@@ -389,6 +406,17 @@ pub(super) fn create(
         OP,
         "provider_usage_grant_included",
     )?;
+    Ok(grant)
+}
+
+pub(super) fn create(
+    request: &SubscriptionCreateRequest,
+    response: &SubscriptionCreateResponse,
+) -> Result<Vec<InstructionBox>> {
+    const OP: &str = "subscriptions.prepare";
+    validate_create_binding(request, response)?;
+    let grant = validate_initial_subscription(request, response)?;
+    let state = &response.resulting_subscription;
     let decoded = instructions(OP, &response.tx_instructions)?;
     require(
         decoded.len() == 2 + usize::from(response.usage_trigger_id.is_some()) + usize::from(grant),
@@ -448,38 +476,12 @@ pub(super) fn create(
     Ok(decoded)
 }
 
-pub(super) fn action(
+fn validate_action_state(
     operation: &'static str,
     action: &'static str,
-    id: &NftId,
     request: &SubscriptionActionRequest,
     response: &SubscriptionActionResponse,
-) -> Result<Vec<InstructionBox>> {
-    require(
-        response.version == SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
-        operation,
-        "version",
-    )?;
-    require(
-        response.authority == request.authority,
-        operation,
-        "authority",
-    )?;
-    require(
-        response.subscription_id == *id,
-        operation,
-        "subscription_id",
-    )?;
-    require(
-        response.action
-            == if action == "charge-now" {
-                "charge_now"
-            } else {
-                action
-            },
-        operation,
-        "action",
-    )?;
+) -> Result<()> {
     let details = &response.details;
     let state = &details.resulting_subscription;
     require(
@@ -488,8 +490,12 @@ pub(super) fn action(
         "cancel_mode",
     )?;
     require(
-        state.subscriber == request.authority
-            && state.billing_trigger_id == details.billing_trigger_id,
+        state.subscriber == request.authority,
+        operation,
+        "resulting_subscription_identity",
+    )?;
+    require(
+        state.billing_trigger_id == details.billing_trigger_id,
         operation,
         "resulting_subscription_identity",
     )?;
@@ -542,6 +548,44 @@ pub(super) fn action(
         _ => false,
     };
     require(valid_state, operation, "resulting_subscription_state")?;
+    Ok(())
+}
+
+pub(super) fn action(
+    operation: &'static str,
+    action: &'static str,
+    id: &NftId,
+    request: &SubscriptionActionRequest,
+    response: &SubscriptionActionResponse,
+) -> Result<Vec<InstructionBox>> {
+    require(
+        response.version == SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1,
+        operation,
+        "version",
+    )?;
+    require(
+        response.authority == request.authority,
+        operation,
+        "authority",
+    )?;
+    require(
+        response.subscription_id == *id,
+        operation,
+        "subscription_id",
+    )?;
+    require(
+        response.action
+            == if action == "charge-now" {
+                "charge_now"
+            } else {
+                action
+            },
+        operation,
+        "action",
+    )?;
+    validate_action_state(operation, action, request, response)?;
+    let details = &response.details;
+    let state = &details.resulting_subscription;
     let (remove, register) = match details.billing_trigger_operation.as_str() {
         "none" => (false, false),
         "unregister" => (true, false),

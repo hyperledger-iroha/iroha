@@ -9,16 +9,16 @@ use crate::{
 use iroha_data_model::{
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::DomainId,
     fastpq::{
         FastpqSourceExecutionKindV1, FastpqSourceRouteV1, TransferDeltaTranscript,
         TransferSmtWitness, TransferTranscript,
     },
     isi::Log,
-    nexus::LaneId,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_logger::Level;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use nonzero_ext::nonzero;
@@ -219,7 +219,7 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
     assert_eq!(block.fastpq_source_inventory().unwrap(), Some(&inventory));
     block.capture_exec_witness().unwrap();
     let context = block.take_fastpq_witness_context().unwrap();
-    assert_eq!(context.source_inventory.as_deref(), Some(&inventory));
+    assert_eq!(context._source_inventory.as_deref(), Some(&inventory));
     assert_eq!(context.tx_set_hash, Some(inventory.tx_set_hash()));
     assert_eq!(context.entry_dataspaces.len(), 6);
 }
@@ -479,11 +479,12 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
     let expected = inventory
         .derive_manifest(7, [3; 32], &original, limits())
         .unwrap();
-    assert_eq!(expected.0.statement_count, 2);
+    assert_eq!(expected.0.statement_count, 1);
+    assert_eq!(expected.1[0].entry_transcript_count, 2);
     assert_eq!(inventory.transcript_seal.transcript_count, 2);
     assert_eq!(inventory.transcript_seal.delta_count, 2);
 
-    for mutation in 0..6 {
+    for mutation in 0..7 {
         let mut changed = original.clone();
         let bundle = changed.get_mut(&hash).unwrap();
         match mutation {
@@ -503,16 +504,19 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
                     crate::fastpq::poseidon_preimage_digest(occurrence, &transcript.batch_hash),
                 );
             }
-            _ => {
+            5 => {
                 let second = bundle.pop().unwrap();
                 bundle[0].deltas.extend(second.deltas);
                 bundle[0].poseidon_preimage_digest = None;
             }
+            _ => {
+                bundle.remove(0);
+            }
         }
         let unchanged_input = changed.clone();
-        // All six altered archives are valid supplied per-operation statements.
-        // The retained execution seal is what rejects their substituted facts.
-        derive_fastpq_ordinary_source_manifest_v1(
+        // The whole-entry relation rejects broken chronology. Even alterations that
+        // remain valid complete bundles must fail against the unchanged execution seal.
+        let supplied = derive_fastpq_ordinary_source_manifest_v1(
             inventory.source(),
             inventory.entries(),
             7,
@@ -520,8 +524,23 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
             inventory.tx_set_hash(),
             &changed,
             limits(),
-        )
-        .unwrap_or_else(|error| panic!("mutation {mutation} must be independently valid: {error}"));
+        );
+        if matches!(mutation, 1 | 2 | 4) {
+            assert!(
+                supplied
+                    .unwrap_err()
+                    .contains("public repeated-key balances do not chain"),
+                "mutation {mutation}"
+            );
+        } else {
+            let supplied = supplied.unwrap_or_else(|error| {
+                panic!("mutation {mutation} remains a valid complete bundle: {error}")
+            });
+            assert_ne!(
+                supplied.1[0].statement_digest,
+                expected.1[0].statement_digest
+            );
+        }
         assert!(
             inventory
                 .derive_manifest(7, [3; 32], &changed, limits())

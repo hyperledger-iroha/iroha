@@ -60,43 +60,18 @@ fn invalid_request(operation: &'static str, error: impl std::fmt::Display) -> Er
     }
 }
 
-fn transport_error(operation: &'static str, error: eyre::Report) -> Error {
-    if let Some(typed) = error.downcast_ref::<Error>() {
-        return typed.clone();
-    }
-    if error
-        .downcast_ref::<reqwest::Error>()
-        .is_some_and(reqwest::Error::is_timeout)
-    {
-        return Error::Timeout { operation };
-    }
-    Error::Transport {
-        operation,
-        details: error.to_string(),
-    }
-}
-
 async fn dispatch<T: JsonDeserialize>(
     client: &Client,
     operation: &'static str,
     builder: DefaultRequestBuilder,
 ) -> Result<T> {
-    let request = builder
-        .header("Accept", "application/json")
-        .max_response_bytes(MAX_RESPONSE_BYTES)
-        .build()
-        .map_err(|error| invalid_request(operation, error))?;
-    let response = if client.torii_request_timeout.is_zero() {
-        client.dispatch_request(request).await
-    } else {
-        tokio::time::timeout(
-            client.torii_request_timeout,
-            client.dispatch_request(request),
-        )
-        .await
-        .map_err(|_| Error::Timeout { operation })?
-    }
-    .map_err(|error| transport_error(operation, error))?;
+    let response = super::dispatch::send(
+        client,
+        operation,
+        builder.max_response_bytes(MAX_RESPONSE_BYTES),
+        "application/json",
+    )
+    .await?;
     decode_response(operation, response)
 }
 
@@ -108,19 +83,11 @@ fn decode_response<T: JsonDeserialize>(
         return Err(Error::Http {
             operation,
             status: response.status().as_u16(),
+            retry_after: crate::error::retry_after(response.headers()),
             body: response.into_body(),
         });
     }
-    let mut content_types = response
-        .headers()
-        .get_all(http::header::CONTENT_TYPE)
-        .iter();
-    if !content_types
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
-        || content_types.next().is_some()
+    if !super::dispatch::media_type(operation, &response)?.eq_ignore_ascii_case("application/json")
     {
         return Err(Error::Decode {
             operation,
@@ -236,7 +203,7 @@ impl Subscriptions<'_> {
 }
 
 impl AccountSubscriptions<'_> {
-    async fn post<T: JsonSerialize, R: JsonDeserialize>(
+    async fn post<T: JsonSerialize + Sync, R: JsonDeserialize>(
         &self,
         operation: &'static str,
         url: url::Url,
@@ -286,7 +253,7 @@ impl AccountSubscriptions<'_> {
             SubscriptionDraftOperation::Plan {
                 plan_id: plan_id.clone(),
             },
-            SubscriptionDraftArtifact::Payload(payload),
+            SubscriptionDraftArtifact::Payload(Box::new(payload)),
             None,
         ))
     }
@@ -442,7 +409,7 @@ impl AccountSubscriptions<'_> {
                 unit_key: intent.unit_key.clone(),
                 delta: intent.delta.clone(),
             },
-            SubscriptionDraftArtifact::Payload(payload),
+            SubscriptionDraftArtifact::Payload(Box::new(payload)),
             None,
         ))
     }

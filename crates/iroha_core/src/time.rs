@@ -22,6 +22,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 /// Outbound time probe message (peer → peer).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::time::TimePing")]
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePing {
     /// Monotonic probe identifier.
@@ -30,6 +32,8 @@ pub struct TimePing {
     pub t1_ms: u64,
 }
 /// Inbound time probe response (peer → peer).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::time::TimePong")]
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePong {
     /// Echoed probe identifier.
@@ -234,8 +238,8 @@ impl From<&iroha_config::parameters::actual::Nts> for Params {
     }
 }
 struct Service {
-    outstanding: BTreeMap<(iroha_data_model::peer::PeerId, u64), OutstandingProbe>,
-    per_peer: BTreeMap<iroha_data_model::peer::PeerId, VecDeque<Sample>>, // ring buffer
+    outstanding: BTreeMap<(iroha_model_base::peer::PeerId, u64), OutstandingProbe>,
+    per_peer: BTreeMap<iroha_model_base::peer::PeerId, VecDeque<Sample>>, // ring buffer
     id_counter: u64,
     params: Params,
     network: Option<IrohaNetwork>,
@@ -387,7 +391,7 @@ impl Service {
     }
     fn take_live_probe(
         &mut self,
-        peer: &iroha_data_model::peer::PeerId,
+        peer: &iroha_model_base::peer::PeerId,
         id: u64,
         received_at: Instant,
     ) -> Option<OutstandingProbe> {
@@ -396,7 +400,7 @@ impl Service {
     }
     fn insert_outstanding_probe(
         &mut self,
-        peer: iroha_data_model::peer::PeerId,
+        peer: iroha_model_base::peer::PeerId,
         id: u64,
         probe: OutstandingProbe,
     ) -> bool {
@@ -430,7 +434,7 @@ impl Service {
             })
             .collect()
     }
-    fn record_sample(&mut self, peer: iroha_data_model::peer::PeerId, sample: Sample) {
+    fn record_sample(&mut self, peer: iroha_model_base::peer::PeerId, sample: Sample) {
         let cap = self.params.per_peer_buffer.max(1);
         let samples = self.per_peer.entry(peer).or_insert_with(VecDeque::new);
         while samples.len() >= cap {
@@ -454,7 +458,7 @@ impl Service {
     }
     fn record_measurement(
         &mut self,
-        peer: iroha_data_model::peer::PeerId,
+        peer: iroha_model_base::peer::PeerId,
         offset_ms: i64,
         rtt_ms: u64,
         probe_sent_at: Instant,
@@ -1350,22 +1354,22 @@ mod tests {
     fn service_for_tests(params: Params) -> Service {
         Service::new(params)
     }
-    fn test_peer_id() -> iroha_data_model::peer::PeerId {
+    fn test_peer_id() -> iroha_model_base::peer::PeerId {
         let key_pair =
             iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
                 .expect("generate test peer key");
-        iroha_data_model::peer::PeerId::new(key_pair.public_key().clone())
+        iroha_model_base::peer::PeerId::new(key_pair.public_key().clone())
     }
     fn insert_sample(
         svc: &mut Service,
-        peer: iroha_data_model::peer::PeerId,
+        peer: iroha_model_base::peer::PeerId,
         received_at: Instant,
     ) {
         insert_sample_with(svc, peer, received_at, 0, 1);
     }
     fn insert_sample_with(
         svc: &mut Service,
-        peer: iroha_data_model::peer::PeerId,
+        peer: iroha_model_base::peer::PeerId,
         received_at: Instant,
         offset_ms: i64,
         rtt_ms: u64,

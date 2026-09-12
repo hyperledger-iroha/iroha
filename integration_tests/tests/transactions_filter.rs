@@ -3,6 +3,7 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::NetworkBuilder;
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -104,7 +105,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     // POST to the endpoint
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
         .unwrap();
     let http = integration_tests::http::client();

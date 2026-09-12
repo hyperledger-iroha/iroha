@@ -3,11 +3,13 @@
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{blocking, data_model::prelude::*};
-use iroha_data_model::nexus::DataSpaceId;
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
@@ -194,7 +196,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
         let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
-        let setup_neverland = domain_setup_instruction(&neverland, &test_client.client().account)?;
+        let setup_neverland = domain_setup_instruction(&neverland, test_client.client().account())?;
         spawn_blocking({
             let client = test_client.clone();
             move || {

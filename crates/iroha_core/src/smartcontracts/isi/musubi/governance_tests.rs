@@ -243,7 +243,12 @@ fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
     }
     .execute(&owner, &mut transaction)
     .expect_err("a zero invitation identity must fail before governance advances");
-    assert!(error.to_string().contains("invitation is invalid"));
+    assert!(
+        matches!(&error, Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message)
+        ) if message.contains("invitation is invalid")),
+        "unexpected invalid invitation rejection: {error:?}"
+    );
     assert_eq!(
         transaction
             .world
@@ -544,7 +549,7 @@ fn package_pending_invitation_bound_is_enforced_before_mutation() {
     let mut transaction = block.transaction();
     let owner = account(31);
     let package = MusubiPackageIdV1::new(
-        iroha_data_model::nexus::DataSpaceId::new(7),
+        iroha_model_base::topology::DataSpaceId::new(7),
         MusubiPackageScopeV1::DataspaceRoot,
         "bounded-invites".parse().expect("package name"),
     );
@@ -1024,7 +1029,27 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     let mut transaction = block.transaction();
     let pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xA1; 32]);
     let order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x22; 32]);
-    let first = location_fixture(0xA3, pin, order);
+    let first_archive = retention_archive(0xA3);
+    let mut first = location_fixture(0xA3, pin, order);
+    first.archive_id = first_archive.archive_id;
+    transaction
+        .world
+        .musubi_locations_by_replication_order
+        .insert(
+            order,
+            MusubiReplicationOrderLocationReferenceV1 {
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    order,
+                    first_archive.archive_id,
+                    first_archive.commitment.clone(),
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::PreLocation,
+            },
+        );
+    transaction
+        .world
+        .musubi_archives
+        .insert(first_archive.archive_id, first_archive);
     bind_location_reverse_indices(None, &first, &mut transaction)
         .expect("first exact location binding succeeds");
     assert!(
@@ -1034,13 +1059,33 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
             .get(&pin)
             .is_some_and(|reference| reference.active && reference.location == first.key())
     );
-    let conflicting = location_fixture(
-        0xA4,
-        pin,
-        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x25; 32]),
-    );
-    bind_location_reverse_indices(None, &conflicting, &mut transaction)
+    let conflicting_archive = retention_archive(0xA4);
+    let conflicting_order =
+        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x25; 32]);
+    let mut conflicting = location_fixture(0xA4, pin, conflicting_order);
+    conflicting.archive_id = conflicting_archive.archive_id;
+    transaction
+        .world
+        .musubi_locations_by_replication_order
+        .insert(
+            conflicting_order,
+            MusubiReplicationOrderLocationReferenceV1 {
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    conflicting_order,
+                    conflicting_archive.archive_id,
+                    conflicting_archive.commitment.clone(),
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::PreLocation,
+            },
+        );
+    transaction
+        .world
+        .musubi_archives
+        .insert(conflicting_archive.archive_id, conflicting_archive);
+    let error = bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("one pin manifest cannot be rebound to another location");
+    assert!(matches!(error, Error::InvariantViolation(message)
+        if message.contains("pin manifests cannot be reused")));
     retire_location_reverse_indices(&first, &mut transaction)
         .expect("retirement atomically leaves reuse tombstones");
     assert!(
@@ -1050,8 +1095,10 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
             .get(&pin)
             .is_some_and(|reference| !reference.active && reference.location == first.key())
     );
-    bind_location_reverse_indices(None, &conflicting, &mut transaction)
+    let error = bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("retired pin tombstones permanently reject reuse");
+    assert!(matches!(error, Error::InvariantViolation(message)
+        if message.contains("pin manifests cannot be reused")));
 }
 #[test]
 fn namespace_binding_replay_requires_current_owner_authorization() {
@@ -1076,7 +1123,7 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         crate::sns::selector_for_dataspace_alias("sora").expect("dataspace alias selector");
     let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
         .expect("account address");
-    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
     metadata.insert(
         crate::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -1100,7 +1147,7 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         .insert(crate::sns::record_storage_key(&selector), record.encode());
     let binding = MusubiNamespaceBindingV1 {
         namespace: "sora".parse().expect("namespace"),
-        home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
         scope: MusubiPackageScopeV1::DataspaceRoot,
         generation: 1,
     };
@@ -1136,7 +1183,7 @@ fn namespace_binding_replay_requires_current_owner_authorization() {
         .expect("the live owner may replay an immutable older-generation binding");
     assert!(transaction.world.take_external_events().is_empty());
     let conflicting = MusubiNamespaceBindingV1 {
-        home_dataspace: iroha_data_model::nexus::DataSpaceId::new(8),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(8),
         ..binding
     };
     RegisterMusubiNamespaceBindingV1::new(conflicting, 1)
@@ -1152,7 +1199,7 @@ fn namespace_claim_uses_live_owner_generation_after_immutable_binding_registrati
     let delegate = account(42);
     let binding = MusubiNamespaceBindingV1 {
         namespace: "dex.universal".parse().expect("namespace"),
-        home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+        home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
         scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
         generation: 1,
     };
@@ -1207,13 +1254,13 @@ fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
     let bindings = [
         MusubiNamespaceBindingV1 {
             namespace: "universal".parse().expect("root namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::DataspaceRoot,
             generation: 1,
         },
         MusubiNamespaceBindingV1 {
             namespace: "dex.universal".parse().expect("domain namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
             generation: 1,
         },
@@ -1222,7 +1269,7 @@ fn namespace_home_dataspace_matches_catalog_for_root_and_domain_scopes() {
         validate_namespace_home_dataspace(binding, &world.view(), &catalog, 50)
             .expect("namespace alias and structural dataspace agree");
         let mismatched = MusubiNamespaceBindingV1 {
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::new(7),
+            home_dataspace: iroha_model_base::topology::DataSpaceId::new(7),
             ..binding.clone()
         };
         validate_namespace_home_dataspace(&mismatched, &world.view(), &catalog, 50)
@@ -1237,6 +1284,13 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
     let owner = account(43);
     let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
         .expect("account address");
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
+    metadata.insert(
+        crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+            .parse()
+            .expect("dataspace id metadata key"),
+        iroha_primitives::json::Json::new(7_u64),
+    );
     let record = iroha_data_model::sns::NameRecordV1::new(
         selector.clone(),
         owner,
@@ -1246,7 +1300,7 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
         110,
         210,
         310,
-        iroha_data_model::metadata::Metadata::default(),
+        metadata,
     );
     let mut world = World::default();
     world
@@ -1255,13 +1309,13 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
     let bindings = [
         MusubiNamespaceBindingV1 {
             namespace: "universal".parse().expect("root namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::DataspaceRoot,
             generation: 1,
         },
         MusubiNamespaceBindingV1 {
             namespace: "dex.universal".parse().expect("domain namespace"),
-            home_dataspace: iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            home_dataspace: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             scope: MusubiPackageScopeV1::Domain("dex".parse().expect("domain")),
             generation: 1,
         },
@@ -1281,7 +1335,7 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
 fn release_yank_rejects_decoded_empty_reason_before_state_lookup() {
     let release = MusubiReleaseIdV1::new(
         MusubiPackageIdV1::new(
-            iroha_data_model::nexus::DataSpaceId::new(7),
+            iroha_model_base::topology::DataSpaceId::new(7),
             MusubiPackageScopeV1::DataspaceRoot,
             "validation".parse().expect("package name"),
         ),

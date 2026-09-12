@@ -111,7 +111,7 @@ fn name_decode_rejects_reserved_chars() {
 fn name_decode_accepts_valid_utf8() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let name: iroha_data_model::prelude::Name = "wonderland".parse().expect("name");
+    let name: iroha_model_base::name::Name = "wonderland".parse().expect("name");
     let good = norito::to_bytes(&name).expect("encode name");
     let p_nb = vm
         .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &good))
@@ -138,7 +138,7 @@ fn name_decode_accepts_valid_utf8() {
     let p = vm.register(10);
     let tlv_name = vm.memory.validate_tlv(p).unwrap();
     assert_eq!(tlv_name.type_id, PointerType::Name);
-    let decoded: iroha_data_model::prelude::Name =
+    let decoded: iroha_model_base::name::Name =
         norito::decode_from_bytes(tlv_name.payload).expect("decode name");
     assert_eq!(decoded.as_ref(), "wonderland");
 }

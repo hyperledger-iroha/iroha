@@ -2,7 +2,7 @@
 macro_rules! string_id {
     ($($ty:ty),+ $(,)?) => {
         $(
-            #[cfg(feature = "json")]
+
             impl norito::json::FastJsonWrite for $ty {
                 fn write_json(&self, out: &mut String) {
                     let repr = self.to_string();
@@ -15,7 +15,7 @@ macro_rules! string_id {
                     norito::json::write_json_string_to(&self.to_string(), out)
                 }
             }
-            #[cfg(feature = "json")]
+
             impl norito::json::JsonDeserialize for $ty {
                 fn json_deserialize(
                     parser: &mut norito::json::Parser<'_>,

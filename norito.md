@@ -14,6 +14,42 @@ implement or derive `SerializePayload` without acquiring a root-frame identity;
 generic frame writers require `NoritoSerialize` explicitly. This separation
 does not change the V1 header, payload layout, checksum or signed bytes.
 
+`DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
+active bounded payload context. Both typed frame directions are blanket
+implementations over the corresponding payload trait and `NoritoSchema`.
+`NoritoSchema` declares one nominal identity and one root-frame projection;
+`schema::identity::frame_hash` computes the fixed digest used by every typed
+reader and writer. Neither direction has an independent hash method.
+Codec derives emit payload implementations; use `#[derive(NoritoSchema)]` with
+`#[norito_schema(name = "...")]` for a framed owner. A field-only payload
+needs no frame identity. The retired `#[norito(schema_name = "...")]`
+attribute is rejected.
+
+Bare `Decode` requires `for<'de> DeserializePayload<'de> + SerializePayload`.
+Canonical field/container decoders use those payload contracts for
+reconstruction and byte comparison; exact slice helpers use `DeserializePayload`
+with `DecodeFromSlice`. They do not require a frame identity. Typed frame callers
+explicitly require the appropriate `NoritoSerialize`/`NoritoDeserialize`
+contracts. Option fields use the same
+canonical child decoder as other owned fields, preserving advertised layout
+flags and field, allocation and nesting limits. Option, tuple and result slice
+decoders reject unread bytes inside a declared child field with a typed length
+error in every build profile; bytes after the complete outer value remain
+available to a prefix-decoding caller.
+
+`Decode`/`NoritoDeserialize` and `DeserializePayload` derives accept
+`#[norito(validate = "path")]` for fallible owner validation. The function
+consumes the reconstructed value and returns `Result<Self, norito::Error>`;
+typed errors propagate unchanged. Each successful reconstruction invokes the
+hook once, including generated slice decoders and unit records. Serializers
+and JSON decoders do not invoke this binary hook. Validation must preserve
+canonical fields rather than normalize external input.
+
+`MultisigPolicy` and `MultisigMember` use this hook to call their existing
+checked constructors directly. Their private field carriers serve strict JSON
+decoding only; binary decoding retains the public owners' declared identities
+and does not cast archived values to a second wire type.
+
 ## Header
 
 The Norito header is always present on wire and on disk. It frames the payload
@@ -133,6 +169,15 @@ checksum writers, canonical comparisons, and separately constructed nested
 buffers always receive actual bytes. Count overflow remains an error even if a
 custom serializer ignores an individual failed write.
 
+`core::SequencePayloadLength` retains exact generic element-sequence lengths
+incrementally. Each append counts its supplied element once under a validated,
+frozen layout; snapshots and reads use constant-size counters. It includes the
+sequence count, element prefixes or packed offset table, and rejects overflow.
+This is an observation of the supplied elements, not a serializer or a promise
+about later bytes: callers must preserve their values and serialization behavior.
+The raw `Vec<u8>` specialization is a different layout and is excluded. Existing
+writers retain their checked count/write behavior and all v1 bytes are unchanged.
+
 Embedded instruction frames retain the counting destination through a
 codec-owned prefix writer. A size-only pass measures the concrete payload and
 adds the fixed header/alignment overhead; it does not construct a checksum writer.
@@ -190,6 +235,12 @@ admission, or buffer reservation. This prevents a recursive or incorrect
 length oracle from exhausting the stack, forcing a payload-sized speculative
 allocation, or understating the bytes accepted by the output pass.
 
+Unit-record size hints use the same zero-field layout calculation as other
+structures. An offset-table packed unit contains one zero `u64` offset (eight
+bytes); its sequential and field-bitset layouts contain no field bytes. Both
+length diagnostics reflect those existing serialized bytes. Canonical framing
+continues to measure actual serialization rather than trust either hint.
+
 Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
 `encode_canonical`, including for resource admission and length-prefixed hashes.
 Both ignore ambient layout guards and restore the caller's guard on return.
@@ -227,11 +278,18 @@ Resource-limit and allocation errors are terminal. The V1 decoder never retries
 the same bytes through an alternate layout after a budget has rejected them;
 the header flags select the only layout used for that frame.
 
-Derived packed structures validate the complete boundary after their declared
-fields, for both offset tables and field-bitset layouts. A valid checksum does
-not make trailing bytes part of a structure. Explicit prefix-field decoding
-reports only the bytes belonging to that field so the enclosing decoder can
-read its following fields.
+Both `Ok` and `Err` branches of the result slice decoder enter the shared
+nesting guard before decoding their bounded child. The guard restores the
+previous depth on success, child error or consumed-length rejection, including
+when another decode follows inside the same active limit scope.
+
+Canonical field/frame decoding of derived packed structures validates the
+complete boundary for both offset tables and field-bitset layouts. A valid
+checksum does not make trailing bytes part of a structure. Unit records retain
+the existing canonical byte comparator for their layout metadata: zero fields
+do not imply a zero-byte payload. Their validation hook does not assert a zero
+consumed offset. Explicit prefix-field decoding reports only the bytes belonging
+to that field so the enclosing decoder can read its following fields.
 
 Nested decode scopes may tighten but never relax an outer budget. Binary value
 decoding is sequential in V1, so its budget counters stay in the calling decode
@@ -839,27 +897,37 @@ chosen algorithm is recorded in the header; there is no on-wire negotiation.
 
 ## Schema Hash Details
 
-The 16-byte schema hash is computed as the first 16 bytes of SHA-256 over a
-domain prefix followed by canonical schema bytes:
+The 16-byte frame hash is the first 16 bytes of
+`SHA-256("norito:v1:type-name\0" || NoritoSchema::frame_name())`.
+The historical domain separator remains part of V1; the name bytes now come
+only from an explicit protocol declaration. Rust source paths and compiler
+`type_name` output do not select the active frame identity.
 
-- Default: `SHA-256("norito:v1:type-name\0" || fully-qualified type name)`.
-  Rust uses `core::any::type_name::<T>()` for the type-name bytes.
-- With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" ||
-  canonical JSON schema)`, where the schema is produced by
-  `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
-- A struct or enum derived with
-  `#[norito(schema_name = "stable.public.schema.id")]` uses
-  `SHA-256("norito:v1:type-name\0" || "stable.public.schema.id")` instead.
-  The explicit name takes precedence over both defaults for Encode and Decode,
-  including builds with `schema-structural`, so Rust module paths and private
-  implementation type names do not leak into a public wire header.
+`#[derive(NoritoSchema)]` requires `#[norito_schema(name = "protocol.name")]`.
+An optional `frame = "protocol.root"` declares a root projection, such as a
+borrowed signing view sharing its owned record's frame. Generic constructors
+compose their arguments' nominal identities in declared order; they never
+substitute a child's root projection. Payload field types do not need identities
+unless they participate in a nominal generic argument or are independently framed.
+A name must not be reused for different layouts. Moving a Rust owner between
+modules leaves its declared identity and encoded bytes unchanged.
 
-An explicit schema name is a wire-compatibility promise. The same name must not
-be reused for different layouts or for generic instantiations whose layouts can
-differ. Renaming the Rust type or moving it between modules does not change a
-named schema hash; changing the explicit name does.
+The `schema-structural` feature exposes schema-inspection hashes using
+`SHA-256("norito:v1:structural-schema\0" || canonical JSON schema)`.
+It does not change frame headers or typed decoder selection. The type-name
+hash helper likewise serves inspection and source-capture tooling only.
 
 Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`
 is reserved for tooling that explicitly opts out of schema validation. Schema
 opt-out never disables the payload-derived resource budget.
+
+### Enum slice boundaries
+
+A derived enum with `#[norito(decode_from_slice)]` decodes one payload prefix and
+returns the exact consumed byte count, including its discriminant. Named, tuple
+and unit variants share the bounded payload decoder; bytes belonging to the
+caller remain unread. Nested fields and complete-frame/exact-slice APIs still
+reject trailing bytes. The advertised layout, validation hook, field/count
+bounds and enclosing allocation budget apply to the prefix operation. This
+changes no wire bytes, frame identities or protocol version.

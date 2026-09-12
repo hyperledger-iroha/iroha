@@ -38,12 +38,8 @@ pub const MAX_PARLIAMENT_SORTITION_REQUESTS_PER_BATCH_V1: usize = 10;
 /// policy version, effect hash, compare-and-set head, or body pipeline.  Core
 /// derives those consensus bindings from the proposal and committed world state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::CreateParliamentGovernanceAttemptV1"
 )]
@@ -97,12 +93,8 @@ impl seal::Instruction for CreateParliamentGovernanceAttemptV1 {}
 
 /// Payload for a monotonic risk escalation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentEscalateRiskV1")]
 pub struct ParliamentEscalateRiskV1 {
     /// Strictly nondecreasing policy-derived risk tier.
@@ -111,12 +103,8 @@ pub struct ParliamentEscalateRiskV1 {
 
 /// One immutable request entry in an atomic future-pulse sortition batch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentSortitionRequestRegistrationV1"
 )]
@@ -136,12 +124,8 @@ pub struct ParliamentSortitionRequestRegistrationV1 {
 /// retries atomically. After any pulse has been consumed, a body-specific
 /// no-roster retry or Confirmation Jury draw contains exactly one fresh request.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterSortitionRequestV1"
 )]
@@ -152,12 +136,8 @@ pub struct ParliamentRegisterSortitionRequestV1 {
 
 /// Payload consuming one finalized threshold-beacon pulse batch.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentConsumeSortitionPulseBatchV1"
 )]
@@ -174,12 +154,8 @@ pub struct ParliamentConsumeSortitionPulseBatchV1 {
 
 /// Payload beginning invitation acceptance after a deterministic draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentBeginInvitationAcceptanceV1"
 )]
@@ -190,12 +166,8 @@ pub struct ParliamentBeginInvitationAcceptanceV1 {
 
 /// Payload terminally recording a missing sortition pulse or empty roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentFailBodyElectionNoRosterV1"
 )]
@@ -206,14 +178,8 @@ pub struct ParliamentFailBodyElectionNoRosterV1 {
 
 /// A candidate's response to one canonical Parliament invitation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "decision", content = "details", deny_unknown_fields)
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[norito(tag = "decision", content = "details", deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 #[repr(u8)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -230,12 +196,8 @@ pub enum ParliamentInvitationDecisionV1 {
 
 /// Payload recording one authority-bound invitation response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentRecordInvitationResponseV1"
 )]
@@ -253,12 +215,8 @@ pub struct ParliamentRecordInvitationResponseV1 {
 
 /// Payload triggering deterministic sealing of a canonical Parliament roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::governance::parliament::ParliamentSealBodyRosterV1")]
 pub struct ParliamentSealBodyRosterV1 {
     /// Election whose ranked, authority-bound responses determine the roster.
@@ -270,12 +228,8 @@ pub struct ParliamentSealBodyRosterV1 {
 
 /// Payload advancing one sealed body by exactly one deliberation phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentAdvanceBodyPhaseV1"
 )]
@@ -288,12 +242,8 @@ pub struct ParliamentAdvanceBodyPhaseV1 {
 
 /// Payload excluding one absent assignment from the current attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentRecordAttemptAbsenceV1"
 )]
@@ -308,12 +258,8 @@ pub struct ParliamentRecordAttemptAbsenceV1 {
 /// Payload endorsing one public nonbinding Parliament finding under the
 /// transaction authority's exact seated assignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentEndorsePublicFindingV1"
 )]
@@ -326,12 +272,8 @@ pub struct ParliamentEndorsePublicFindingV1 {
 
 /// Payload triggering objective expiry of one public-finding endorsement window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentFailPublicFindingNoResultV1"
 )]
@@ -342,12 +284,8 @@ pub struct ParliamentFailPublicFindingNoResultV1 {
 
 /// Payload registering a fresh private timed-OVN ballot attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterBallotAttemptV1"
 )]
@@ -374,12 +312,8 @@ pub struct ParliamentRegisterBallotAttemptV1 {
 /// authenticated transaction authority and requires the record's participant
 /// hash to bind that account to this exact ballot attempt.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentRegisterBallotParticipantV1"
 )]
@@ -392,12 +326,8 @@ pub struct ParliamentRegisterBallotParticipantV1 {
 
 /// Payload closing the member-authenticated timed-OVN registration window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentCloseBallotRegistrationV1"
 )]
@@ -411,12 +341,8 @@ pub struct ParliamentCloseBallotRegistrationV1 {
 /// Core derives the participant hash from the transaction authority; neither a
 /// Parliament manager nor the caller can name or exclude another participant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentRecordBallotDropoutV1"
 )]
@@ -427,12 +353,8 @@ pub struct ParliamentRecordBallotDropoutV1 {
 
 /// Payload freezing the exact nonempty survivor subset derived by Core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentFreezeBallotSurvivorsV1"
 )]
@@ -447,12 +369,8 @@ pub struct ParliamentFreezeBallotSurvivorsV1 {
 /// survivor offset from committed state and accepts only proof-valid contiguous
 /// records, so the relayer cannot select or rewrite the corpus.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentFreezeTimedOvnCorpusV1"
 )]
@@ -472,12 +390,8 @@ pub struct ParliamentFreezeTimedOvnCorpusV1 {
 
 /// Payload consuming one finalized release pulse for a complete ballot batch.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentBeginBallotOpeningBatchV1"
 )]
@@ -494,12 +408,8 @@ pub struct ParliamentBeginBallotOpeningBatchV1 {
 
 /// Payload triggering Core derivation of an objectively expired ballot phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentFailBallotNoResultV1"
 )]
@@ -514,12 +424,8 @@ pub struct ParliamentFailBallotNoResultV1 {
 /// data model depend on non-schema cryptographic runtime types. Core must
 /// reconstruct the exact future identity and verify every field and pairing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentTleFinalReleaseSignatureV1"
 )]
@@ -534,12 +440,8 @@ pub struct ParliamentTleFinalReleaseSignatureV1 {
 
 /// Payload finalizing an aggregate-only timed-OVN opening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentFinalizeOpenedBallotV1"
 )]
@@ -552,12 +454,8 @@ pub struct ParliamentFinalizeOpenedBallotV1 {
 
 /// Consensus-derived audit payload recording compare-and-set supersession.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticSupersededV1"
 )]
@@ -568,21 +466,17 @@ pub struct ParliamentAutomaticSupersededV1 {
 
 /// Consensus-derived audit payload for an atomically rolled-back effect failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticExecutionFailedV1"
 )]
 pub struct ParliamentAutomaticExecutionFailedV1 {
     /// Exact certified effect preimage hash.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub effect_preimage_hash: [u8; 32],
     /// Certificate-and-height-derived execution failure root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub failure_root: [u8; 32],
 }
 
@@ -592,15 +486,8 @@ pub struct ParliamentAutomaticExecutionFailedV1 {
 /// constructs it only at the certificate's exact due block after comparing the
 /// retained expected head and atomically applying the certified effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "outcome", content = "details", deny_unknown_fields)
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(tag = "outcome", content = "details", deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentAutomaticExecutionOutcomeV1"
 )]
@@ -621,20 +508,9 @@ pub enum ParliamentAutomaticExecutionOutcomeV1 {
 /// Heights representing when a transition executes are intentionally absent:
 /// Core supplies the containing block height.  Future sortition and release
 /// heights remain explicit because they are immutable precommitments.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "closed transition variants retain their canonical direct Norito payloads"
-)]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "transition", content = "payload", deny_unknown_fields)
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(tag = "transition", content = "payload", deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::ParliamentLifecycleTransitionV1"
 )]
@@ -720,14 +596,8 @@ pub enum ParliamentLifecycleTransitionV1 {
 /// [`ParliamentLifecycleTransitionV1`] and never carry registration or ballot
 /// corpora.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "details", deny_unknown_fields)
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[norito(tag = "kind", content = "details", deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 #[repr(u8)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1235,12 +1105,8 @@ impl ParliamentAutomaticExecutionOutcomeV1 {
 /// block supplies order and height, and Core derives or revalidates every state,
 /// corpus, pulse, proof, and result binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::isi::governance::parliament::SubmitParliamentLifecycleTransitionV1"
 )]

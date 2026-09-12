@@ -18,3 +18,6 @@ pub enum TryFromDataModelObjectError {
     /// Failed to deserialize object payload
     Deserialize(norito::json::Error),
 }
+
+#[cfg(test)]
+mod frame_identity_tests;

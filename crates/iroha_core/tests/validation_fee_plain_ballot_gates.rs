@@ -18,7 +18,7 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::AssetDefinitionId,
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     governance::types::{ProposalKind, ValidationFeePolicyProposal},
     isi::{Grant, governance::CastPlainBallot},
     permission::Permission,
@@ -28,6 +28,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 

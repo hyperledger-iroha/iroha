@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
 use axum::{
-    Router,
     body::Body,
     extract::connect_info::ConnectInfo,
     http::{Request, StatusCode},
@@ -31,11 +30,10 @@ use iroha_crypto::{
     Algorithm, BlsNormal, Hash, HashOf, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
 };
 use iroha_data_model::{
-    ChainId, IntoKeyValue, NetworkId, Registrable,
+    IntoKeyValue, NetworkId, Registrable,
     account::AccountId,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
-    name::Name,
     prelude as dm,
     sorafs::pin_registry::{
         ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
@@ -45,6 +43,8 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::Child;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_torii::{
     MaybeTelemetry, OnlinePeersProvider, SoraFsOrderbookTransactionSigner,
@@ -1684,7 +1684,10 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let chain_id_arc = Arc::new(chain_id.clone());
-    let runtime_deps = ToriiRuntimeDeps::new(MaybeTelemetry::disabled());
+    let runtime_deps = ToriiRuntimeDeps::new(
+        build_identity_test_fixture::build_identity(),
+        MaybeTelemetry::disabled(),
+    );
     let runtime_deps = if let Some((proof, repair, reserve, orderbook)) = native_signers {
         let proof: Arc<dyn SoraFsProofOutcomeTransactionSigner> = proof;
         let repair: Arc<dyn SoraFsRepairTransactionSigner> = repair;
@@ -3570,3 +3573,6 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
 }
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

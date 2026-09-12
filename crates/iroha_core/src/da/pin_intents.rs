@@ -4,13 +4,11 @@
 //! These helpers load and sort pin intents deterministically so they can be
 //! threaded into WSV/registry wiring without relying on filesystem ordering.
 use crate::da::ReplayFingerprint;
-use iroha_data_model::{
-    da::{
-        pin_intent::{DaPinIntent, DaPinIntentBundle},
-        types::StorageTicketId,
-    },
-    nexus::LaneId,
+use iroha_data_model::da::{
+    pin_intent::{DaPinIntent, DaPinIntentBundle},
+    types::StorageTicketId,
 };
+use iroha_model_base::topology::LaneId;
 use norito::{decode_from_bytes, to_bytes};
 use std::{
     collections::BTreeMap,
@@ -559,9 +557,9 @@ mod tests {
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::StorageTicketId,
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use std::{convert::TryFrom, path::PathBuf};
     use tempfile::tempdir;
     fn sample_intent(lane: u32, seq: u64) -> DaPinIntent {

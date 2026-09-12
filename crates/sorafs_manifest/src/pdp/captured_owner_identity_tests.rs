@@ -1,0 +1,83 @@
+// Actual compiler observations for existing owners in sorafs_manifest::pdp.
+// This is a private include fragment; owning suites retain all payload controls.
+
+/// Verify every captured concrete identity in this ownership scope.
+#[test]
+fn captured_concrete_owner_identities() {
+    crate::captured_owner_identity_support::check_both::<self::HashAlgorithmV1>(
+        "sorafs_manifest::pdp::HashAlgorithmV1",
+        "sorafs_manifest::pdp::HashAlgorithmV1",
+        "e85acc4d008460eb638f901a99ccea2a",
+        "e85acc4d008460eb638f901a99ccea2a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpCommitmentV1>(
+        "sorafs_manifest::pdp::PdpCommitmentV1",
+        "sorafs_manifest::pdp::PdpCommitmentV1",
+        "10979898f7325437bfb5d8962eaa3976",
+        "10979898f7325437bfb5d8962eaa3976",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpSampleV1>(
+        "sorafs_manifest::pdp::PdpSampleV1",
+        "sorafs_manifest::pdp::PdpSampleV1",
+        "acd50d94c1d67d3088afdab8c5480e36",
+        "acd50d94c1d67d3088afdab8c5480e36",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpChallengeV1>(
+        "sorafs_manifest::pdp::PdpChallengeV1",
+        "sorafs_manifest::pdp::PdpChallengeV1",
+        "a18a6112b3caa5512e65d7f4d7f44eb8",
+        "a18a6112b3caa5512e65d7f4d7f44eb8",
+    );
+    crate::captured_owner_identity_support::check_serialize_only::<self::PdpChallengeIdPayloadV1>(
+        "sorafs_manifest::pdp::PdpChallengeIdPayloadV1",
+        "sorafs_manifest::pdp::PdpChallengeIdPayloadV1",
+        "c70f21709335258dc04eac8fe80e8781",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpHotLeafProofV1>(
+        "sorafs_manifest::pdp::PdpHotLeafProofV1",
+        "sorafs_manifest::pdp::PdpHotLeafProofV1",
+        "257a7ccea5d131f3db8d8b735acd0c8a",
+        "257a7ccea5d131f3db8d8b735acd0c8a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpProofLeafV1>(
+        "sorafs_manifest::pdp::PdpProofLeafV1",
+        "sorafs_manifest::pdp::PdpProofLeafV1",
+        "5ccc7aba8256cabb3c24b2e7fa4b496a",
+        "5ccc7aba8256cabb3c24b2e7fa4b496a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpEd25519SignatureV1>(
+        "sorafs_manifest::pdp::PdpEd25519SignatureV1",
+        "sorafs_manifest::pdp::PdpEd25519SignatureV1",
+        "02cb41dc6e703dc64e8580120ef4caec",
+        "02cb41dc6e703dc64e8580120ef4caec",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpProofV1>(
+        "sorafs_manifest::pdp::PdpProofV1",
+        "sorafs_manifest::pdp::PdpProofV1",
+        "4aa55ca691373d54edeec5d2cf99f80b",
+        "4aa55ca691373d54edeec5d2cf99f80b",
+    );
+    crate::captured_owner_identity_support::check_serialize_only::<self::PdpProofSigningPayloadV1>(
+        "sorafs_manifest::pdp::PdpProofSigningPayloadV1",
+        "sorafs_manifest::pdp::PdpProofSigningPayloadV1",
+        "898da722b5dc86e5ee4ac4d8b3536a2e",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpRejectionReasonV1>(
+        "sorafs_manifest::pdp::PdpRejectionReasonV1",
+        "sorafs_manifest::pdp::PdpRejectionReasonV1",
+        "a28bc0f44799489e4edbddc4123b6105",
+        "a28bc0f44799489e4edbddc4123b6105",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpTerminalDecisionV1>(
+        "sorafs_manifest::pdp::PdpTerminalDecisionV1",
+        "sorafs_manifest::pdp::PdpTerminalDecisionV1",
+        "69c071b67e273b5ce7146719fd906e93",
+        "69c071b67e273b5ce7146719fd906e93",
+    );
+    crate::captured_owner_identity_support::check_both::<self::PdpGovernanceArchiveV1>(
+        "sorafs_manifest::pdp::PdpGovernanceArchiveV1",
+        "sorafs_manifest::pdp::PdpGovernanceArchiveV1",
+        "37c5b8140050c5c671196ec73d4b7c33",
+        "37c5b8140050c5c671196ec73d4b7c33",
+    );
+}

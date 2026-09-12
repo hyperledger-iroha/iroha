@@ -2,9 +2,6 @@
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    domain::DomainId,
-    name::Name,
-    nexus::DataSpaceId,
     nft::NftId,
     smart_contract::entrypoint::{
         ENTRYPOINT_RETURN_TLV_ENVELOPE_BYTES_V1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
@@ -13,6 +10,9 @@ use iroha_data_model::{
         entrypoint_return_schema_hash_v1, entrypoint_value_subtree_range_v1,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,
@@ -25,7 +25,7 @@ use ivm::{
     sum::SumLayoutV1,
 };
 use norito::{
-    codec::{Decode, Encode},
+    codec::Encode,
     json::{self, Map, Value},
 };
 use std::str;
@@ -246,7 +246,7 @@ fn decode_canonical<T>(
     kind: &'static str,
 ) -> Result<T, EntrypointReturnDecodeError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_canonical_norito(payload).map_err(|error| EntrypointReturnDecodeError::InvalidValue {
         register,
@@ -2446,6 +2446,10 @@ mod tests {
         // This test-only encoder preserves the retired field shape solely to
         // prove that the first-release decoder does not accept it. Variant
         // order intentionally matches the canonical enum's discriminants.
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::return_value::tests::retired_recursive_list_record_encoding_is_rejected::LegacyEntrypointValueAtomV1"
+        )]
         #[derive(Encode)]
         enum LegacyEntrypointValueAtomV1 {
             Tag(bool),
@@ -2454,6 +2458,10 @@ mod tests {
             Pointer(Vec<u8>),
             List(Vec<Vec<Self>>),
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::return_value::tests::retired_recursive_list_record_encoding_is_rejected::LegacyEntrypointReturnRecordV1"
+        )]
         #[derive(Encode)]
         struct LegacyEntrypointReturnRecordV1 {
             schema_hash: [u8; 32],
@@ -2473,12 +2481,46 @@ mod tests {
             LegacyEntrypointValueAtomV1::Bool(false),
             LegacyEntrypointValueAtomV1::Pointer(Vec::new()),
         );
-        let legacy_bytes = norito::to_bytes(&legacy).expect("encode retired recursive shape");
-        let canonical_bytes = norito::to_bytes(&EntrypointReturnRecordV1 {
+        let current = EntrypointReturnRecordV1 {
             schema_hash,
             atoms: vec![EntrypointValueAtomV1::List(1), int_atom(7)],
-        })
-        .expect("encode canonical flat shape");
+        };
+        let (current_payload, current_flags, payload, flags) = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (current_payload, current_flags) =
+                norito::codec::encode_with_header_flags(&current);
+            let (payload, flags) = norito::codec::encode_with_header_flags(&legacy);
+            (current_payload, current_flags, payload, flags)
+        };
+        let canonical_bytes =
+            norito::core::frame_bare_with_header_flags::<EntrypointReturnRecordV1>(
+                &current_payload,
+                current_flags,
+            )
+            .unwrap();
+        assert_eq!(canonical_bytes, norito::encode_canonical(&current).unwrap());
+        assert_eq!(
+            decode_entrypoint_return_record(&schema, &canonical_bytes).unwrap(),
+            current
+        );
+        let legacy_bytes =
+            norito::core::frame_bare_with_header_flags::<EntrypointReturnRecordV1>(&payload, flags)
+                .unwrap();
+        let view =
+            norito::core::from_bytes_view(&legacy_bytes).expect("valid current-owner envelope");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<EntrypointReturnRecordV1>()
+        );
+        assert_eq!(view.as_bytes(), payload.as_slice());
+        assert!(
+            !matches!(
+                norito::decode_canonical::<EntrypointReturnRecordV1>(&legacy_bytes),
+                Err(norito::Error::SchemaMismatch)
+            ),
+            "recursive payload must reach the current return-record decoder"
+        );
         assert_ne!(legacy_bytes, canonical_bytes);
         assert!(decode_entrypoint_return_record(&schema, &legacy_bytes).is_err());
     }

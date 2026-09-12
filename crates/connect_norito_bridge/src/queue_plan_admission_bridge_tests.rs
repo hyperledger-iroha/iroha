@@ -1,5 +1,7 @@
 #[test]
 fn bridge_public_transaction_signing_binds_queue_plan_and_direct_builder_stays_ordinary() {
+    use iroha_model_base::metadata::Metadata;
+
     let keypair = fixture_key_pair(0x5A);
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<

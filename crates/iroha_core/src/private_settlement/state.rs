@@ -98,6 +98,10 @@ fn settlement_namespace_v1(
 /// [`PrivateSettlementPoolGovernanceProjectionV1`]. Retaining the policy and
 /// lifecycle fields of every superseded revision lets recovery validate old
 /// finalized receipts against the policy that was effective when they committed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementPoolGovernanceRevisionV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub(crate) struct PrivateSettlementPoolGovernanceRevisionV1 {
     pub(crate) audit_policy_digest: Hash,
@@ -129,7 +133,20 @@ impl PrivateSettlementPoolGovernanceRevisionV1 {
 /// The restricted asset identifier and asset-binding opening salt are deliberately
 /// absent. They remain in access-controlled governance/auditor material supplied
 /// when the pool is bootstrapped.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    JsonDeserialize,
+    JsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementPoolGovernanceProjectionV1"
+)]
 pub(crate) struct PrivateSettlementPoolGovernanceProjectionV1 {
     pub(crate) version: u8,
     pub(crate) route: PrivateSettlementRouteV1,
@@ -170,7 +187,7 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
     /// Validate the complete public projection after snapshot recovery.
     pub(crate) fn validate_current_fields(&self) -> Result<(), PrivateSettlementStateErrorV1> {
         if self.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
-            || self.route.dataspace_id == iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+            || self.route.dataspace_id == iroha_model_base::topology::DataSpaceId::UNIVERSAL
             || self.route.lane_incarnation == zero_hash_v1()
             || self.pool_id.is_zero()
             || self.asset_binding_commitment == zero_hash_v1()
@@ -485,7 +502,18 @@ pub fn fetch_private_settlement_auditor_view_v1(
 }
 
 /// Persisted compact frontier for one explicitly governed settlement pool.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    JsonDeserialize,
+    JsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::private_settlement::state::PrivateSettlementPoolStateV1")]
 pub(crate) struct PrivateSettlementPoolStateV1 {
     version: u8,
     route: PrivateSettlementRouteV1,
@@ -755,6 +783,10 @@ impl PrivateSettlementPoolStateV1 {
 }
 
 /// Fsync-backed availability evidence minted by the restricted sidecar store.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementDurableAvailabilityV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PrivateSettlementDurableAvailabilityV1 {
     payload_digest: Hash,
@@ -834,6 +866,10 @@ impl PrivateSettlementDurableAvailabilityV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementSuccessorFrontierV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PrivateSettlementSuccessorFrontierV1 {
     pub(super) epoch: u64,
@@ -843,7 +879,10 @@ pub(super) struct PrivateSettlementSuccessorFrontierV1 {
     pub(super) ommers: Vec<[u8; 32]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementVerifiedLegDigestMaterialV1"
+)]
 struct PrivateSettlementVerifiedLegDigestMaterialV1 {
     manifest_digest: Hash,
     statement_digest: Hash,
@@ -860,6 +899,8 @@ struct PrivateSettlementVerifiedLegDigestMaterialV1 {
 /// The fields remain private and the token is revalidated after decode.  It is
 /// deliberately persisted with staged locks so a restart can reconstruct and
 /// reject conflicting pool/nullifier/output reservations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::private_settlement::state::ValidatedPrivateSettlementLegV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct ValidatedPrivateSettlementLegV1 {
     route: PrivateSettlementRouteV1,
@@ -1259,7 +1300,76 @@ pub(crate) enum PrivateSettlementStateErrorV1 {
 mod tests {
     use super::*;
     use crate::private_settlement::sidecar_store::tests::sidecar_fixture;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+
+    #[test]
+    fn pool_state_and_governance_frames_keep_their_declared_owner_roots() {
+        use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1;
+
+        let fixture = sidecar_fixture();
+        let projection =
+            PrivateSettlementPoolGovernanceProjectionV1::from_restricted(&fixture.pool_governance)
+                .expect("governance projection");
+        assert_private_settlement_frame_v1(
+            &projection,
+            "iroha_core::private_settlement::state::PrivateSettlementPoolGovernanceProjectionV1",
+        );
+        let pool = PrivateSettlementPoolStateV1::bootstrap(
+            projection.route,
+            projection.pool_id,
+            projection.governance_digest,
+            &[commitment(0x21)],
+        )
+        .expect("governed pool");
+        assert_private_settlement_frame_v1(
+            &pool,
+            "iroha_core::private_settlement::state::PrivateSettlementPoolStateV1",
+        );
+    }
+
+    #[test]
+    fn verified_leg_digest_material_retains_its_encode_only_frame_root() {
+        use norito::NoritoSchema as _;
+
+        let pool = PrivateSettlementPoolStateV1::bootstrap(
+            route(1),
+            PrivacyPoolIdV1::new([0x11; 32]),
+            Hash::new(b"restricted pool policy"),
+            &[commitment(0x21)],
+        )
+        .expect("governed pool");
+        let verified = verified_for(
+            &pool,
+            vec![commitment(0x41), commitment(0x42), commitment(0x43)],
+        );
+        let material = verified.digest_material();
+        let expected =
+            "iroha_core::private_settlement::state::PrivateSettlementVerifiedLegDigestMaterialV1";
+        assert_eq!(
+            PrivateSettlementVerifiedLegDigestMaterialV1::nominal_name(),
+            expected
+        );
+        assert_eq!(
+            PrivateSettlementVerifiedLegDigestMaterialV1::frame_name(),
+            expected
+        );
+        let frame = norito::encode_canonical(&material).expect("encode-only digest frame");
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<PrivateSettlementVerifiedLegDigestMaterialV1>()
+        );
+        assert_ne!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<PrivateSettlementPoolStateV1>()
+        );
+        let mut changed = material.clone();
+        changed.verified_at_height += 1;
+        assert_ne!(
+            canonical_digest_v1(VERIFIED_LEG_DIGEST_DOMAIN_V1, &material).expect("digest"),
+            canonical_digest_v1(VERIFIED_LEG_DIGEST_DOMAIN_V1, &changed).expect("changed digest"),
+        );
+        // This signing/digest carrier intentionally has no decoding or typed-frame reader.
+    }
 
     fn route(byte: u8) -> PrivateSettlementRouteV1 {
         PrivateSettlementRouteV1 {

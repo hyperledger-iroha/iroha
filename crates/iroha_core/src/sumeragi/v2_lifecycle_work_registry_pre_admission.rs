@@ -84,6 +84,18 @@ impl PendingLifecycleOutputAdmissionV1 {
         self.ownership.owner().clone()
     }
 
+    /// Identify an exact single-effect periodic Broadcast without an Apply suffix.
+    pub(in crate::sumeragi) fn binds_single_periodic_retransmit_broadcast(&self) -> bool {
+        self.ownership
+            .binds_single_periodic_retransmit_broadcast(&self.effect)
+    }
+
+    /// Identify the bound periodic two-effect prefix without authorizing its suffix.
+    pub(in crate::sumeragi) fn binds_periodic_retransmit_apply_prefix(&self) -> bool {
+        self.ownership
+            .binds_periodic_retransmit_apply_prefix(&self.effect)
+    }
+
     /// Authenticate this exact periodic CommitQC output as the first member
     /// of the retained Apply's two-effect reducer batch.
     pub(in crate::sumeragi) fn exactly_precedes_periodic_retransmit_apply(
@@ -1574,9 +1586,9 @@ pub(in crate::sumeragi) struct LocalBodyValidateReplayPreAdmissionError {
     _durable_receipt: DurableBodyReceipt,
     _replay_evidence: LocalValidateReplayEvidenceV1,
 }
-/// Ownership-preserving failure while resealing one historical protected-lock Validate.
+/// Ownership-preserving failure while resealing one historical protected body Validate.
 #[derive(Debug)]
-pub(in crate::sumeragi) struct ProtectedLockValidateReplayPreAdmissionError {
+pub(in crate::sumeragi) struct ProtectedBodyValidateReplayPreAdmissionError {
     _effect: AdapterEffect,
     _ownership: RuntimeEffectOwnership,
     _manifest: wire::PayloadManifest,
@@ -2524,22 +2536,22 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
     }
 }
 impl PreparedLocalBodyValidateReplayPreAdmission {
-    /// Reseal one exact historical protected-lock Validate after its original
+    /// Reseal one exact historical protected body Validate after its original
     /// signed-Proposal replay owner has retired.
     ///
     /// This admits no Fetch or Store shortcut. The supplied PrepareQC must
     /// exactly match the runtime candidate statement and durable body family;
     /// lifecycle admission reauthenticates its full signature and roster.
     #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn seal_exact_protected_lock_validate(
+    pub(in crate::sumeragi) fn seal_exact_protected_body_validate(
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
         manifest: wire::PayloadManifest,
         durable_receipt: DurableBodyReceipt,
         certificate: wire::QuorumCertificate,
-    ) -> Result<Self, ProtectedLockValidateReplayPreAdmissionError> {
+    ) -> Result<Self, ProtectedBodyValidateReplayPreAdmissionError> {
         let failed = |effect, ownership, manifest, durable_receipt, certificate| {
-            ProtectedLockValidateReplayPreAdmissionError {
+            ProtectedBodyValidateReplayPreAdmissionError {
                 _effect: effect,
                 _ownership: ownership,
                 _manifest: manifest,
@@ -2560,7 +2572,7 @@ impl PreparedLocalBodyValidateReplayPreAdmission {
             unreachable!("an unchanged exact ownership binding projects deterministically")
         };
         let Some(replay_evidence) =
-            LocalValidateReplayEvidenceV1::from_exact_protected_lock_validate(
+            LocalValidateReplayEvidenceV1::from_exact_protected_body_validate(
                 &effect,
                 &manifest,
                 &durable_receipt,

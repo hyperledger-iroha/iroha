@@ -19,6 +19,8 @@ from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 SCRIPT = ROOT / "scripts" / "private_settlement_release_runner.py"
 SPEC = importlib.util.spec_from_file_location(
     "private_settlement_release_runner", SCRIPT
@@ -1568,7 +1570,8 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             root = Path(temporary).resolve()
             source, output = root / "source", root / "new-parent" / "output"
             source.mkdir()
-            frozen_plan = {"commit": COMMIT, "jobs": [], "harness": {"sha256": EXECUTABLE}}
+            frozen_plan = {"commit": COMMIT, "jobs": [], "harness": {"sha256": EXECUTABLE},
+                           "benchmark_accounting": MODULE.benchmark_deadline_policy(7_200)}
             with mock.patch.object(MODULE, "load_plan", return_value=(frozen_plan, root)), mock.patch.object(
                 MODULE, "validate_campaign_timeout"
             ), mock.patch.object(MODULE, "file_binding", return_value={}), mock.patch.object(
@@ -1579,14 +1582,15 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 MODULE.execute_plan(
                     root / "plan.json", output, source_root=source,
                     harness=root / "harness", smoke_campaign=root / "missing-smoke",
-                    timeout_seconds=7_200,
+                    scope_path=root / "scope.json", campaign_id="test",
                 )
             invoke.assert_not_called()
             self.assertFalse(output.parent.exists())
 
     def test_release_execution_cli_requires_explicit_smoke_evidence(self) -> None:
         arguments = ["execute", "--plan", "/plan", "--output-dir", "/output",
-                     "--source-root", "/source", "--harness", "/harness"]
+                     "--source-root", "/source", "--harness", "/harness",
+                     "--scope", "/scope", "--campaign-id", "test"]
         with mock.patch("sys.stderr", new_callable=io.StringIO) as error, self.assertRaises(SystemExit) as result:
             MODULE.parse_args(arguments)
         self.assertEqual(result.exception.code, 2)
@@ -3204,6 +3208,64 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaises(MODULE.RunnerError):
                 MODULE.validate_benchmark_baseline(baseline, "fixture baseline")
 
+            # Reuse the already validated synthetic captures without creating
+            # another large fixture copy. Only the synthetic checkout identity
+            # differs from the real source; every publication gate runs below.
+            campaign_id = "campaign-1-complete"
+            campaign_root = root / "accounting" / "campaigns" / campaign_id
+            publication = campaign_root / "publication"
+            publication.mkdir(mode=0o700)
+            campaign_artifacts = []
+            accounting_kinds = {
+                "benchmark_raw", "benchmark_report", "benchmark_scope",
+                "benchmark_accounting_record", "benchmark_accounting_report",
+            }
+            for artifact in manifest["artifacts"]:
+                if artifact["kind"] in accounting_kinds:
+                    continue
+                source = root / artifact["path"]
+                destination = publication / artifact["path"]
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                source.rename(destination)
+                campaign_artifacts.append(dict(artifact))
+            MODULE.write_json(campaign_root / "campaign-artifacts.json", {
+                "version": MODULE.VERSION,
+                "protocol": MODULE.PROTOCOL,
+                "commit": manifest["commit"],
+                "real_process_campaign_complete": True,
+                "publication_evidence": False,
+                "publication_root": "publication",
+                "artifacts": campaign_artifacts,
+            })
+            with mock.patch.object(MODULE, "verify_source_checkout") as checkout:
+                fragment_path = MODULE.finalize_registered_scope(
+                    root / "accounting" / "scope.json",
+                    root / "finalized",
+                    qualification_campaign_id=campaign_id,
+                    source_root=ROOT,
+                )
+            self.assertEqual(checkout.call_count, 2)
+            checkout.assert_called_with(ROOT, manifest["commit"])
+            fragment = json.loads(fragment_path.read_text(encoding="utf-8"))
+            self.assertEqual(fragment["qualification_campaign_id"], campaign_id)
+            self.assertFalse(fragment["publication_evidence"])
+            final_publication = fragment_path.parent / "publication"
+            MODULE.validate_publication_fragment(
+                final_publication, fragment["artifacts"], commit=manifest["commit"],
+            )
+            accounting = json.loads((final_publication / "reports" /
+                "benchmark-accounting-v1.json").read_text(encoding="utf-8"))
+            self.assertEqual(accounting["counts"], {
+                "planned": 700, "attempted": 352, "succeeded": 351,
+                "failed": 1, "timed_out": 0, "not_started": 348, "incomplete": 0,
+            })
+            predecessor = [row for row in accounting["rows"]
+                           if row["campaign_id"] == "campaign-0-failed"]
+            self.assertEqual(sum(row["state"] == "succeeded" for row in predecessor), 1)
+            self.assertEqual(sum(row["state"] == "failed" for row in predecessor), 1)
+            self.assertTrue(next(row for row in predecessor
+                                 if row["state"] == "succeeded")["warmup"])
+
     def test_plan_seed_and_sample_minima_cannot_be_weakened(self) -> None:
         with self.assertRaises(MODULE.RunnerError):
             MODULE.verify_seed_policy(tuple(range(9)))
@@ -3333,6 +3395,7 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
             "requirements": {"seeds": [0], "warmups": 0, "measured": 1,
                              "bootstrap_iterations": 100},
             "benchmark_baseline": None,
+            "benchmark_accounting": MODULE.benchmark_deadline_policy(7_200),
         }
         for key, value in (("hardware", {}), ("canary_manifest", {}),
                            ("configuration_manifest", {"configurations": []})):
@@ -3341,7 +3404,14 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
             frozen[key] = {"path": path.name, **MODULE.file_binding(path)}
         plan_path = root / "plan.json"
         MODULE.write_json(plan_path, frozen)
-        output = root / "retained-campaign"
+        output = root / "campaigns" / "test"
+        scope_path = root / "scope.json"
+        MODULE.private_record(scope_path, {
+            "version": 1, "protocol": MODULE.PROTOCOL, "scope_id": "e" * 64,
+            "previous_scope_sha256": None, "registered_ns": 1, "stopping_policy": "fail_fast",
+            "deadline_policy": frozen["benchmark_accounting"],
+            "campaigns": [{"campaign_id": "test", "plan": MODULE.file_binding(plan_path)}],
+        })
         with ExitStack() as stack:
             def patch(target, name, **kwargs):
                 return stack.enter_context(mock.patch.object(target, name, **kwargs))
@@ -3354,6 +3424,11 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
             patch(MODULE, "build_request", side_effect=lambda _plan, _root, job: dict(job))
             process = patch(MODULE.subprocess, "Popen", side_effect=self.fake_process())
             patch(MODULE, "_process_group_exists", return_value=False)
+            patch(MODULE, "validate_benchmark_transport", side_effect=lambda _evidence, **kwargs: {
+                "request_sha256": kwargs["request_sha256"], "payload": None, "process_inventory": None,
+                "mandatory_signed_rs16_da_rbc": None, "signed_rs16_da_observations": None,
+                "authenticated_message_control": None,
+            })
             patch(MODULE, "materialize_fault_response", return_value=({"synthetic": "fault"}, []))
             benchmark = patch(MODULE, "materialize_benchmark_response", return_value={"synthetic": "benchmark"})
             patch(MODULE, "validate_leakage_response", return_value=({"messages": 1}, []))
@@ -3372,12 +3447,13 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
                 "process": process, "benchmark": benchmark, "leakage": leakage,
                 "execute": lambda: MODULE.execute_plan(
                     plan_path, output, source_root=source, harness=harness,
-                    smoke_campaign=root / "synthetic-smoke", timeout_seconds=7_200,
+                    smoke_campaign=root / "synthetic-smoke", scope_path=scope_path, campaign_id="test",
                 ),
             }
 
     def assert_no_success(self, output: Path) -> dict[str, Any]:
         self.assertFalse((output / "release-artifact-fragment-v1.json").exists())
+        self.assertFalse((output / "campaign-artifacts.json").exists())
         failure = json.loads((output / "failure.json").read_text())
         self.assertIs(failure["passed"], False)
         self.assertEqual(failure["planned_jobs"], 4)
@@ -3519,7 +3595,7 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
             record = MODULE.private_record
 
             def fail_pending(path, value):
-                if path.name == "release-artifact-fragment-v1.pending.json":
+                if path.name == "campaign-artifacts.pending.json":
                     path.write_bytes(b'{"partial":')
                     raise OSError("synthetic fragment write failure")
                 record(path, value)
@@ -3531,13 +3607,13 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
             failure = self.assert_no_success(fixture["output"])
             self.assertEqual(failure["stage"], "publication")
             self.assertEqual(len(failure["completed_jobs"]), 4)
-            pending = fixture["output"] / "release-artifact-fragment-v1.pending.json"
+            pending = fixture["output"] / "campaign-artifacts.pending.json"
             self.assertEqual(pending.read_bytes(), b'{"partial":')
             self.assertTrue((fixture["output"] / "campaign-validation.json").is_file())
 
     def test_fragment_directory_sync_failure_retains_pending_and_campaign_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
-            final = fixture["output"] / "release-artifact-fragment-v1.json"
+            final = fixture["output"] / "campaign-artifacts.json"
             real_fsync = os.fsync
             failed = False
 
@@ -3554,18 +3630,18 @@ class PrivateSettlementFailureRetentionTests(unittest.TestCase):
                 fixture["execute"]()
             failure = self.assert_no_success(fixture["output"])
             self.assertEqual(failure["stage"], "publication")
-            pending = fixture["output"] / "release-artifact-fragment-v1.pending.json"
+            pending = fixture["output"] / "campaign-artifacts.pending.json"
             self.assertTrue(json.loads(pending.read_text())["real_process_campaign_complete"])
             self.assertEqual(len(failure["completed_jobs"]), 4)
 
     def test_successful_campaign_retains_attempts_and_publishes_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, self.execution_fixture(Path(temporary).resolve()) as fixture:
             final = fixture["execute"]()
-            self.assertEqual(final.name, "release-artifact-fragment-v1.json")
+            self.assertEqual(final.name, "campaign-artifacts.json")
             self.assertTrue(json.loads(final.read_text())["real_process_campaign_complete"])
             self.assertFalse((fixture["output"] / "failure.json").exists())
             self.assertEqual(len(list((fixture["output"] / "attempts").glob("*/validation-outcome.json"))), 4)
-            self.assertEqual(final.read_bytes(), (fixture["output"] / "release-artifact-fragment-v1.pending.json").read_bytes())
+            self.assertEqual(final.read_bytes(), (fixture["output"] / "campaign-artifacts.pending.json").read_bytes())
             self.assertEqual(stat.S_IMODE(final.stat().st_mode), 0o600)
             self.assertEqual(fixture["smoke"].call_count, 2)
 

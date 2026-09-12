@@ -1,4 +1,4 @@
-//! Prepare complete local D7 facts without inserting a write or publishing capture state.
+//! Test-only qualification of complete local D7 facts without publishing capture state.
 //!
 //! Caller-supplied construction caps are explicit local inputs. This seam does not choose
 //! production defaults, authenticate a source policy, or bypass proposal/mandatory-work
@@ -111,8 +111,8 @@ impl StateBlock<'_> {
     /// passes the raw map borrowed by `drain_exec_witness_checked`. The StateBlock transcript
     /// map may already have been moved to the block; ownership comes from the retained exact
     /// source seal, never from an advertised archive. No transcript, private path, ordinary
-    /// write or witness is cloned here. Existing producer caps run before its public hashing
-    /// and statement/tree construction. Permission-table scanning has its existing separate
+    /// write or witness is cloned here. Whole-inventory reservation checks all six caps before statement/tree construction;
+    /// its public measurement and exact seal precede successful usage publication. Permission-table scanning has its existing separate
     /// cost and is not bounded by transcript caps.
     ///
     /// The result is local only: no D7 write, recorder drain, cached context, sticky error or
@@ -134,17 +134,13 @@ impl StateBlock<'_> {
             return Err("authenticated replay cannot prepare new ordinary FASTPQ D7 facts".into());
         }
         let inventory = self.verified_fastpq_source_inventory_for_capture()?;
-        // Reject the independent executed-entry cap before scanning the role table.
-        if !u32::try_from(inventory.entries().len())
-            .is_ok_and(|count| count <= limits.max_executed_entries)
-        {
-            return Err("FASTPQ source height or executed-entry count is invalid".into());
-        }
+        let mut budget = self.fastpq_source_statement_budget(limits)?;
+        let attempt = budget.prepare(self, transcripts)?;
         let creation_time_ms = self._curr_block.creation_time_ms;
         // Preserve public_inputs_template_from_block's existing saturating timestamp units.
         let slot = creation_time_ms.saturating_mul(1_000_000);
         let perm_root = crate::fastpq::permission_table_root(self.world.roles.iter());
-        let (manifest, leaves) = inventory.derive_manifest(slot, perm_root, transcripts, limits)?;
+        let (manifest, leaves) = attempt.materialize(self)?;
         Ok(PreparedOwnedFastpqD7Capture {
             context: OwnedFastpqD7CaptureContext {
                 inventory,

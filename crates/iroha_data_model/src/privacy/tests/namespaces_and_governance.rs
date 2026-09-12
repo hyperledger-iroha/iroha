@@ -280,7 +280,7 @@ fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() 
         PrivacyOrchardPoolBootstrapV1::new(
             PrivacyPoolIdV1::new(raw(210)),
             asset_definition_id(),
-            AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::UNIVERSAL),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL),
             account(211),
         ),
         Err(PrivacyOrchardPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope)
@@ -420,7 +420,7 @@ fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
             pool_id: PrivacyPoolIdV1::new(raw(219)),
             asset_definition_id: asset_definition_id(),
             public_balance_scope: AssetBalanceScope::Dataspace(
-                crate::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
             reserve_account: account(220),
             program_id: PrivacyProgramIdV1::new(raw(216)),

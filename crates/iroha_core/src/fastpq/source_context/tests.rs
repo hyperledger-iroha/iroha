@@ -355,3 +355,59 @@ fn cloned_seals_remain_closed_and_transaction_local_defaults_remain_open() {
         Some(&original)
     );
 }
+
+#[test]
+fn extraction_moves_only_exact_selected_sources_and_rejects_missing_sources_atomically() {
+    let context = snapshot();
+    let first = Hash::new(b"lane transcript");
+    let other = Hash::new(b"carrier transcript");
+    let absent = Hash::new(b"missing capture");
+    let mut captures = FastpqSourceCaptureAccumulator::default();
+    for hash in [first, other] {
+        captures.record(context.capture_transcript(Some(hash), hash, None, None, 0));
+    }
+    let original = captures.sources().unwrap().clone();
+    assert_eq!(
+        captures.take_unsealed_sources(&BTreeSet::from([first, absent])),
+        Err(FastpqSourceCaptureError::MissingSource { entry_hash: absent })
+    );
+    assert_eq!(captures.sources(), Ok(&original));
+    let extracted = captures
+        .take_unsealed_sources(&BTreeSet::from([first]))
+        .unwrap();
+    assert_eq!(extracted, BTreeMap::from([(first, original[&first])]));
+    assert_eq!(
+        captures.sources().unwrap(),
+        &BTreeMap::from([(other, original[&other])])
+    );
+    captures.seal().unwrap();
+    assert_eq!(captures.sealed_sources().unwrap().len(), 1);
+}
+
+#[test]
+fn extraction_cannot_mutate_a_sealed_inventory_or_clear_a_sticky_failure() {
+    let context = snapshot();
+    let hash = Hash::new(b"sealed transcript");
+    let mut captures = FastpqSourceCaptureAccumulator::default();
+    captures.record(context.capture_transcript(Some(hash), hash, None, None, 0));
+    let original = captures.sources().unwrap().clone();
+    captures.seal().unwrap();
+    assert_eq!(
+        captures.take_unsealed_sources(&BTreeSet::from([hash])),
+        Err(FastpqSourceCaptureError::CaptureAlreadySealed)
+    );
+    assert_eq!(captures.sealed_sources(), Ok(&original));
+
+    let mut failed = FastpqSourceCaptureAccumulator::default();
+    failed.record(Err(FastpqSourceCaptureError::ExecutionIdentityMismatch));
+    for selection in [BTreeSet::new(), BTreeSet::from([hash])] {
+        assert_eq!(
+            failed.take_unsealed_sources(&selection),
+            Err(FastpqSourceCaptureError::ExecutionIdentityMismatch)
+        );
+        assert_eq!(
+            failed.sources(),
+            Err(&FastpqSourceCaptureError::ExecutionIdentityMismatch)
+        );
+    }
+}

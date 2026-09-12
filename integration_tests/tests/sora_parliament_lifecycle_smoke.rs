@@ -69,7 +69,6 @@ use iroha::{
                 consensus_metadata,
             },
         },
-        peer::PeerId,
         permission::Permission,
         prelude::{
             Account, AssetId, FeePaymentIntent, FindAssetById, FindAssets, FindBlocks, Grant,
@@ -118,6 +117,7 @@ use iroha_crypto::timed_ovn::{TimedOvnChoiceV1, TimedOvnRegistrationSecretV1};
 use iroha_executor_data_model::permission::{
     governance::CanProposeContractDeployment, smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::{NetworkBuilder, ParliamentBeaconSignerMode};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode as _;
@@ -262,14 +262,14 @@ fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Client {
         })
         .expect("selected citizen owns one deterministic key")
         .clone();
-    let mut client = base.clone();
-    client.account = account.clone();
-    client.key_pair = key;
-    client
+    integration_tests::sync::rebind_blocking_client(base, |builder| {
+        builder.account = account.clone();
+        builder.key_pair = key;
+    })
 }
 
 fn current_height(client: &Client) -> Result<u64> {
-    Ok(client.get_status()?.blocks)
+    Ok(client.status().get()?.blocks)
 }
 
 fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
@@ -866,7 +866,7 @@ fn stage_contract_artifact(
         .map_err(|error| eyre!("verify integration contract artifact: {error}"))?;
     let manifest = verified
         .manifest
-        .try_signed(&client.key_pair)
+        .try_signed(client.client().key_pair())
         .map_err(|error| eyre!("sign integration contract manifest: {error}"))?;
     let total_size = u64::try_from(artifact.len())?;
     let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
@@ -1177,7 +1177,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
 
     let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
-        proposal_operator: client.account.clone(),
+        proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
         code_hash,
         abi_hash,
@@ -2716,9 +2716,9 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         .peers()
         .iter()
         .map(|peer| {
-            let mut client = peer.client();
-            client.torii_request_timeout = status_poll_request_timeout;
-            client
+            integration_tests::sync::rebind_blocking_client(&peer.client(), |builder| {
+                builder.torii_request_timeout = status_poll_request_timeout;
+            })
         })
         .collect::<Vec<_>>();
 

@@ -212,8 +212,13 @@ Before long or stateful writes, sample:
 - `iroha.transactions.status` or `iroha.transactions.wait`
 - `GET https://taira.sora.org/status`
 
-Proceed only when blocks advance, the queue is not saturated, and the relevant
-dataspace backlog is not climbing.
+Iroha does not create empty blocks. An unchanged block height is healthy when
+there is no pending work; do not require idle height advancement or submit
+transactions just to make height increase. Check queue saturation and the
+relevant dataspace backlog. For an authorized write, prove that its exact
+transaction hash reaches state-resolved `Applied`. If certified lane work is
+pending without a canonical application, inspect lane frontiers and merge
+selection as well as consensus status.
 
 Interpret common failures narrowly:
 
@@ -253,9 +258,26 @@ form. Keep the populated
 token in the owner-only runtime workspace. Do not replace the compiled protocol
 with a parallel Python implementation.
 
-Deployment proof always runs a fresh same-revision read-only Inrou check;
-retained receipts are audit evidence and never substitute for current
-liveness. Host cleanup persists one request-bound plan before mutation, then
+Public-reset inventory, authorization, journal and report explicitly bind
+`qualification_scope`. Use `core_testnet` for basic Taira and BPNG connectivity:
+four-validator convergence, onboarding, faucet and an Applied write, restart
+persistence, public Torii/MCP checks and application connectivity. Advanced
+Inrou workloads are qualified separately. The `inrou` scope additionally runs
+the Inrou mutations and fresh same-revision read-only Inrou checks; retained
+receipts never substitute for current workload liveness. A core testnet result
+does not claim Inrou qualification. The existing host stage/preseed barrier
+remains part of installation in both scopes.
+
+The basic scope restarts one validator and proves all four converge before the
+postrestart onboarding, faucet and Applied write. Inrou qualification exercises
+all four ordered restart waves. `taira doctor --scope basic` is the default
+connectivity check; `--scope full` adds advanced product and synchronized-time
+requirements. Basic reports valid local-clock fallback as a warning. Malformed
+time/MCP responses still fail. Render public validator units with
+`scripts/taira_validator_unit.py`; its Type=exec startup waits for the custody
+launcher before native daemon attestation and readiness begin.
+
+Host cleanup persists one request-bound plan before mutation, then
 removes only marker-admitted upload/release roots and older superseded
 marker-bound Inrou stage roots through crash-resumable tombstones within the
 signed reclaim-byte cap. It does not scan or prune live state, secrets, the

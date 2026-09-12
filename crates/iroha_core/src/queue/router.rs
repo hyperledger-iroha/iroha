@@ -17,7 +17,6 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
-    domain::DomainId,
     isi::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
@@ -56,16 +55,13 @@ use iroha_data_model::{
             ScheduleConfidentialPolicyTransition,
         },
     },
-    metadata::Metadata,
     musubi::MusubiPackageIdV1,
-    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
+        AUTOSCALE_META_MANAGED, DataSpaceCatalog, LaneCatalog,
     },
     permission::Permission,
     smart_contract::ContractAddress,
-    state_path::StatePath,
     transaction::{Executable, ExecutableBatchItem, signed::TransactionPayload},
 };
 use iroha_executor_data_model::isi::multisig::{
@@ -90,6 +86,10 @@ use iroha_executor_data_model::permission::{
         CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{name::Name, state_path::StatePath};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use std::{
@@ -191,6 +191,8 @@ impl TransactionRoutingView for TransactionPayload {
     }
 }
 /// Routing decision returned by a [`LaneRouter`].
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RoutingDecision")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RoutingDecision {
     /// Lane assigned to the transaction.
@@ -214,6 +216,8 @@ impl Default for RoutingDecision {
     }
 }
 /// Role of one route in a transaction routing plan.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RouteLegRole")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RouteLegRole {
     /// The route coordinates final admission and commit ordering for the plan.
@@ -222,6 +226,8 @@ pub enum RouteLegRole {
     Participant,
 }
 /// One lane/dataspace leg in a transaction routing plan.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RouteLeg")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RouteLeg {
     /// Lane and dataspace selected for this leg.
@@ -237,6 +243,8 @@ impl RouteLeg {
     }
 }
 /// Native AMX routing plan for a transaction that touches multiple dataspaces.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::NativeAmxRoutingPlan")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxRoutingPlan {
     /// Stable digest of the coordinator and participant route set.
@@ -247,7 +255,8 @@ pub struct NativeAmxRoutingPlan {
     pub participants: Vec<RouteLeg>,
 }
 /// Complete routing plan for a transaction.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RoutingPlan")]
 pub enum RoutingPlan {
     /// The transaction executes on one lane/dataspace route.
     Single(RouteLeg),
@@ -7714,6 +7723,7 @@ fn default_route_elastic_candidates(
     candidates.dedup();
     candidates
 }
+#[cfg(test)]
 fn insert_height_active_routable_lane(
     lanes: &mut BTreeSet<LaneId>,
     route: RoutingDecision,
@@ -7726,7 +7736,8 @@ fn insert_height_active_routable_lane(
         lanes.insert(route.lane_id);
     }
 }
-/// Resolve the set of lanes that the configured Nexus routing policy can select at a block height.
+/// Resolve height-specific routable lanes for routing and scheduler regression fixtures.
+#[cfg(test)]
 pub(crate) fn routable_lane_ids_for_nexus_at_height(
     nexus: &Nexus,
     block_height: u64,
@@ -9004,16 +9015,14 @@ mod tests {
             },
         },
         merge::{LaneDrainIntentV1, LaneDrainStateV1},
-        metadata::Metadata,
         nexus::{
             AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
-            LaneId, LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
+            LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
             PrivateSettlementCommitBundleV1, PrivateSettlementPoolGovernanceLifecycleV1,
             PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1, UniversalAccountId,
         },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
-        peer::PeerId,
         permission::Permission,
         prelude::*,
         sns::{NameControllerV1, NameRecordV1},
@@ -9031,10 +9040,46 @@ mod tests {
         },
         trigger::CanRegisterTrigger,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::NumericSpec;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
     use std::collections::{BTreeMap, BTreeSet};
+    #[test]
+    fn routing_plan_frame_and_leg_payload_preserve_their_boundaries() {
+        let leg = RouteLeg::new(RoutingDecision::default(), RouteLegRole::Coordinator);
+        let plan = RoutingPlan::Single(leg);
+        let leg_bytes = {
+            let _layout =
+                norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::COMPACT_LEN);
+            let mut bytes = Vec::new();
+            norito::SerializePayload::serialize(&leg, &mut norito::core::Encoder::new(&mut bytes))
+                .expect("encode route leg payload");
+            assert_eq!(
+                norito::core::decode_field_canonical::<RouteLeg>(&bytes)
+                    .expect("decode route leg payload"),
+                (leg, bytes.len())
+            );
+            bytes
+        };
+        assert!(!leg_bytes.is_empty());
+        let plan_bytes = norito::encode_canonical(&plan).expect("encode routing plan");
+        let unrelated_bytes = norito::encode_canonical(&42_u8).expect("encode unrelated owner");
+        assert_eq!(
+            norito::decode_from_bytes::<RoutingPlan>(&plan_bytes).expect("decode routing plan"),
+            plan
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<u8>(&plan_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_from_bytes::<RoutingPlan>(&unrelated_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
     fn sample_transaction(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,

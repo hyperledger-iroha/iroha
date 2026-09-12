@@ -54,7 +54,7 @@ impl PendingRuntimeEffectBinding {
         pending.validate_exact(effect).then_some(pending)
     }
 
-    /// Reconstruct the unique ordinal-free owner of one authenticated cold output.
+    /// Reconstruct the unique ordinal-free owner of one authenticated durable output.
     ///
     /// Output effects do not carry candidate statements in the serialized runtime
     /// binding. The one-shot permit is minted only while the complete signed or

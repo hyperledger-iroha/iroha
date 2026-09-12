@@ -199,6 +199,10 @@ pub struct AnonymousPgcBootstrapWitnessV1<'a> {
     pub randomness: &'a [SecretScalarV1],
 }
 /// Generalized Schnorr proof that one bootstrap ciphertext is well formed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::PgcBootstrapWellFormedProofV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -216,6 +220,10 @@ pub struct PgcBootstrapWellFormedProofV1 {
     balance_response: CanonicalScalarV1,
 }
 /// Exact unsigned 32-bit proof for one encrypted balance's right component.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::PgcBootstrapUnsignedRangeProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -226,6 +234,10 @@ pub struct PgcBootstrapUnsignedRangeProofV1 {
     branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
 }
 /// Complete proof for one ordered bootstrap account.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::PgcBootstrapAccountProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -235,6 +247,10 @@ pub struct PgcBootstrapAccountProofV1 {
     unsigned_range: PgcBootstrapUnsignedRangeProofV1,
 }
 /// Schnorr proof that aggregate plaintext equals the exact public supply.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::PgcBootstrapAggregateSupplyProofV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -250,6 +266,10 @@ pub struct PgcBootstrapAggregateSupplyProofV1 {
     randomness_response: CanonicalScalarV1,
 }
 /// Canonical proof for one complete PGC pool bootstrap.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::AnonymousPgcBootstrapProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -941,17 +961,29 @@ mod tests {
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     const TEST_NAMESPACE: &[u8] = b"canonical-norito:anonymous-pgc:taira-pool-7";
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::tests::LegacyUnsignedRangeProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyUnsignedRangeProofV1 {
         bit_commitments: Vec<CompressedPointV1>,
         branch_challenges: Vec<CanonicalScalarV1>,
         branch_responses: Vec<CanonicalScalarV1>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::tests::LegacyAccountProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyAccountProofV1 {
         well_formed: PgcBootstrapWellFormedProofV1,
         unsigned_range: LegacyUnsignedRangeProofV1,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::bootstrap::tests::LegacyBootstrapProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyBootstrapProofV1 {
         version: u8,
@@ -1172,7 +1204,7 @@ mod tests {
                 "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
                 "e785c256e2682ad5a82649b8ace70906088b2822d979ffd75b40150e686295e6".to_owned(),
                 90_035,
-                "d249c7a5a0309a71b1674e7f0980d5fe5b68948b1411f16f2567ff746d273000".to_owned(),
+                "db5d4c8201c268ac3bca0a9f1dfe53264535e7d47df8fc7876636718ea15f03d".to_owned(),
             )
         );
     }
@@ -1381,7 +1413,19 @@ mod tests {
         changed_bindings.push(changed);
         let mut changed = base;
         changed.genesis_hash[0] ^= 1;
-        changed_bindings.push(changed);
+        assert!(
+            AnonymousPgcBootstrapStatementV1::new(
+                TEST_NAMESPACE,
+                fixture.initial_root,
+                fixture.initial_epoch,
+                fixture.total_supply,
+                &fixture.public_keys,
+                &fixture.encrypted_balances,
+                changed
+            )
+            .is_err(),
+            "network/genesis disagreement must reject before proof evaluation"
+        );
         let mut changed = base;
         changed.action_index += 1;
         changed_bindings.push(changed);

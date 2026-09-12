@@ -105,6 +105,8 @@ const PRIVACY_AGGREGATE_SUBJECT_DOMAIN_V1: &[u8] =
 const PROOF_TOKEN_ISSUANCE_HASH_DOMAIN_V1: &[u8] = b"sorafs.transparency.proof_token_issuance.v1";
 const PROOF_TOKEN_SUBJECT_DOMAIN_V1: &[u8] = b"sorafs.transparency.proof_token.subject.v1";
 /// Transparency ledger entry kind.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerEntryKindV1")]
 #[derive(
     Clone,
     Debug,
@@ -140,6 +142,8 @@ pub enum ModerationLedgerEntryKindV1 {
     Custom(String),
 }
 /// Public metadata attached to a transparency ledger entry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerMetadataV1")]
 #[derive(
     Clone,
     Debug,
@@ -160,6 +164,8 @@ pub struct ModerationLedgerMetadataV1 {
     pub value: String,
 }
 /// Privacy mode used for an aggregate row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationPrivacyModeV1")]
 #[derive(
     Clone,
     Copy,
@@ -184,6 +190,8 @@ pub enum ModerationPrivacyModeV1 {
     DifferentialPrivacyWithSuppression,
 }
 /// Explicit privacy parameters for a transparency aggregate.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationPrivacyParametersV1")]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -210,6 +218,8 @@ pub struct ModerationPrivacyParametersV1 {
     pub suppression_threshold: Option<u64>,
 }
 /// One privacy-safe aggregate metric.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationPrivacyAggregateMetricV1")]
 #[derive(
     Clone,
     Debug,
@@ -237,6 +247,8 @@ pub struct ModerationPrivacyAggregateMetricV1 {
 /// Every aggregate carries this field on wire. Differential-privacy modes require a nonzero
 /// threshold-PRF commitment, while suppression-only aggregates use the explicit no-randomness
 /// variant. There is no absent or legacy metadata representation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationPrivacyNoiseSourceV1")]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -248,6 +260,8 @@ pub enum ModerationPrivacyNoiseSourceV1 {
     ThresholdPrf(ModerationPrivacyThresholdPrfCommitmentV1),
 }
 /// Nonzero public commitment to hidden threshold-PRF cycle output.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationPrivacyThresholdPrfCommitmentV1")]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -258,6 +272,8 @@ pub struct ModerationPrivacyThresholdPrfCommitmentV1 {
     pub commitment: [u8; 32],
 }
 /// Canonical privacy-safe moderation aggregate for SFM-4c dashboards.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationPrivacyAggregateV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -298,6 +314,8 @@ pub struct ModerationPrivacyAggregateV1 {
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
 /// Canonical privacy-safe record for one issued `SoraFS` moderation proof token.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ProofTokenIssuanceV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -338,6 +356,8 @@ pub struct ProofTokenIssuanceV1 {
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
 /// Canonical SFM-4c transparency ledger entry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerEntryV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -379,6 +399,8 @@ pub struct ModerationLedgerEntryV1 {
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
 /// Canonical transparency ledger cycle header.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerBlockV1")]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -405,6 +427,8 @@ pub struct ModerationLedgerBlockV1 {
     pub previous_block_hash: Option<[u8; 32]>,
 }
 /// Relative position of a sibling in a Merkle audit path.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerProofSideV1")]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -416,6 +440,8 @@ pub enum ModerationLedgerProofSideV1 {
     Right,
 }
 /// One sibling node in a transparency ledger Merkle proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerProofNodeV1")]
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -427,6 +453,8 @@ pub struct ModerationLedgerProofNodeV1 {
     pub hash: [u8; 32],
 }
 /// Inclusion proof for a transparency ledger entry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerProofV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -451,6 +479,8 @@ pub struct ModerationLedgerProofV1 {
     pub audit_path: Vec<ModerationLedgerProofNodeV1>,
 }
 /// Canonical SFM-4c cycle publication bundle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::transparency::ModerationLedgerCyclePublicationV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
 )]
@@ -2898,3 +2928,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("transparency/captured_owner_identity_tests.rs");

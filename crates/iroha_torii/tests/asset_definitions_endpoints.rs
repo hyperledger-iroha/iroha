@@ -13,10 +13,10 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::DomainId;
 use iroha_data_model::Registrable as _;
 use iroha_data_model::isi::SetAssetDefinitionAlias;
 use iroha_data_model::prelude as dm;
+use iroha_model_base::domain::DomainId;
 use iroha_torii::Torii;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
             .public_key()
             .clone(),
     );
-    let domain_id: dm::DomainId =
+    let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
@@ -107,7 +107,7 @@ fn build_app(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     Torii::new_with_handle(
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
@@ -119,7 +119,10 @@ fn build_app(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii asset-definition fixture")
     .api_router_for_tests()
@@ -261,7 +264,7 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
             .public_key()
             .clone(),
     );
-    let domain_id: dm::DomainId =
+    let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
@@ -356,3 +359,6 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     );
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

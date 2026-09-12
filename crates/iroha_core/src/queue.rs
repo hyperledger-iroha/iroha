@@ -108,11 +108,10 @@ use iroha_config::parameters::actual::{
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::nexus::{
-    DataSpaceCatalog, DataSpaceId, FeeDebitSource, FeeRejectionCode,
-    FeeSponsorBeneficiaryEpochBudgetWindow, FeeSponsorBlockBudgetWindow,
-    FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow, FeeSponsorProgramEpochBudgetWindow,
-    FeeSponsorProgramId, FeeSponsorProgramRevisionKey, LaneCatalog, LaneId, LanePrivacyProof,
-    UniversalAccountId,
+    DataSpaceCatalog, FeeDebitSource, FeeRejectionCode, FeeSponsorBeneficiaryEpochBudgetWindow,
+    FeeSponsorBlockBudgetWindow, FeeSponsorBudgetCounterKey, FeeSponsorBudgetWindow,
+    FeeSponsorProgramEpochBudgetWindow, FeeSponsorProgramId, FeeSponsorProgramRevisionKey,
+    LaneCatalog, LanePrivacyProof, UniversalAccountId,
 };
 #[cfg(test)]
 use iroha_data_model::nexus::{LaneLifecyclePlan, LaneStorageProfile, LaneVisibility};
@@ -138,14 +137,15 @@ use iroha_data_model::{
             RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
     },
-    name::Name,
-    peer::PeerId,
     transaction::{
         Executable, ExecutableBatchItem, SignedTransaction, TransactionAdmissionIntent,
         TransactionEntrypoint, signed::TransactionPayload,
     },
 };
 use iroha_logger::{trace, warn};
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 #[cfg(feature = "telemetry")]
 use iroha_torii_shared::status::NexusLaneTeuBuckets;
@@ -172,6 +172,7 @@ use reservation_journal::{
 };
 #[cfg(test)]
 use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
+#[cfg(test)]
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
@@ -410,6 +411,8 @@ pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1: u16 = 1;
 /// This identity is persisted inside the exact journal record. Together with the record's
 /// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
 /// global admission binding that every authority attested.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanGlobalAdmissionIdentityV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanGlobalAdmissionIdentityV1 {
     /// Identity layout version.
@@ -420,6 +423,8 @@ pub struct QueuePlanGlobalAdmissionIdentityV1 {
     pub request_id: Hash,
 }
 /// One routing leg paired with the exact active lane incarnation that admitted it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanRouteIncarnationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanRouteIncarnationV1 {
     /// Coordinator or participant route in canonical routing-plan order.
@@ -438,6 +443,8 @@ pub struct QueuePlanRouteIncarnationV1 {
     pub durability_threshold: u16,
 }
 /// Generation-stable lifecycle context for one queue-plan admission attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanAdmissionContextV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionContextV1 {
     /// Context layout version.
@@ -617,6 +624,8 @@ impl QueuePlanAdmissionContextV1 {
     }
 }
 /// Exact evidence returned only after the pending-plan journal Put is durably synchronized.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanDurableAdmissionV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanDurableAdmissionV1 {
     /// Claim layout version.
@@ -664,6 +673,10 @@ pub fn queue_plan_journal_record_claim_digest(
 pub enum QueuePlanAdmissionContextDisposition {
     /// The supplied context is the exact current admission generation.
     Current,
+    /// The supplied context names an exact canonical predecessor behind the
+    /// local frontier, while every bound route incarnation and validator set
+    /// remains identical at the source and current proposal heights.
+    Historical,
     /// The supplied context is structurally valid but its canonical frontier
     /// has not arrived locally yet, and its embedded authority matches the
     /// exact current source authority.
@@ -733,6 +746,8 @@ pub enum QueuePlanAdmissionContextError {
 /// The two identity hashes are supplied by lane consensus: `reservation_owner_hash` identifies
 /// the leader/session taking ownership, while `proposal_identity_hash` identifies the provisional
 /// proposal slot before its transaction-dependent final descriptor is assembled.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationScopeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneQueueReservationScopeV1 {
     /// Lane allowed to coordinate execution of selected transactions.
@@ -814,6 +829,8 @@ impl LaneQueueReservationRoutingMode {
 /// Complete exact identity of one durable lane queue reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationKeyV1")]
 pub struct LaneQueueReservationKeyV1 {
     /// Exact encoded reservation-key schema version.
     pub version: u16,
@@ -884,6 +901,8 @@ impl LaneQueueReservationKeyV1 {
 /// Ordinals start at one and are never reused while a transaction remains
 /// tracked. The reservation journal retains this identity while the hash is
 /// absent from the ordinary FIFO so later admissions cannot overtake it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueFifoOrderV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct LaneQueueFifoOrderV1 {
@@ -921,6 +940,8 @@ impl LaneQueueFifoOrderV1 {
 /// batches.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationRecordV1")]
 pub(crate) struct LaneQueueReservationRecordV1 {
     /// Record format version.
     version: u16,
@@ -947,6 +968,8 @@ impl LaneQueueReservationRecordV1 {
 /// attempt before it can touch a live reservation from a recreated lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseBarrierV1")]
 pub(crate) struct LaneQueueReservationReleaseBarrierV1 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
@@ -1383,6 +1406,8 @@ impl LaneQueueReleaseFinalizationGate {
 /// A completion frame moves the exact live records here atomically. Keeping
 /// the original durable ordinals makes a crash between that frame and FIFO
 /// reinsertion restartable without changing global queue order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseCompletionV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReleaseCompletionV1 {
@@ -1494,6 +1519,8 @@ pub struct LaneQueueReservationReplaySummary {
 /// atomic `PutBatch` frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationGroupIdentityV1")]
 pub(crate) struct LaneQueueReservationGroupIdentityV1 {
     /// Coordinator lane that owns the group.
     pub(crate) lane_id: LaneId,
@@ -2119,6 +2146,8 @@ pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
     pub(crate) durable_admission: QueuePlanDurableAdmissionV1,
 }
 /// Complete FIFO-ordered membership of one exact autonomous proposal slot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReconciliationGroupV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
@@ -4144,8 +4173,10 @@ pub struct Queue {
     /// Sticky process-lifetime fault when accepted work exposes internally inconsistent immutable
     /// routing or fee-admission identity. Expected catalog retirement evicts affected work instead.
     accepted_work_validation_fault: AtomicBool,
-    /// Startup publication gate retained until V2 has classified every
-    /// replayed reservation owner against one State/Kura evidence snapshot.
+    /// Startup publication gate retained from journal installation until V2
+    /// has reconciled the exact QueuePlan/reservation replay with State/Kura.
+    /// An empty replay still requires that publication boundary; emptiness
+    /// does not authorize ordinary admission to change its replay identity.
     ///
     /// QueuePlan replay may materialize quarantined payload bytes while this
     /// bit is set, but ordinary admission, gossip, and global/lane selection
@@ -5370,7 +5401,7 @@ trait QueueAdmissionStateAccess {
         &mut self,
         authority: &AccountId,
         lane_alias: &str,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error>;
 }
 struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
@@ -5439,7 +5470,7 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
         &mut self,
         authority: &AccountId,
         lane_alias: &str,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error> {
         Queue::extract_lane_authority_domains(
             self.world,
             authority,
@@ -6006,13 +6037,11 @@ impl Queue {
         self.apply_durable_fifo_order_reconciliation_locked(fifo_plan);
         self.remove_hashes_from_fifo_locked(&hashes);
         *store = candidate_store;
-        self.lane_reservation_reconciliation_pending.store(
-            !store.live_by_entrypoint.is_empty()
-                || !store.commit_barriers.is_empty()
-                || !store.release_barriers.is_empty()
-                || !store.completed_releases.is_empty(),
-            Ordering::Release,
-        );
+        // Even an empty owner replay must remain closed until the exact
+        // QueuePlan replay and State/Kura lifecycle cut are reconciled. Opening
+        // here would let ingress change live claims beneath the startup receipt.
+        self.lane_reservation_reconciliation_pending
+            .store(true, Ordering::Release);
         self.missing_reservation_payload_count
             .store(store.missing_payload_hashes.len(), Ordering::Relaxed);
         *self.lane_reservation_snapshot_replay_receipt.lock() = Some(replay_receipt);
@@ -6406,6 +6435,11 @@ impl Queue {
             selected_encoded_bytes = next_encoded_bytes;
             selected_gas = next_gas;
         }
+        // Selection owns every state-derived value it needs. Keep the lifecycle and
+        // reservation-transition fences through publication, but release the MVCC
+        // snapshot before journal I/O so slow storage cannot retain an entire World
+        // generation and its configuration snapshots.
+        drop(routing_state_view);
         if selected.is_empty() && conflicting_admissions.is_empty() {
             // An installed journal is still mandatory even when the lane currently has no work;
             // otherwise a misconfigured scheduler could appear healthy until its first payload.
@@ -8511,22 +8545,20 @@ impl Queue {
             {
                 return Err(LaneQueueReservationError::Conflict { hash });
             }
-            // Phase two durably records PlanTombstoned before removing this
-            // member's payload and FIFO identity. A crash before ForgetCommit
-            // therefore legitimately replays only these two exact terminal
-            // markers. Do not resurrect FIFO ownership, or mistake any partial
-            // remaining owner for the fully consumed member.
-            if retrying_commit_barrier
-                && plan_tombstone_marked
-                && !self.fifo_order_by_hash.contains_key(&hash)
-            {
+            // A restarted Commit barrier can have no payload/FIFO owner after
+            // its QueuePlan tombstone, including a crash before PlanTombstoned
+            // is appended. Accept only the exact terminal owner mask here;
+            // journal preflight below must prove an unmarked tombstone before
+            // any cleanup effect. Never resurrect FIFO ownership for this phase.
+            if retrying_commit_barrier && !self.fifo_order_by_hash.contains_key(&hash) {
                 if seen_live {
                     return Err(LaneQueueReservationError::InvalidIdentity(
                         "lane reservation group has a Commit barrier after a live suffix"
                             .to_owned(),
                     ));
                 }
-                let expected_terminal_markers = (1_u32 << 1) | (1_u32 << 2);
+                let expected_terminal_markers =
+                    (1_u32 << 1) | if plan_tombstone_marked { 1_u32 << 2 } else { 0 };
                 if self
                     .canonical_queue_hash_terminal_owner_mask_locked(store, hash, ownership, false)
                     != expected_terminal_markers
@@ -8540,7 +8572,7 @@ impl Queue {
                         key: *key,
                         reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
                         queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
-                        plan_tombstone_marked: true,
+                        plan_tombstone_marked,
                     });
                 // The caller still authenticates this exact phase against both
                 // retained journals before the cleanup transition can mutate.
@@ -8795,7 +8827,12 @@ impl Queue {
     ) -> Result<(), LaneQueueReservationError> {
         let guard = self.plan_journal.lock();
         let Some(journal) = guard.as_ref() else {
-            if !preflight.replica_keys.is_empty() {
+            if !preflight.replica_keys.is_empty()
+                || preflight.active_phases.iter().any(|phase| {
+                    phase.queue_plan_phase == QueuePlanReservationPhaseV1::Tombstoned
+                        && !phase.plan_tombstone_marked
+                })
+            {
                 return Err(LaneQueueReservationError::JournalNotInstalled);
             }
             return Ok(());
@@ -10486,14 +10523,12 @@ impl Queue {
         {
             return Ok(None);
         }
-        let expected_pending = !expected_snapshot.is_empty();
-        if self
+        if !self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
-            != expected_pending
         {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "lane reservation reconciliation publication gate disagrees with replay ownership"
+                "lane reservation reconciliation publication gate opened before exact startup completion"
                     .to_owned(),
             ));
         }
@@ -11010,6 +11045,7 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
         if self.lane_reservation_startup_completion.lock().is_some()
+            || !self.lane_reservation_startup_reconciliation_pending()
             || receipt.initial_snapshot != *expected_snapshot
             || receipt.replay_receipt != self.lane_reservation_snapshot_replay_receipt()?
             || receipt.plan_replay_receipt != self.queue_plan_startup_replay_receipt()?
@@ -11032,6 +11068,7 @@ impl Queue {
         expected_snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     ) -> Result<bool, LaneQueueReservationError> {
         if self.lane_reservation_startup_completion.lock().is_some()
+            || !self.lane_reservation_startup_reconciliation_pending()
             || receipt.initial_snapshot != *expected_snapshot
             || self
                 .lane_reservation_snapshot_replay_receipt
@@ -11107,12 +11144,52 @@ impl Queue {
             .as_ref()
             == Some(observation))
     }
-    /// Return whether replayed reservation ownership is still quarantined
-    /// behind the State/Kura-aware startup publication gate.
+    /// Return whether journal startup is still quarantined behind the exact
+    /// State/Kura-aware publication gate, including an empty owner replay.
+    /// Readiness and ingress consumers must remain closed while this is true;
+    /// only successful exact startup reconciliation opens the installed Queue.
     #[must_use]
-    pub(crate) fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
+    pub fn lane_reservation_startup_reconciliation_pending(&self) -> bool {
         self.lane_reservation_reconciliation_pending
             .load(Ordering::Acquire)
+    }
+    /// Complete the exact empty journal startup used before seeding fixture work.
+    ///
+    /// Recovery fixtures with retained plans or reservation owners must use the
+    /// State/Kura reconciliation coordinator instead.
+    #[cfg(test)]
+    pub(crate) fn complete_empty_startup_for_test(&self, state: &State) {
+        assert!(self.lane_reservation_startup_reconciliation_pending());
+        let snapshot = self
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture empty fixture startup ownership");
+        assert!(
+            snapshot.is_empty(),
+            "fixture startup must not own reservations"
+        );
+        let plan_replay_receipt = self.plan_journal_startup_replay_receipt.lock().clone();
+        if let Some(receipt) = plan_replay_receipt {
+            assert!(
+                receipt
+                    .binds_live_claims(std::iter::empty())
+                    .expect("validate empty fixture QueuePlan replay receipt"),
+                "fixture startup must have no retained plans"
+            );
+        } else {
+            let replay = self
+                .replay_plan_journal(state)
+                .expect("replay empty fixture QueuePlan journal before admission");
+            assert_eq!(
+                replay.records, 0,
+                "fixture startup must have no retained plans"
+            );
+        }
+        let receipt = self
+            .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+            .expect("bind exact empty fixture startup receipt")
+            .expect("fixture ownership remains unchanged during startup");
+        self.complete_lane_reservation_startup_reconciliation(receipt)
+            .expect("complete empty fixture startup before admitting work");
     }
     /// Publish successful State/Kura-aware reservation reconciliation.
     ///
@@ -11157,9 +11234,7 @@ impl Queue {
         let reconciliation_pending = self
             .lane_reservation_reconciliation_pending
             .load(Ordering::Acquire);
-        if self.lane_reservation_startup_completion.lock().is_some()
-            || (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)
-        {
+        if self.lane_reservation_startup_completion.lock().is_some() || !reconciliation_pending {
             return Err(LaneQueueReservationError::InvalidIdentity(
                 "startup reconciliation receipt is stale at the final publication gate".to_owned(),
             ));
@@ -13126,7 +13201,7 @@ impl Queue {
         authority: &AccountId,
         lane_alias: &str,
         now_ms: u64,
-    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+    ) -> Result<Vec<iroha_model_base::domain::DomainId>, Error> {
         extract_directory_authority_domains(world, authority, now_ms).map_err(|err| {
             Error::LaneComplianceDenied {
                 alias: lane_alias.to_string(),
@@ -15534,12 +15609,7 @@ impl Queue {
             });
         }
         let future = admission_context.authority_height > current_authority_height;
-        if admission_context.authority_height < current_authority_height {
-            return Err(QueuePlanAdmissionContextError::NonCanonical {
-                reason: "first-time historical admission requires rebinding at the current canonical frontier"
-                    .to_owned(),
-            });
-        }
+        let historical = admission_context.authority_height < current_authority_height;
         let current_proposal_height = current_authority_height.checked_add(1).ok_or_else(|| {
             QueuePlanAdmissionContextError::NonCanonical {
                 reason: "current authority height overflows its proposal height".to_owned(),
@@ -15626,9 +15696,33 @@ impl Queue {
                     ),
                 });
             }
+            if historical {
+                let current_validator_set = queue_plan_authoritative_peers_in_view_at_height(
+                    state_view,
+                    bound.leg.route,
+                    current_proposal_height,
+                )
+                .map_err(|_| QueuePlanAdmissionContextError::MissingAuthority {
+                    lane_id: bound.leg.route.lane_id,
+                    dataspace_id: bound.leg.route.dataspace_id,
+                    proposal_height: current_proposal_height,
+                })?;
+                if current_validator_set != bound.validator_set {
+                    return Err(QueuePlanAdmissionContextError::NonCanonical {
+                        reason: format!(
+                            "lane {} dataspace {} validator set changed after source proposal height {}",
+                            bound.leg.route.lane_id,
+                            bound.leg.route.dataspace_id,
+                            source_proposal_height
+                        ),
+                    });
+                }
+            }
         }
         Ok(if future {
             QueuePlanAdmissionContextDisposition::Future
+        } else if historical {
+            QueuePlanAdmissionContextDisposition::Historical
         } else {
             QueuePlanAdmissionContextDisposition::Current
         })
@@ -15659,16 +15753,17 @@ impl Queue {
     }
     /// Classify an ingress-supplied context against one coherent local state view.
     ///
-    /// A first-time historical context is rejected because current WSV cannot
-    /// reconstruct an immutable old committee after authority churn. Exact
-    /// already-owned durable retries are handled before this classifier. A
-    /// future context is reported only when its embedded roster and incarnation
+    /// A historical context is accepted only when its canonical predecessor is
+    /// retained and every embedded roster and incarnation resolves identically
+    /// at both its source proposal height and the current proposal height. This
+    /// permits a height-only admission race without accepting authority churn.
+    /// A future context is reported only when its embedded roster and incarnation
     /// match the exact current authority source, without mutating queue ownership.
     ///
     /// # Errors
     /// Returns an error when the routing plan is inactive, the context is
-    /// historical, or any authority, roster, or incarnation binding is not
-    /// canonical at the current source frontier.
+    /// unavailable from retained history, or any authority, roster, or
+    /// incarnation binding is not canonical at both required frontiers.
     pub fn classify_plan_admission_context_with_state(
         &self,
         state: &State,
@@ -15966,6 +16061,15 @@ impl Queue {
             Ok(())
         }
     }
+    fn check_startup_admission(&self) -> Result<(), Error> {
+        if self.lane_reservation_startup_reconciliation_pending() {
+            return Err(Error::PlanJournalDurabilityRejected {
+                reason: "queue journal startup is awaiting exact State/Kura reconciliation"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    }
     /// Push transaction into queue.
     ///
     /// # Errors
@@ -15977,6 +16081,10 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        self.check_startup_admission().map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         self.sync_nexus_routing_with_view(state_view);
         let routing_plan = match self
             .router
@@ -16095,6 +16203,10 @@ impl Queue {
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<QueuePushOutcome, Failure> {
+        self.check_startup_admission().map_err(|err| Failure {
+            tx: tx.clone().into(),
+            err,
+        })?;
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
@@ -16230,6 +16342,12 @@ impl Queue {
             };
             loop {
                 let queue_guard = self.push_remove_lock.lock();
+                // The retry path can replace a durable claim before reaching
+                // prepared admission. It must retain the same startup fence.
+                self.check_startup_admission().map_err(|err| Failure {
+                    tx: tx.clone().into(),
+                    err,
+                })?;
                 if self.durability_transition_active(&tx_hash) {
                     drop(queue_guard);
                     self.wait_for_durability_transitions(&[tx_hash]);
@@ -16551,7 +16669,10 @@ impl Queue {
                         &routing_plan,
                         expected_context,
                     ) {
-                        Ok(QueuePlanAdmissionContextDisposition::Current) => {}
+                        Ok(
+                            QueuePlanAdmissionContextDisposition::Current
+                            | QueuePlanAdmissionContextDisposition::Historical,
+                        ) => {}
                         Ok(QueuePlanAdmissionContextDisposition::Future) => {
                             return Err(Failure {
                                 tx: tx.into(),
@@ -21953,15 +22074,13 @@ pub mod tests {
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
         isi::runtime_upgrade::ProposeRuntimeUpgrade,
-        metadata::Metadata,
-        name::Name,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_MANAGED,
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId,
-            DataSpaceMetadata, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
-            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId, LaneLifecyclePlan,
-            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, LaneSchedulerPolicy,
-            ManifestVersion, ParticipantSelector,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceMetadata,
+            JurisdictionSet, LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId,
+            LaneComplianceRule, LaneConfig, LaneLifecyclePlan, LanePrivacyMerkleWitness,
+            LanePrivacyProof, LanePrivacyWitness, LaneSchedulerPolicy, ManifestVersion,
+            ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -21974,6 +22093,10 @@ pub mod tests {
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
     use iroha_logger::Level;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]
@@ -22013,9 +22136,20 @@ pub mod tests {
                 .into_iter()
                 .map(|leg| QueuePlanRouteIncarnationV1 {
                     leg,
-                    lane_incarnation: Hash::new(
-                        norito::to_bytes(&leg).expect("encode synthetic context leg"),
-                    ),
+                    lane_incarnation: {
+                        // This synthetic fixture hashes the nested leg payload under one
+                        // explicit layout; the real RoutingPlan owns the durable frame.
+                        let _layout = norito::core::DecodeFlagsGuard::enter(
+                            norito::core::header_flags::COMPACT_LEN,
+                        );
+                        let mut payload = Vec::new();
+                        norito::SerializePayload::serialize(
+                            &leg,
+                            &mut norito::core::Encoder::new(&mut payload),
+                        )
+                        .expect("encode synthetic route-leg payload");
+                        Hash::new(payload)
+                    },
                     validator_set_hash_version:
                         iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&validators),
@@ -22024,6 +22158,37 @@ pub mod tests {
                     durability_threshold: 1,
                 })
                 .collect(),
+        }
+    }
+    #[test]
+    fn synthetic_queue_context_leg_identity_ignores_ambient_layout() {
+        let plan = RoutingPlan::native_amx(
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            vec![RouteLeg::new(
+                RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+                RouteLegRole::Participant,
+            )],
+        );
+        let expected = synthetic_queue_plan_admission_context(&plan);
+        for flags in [0, norito::core::header_flags::PACKED_STRUCT] {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(synthetic_queue_plan_admission_context(&plan), expected);
+        }
+        let _layout =
+            norito::core::DecodeFlagsGuard::enter(norito::core::header_flags::COMPACT_LEN);
+        for route in expected.route_incarnations {
+            let mut payload = Vec::new();
+            norito::SerializePayload::serialize(
+                &route.leg,
+                &mut norito::core::Encoder::new(&mut payload),
+            )
+            .expect("encode route-leg payload independently");
+            assert_eq!(
+                norito::core::decode_field_canonical::<RouteLeg>(&payload)
+                    .expect("the synthetic identity commits an exact leg payload"),
+                (route.leg, payload.len())
+            );
+            assert_eq!(route.lane_incarnation, Hash::new(payload));
         }
     }
     fn pending_kagemusha_binding_for_test(
@@ -22247,15 +22412,10 @@ pub mod tests {
             &RoutingPlan::single(previous.coordinator_route())
         ));
     }
-    fn exact_lane_authority_for_queue_test(
+    fn lane_authority_for_queue_test(
         state: &mut State,
         validator_keys: &[iroha_crypto::KeyPair],
     ) -> Arc<LaneManifestRegistry> {
-        assert_eq!(
-            validator_keys.len(),
-            4,
-            "the default queue dataspace has f=1 and therefore requires exactly four validators"
-        );
         let validator_peers = validator_keys
             .iter()
             .map(|key| PeerId::new(key.public_key().clone()))
@@ -22320,6 +22480,17 @@ pub mod tests {
             })
             .collect();
         Arc::new(LaneManifestRegistry::from_statuses(statuses))
+    }
+    fn exact_lane_authority_for_queue_test(
+        state: &mut State,
+        validator_keys: &[iroha_crypto::KeyPair],
+    ) -> Arc<LaneManifestRegistry> {
+        assert_eq!(
+            validator_keys.len(),
+            4,
+            "the default queue dataspace has f=1 and therefore requires exactly four validators"
+        );
+        lane_authority_for_queue_test(state, validator_keys)
     }
     fn exact_f1_lane_authority_for_queue_test(
         state: &mut State,
@@ -22436,6 +22607,12 @@ pub mod tests {
         globally_bound_guard_fixture_at_height(0)
     }
     fn globally_bound_guard_fixture_at_height(authority_height: u64) -> GloballyBoundGuardFixture {
+        globally_bound_guard_fixture_with_journals(authority_height, false)
+    }
+    fn globally_bound_guard_fixture_with_journals(
+        authority_height: u64,
+        reservations: bool,
+    ) -> GloballyBoundGuardFixture {
         let dir = tempdir().expect("global guard fixture directory");
         let journal_path = dir.path().join("global_guard_queue_plan.norito");
         let mut state = State::new(
@@ -22461,6 +22638,10 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install global guard fixture journal");
+        if reservations {
+            install_test_reservation_journal(&queue, &dir);
+            queue.complete_empty_startup_for_test(&state);
+        }
         let transaction = accepted_queue_plan_tx_by_someone(&time_source);
         let follower_transaction = accepted_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
@@ -22555,6 +22736,9 @@ pub mod tests {
             queue.plan_journal.lock().is_some(),
             "globally certified reservation fixtures require a queue-plan journal"
         );
+        if queue.lane_reservation_startup_reconciliation_pending() {
+            queue.complete_empty_startup_for_test(state);
+        }
         let authority = transaction.authority().clone();
         if state.view().world().accounts().get(&authority).is_none() {
             let mut world = state.world.block();
@@ -22657,6 +22841,7 @@ pub mod tests {
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: kura_defaults::FSYNC_INTERVAL,
             lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         };
         let kura = Kura::new_temporary_with_configured_lane_catalog(
@@ -22836,7 +23021,7 @@ pub mod tests {
         );
         assert_eq!(
             queue.router.read().try_route(&tx),
-            Err(RoutingResolveError::UnknownDataspace {
+            Err(RoutingResolveError::NoLaneForDataspace {
                 dataspace_id: unknown_dataspace,
             })
         );
@@ -23505,6 +23690,7 @@ pub mod tests {
         }
         seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
+        let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
         assert_eq!(
@@ -23535,8 +23721,12 @@ pub mod tests {
         assert!(!queue.accepted_work_validation_faulted());
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         assert!(
-            state.lane_manifests.read().status(LaneId::new(1)).is_some(),
-            "committed queue reconfiguration must publish the same manifest registry to consensus state even when background polling is disabled"
+            queue.lane_manifests.read().status(LaneId::new(1)).is_some(),
+            "queue reconfiguration must refresh its manifest projection for the current catalog"
+        );
+        assert!(
+            Arc::ptr_eq(&state.lane_manifests.read(), &authoritative_manifests),
+            "refreshing a queue projection must preserve State's authoritative manifest registry"
         );
         assert_eq!(
             state.lane_manifests.read().consensus_policy_digest(),
@@ -24306,7 +24496,9 @@ pub mod tests {
         let time_source = TimeSource::new_system();
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id.clone()],
@@ -24359,7 +24551,9 @@ pub mod tests {
         let time_source = TimeSource::new_system();
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id],
@@ -24468,7 +24662,9 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_primary, primary_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_primary);
         let (validator_secondary, _secondary_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_secondary);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24628,7 +24824,9 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24709,6 +24907,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24798,6 +24997,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24962,6 +25162,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -25156,7 +25357,7 @@ pub mod tests {
     async fn governance_manifest_rejects_cross_namespace_rebind() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut world = world_with_test_domains();
+        let world = world_with_test_domains();
         let (validator, keypair) = gen_account_in("wonderland");
         let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25167,10 +25368,8 @@ pub mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        world
-            .contract_instances
-            .insert(existing_contract_address.clone(), Hash::new(b"demo"));
         let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
+        register_test_authority(&state, &validator);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let mut protected = BTreeSet::new();
@@ -25247,6 +25446,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             hooks: GovernanceHooks {
@@ -25321,6 +25521,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut statuses = BTreeMap::new();
         let metadata_key = Name::from_str("gov_upgrade_id").expect("static metadata key");
         let mut allowed_ids = BTreeSet::new();
@@ -25437,14 +25638,16 @@ pub mod tests {
         );
     }
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
-        accepted_tx_by(account_id, &key_pair, time_source)
+        accepted_tx_by(
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
+            time_source,
+        )
     }
     fn accepted_queue_plan_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         accepted_queue_plan_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             vec![sample_unregister_instruction()],
             Metadata::default(),
@@ -25459,14 +25662,13 @@ pub mod tests {
     fn accepted_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("reservation");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
@@ -25475,14 +25677,13 @@ pub mod tests {
     fn accepted_queue_plan_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("reservation");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_queue_plan_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
@@ -25493,18 +25694,44 @@ pub mod tests {
         dataspace_alias: &str,
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("dummy");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, dataspace_alias).unwrap(),
         ))];
         accepted_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
         )
+    }
+    #[test]
+    fn shared_queue_transactions_have_registered_authority_and_unique_entrypoints() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let transactions = [
+            accepted_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
+            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+        ];
+        let view = state.view();
+        let mut hashes = BTreeSet::new();
+        for transaction in transactions {
+            assert!(
+                view.world()
+                    .accounts()
+                    .get(transaction.as_ref().authority())
+                    .is_some()
+            );
+            assert!(hashes.insert(transaction.hash_as_entrypoint()));
+        }
     }
     #[test]
     fn compute_tx_encoded_len_matches_payload() {
@@ -26074,7 +26301,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn strict_durable_claim_rejects_unowned_history_and_defers_authenticated_future() {
+    fn strict_durable_claim_admits_stable_history_rejects_forgery_and_defers_future() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("strict-claim-frontier-v1.norito");
         let mut state = State::new(
@@ -26116,29 +26343,25 @@ pub mod tests {
         );
 
         seed_committed_height_for_queue_test(&state, 3);
-        assert!(
+        assert_eq!(
             queue
                 .classify_plan_admission_context_with_state(&state, &plan, &historical_context,)
-                .is_err(),
-            "current WSV cannot authenticate a first-time historical authority roster"
+                .expect("classify exact stable historical context"),
+            QueuePlanAdmissionContextDisposition::Historical,
+            "height advancement alone must not invalidate an otherwise identical authority binding"
         );
-        let historical_error = queue
+        queue
             .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
                 historical_tx,
                 &state,
                 plan.clone(),
                 &historical_context,
             )
-            .expect_err("an unowned historical context must be rebound at the current frontier");
-        assert!(matches!(
-            historical_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("historical admission requires rebinding")
-        ));
-        assert_eq!(queue.active_len(), 0);
+            .expect("an exact stable historical context must acquire durable ownership");
+        assert_eq!(queue.active_len(), 1);
 
-        let journal_len_after_historical_rejection = std::fs::metadata(&journal_path)
-            .expect("frontier journal metadata after historical rejection")
+        let journal_len_after_historical_admission = std::fs::metadata(&journal_path)
+            .expect("frontier journal metadata after historical admission")
             .len();
         let (_invalid_time_handle, invalid_time_source) =
             TimeSource::new_mock(Duration::from_millis(732));
@@ -26161,6 +26384,14 @@ pub mod tests {
                 &invalid_history,
             )
             .expect_err("noncanonical history must fail before durable ownership");
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("frontier journal metadata after forged historical context")
+                .len(),
+            journal_len_after_historical_admission,
+            "forged history must not append a durable claim"
+        );
 
         let (_future_time_handle, future_time_source) =
             TimeSource::new_mock(Duration::from_millis(733));
@@ -26222,14 +26453,99 @@ pub mod tests {
             Error::UnresolvedRoute { ref reason }
                 if reason.contains("ahead of the local canonical frontier")
         ));
-        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.active_len(), 1);
         assert_eq!(
             std::fs::metadata(&journal_path)
                 .expect("frontier journal metadata after rejected contexts")
                 .len(),
-            journal_len_after_historical_rejection,
+            journal_len_after_historical_admission,
             "invalid and future contexts must not append queue ownership"
         );
+    }
+    #[test]
+    fn historical_admission_rejects_height_bound_committee_rotation() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let validator_keys = (0_u8..5)
+            .map(|offset| {
+                iroha_crypto::KeyPair::from_seed(
+                    vec![0xA0_u8.saturating_add(offset); 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+            })
+            .collect::<Vec<_>>();
+        let manifests = lane_authority_for_queue_test(&mut state, &validator_keys);
+        state.install_lane_manifests(&manifests);
+        {
+            let mut world_block = state.world.block();
+            let first_id = crate::state::derive_validator_key_id(validator_keys[0].public_key());
+            let mut first = world_block
+                .consensus_keys
+                .get(&first_id)
+                .cloned()
+                .expect("first height-bound validator key");
+            first.expiry_height = Some(4);
+            world_block.consensus_keys.insert(first_id, first);
+            let fifth_id = crate::state::derive_validator_key_id(validator_keys[4].public_key());
+            let mut fifth = world_block
+                .consensus_keys
+                .get(&fifth_id)
+                .cloned()
+                .expect("fifth height-bound validator key");
+            fifth.activation_height = 4;
+            world_block.consensus_keys.insert(fifth_id, fifth);
+            world_block.commit();
+        }
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(934));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve height-bound committee route");
+        let historical_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture source-height committee");
+        let embedded = &historical_context.route_incarnations[0].validator_set;
+        assert_eq!(
+            queue_plan_authoritative_peers_in_view_at_height(
+                &state.view(),
+                plan.coordinator_route(),
+                2,
+            )
+            .expect("resolve retained source-height projection"),
+            *embedded
+        );
+        seed_committed_height_for_queue_test(&state, 3);
+        assert_ne!(
+            queue_plan_authoritative_peers_in_view_at_height(
+                &state.view(),
+                plan.coordinator_route(),
+                4,
+            )
+            .expect("resolve rotated current committee"),
+            *embedded
+        );
+        let error = queue
+            .classify_plan_admission_context_with_state(&state, &plan, &historical_context)
+            .expect_err("current committee rotation must reject a historical admission");
+        assert!(matches!(
+            error,
+            QueuePlanAdmissionContextError::NonCanonical { ref reason }
+                if reason.contains("validator set changed after source proposal height")
+        ));
     }
     #[test]
     fn strict_durable_claim_retry_survives_height_advance_before_and_after_restart_replay() {
@@ -26358,19 +26674,13 @@ pub mod tests {
             &plan,
             &context,
         ));
-        let mutated_tx_error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                mutated_tx,
-                &state,
-                plan.clone(),
-                &context,
-            )
-            .expect_err("a different transaction must not reuse an earlier durable claim");
-        assert!(matches!(
-            mutated_tx_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("admission context no longer matches")
-        ));
+        assert_eq!(
+            queue
+                .durable_plan_admission_claim_with_state(&mutated_tx, &state)
+                .expect("an unrelated transaction has no existing claim"),
+            None,
+            "a historical context does not transfer ownership of an earlier transaction claim"
+        );
         mutable_router.set(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(42)));
         assert_eq!(
             queue
@@ -26532,6 +26842,12 @@ pub mod tests {
             .len();
         seed_committed_height_for_queue_test(&state, 3);
         install_exact_lane_authority_for_queue_test(&mut state, &validator_keys[1..]);
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &original_context)
+                .is_err(),
+            "a historical context must fail closed after validator authority changes"
+        );
         let current_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture exact current rollover context");
@@ -27294,19 +27610,16 @@ pub mod tests {
         let original_journal_len = std::fs::metadata(&journal_path)
             .expect("stale-incarnation journal metadata")
             .len();
-        {
-            // This queue-only ABA test changes the authoritative routing/incarnation state.
-            // Keep the test Kura's marker projection synchronized so the fixture remains a
-            // valid State even though the assertion concerns only durable queue claims.
-            let nexus = state.nexus.get_mut();
-            let mut lanes = nexus.lane_catalog.lanes().to_vec();
-            lanes[0].alias = "recreated-single-lane".to_owned();
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(1_u32), lanes).expect("recreated lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-        state.reseed_static_lane_incarnations_for_tests();
+        let recreated_incarnation = Hash::new(b"recreated lane incarnation for queue claim replay");
+        state.set_lane_incarnation_for_test(LaneId::SINGLE, recreated_incarnation);
+        state
+            .kura()
+            .install_lane_incarnation_marker_for_test(
+                state.nexus_snapshot().lane_config.primary(),
+                recreated_incarnation,
+                0,
+            )
+            .expect("replace exact incarnation marker for queue replay fixture");
         let current_context = make_queue()
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture recreated incarnation context");
@@ -27324,19 +27637,32 @@ pub mod tests {
             ),
             "same lane id with a new active incarnation must not reuse the old claim"
         );
-        let recreated_retry_error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                tx.clone(),
-                &state,
-                plan.clone(),
+        for (context, expected_reason) in [
+            (
                 &original_context,
-            )
-            .expect_err("same-ID ABA must invalidate a same-process durable-claim retry");
-        assert!(matches!(
-            recreated_retry_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("active lane incarnation")
-        ));
+                "neither the existing claim nor the exact current generation",
+            ),
+            (&current_context, "active lane incarnation"),
+        ] {
+            let error = queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    context,
+                )
+                .expect_err(
+                    "same-ID ABA must invalidate original retries and current-generation rollover",
+                );
+            assert!(
+                matches!(
+                    &error.err,
+                    Error::UnresolvedRoute { reason } if reason.contains(expected_reason)
+                ),
+                "unexpected ABA retry failure: {:?}",
+                error.err
+            );
+        }
         assert_eq!(queue.active_len(), 1);
         assert_eq!(
             std::fs::metadata(&journal_path)
@@ -27510,9 +27836,10 @@ pub mod tests {
         assert_eq!(
             replay_queue
                 .route_plan_with_state(&tx, &state)
-                .expect("resolve current policy")
-                .coordinator_route(),
-            current_route
+                .expect_err("the replacement policy targets an unavailable dataspace"),
+            RoutingResolveError::UnknownDataspace {
+                dataspace_id: current_route.dataspace_id,
+            }
         );
         let summary = replay_queue
             .replay_plan_journal(&state)
@@ -28579,6 +28906,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install stateless-rejection journal");
         let (authority, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority);
         let wrong_network_id =
             crate::sumeragi::synthetic_network_id("wrong-network-for-queue-journal-replay");
         let signed = TransactionBuilder::new_with_time_source(
@@ -28782,18 +29110,7 @@ pub mod tests {
             .expect("install journal");
         let tx = accepted_tx_by(authority_id, &authority_keypair, &time_source);
         let hash = tx.hash_as_entrypoint();
-        let stale_plan = queue
-            .router
-            .read()
-            .try_route_plan_with_state(&tx, &state)
-            .and_then(|plan| {
-                resolve_routing_plan_against_catalogs(
-                    plan,
-                    &stale_nexus.lane_catalog,
-                    &stale_nexus.dataspace_catalog,
-                )
-            })
-            .expect("stale plan resolves against stale Nexus catalogs");
+        let stale_plan = RoutingPlan::single(old_route);
         assert_eq!(stale_plan.coordinator_route(), old_route);
         let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
@@ -28941,6 +29258,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
             authority_id.clone(),
             &authority_keypair,
@@ -29065,6 +29383,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let (tx, stale_plan) = (0_u32..512)
             .map(|idx| {
                 let tx = accepted_tx_with(
@@ -29332,6 +29651,7 @@ pub mod tests {
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
             authority_id,
             &authority_keypair,

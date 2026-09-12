@@ -34,11 +34,7 @@ use iroha_data_model::{
         ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaStripeLayout},
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
-    name::Name,
-    nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig as ModelLaneConfig, LaneId,
-    },
+    nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig as ModelLaneConfig},
     parameter::{Parameter, custom::CustomParameter},
     sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     taikai::{
@@ -50,19 +46,21 @@ use iroha_data_model::{
         TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
+use iroha_model_base::name::Name;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
-    NoritoDeserialize, from_bytes,
+    DeserializePayload, from_bytes,
     json::{self, Value},
     to_bytes,
 };
 use reqwest::Url;
 use sorafs_car::{CarBuildPlan, PersistedChunkRecord};
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProfileId,
-    ProviderAdmissionCouncilPolicy, canonical_manifest_root_cid,
+    BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, CouncilSignature, ProviderAdmissionCouncilPolicy,
+    canonical_manifest_root_cid,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
@@ -1122,18 +1120,10 @@ fn sample_pdp_commitment_for_tests() -> PdpCommitmentV1 {
     PdpCommitmentV1::from_tree(
         &tree,
         [0x11; 32],
-        ChunkingProfileV1 {
-            profile_id: ProfileId(0xAB),
-            namespace: "inline".to_owned(),
-            name: "inline".to_owned(),
-            semver: "1.0.0".to_owned(),
-            min_size: 64 * 1024,
-            target_size: 64 * 1024,
-            max_size: 64 * 1024,
-            break_mask: 1,
-            multihash_code: BLAKE3_256_MULTIHASH_CODE,
-            aliases: vec!["inline.inline@1.0.0".to_owned()],
-        },
+        ChunkingProfileV1::from_profile(
+            chunk_profile_for_request(64 * 1024),
+            BLAKE3_256_MULTIHASH_CODE,
+        ),
         32,
         1_707_300_000,
     )
@@ -1621,6 +1611,14 @@ fn compute_da_manifest_artifacts_builds_canonical_pipeline_outputs() {
         None,
     )
     .expect("canonical DA compute pipeline");
+    crate::frame_test_support::assert_current_frame(
+        &computed.manifest.manifest,
+        "iroha_data_model::da::manifest::DaManifestV1",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &computed.server_assignment,
+        "iroha_torii::da::persistence::DaIngestServerAssignmentV1",
+    );
     assert_eq!(computed.proof_scheme, DaProofScheme::MerkleSha256);
     assert_eq!(computed.canonical_payload, request.payload);
     assert_eq!(
@@ -2826,3 +2824,28 @@ use replay_manifest_and_metrics::{
     sample_manifest_context_for, telemetry_handle_for_tests, zero_sequence_manifest_context_for,
 };
 use taikai_validation::taikai_ssm_validation_fixture;
+
+#[tokio::test]
+async fn ingest_response_binary_body_advertises_exact_current_owner() {
+    assert_eq!(
+        <DaIngestResponse as norito::NoritoSchema>::nominal_name(),
+        "iroha_torii::da::ingest::DaIngestResponse"
+    );
+    let value = DaIngestResponse {
+        status: "pending_pin_authorization",
+        duplicate: false,
+        receipt: None,
+        pin_scope: None,
+    };
+    let expected = norito::to_bytes(&value).expect("encode response frame");
+    assert_eq!(
+        &expected[6..22],
+        &norito::schema::identity::frame_hash::<DaIngestResponse>()
+    );
+    let response = utils::respond_with_format(value, ResponseFormat::Norito);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .expect("read response body");
+    assert_eq!(body.as_ref(), expected.as_slice());
+}

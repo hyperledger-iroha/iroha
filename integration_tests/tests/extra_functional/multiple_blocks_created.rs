@@ -3,6 +3,7 @@
 use eyre::{Result, eyre};
 use integration_tests::{sandbox, sync::get_status_with_retry_async};
 use iroha::data_model::{parameter::BlockParameter, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use rand::{SeedableRng, prelude::IteratorRandom};
@@ -43,7 +44,7 @@ async fn multiple_blocks_created() -> Result<()> {
             client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
         });
     let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
-    let create_domain = domain_setup_instruction(&domain_id, &submit_client.client().account)?;
+    let create_domain = domain_setup_instruction(&domain_id, submit_client.client().account())?;
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(

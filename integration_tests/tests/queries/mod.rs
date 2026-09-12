@@ -9,6 +9,7 @@ use iroha::{
         query::{error::QueryExecutionFail, parameters::MAX_FETCH_SIZE},
     },
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use std::time::Duration;
 const QUERY_TX_STATUS_TIMEOUT: Duration = Duration::from_secs(120);
@@ -19,7 +20,7 @@ fn query_client(network: &Network) -> Client {
     let client = network.client();
     let status_timeout = client
         .client()
-        .transaction_status_timeout
+        .transaction_status_timeout()
         .max(QUERY_TX_STATUS_TIMEOUT)
         .max(network.sync_timeout());
     let min_ttl = status_timeout.saturating_add(Duration::from_secs(120));
@@ -103,7 +104,7 @@ fn query_basic_scenarios() -> eyre::Result<()> {
     // find_transactions_reversed
     {
         let domain_id: DomainId = DomainId::try_new("domain1-txs", "universal")?;
-        let register_domain = domain_setup_instruction(&domain_id, &client.client().account)?;
+        let register_domain = domain_setup_instruction(&domain_id, client.client().account())?;
         client.submit(
             register_domain.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

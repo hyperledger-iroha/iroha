@@ -26,12 +26,10 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-use iroha_data_model::{
-    NetworkId,
-    prelude::{Peer, PeerId},
-};
+use iroha_data_model::{NetworkId, prelude::Peer};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::SocketAddr;
 use norito::{
     codec::{Decode, Encode},
@@ -175,6 +173,16 @@ enum ValidatorDialRole {
     Preferred,
     /// The other endpoint owns the immediate attempt; this endpoint is backup.
     Standby,
+}
+/// One outbound authentication tenure includes its bounded dial and the
+/// configured pre-authentication work, never established-session idleness.
+fn checked_outbound_authentication_timeout(
+    dial_timeout: Duration,
+    preauth_timeout: Duration,
+) -> Option<Duration> {
+    let timeout = dial_timeout.checked_add(preauth_timeout)?;
+    PreauthDeadline::from_now(timeout)?;
+    Some(timeout)
 }
 impl ValidatorDialScheduler {
     fn new(roster: HashSet<PeerId>, takeover_delay: Duration) -> Self {
@@ -577,6 +585,7 @@ enum RelayTarget {
     Direct(PeerId),
 }
 #[derive(Clone, Debug, Encode, Decode)]
+#[norito(decode_from_slice)]
 struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
@@ -584,25 +593,12 @@ struct RelayMessage<T> {
     origin_signature: Vec<u8>,
     payload: T,
 }
-impl<'a, T> ncore::DecodeFromSlice<'a> for RelayMessage<T>
-where
-    T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
-{
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        use std::borrow::Cow;
-        let min_size = ncore::archived_payload_size::<Self>();
-        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-            let mut padded = Vec::with_capacity(min_size);
-            padded.extend_from_slice(bytes);
-            padded.resize(min_size, 0);
-            Cow::Owned(padded)
-        } else {
-            Cow::Borrowed(bytes)
-        };
-        let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-        let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-        let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
-        Ok((value, bytes.len()))
+impl<T: norito::NoritoSchema> norito::NoritoSchema for RelayMessage<T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_p2p::network::RelayMessage",
+            &[T::nominal_name()],
+        )
     }
 }
 impl<T: Encode> RelayMessage<T> {
@@ -1879,6 +1875,11 @@ pub struct NetworkReplyRoute {
     tenure: Arc<ReliableReplyRouteTenure>,
     delivery_ordinal: u128,
     delivery_binding: Arc<ReliableReplyDeliveryBinding>,
+    /// Sealed from the immutable delivery tuple when this private capability is minted.
+    process_local_identity: Hash,
+    /// Shared immutable source identity; obtaining or cloning a key neither
+    /// rehashes its peer nor allocates another source owner.
+    source_key: NetworkReplySourceKey,
 }
 /// Test-only authority for minting opaque authenticated reply-route tenures.
 ///
@@ -2028,12 +2029,11 @@ impl NetworkReplyRouteTestFixture {
             delivery_drain: InboundDeliveryDrain::completed_for_test(),
             termination_seen: AtomicBool::new(false),
         });
-        Some(NetworkReplyRoute {
-            semantic_target,
-            tenure,
-            delivery_ordinal: prior.delivery_ordinal,
-            delivery_binding: Arc::clone(&prior.delivery_binding),
-        })
+        let mut forged = NetworkReplyRoute::new(semantic_target, tenure, prior.delivery_ordinal);
+        // Keep projections bound to the forged tuple; only the intrinsic
+        // delivery binding is substituted so ordinary validation rejects it.
+        forged.delivery_binding = Arc::clone(&prior.delivery_binding);
+        Some(forged)
     }
     /// Forge an adversarial capability which reuses `prior`'s actor-global
     /// connection ordinal under a distinct, otherwise valid tenure.
@@ -2114,12 +2114,19 @@ impl NetworkReplyRouteTestFixture {
 /// process-local scheduling key and must not enter wire or consensus state.
 #[derive(Clone)]
 pub struct NetworkReplySourceKey {
+    identity: Arc<NetworkReplySourceIdentity>,
+}
+/// Immutable source tuple owned independently of delivery and connection state.
+/// Different deliveries may allocate equal tuples; pointer equality of this
+/// allocation never defines source equality or ordering.
+struct NetworkReplySourceIdentity {
     owner: Arc<()>,
     authenticated_via: PeerId,
+    process_local_identity: Hash,
 }
 impl NetworkReplySourceKey {
     fn owner_address(&self) -> usize {
-        Arc::as_ptr(&self.owner) as usize
+        Arc::as_ptr(&self.identity.owner) as usize
     }
     /// Authenticated transport peer which owns this bounded source lane.
     ///
@@ -2128,7 +2135,7 @@ impl NetworkReplySourceKey {
     /// remains required for process-local scheduling and capability checks.
     #[must_use]
     pub fn authenticated_source_peer(&self) -> &PeerId {
-        &self.authenticated_via
+        &self.identity.authenticated_via
     }
     /// Equality-preserving in-process projection of this authenticated source lane.
     ///
@@ -2140,22 +2147,20 @@ impl NetworkReplySourceKey {
     /// changes owned by the same actor.
     #[must_use]
     pub fn process_local_identity_hash(&self) -> Hash {
-        const DOMAIN: &[u8] = b"iroha:p2p:reply-source-process-local-identity:v1\n";
-        let actor = (self.owner_address() as u128).to_le_bytes();
-        let authenticated_source = self.authenticated_via.encode();
-        Hash::new_from_chunks(&[DOMAIN, &actor, &authenticated_source])
+        self.identity.process_local_identity
     }
 }
 impl PartialEq for NetworkReplySourceKey {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.owner, &other.owner) && self.authenticated_via == other.authenticated_via
+        Arc::ptr_eq(&self.identity.owner, &other.identity.owner)
+            && self.identity.authenticated_via == other.identity.authenticated_via
     }
 }
 impl Eq for NetworkReplySourceKey {}
 impl core::hash::Hash for NetworkReplySourceKey {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         core::hash::Hash::hash(&self.owner_address(), state);
-        core::hash::Hash::hash(&self.authenticated_via, state);
+        core::hash::Hash::hash(&self.identity.authenticated_via, state);
     }
 }
 impl PartialOrd for NetworkReplySourceKey {
@@ -2167,7 +2172,11 @@ impl Ord for NetworkReplySourceKey {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.owner_address()
             .cmp(&other.owner_address())
-            .then_with(|| self.authenticated_via.cmp(&other.authenticated_via))
+            .then_with(|| {
+                self.identity
+                    .authenticated_via
+                    .cmp(&other.identity.authenticated_via)
+            })
     }
 }
 impl core::fmt::Debug for NetworkReplySourceKey {
@@ -2191,17 +2200,28 @@ impl NetworkReplyRoute {
         tenure: Arc<ReliableReplyRouteTenure>,
         delivery_ordinal: u128,
     ) -> Self {
+        let (process_local_identity, process_local_source_identity) =
+            Self::seal_process_local_identities(&semantic_target, &tenure, delivery_ordinal);
         let delivery_binding = Arc::new(ReliableReplyDeliveryBinding {
             owner: Arc::clone(&tenure.owner),
             minting_tenure: Arc::downgrade(&tenure),
             semantic_target: semantic_target.clone(),
             delivery_ordinal,
         });
+        let source_key = NetworkReplySourceKey {
+            identity: Arc::new(NetworkReplySourceIdentity {
+                owner: Arc::clone(&tenure.owner),
+                authenticated_via: tenure.delivery_peer.clone(),
+                process_local_identity: process_local_source_identity,
+            }),
+        };
         Self {
             semantic_target,
             tenure,
             delivery_ordinal,
             delivery_binding,
+            process_local_identity,
+            source_key,
         }
     }
     fn validate_delivery_binding(&self) -> Result<(), NetworkReplyRouteError> {
@@ -2228,10 +2248,7 @@ impl NetworkReplyRoute {
     /// same key. No connection identifier or tenure ordinal is exposed.
     #[must_use]
     pub fn source_key(&self) -> NetworkReplySourceKey {
-        NetworkReplySourceKey {
-            owner: Arc::clone(&self.tenure.owner),
-            authenticated_via: self.tenure.delivery_peer.clone(),
-        }
+        self.source_key.clone()
     }
     /// Whether this capability was minted for the supplied authenticated delivery peer.
     ///
@@ -2427,26 +2444,38 @@ impl NetworkReplyRoute {
     /// projections from substitution.
     #[must_use]
     pub fn process_local_identity_hash(&self) -> Hash {
-        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-process-local-identity:v1\n";
-        let actor = (Arc::as_ptr(&self.tenure.owner) as usize as u128).to_le_bytes();
-        let tenure = (Arc::as_ptr(&self.tenure) as usize as u128).to_le_bytes();
-        let connection_ordinal = self.tenure.connection_ordinal.to_le_bytes();
-        let delivery_ordinal = self.delivery_ordinal.to_le_bytes();
-        let source_capacity = u64::try_from(self.tenure.source_capacity)
+        self.process_local_identity
+    }
+    /// Encode each immutable peer identity once when minting a delivery.
+    /// Liveness remains checked independently by the capability predicates.
+    fn seal_process_local_identities(
+        semantic_target: &PeerId,
+        tenure: &Arc<ReliableReplyRouteTenure>,
+        delivery_ordinal: u128,
+    ) -> (Hash, Hash) {
+        const ROUTE_DOMAIN: &[u8] = b"iroha:p2p:reply-route-process-local-identity:v1\n";
+        const SOURCE_DOMAIN: &[u8] = b"iroha:p2p:reply-source-process-local-identity:v1\n";
+        let actor = (Arc::as_ptr(&tenure.owner) as usize as u128).to_le_bytes();
+        let tenure_identity = (Arc::as_ptr(tenure) as usize as u128).to_le_bytes();
+        let connection_ordinal = tenure.connection_ordinal.to_le_bytes();
+        let delivery_ordinal = delivery_ordinal.to_le_bytes();
+        let source_capacity = u64::try_from(tenure.source_capacity)
             .expect("bounded reply-source capacity fits u64")
             .to_le_bytes();
-        let authenticated_source = self.tenure.delivery_peer.encode();
-        let semantic_target = self.semantic_target.encode();
-        Hash::new_from_chunks(&[
-            DOMAIN,
+        let authenticated_source = tenure.delivery_peer.encode();
+        let semantic_target = semantic_target.encode();
+        let route = Hash::new_from_chunks(&[
+            ROUTE_DOMAIN,
             &actor,
-            &tenure,
+            &tenure_identity,
             &connection_ordinal,
             &delivery_ordinal,
             &source_capacity,
             &authenticated_source,
             &semantic_target,
-        ])
+        ]);
+        let source = Hash::new_from_chunks(&[SOURCE_DOMAIN, &actor, &authenticated_source]);
+        (route, source)
     }
 }
 /// Valid update of one authenticated reply-source attempt.
@@ -2504,6 +2533,8 @@ pub struct NetworkReplyRoutes {
     semantic_target: PeerId,
     owner: Arc<()>,
     source_capacity: usize,
+    /// Immutable history preimage prefix; active and retired maps stay dynamic.
+    process_local_identity_prefix: Arc<[u8]>,
     attempts: BTreeMap<NetworkReplySourceKey, NetworkReplyRoute>,
     /// Latest delivery which left the live attempt set for each source.
     ///
@@ -2652,11 +2683,14 @@ impl NetworkReplyRoutes {
         }
         let semantic_target = route.semantic_target.clone();
         let owner = Arc::clone(&route.tenure.owner);
+        let process_local_identity_prefix =
+            Self::seal_process_local_identity_prefix(&semantic_target, &owner, source_capacity);
         let attempts = BTreeMap::from([(route.source_key(), route)]);
         Ok(Self {
             semantic_target,
             owner,
             source_capacity,
+            process_local_identity_prefix,
             attempts,
             retired_attempts: BTreeMap::new(),
         })
@@ -2703,17 +2737,7 @@ impl NetworkReplyRoutes {
     /// representation.
     #[must_use]
     pub fn process_local_exact_history_hash(&self) -> Hash {
-        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-history-process-local:v1\n";
-        let actor = (Arc::as_ptr(&self.owner) as usize as u128).to_le_bytes();
-        let source_capacity = u64::try_from(self.source_capacity)
-            .expect("bounded reply-source capacity fits u64")
-            .to_le_bytes();
-        let semantic_target = self.semantic_target.encode();
-        let mut projection = Vec::new();
-        projection.extend_from_slice(DOMAIN);
-        projection.extend_from_slice(&actor);
-        projection.extend_from_slice(&source_capacity);
-        projection.extend_from_slice(&semantic_target);
+        let mut projection = self.process_local_identity_prefix.to_vec();
         projection.extend_from_slice(
             &u64::try_from(self.attempts.len())
                 .expect("bounded active route count fits u64")
@@ -2733,6 +2757,25 @@ impl NetworkReplyRoutes {
             projection.extend_from_slice(route.process_local_identity_hash().as_ref());
         }
         Hash::new(projection)
+    }
+    /// Seal only immutable container geometry, never mutable route membership.
+    fn seal_process_local_identity_prefix(
+        semantic_target: &PeerId,
+        owner: &Arc<()>,
+        source_capacity: usize,
+    ) -> Arc<[u8]> {
+        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-history-process-local:v1\n";
+        let actor = (Arc::as_ptr(owner) as usize as u128).to_le_bytes();
+        let source_capacity = u64::try_from(source_capacity)
+            .expect("bounded reply-source capacity fits u64")
+            .to_le_bytes();
+        let semantic_target = semantic_target.encode();
+        let mut prefix = Vec::new();
+        prefix.extend_from_slice(DOMAIN);
+        prefix.extend_from_slice(&actor);
+        prefix.extend_from_slice(&source_capacity);
+        prefix.extend_from_slice(&semantic_target);
+        prefix.into()
     }
     /// Consume the set into independent source attempts in stable local order.
     pub fn into_routes(self) -> impl Iterator<Item = NetworkReplyRoute> {
@@ -7042,6 +7085,15 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 "network.preauth_timeout_ms cannot be represented by the monotonic clock",
             )
         })?;
+        let outbound_authentication_timeout =
+            checked_outbound_authentication_timeout(dial_timeout, preauth_timeout).ok_or_else(
+                || {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "network.dial_timeout_ms + network.preauth_timeout_ms cannot be represented by the monotonic clock",
+                    )
+                },
+            )?;
         let authenticated_source_credit_capacity = inbound_source_credit_capacity(
             p2p_subscriber_queue_cap.get(),
             max_total_connections,
@@ -7123,7 +7175,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             .retain(|peer_id| peer_id == &self_id || initial_trusted_sources.contains(peer_id));
         let validator_dial_scheduler = ValidatorDialScheduler::new(
             initial_validator_dial_roster,
-            dial_timeout.saturating_add(idle_timeout),
+            outbound_authentication_timeout,
         );
         initial_trusted_sources.remove(&self_id);
         let authenticated_source_geometry =
@@ -7522,6 +7574,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             idle_timeout,
             reply_writer_flush_timeout,
             dial_timeout,
+            outbound_authentication_timeout,
             connect_startup_delay_until,
             network_id,
             consensus_caps,
@@ -8869,13 +8922,31 @@ mod accept_stream_tests {
         LaneProfile, Network as NetCfg, RelayMode, SoranetPrivacy as ActualSoranetPrivacy,
     };
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305};
-    use iroha_data_model::peer::{Peer, PeerId};
+    use iroha_data_model::peer::Peer;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, DecodeAll, Encode};
     #[cfg(feature = "quic")]
     #[allow(unused_imports)]
     use quinn::crypto::rustls::QuicClientConfig;
     use std::time::Duration;
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::test_payload_identity::<Dummy>(
+            "iroha_p2p::network::accept_stream_tests::Dummy",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DummyConsensus>(
+            "iroha_p2p::network::accept_stream_tests::DummyConsensus",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DummyConsensusPayload>(
+            "iroha_p2p::network::accept_stream_tests::DummyConsensusPayload",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DummyConsensusChunk>(
+            "iroha_p2p::network::accept_stream_tests::DummyConsensusChunk",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::Dummy")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     fn test_node_key_pair() -> KeyPair {
@@ -8938,6 +9009,8 @@ mod accept_stream_tests {
         };
     }
     impl_decode_from_slice_via_codec!(Dummy);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::DummyConsensus")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyConsensus;
     impl message::ClassifyTopic for DummyConsensus {
@@ -8949,6 +9022,8 @@ mod accept_stream_tests {
         }
     }
     impl_decode_from_slice_via_codec!(DummyConsensus);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::DummyConsensusPayload")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyConsensusPayload;
     impl message::ClassifyTopic for DummyConsensusPayload {
@@ -8960,6 +9035,8 @@ mod accept_stream_tests {
         }
     }
     impl_decode_from_slice_via_codec!(DummyConsensusPayload);
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::accept_stream_tests::DummyConsensusChunk")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyConsensusChunk;
     impl message::ClassifyTopic for DummyConsensusChunk {
@@ -9586,7 +9663,7 @@ mod accept_stream_tests {
             Err(e) => panic!("network start: {e:?}"),
         };
         let peer_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = iroha_data_model::peer::PeerId::from(peer_key.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::from(peer_key.public_key().clone());
         let addr = socket_addr!(127.0.0.1:9);
         handle.update_peers_addresses(UpdatePeers(vec![(peer_id.clone(), addr)]));
         let mut topology = HashSet::new();
@@ -10572,6 +10649,11 @@ mod accept_stream_tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        assert_eq!(
+            connection.max_datagram_size(),
+            None,
+            "the listener must not negotiate DATAGRAM support"
+        );
         let error = connection
             .send_datagram(bytes::Bytes::from_static(b"probe"))
             .expect_err("the dormant listener must advertise no DATAGRAM receive support");
@@ -10868,6 +10950,11 @@ where
     if quic_datagrams_enabled {
         transport.datagram_receive_buffer_size(Some(quic_datagram_receive_buffer_bytes));
         transport.datagram_send_buffer_size(quic_datagram_send_buffer_bytes);
+    } else {
+        // Quinn enables DATAGRAM buffers by default. Match the disabled
+        // application policy and the endpoint's zero-DATAGRAM byte budget.
+        transport.datagram_receive_buffer_size(None);
+        transport.datagram_send_buffer_size(0);
     }
     crate::transport::quic::configure_flow_control(&mut transport, flow_control).map_err(
         |error| {
@@ -11141,6 +11228,14 @@ mod quic_tests {
     use iroha_primitives::addr::socket_addr;
     use norito::codec::{Decode, Encode};
     use std::sync::Arc;
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::test_payload_identity::<Dummy>(
+            "iroha_p2p::network::quic_tests::Dummy",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::quic_tests::Dummy")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
@@ -11724,6 +11819,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     reply_writer_flush_timeout: Duration,
     /// Timeout applied to an individual outbound dial attempt.
     dial_timeout: Duration,
+    /// Total dial-and-authentication tenure, also used for validator standby takeover.
+    outbound_authentication_timeout: Duration,
     /// Whether to enable `TCP_NODELAY` on TCP connections (best-effort).
     tcp_nodelay: bool,
     /// Optional TCP keepalive idle timeout (best-effort, platform-specific).
@@ -14210,6 +14307,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if self.exceeds_outbound_connection_cap(peer) {
             return false;
         }
+        let Some(authentication_deadline) =
+            PreauthDeadline::from_now(self.outbound_authentication_timeout)
+        else {
+            iroha_logger::error!(
+                "Refusing outbound handshake with an unrepresentable authentication deadline"
+            );
+            return false;
+        };
         let soranet_policy = match self.soranet_handshake.snapshot() {
             Ok(policy) => policy,
             Err(error) => {
@@ -14245,6 +14350,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             service_message_sender,
             self.idle_timeout,
             self.dial_timeout,
+            authentication_deadline,
             self.network_id.clone(),
             self.consensus_caps.clone(),
             self.confidential_caps.clone(),
@@ -15904,8 +16010,39 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
     use std::sync::{Mutex, OnceLock};
     use tokio::sync::mpsc::error::TryRecvError;
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::test_payload_identity::<DummyMsg>(
+            "iroha_p2p::network::tests::DummyMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<TamperableMsg>(
+            "iroha_p2p::network::tests::TamperableMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<SafetyMsg>(
+            "iroha_p2p::network::tests::SafetyMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<TrustGossipMsg>(
+            "iroha_p2p::network::tests::TrustGossipMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<PeerGossipMsg>(
+            "iroha_p2p::network::tests::PeerGossipMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<TopicMsg>(
+            "iroha_p2p::network::tests::TopicMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<RouteMsg>(
+            "iroha_p2p::network::tests::RouteMsg",
+        );
+        crate::frame_identity_tests::test_payload_identity::<DeferredProgressMsg>(
+            "iroha_p2p::network::tests::DeferredProgressMsg",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::DummyMsg")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct DummyMsg;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::TamperableMsg")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct TamperableMsg {
         tag: u8,
@@ -15916,6 +16053,8 @@ mod tests {
         }
     }
     impl message::ClassifyTopic for Vec<u8> {}
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::SafetyMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     struct SafetyMsg(u8);
     impl message::ClassifyTopic for SafetyMsg {
@@ -15926,6 +16065,8 @@ mod tests {
             message::ProgressReconstruction::Retransmit
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::TrustGossipMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct TrustGossipMsg;
     impl message::ClassifyTopic for TrustGossipMsg {
@@ -15933,6 +16074,8 @@ mod tests {
             message::Topic::TrustGossip
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::PeerGossipMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     struct PeerGossipMsg;
     impl message::ClassifyTopic for PeerGossipMsg {
@@ -15940,6 +16083,8 @@ mod tests {
             message::Topic::PeerGossip
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::TopicMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode)]
     enum TopicMsg {
         Trust,
@@ -15953,6 +16098,8 @@ mod tests {
             }
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::RouteMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     enum RouteMsg {
         Control,
@@ -16058,6 +16205,8 @@ mod tests {
             );
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::tests::DeferredProgressMsg")]
     #[derive(Clone, Copy, Debug, Decode, Encode, PartialEq, Eq)]
     enum DeferredProgressMsg {
         Safety(u8),
@@ -16479,6 +16628,24 @@ mod tests {
         ValidatorDialScheduler::new(roster.iter().cloned().collect(), takeover_delay)
     }
     #[test]
+    fn outbound_authentication_lifetime_rejects_unrepresentable_budgets() {
+        use iroha_config::parameters::defaults::network::{DIAL_TIMEOUT, PREAUTH_TIMEOUT};
+
+        assert_eq!(
+            checked_outbound_authentication_timeout(DIAL_TIMEOUT, PREAUTH_TIMEOUT),
+            Some(Duration::from_secs(35))
+        );
+        assert!(
+            checked_outbound_authentication_timeout(Duration::MAX, Duration::from_secs(1))
+                .is_none(),
+            "an overflowing budget must fail before spawning transport work"
+        );
+        assert!(
+            checked_outbound_authentication_timeout(Duration::MAX, Duration::ZERO).is_none(),
+            "a duration that does not fit the monotonic clock must fail closed"
+        );
+    }
+    #[test]
     fn four_validator_full_mesh_has_exactly_six_balanced_initial_dial_owners() {
         let roster = deterministic_validator_roster(4);
         let now = tokio::time::Instant::now();
@@ -16545,6 +16712,58 @@ mod tests {
             Some(deadline),
             "takeover becomes eligible without minting another retry epoch"
         );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn validator_standby_dials_after_authentication_tenure_despite_long_idle_timeout() {
+        let mut network = bare_network().expect("validator standby actor fixture must initialize");
+        let roster = deterministic_validator_roster(2);
+        network.self_id = roster[1].clone();
+        network.idle_timeout = Duration::from_secs(300);
+        network.dial_timeout = Duration::from_secs(5);
+        network.outbound_authentication_timeout =
+            checked_outbound_authentication_timeout(network.dial_timeout, Duration::from_secs(30))
+                .expect("bounded authentication tenure");
+        network.validator_dial_scheduler = ValidatorDialScheduler::new(
+            roster.iter().cloned().collect(),
+            network.outbound_authentication_timeout,
+        );
+        network.happy_eyeballs_stagger = Duration::ZERO;
+        let peer = Peer::new(socket_addr!(127.0.0.1:12091), roster[0].clone());
+        network.current_topology.insert(peer.id().clone());
+        network
+            .current_peers_addresses
+            .push((peer.id().clone(), peer.address().clone()));
+        let started = tokio::time::Instant::now();
+        network.update_topology();
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(
+            network.pending_connects[0].0,
+            started + network.outbound_authentication_timeout
+        );
+
+        tokio::time::advance(Duration::from_secs(34)).await;
+        network.update_topology();
+        network.process_pending_connects();
+        assert!(network.connecting_peers.is_empty());
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(
+            network.pending_connects[0].0,
+            started + network.outbound_authentication_timeout,
+            "topology refresh must preserve the original takeover deadline"
+        );
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        network.process_pending_connects();
+        assert!(tokio::time::Instant::now() < started + network.idle_timeout);
+        assert_eq!(network.connecting_peers.len(), 1);
+        assert!(
+            network
+                .connecting_peers
+                .values()
+                .any(|active| active == &peer)
+        );
+        assert_eq!(network.outbound_connections.len(), 1);
+        assert!(network.pending_connects.is_empty());
     }
     #[test]
     fn simultaneous_restart_and_roster_iteration_order_choose_the_same_pair_owners() {
@@ -17001,6 +17220,59 @@ mod tests {
         );
     }
     #[test]
+    fn reply_source_key_shares_identity_without_retaining_delivery_tenure() {
+        use std::hash::{Hash as _, Hasher as _};
+        fn table_hash(key: &NetworkReplySourceKey) -> u64 {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut hash);
+            hash.finish()
+        }
+        assert_eq!(
+            std::mem::size_of::<NetworkReplySourceKey>(),
+            std::mem::size_of::<usize>(),
+            "a frequently cloned fairness key retains one shared source pointer"
+        );
+        let owner = Arc::new(());
+        let delivery_peer = random_peer_id();
+        let semantic_target = random_peer_id();
+        let tenure = test_reply_tenure(&owner, delivery_peer.clone(), 31, 9);
+        let retired_tenure = Arc::downgrade(&tenure);
+        let route = NetworkReplyRoute::new(semantic_target.clone(), tenure, 0);
+        let key = route.source_key();
+        assert!(Arc::ptr_eq(&key.identity, &route.source_key().identity));
+        assert!(Arc::ptr_eq(
+            &key.identity,
+            &route.clone().source_key().identity
+        ));
+        let reconnect = NetworkReplyRoute::new(
+            semantic_target,
+            test_reply_tenure(&owner, delivery_peer.clone(), 32, 10),
+            1,
+        );
+        let later_key = reconnect.source_key();
+        assert!(!Arc::ptr_eq(&key.identity, &later_key.identity));
+        assert_eq!(
+            key, later_key,
+            "source equality is independent of backing allocation"
+        );
+        assert_eq!(key.cmp(&later_key), std::cmp::Ordering::Equal);
+        assert_eq!(table_hash(&key), table_hash(&later_key));
+        assert_eq!(
+            key.process_local_identity_hash(),
+            later_key.process_local_identity_hash()
+        );
+        drop(route);
+        assert!(
+            retired_tenure.upgrade().is_none(),
+            "a source key cannot extend a delivery tenure"
+        );
+        assert_eq!(key.authenticated_source_peer(), &delivery_peer);
+        assert_eq!(
+            key, later_key,
+            "retiring the delivery does not mutate its source identity"
+        );
+    }
+    #[test]
     fn reply_route_source_updates_are_ordinal_monotonic_and_target_scoped() {
         let owner = Arc::new(());
         let other_owner = Arc::new(());
@@ -17171,6 +17443,149 @@ mod tests {
             same_peer_foreign.source_key().process_local_identity_hash(),
             "the fixed-width source projection must retain opaque actor ownership"
         );
+    }
+    #[test]
+    fn reply_route_history_projection_tracks_live_and_retired_transitions() {
+        // Reconstruct the full documented preimage independently of the sealed
+        // projections, so cached identity cannot hide a substituted tuple.
+        fn fresh_route_hash(route: &NetworkReplyRoute) -> Hash {
+            let actor = (Arc::as_ptr(&route.tenure.owner) as usize as u128).to_le_bytes();
+            let tenure = (Arc::as_ptr(&route.tenure) as usize as u128).to_le_bytes();
+            let connection = route.tenure.connection_ordinal.to_le_bytes();
+            let delivery = route.delivery_ordinal.to_le_bytes();
+            let capacity = u64::try_from(route.tenure.source_capacity)
+                .unwrap()
+                .to_le_bytes();
+            let source = route.tenure.delivery_peer.encode();
+            let target = route.semantic_target.encode();
+            let source_hash = Hash::new_from_chunks(&[
+                b"iroha:p2p:reply-source-process-local-identity:v1\n",
+                &actor,
+                &source,
+            ]);
+            assert_eq!(
+                route.source_key().process_local_identity_hash(),
+                source_hash
+            );
+            let hash = Hash::new_from_chunks(&[
+                b"iroha:p2p:reply-route-process-local-identity:v1\n",
+                &actor,
+                &tenure,
+                &connection,
+                &delivery,
+                &capacity,
+                &source,
+                &target,
+            ]);
+            assert_eq!(route.process_local_identity_hash(), hash);
+            hash
+        }
+        fn exact_history(routes: &NetworkReplyRoutes) -> Hash {
+            let mut bytes = b"iroha:p2p:reply-route-history-process-local:v1\n".to_vec();
+            bytes.extend_from_slice(&(Arc::as_ptr(&routes.owner) as usize as u128).to_le_bytes());
+            bytes.extend_from_slice(&u64::try_from(routes.source_capacity).unwrap().to_le_bytes());
+            bytes.extend_from_slice(&routes.semantic_target.encode());
+            for (marker, members) in [(0, &routes.attempts), (1, &routes.retired_attempts)] {
+                bytes.extend_from_slice(&u64::try_from(members.len()).unwrap().to_le_bytes());
+                for route in members.values() {
+                    bytes.push(marker);
+                    bytes.extend_from_slice(fresh_route_hash(route).as_ref());
+                }
+            }
+            let hash = Hash::new(bytes);
+            assert_eq!(routes.process_local_exact_history_hash(), hash);
+            assert_eq!(routes.clone().process_local_exact_history_hash(), hash);
+            hash
+        }
+
+        let hub_a = random_peer_id();
+        let hub_b = random_peer_id();
+        let target = random_peer_id();
+        let mut fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let first = fixture.mint(target.clone());
+        let first_set = NetworkReplyRoutes::try_from_route(first.clone()).expect("source A");
+        let mut routes = first_set.clone();
+        let initial = exact_history(&routes);
+        let later = fixture
+            .redeliver(&first)
+            .expect("same-tenure later delivery");
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(later.clone()).unwrap())
+            .unwrap();
+        let redelivered = exact_history(&routes);
+        assert_ne!(
+            redelivered, initial,
+            "the later delivery and its tombstone both enter history"
+        );
+        let second = fixture.mint_via(target.clone(), hub_b.clone());
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(second.clone()).unwrap())
+            .unwrap();
+        let two_sources = exact_history(&routes);
+        assert_ne!(two_sources, redelivered);
+        assert!(fixture.mark_reply_unwritable_while_delivery_active(&second));
+        assert_eq!(
+            exact_history(&routes),
+            two_sources,
+            "writer liveness is not identity"
+        );
+        assert!(fixture.retire(&second));
+        assert_eq!(
+            exact_history(&routes),
+            two_sources,
+            "retirement awaits the owned pruning snapshot"
+        );
+        let before_prune = routes.clone();
+        let (_, receipt) = routes.retain_active_with_receipt();
+        routes = receipt
+            .into_output(&before_prune)
+            .expect("exact pruning receipt");
+        let pruned = exact_history(&routes);
+        assert_ne!(
+            pruned, two_sources,
+            "active-to-retired placement changes the preimage"
+        );
+        routes
+            .merge_observed(&first_set)
+            .expect("a stale same-source observation is inert");
+        assert_eq!(exact_history(&routes), pruned);
+        let reconnected = fixture.mint_via(target.clone(), hub_b);
+        routes
+            .merge_observed(&NetworkReplyRoutes::try_from_route(reconnected).unwrap())
+            .unwrap();
+        let rejoined = exact_history(&routes);
+        assert_ne!(rejoined, pruned);
+        assert!(routes.remove_completed_source(&first.source_key()));
+        let completed = exact_history(&routes);
+        assert_ne!(
+            completed, rejoined,
+            "completion removes active and retired source history"
+        );
+
+        let mut foreign_fixture = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let foreign =
+            NetworkReplyRoutes::try_from_route(foreign_fixture.mint(target.clone())).unwrap();
+        assert_eq!(
+            routes.merge(&foreign),
+            Err(NetworkReplyRouteError::ForeignOwner)
+        );
+        assert_eq!(
+            exact_history(&routes),
+            completed,
+            "failed merges retain the exact preimage"
+        );
+        let forged = fixture
+            .forge_equal_ordinal_different_tenure(&later, target, hub_a)
+            .unwrap();
+        assert_ne!(fresh_route_hash(&forged), fresh_route_hash(&later));
+        assert!(
+            !forged.is_active(),
+            "sealed projections cannot authenticate a substituted binding"
+        );
+        assert!(matches!(
+            NetworkReplyRoutes::try_from_route(forged),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
     }
     #[test]
     fn cancelled_newer_hub_cannot_erase_older_independent_route_attempt() {
@@ -17396,6 +17811,7 @@ mod tests {
             semantic_target: history.semantic_target.clone(),
             owner: Arc::clone(&history.owner),
             source_capacity: history.source_capacity,
+            process_local_identity_prefix: Arc::clone(&history.process_local_identity_prefix),
             attempts: BTreeMap::from([(collision_source, collision)]),
             retired_attempts: BTreeMap::new(),
         };
@@ -18814,6 +19230,7 @@ mod tests {
                 reply_writer_flush_timeout:
                     iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
                 dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+                outbound_authentication_timeout: Duration::from_millis(50),
                 tcp_nodelay: true,
                 tcp_keepalive: None,
                 connect_startup_delay_until: tokio::time::Instant::now(),
@@ -19077,15 +19494,28 @@ mod tests {
     }
     #[test]
     fn failed_pre_handshake_dial_retains_exact_backoff_retry_owner() {
-        let_test_network!(network);
-        let peer = test_peer(socket_addr!(127.0.0.1:12092));
+        let mut network =
+            bare_network().expect("failed authentication actor fixture must initialize");
+        let roster = deterministic_validator_roster(2);
+        network.self_id = roster[0].clone();
+        network.validator_dial_scheduler = ValidatorDialScheduler::new(
+            roster.iter().cloned().collect(),
+            network.outbound_authentication_timeout,
+        );
+        let peer = Peer::new(socket_addr!(127.0.0.1:12092), roster[1].clone());
         let conn_id = 92;
+        network.max_total_connections = Some(1);
         network.current_topology.insert(peer.id().clone());
         network
             .current_peers_addresses
             .push((peer.id().clone(), peer.address().clone()));
         network.connecting_peers.insert(conn_id, peer.clone());
         network.outbound_connections.insert(conn_id);
+        assert!(network.exceeds_caps());
+        assert!(
+            !network.trigger_reconnect_for_peer(peer.id()),
+            "the unfinished authentication must retain exactly one dial owner"
+        );
 
         network.peer_terminated(Terminated {
             peer: None,
@@ -19094,6 +19524,14 @@ mod tests {
 
         assert!(!network.connecting_peers.contains_key(&conn_id));
         assert!(!network.outbound_connections.contains(&conn_id));
+        assert!(!network.exceeds_caps());
+        assert_eq!(
+            network
+                .validator_dial_scheduler
+                .role(&network.self_id, peer.id()),
+            ValidatorDialRole::Preferred,
+            "the failed preferred owner must remain eligible to retry"
+        );
         let key = peer.address().to_string();
         let (retry_at, _) = network
             .retry_backoff
@@ -19106,6 +19544,18 @@ mod tests {
         assert_eq!(*pending_at, retry_at);
         assert_eq!(pending_peer.id(), peer.id());
         assert_eq!(pending_peer.address(), peer.address());
+
+        network.peer_terminated(Terminated {
+            peer: None,
+            conn_id,
+        });
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(network.pending_connects[0].0, retry_at);
+        assert_eq!(
+            network.retry_backoff[peer.id()][&key].0,
+            retry_at,
+            "a duplicate authentication teardown must not postpone the retained retry"
+        );
     }
     #[test]
     fn address_snapshot_revokes_retained_retry_before_scheduling_replacement() {
@@ -26881,3 +27331,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         }
     }
 }
+
+#[cfg(test)]
+mod frame_identity_tests;

@@ -8,9 +8,13 @@ use norito::{
 };
 
 /// Keep framing valid while replacing one canonical label with an ambiguous one.
-pub(crate) fn assert_ambiguous_domain_label_rejected<T>(value: &T, label: &str)
+pub fn assert_ambiguous_domain_label_rejected<T>(value: &T, label: &str)
 where
-    T: Decode + Encode + Debug + PartialEq,
+    T: Decode
+        + for<'__frame> norito::NoritoDeserialize<'__frame>
+        + norito::NoritoSerialize
+        + Debug
+        + PartialEq,
 {
     let canonical = value.encode();
     assert_eq!(&T::decode(&mut canonical.as_slice()).unwrap(), value);

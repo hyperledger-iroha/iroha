@@ -509,7 +509,10 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        telemetry,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            telemetry,
+        ),
     )
     .expect("valid Torii Connect fixture")
 }
@@ -1629,7 +1632,6 @@ async fn connect_ws_rejects_query_token() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    let app2 = app.router();
     let server = spawn_test_server(listener, app);
     let sid = B64.encode([0x72u8; 32]);
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");
@@ -1644,3 +1646,6 @@ async fn connect_ws_rejects_query_token() {
     server.shutdown().await;
 }
 include!("connect_gating_disabled_ws_test.rs");
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

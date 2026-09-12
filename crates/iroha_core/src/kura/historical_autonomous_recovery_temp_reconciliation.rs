@@ -893,7 +893,9 @@ impl Kura {
         // preserves physical bytes, while exact-duplicate cleanup can remove a
         // complete inode; the next capacity/read request therefore performs one
         // authoritative rescan rather than applying a guessed logical delta.
-        let _accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(inventory.temporary_indices.len());
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
         for index in &inventory.temporary_indices {
@@ -906,17 +908,387 @@ impl Kura {
                 .stable_by_path
                 .get(&temporary.stable_path)
                 .map(|index| &inventory.artifacts[*index]);
+            let resource_child = accounting_mutation
+                .resource_child(vec![temporary.path.clone(), temporary.stable_path.clone()]);
             self.reconcile_one_historical_autonomous_recovery_publication_temporary_locked(
                 temporary,
                 expected_stable,
             )?;
+            resource_child.finish();
         }
         drop(_sidecar_guard);
         drop(_geometry_guard);
         let _ = self.historical_autonomous_lane_recovery_records_bounded_under_prune_guard(
             HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
         )?;
+        accounting_mutation.finish_resources_before_disk_rescan();
         self.note_committed_lane_status_change();
         Ok(())
+    }
+}
+
+/// Physical publication bounds shared by every lane in one disk-accounting scan.
+/// Accounting admits an interrupted publication as bytes, never as application evidence.
+struct HistoricalAutonomousRecoveryAccountingBudget {
+    stable_remaining: usize,
+    temporary_remaining: usize,
+    bytes_remaining: u64,
+}
+impl HistoricalAutonomousRecoveryAccountingBudget {
+    fn new(bytes_remaining: u64) -> Self {
+        Self {
+            stable_remaining: HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            temporary_remaining: HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
+            bytes_remaining,
+        }
+    }
+}
+impl Kura {
+    /// Count a bounded publication namespace before authoritative secondary-lane recovery.
+    ///
+    /// Stable records and temporary publications have independent hard counts. A hard link is
+    /// accepted only when both names are present in this directory and pair one stable name with
+    /// one current temporary name. Their inode contributes bytes once. This metadata-only scan
+    /// cannot make any record usable: ordinary readers and recovery retain canonical decoding,
+    /// record-count, dependency, incarnation and whole-inventory checks before publication.
+    fn historical_autonomous_recovery_publication_accounting_bytes(
+        directory: &Path,
+        budget: &mut HistoricalAutonomousRecoveryAccountingBudget,
+    ) -> Result<u64> {
+        if budget.stable_remaining > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
+            || budget.temporary_remaining > HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS
+            || budget.bytes_remaining > HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES
+        {
+            return Err(Self::invalid_historical_autonomous_recovery(
+                directory.to_path_buf(),
+                "historical publication accounting exceeds its hard bounds",
+            ));
+        }
+        let before = secure_file_metadata::from_path(directory)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        if before.file_type().is_symlink() || !before.file_type().is_dir() {
+            return Err(Self::invalid_historical_autonomous_recovery(
+                directory.to_path_buf(),
+                "historical publication accounting namespace is not a direct directory",
+            ));
+        }
+        let mut stable_remaining = budget.stable_remaining;
+        let mut temporary_remaining = budget.temporary_remaining;
+        let mut physical_bytes = 0_u64;
+        let mut files = Vec::new();
+        let mut identities =
+            BTreeMap::<HistoricalAutonomousRecoveryPublicationIdentity, Vec<usize>>::new();
+        for entry in std::fs::read_dir(directory)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?
+        {
+            let entry = entry.map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+            let path = entry.path();
+            let kind = Self::historical_autonomous_recovery_publication_kind(&entry.file_name())
+                .filter(|_| path.parent() == Some(directory))
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.clone(),
+                        "historical publication accounting has an unknown or malformed entry",
+                    )
+                })?;
+            let remaining = match kind {
+                HistoricalAutonomousRecoveryPublicationKind::Stable => &mut stable_remaining,
+                HistoricalAutonomousRecoveryPublicationKind::Temporary => &mut temporary_remaining,
+            };
+            *remaining = remaining.checked_sub(1).ok_or_else(|| {
+                Self::invalid_historical_autonomous_recovery(
+                    path.clone(),
+                    "historical publication accounting exceeds its per-kind file bound",
+                )
+            })?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || metadata.len() == 0
+                || metadata.len() > u64::try_from(HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES)?
+            {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path,
+                    "historical publication accounting entry is empty, non-regular or oversized",
+                ));
+            }
+            let links = Self::historical_autonomous_recovery_publication_link_count(&metadata)
+                .ok_or_else(|| {
+                    Self::invalid_historical_autonomous_recovery(
+                        path.clone(),
+                        "historical publication accounting has an unexpected hard-link count",
+                    )
+                })?;
+            let identity =
+                Self::historical_autonomous_recovery_publication_identity(&metadata, files.len());
+            let aliases = identities.entry(identity).or_default();
+            if aliases.is_empty() {
+                physical_bytes = physical_bytes
+                    .checked_add(metadata.len())
+                    .filter(|bytes| *bytes <= budget.bytes_remaining)
+                    .ok_or_else(|| {
+                        Self::invalid_historical_autonomous_recovery(
+                            path.clone(),
+                            "historical publication accounting exceeds its physical-byte bound",
+                        )
+                    })?;
+            }
+            if aliases.len() >= 2 {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path,
+                    "historical publication accounting has ambiguous file aliases",
+                ));
+            }
+            aliases.push(files.len());
+            files.push((path, metadata, kind, links));
+        }
+        for aliases in identities.values() {
+            let (_, first_metadata, first_kind, first_links) = &files[aliases[0]];
+            let valid = match aliases.as_slice() {
+                [_] => *first_links == 1,
+                [_, second] => {
+                    let (_, second_metadata, second_kind, second_links) = &files[*second];
+                    *first_links == 2
+                        && *second_links == 2
+                        && first_kind != second_kind
+                        && Self::historical_autonomous_recovery_publication_metadata_unchanged(
+                            first_metadata,
+                            second_metadata,
+                            2,
+                        )
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    files[aliases[0]].0.clone(),
+                    "historical publication accounting hard links are not one exact stable/temporary pair",
+                ));
+            }
+        }
+        let after = secure_file_metadata::from_path(directory)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        if after.file_type().is_symlink()
+            || !after.file_type().is_dir()
+            || !Self::sidecar_directory_metadata_unchanged(&before, &after)
+        {
+            return Err(Self::invalid_historical_autonomous_recovery(
+                directory.to_path_buf(),
+                "historical publication accounting directory changed during enumeration",
+            ));
+        }
+        for (path, metadata, _, links) in &files {
+            let current = secure_file_metadata::from_path(path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            if !Self::historical_autonomous_recovery_publication_metadata_unchanged(
+                metadata, &current, *links,
+            ) {
+                return Err(Self::invalid_historical_autonomous_recovery(
+                    path.clone(),
+                    "historical publication accounting entry changed during enumeration",
+                ));
+            }
+        }
+        budget.stable_remaining = stable_remaining;
+        budget.temporary_remaining = temporary_remaining;
+        budget.bytes_remaining -= physical_bytes;
+        Ok(physical_bytes)
+    }
+}
+
+#[cfg(test)]
+mod historical_publication_accounting_tests {
+    use super::*;
+
+    #[test]
+    fn accounting_bounds_each_kind_and_exact_physical_bytes_without_consuming_rejected_budget() {
+        let temp = tempfile::tempdir().expect("accounting namespace");
+        let stable = temp
+            .path()
+            .join(format!("{}.norito", "01".repeat(Hash::LENGTH)));
+        let pending = temp.path().join(format!(
+            "{HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX}pending"
+        ));
+        std::fs::write(stable, [1_u8; 3]).expect("stable bytes");
+        std::fs::write(pending, [2_u8; 4]).expect("pending bytes");
+        for (stable_remaining, temporary_remaining, bytes_remaining, accepted) in [
+            (1, 1, 7, true),
+            (0, 1, 7, false),
+            (1, 0, 7, false),
+            (1, 1, 6, false),
+        ] {
+            let mut budget = HistoricalAutonomousRecoveryAccountingBudget {
+                stable_remaining,
+                temporary_remaining,
+                bytes_remaining,
+            };
+            let result = Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                temp.path(),
+                &mut budget,
+            );
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                assert_eq!(result.expect("exact accounting"), 7);
+                assert_eq!(
+                    (
+                        budget.stable_remaining,
+                        budget.temporary_remaining,
+                        budget.bytes_remaining
+                    ),
+                    (0, 0, 0)
+                );
+            } else {
+                assert_eq!(
+                    (
+                        budget.stable_remaining,
+                        budget.temporary_remaining,
+                        budget.bytes_remaining
+                    ),
+                    (stable_remaining, temporary_remaining, bytes_remaining)
+                );
+            }
+        }
+        let mut budget = HistoricalAutonomousRecoveryAccountingBudget::new(7);
+        assert_eq!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                temp.path(),
+                &mut budget
+            )
+            .expect("configured budget"),
+            7
+        );
+        assert_eq!(
+            budget.stable_remaining,
+            HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS - 1
+        );
+    }
+
+    #[test]
+    fn accounting_accepts_only_an_internal_stable_temporary_hard_link_pair() {
+        let temp = tempfile::tempdir().expect("accounting namespace");
+        let outside = tempfile::tempdir().expect("external link directory");
+        let stable = temp
+            .path()
+            .join(format!("{}.norito", "02".repeat(Hash::LENGTH)));
+        let pending = temp.path().join(format!(
+            "{HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX}linked"
+        ));
+        std::fs::write(&stable, [3_u8; 7]).expect("stable bytes");
+        std::fs::hard_link(&stable, &pending).expect("internal publication pair");
+        let mut budget = HistoricalAutonomousRecoveryAccountingBudget::new(7);
+        assert_eq!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                temp.path(),
+                &mut budget
+            )
+            .expect("count inode once"),
+            7
+        );
+        assert_eq!(budget.bytes_remaining, 0);
+        let second_stable = temp
+            .path()
+            .join(format!("{}.norito", "05".repeat(Hash::LENGTH)));
+        std::fs::rename(&pending, &second_stable)
+            .expect("replace the temporary with a second stable name");
+        assert!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                temp.path(),
+                &mut HistoricalAutonomousRecoveryAccountingBudget::new(7),
+            )
+            .is_err(),
+            "two stable names cannot impersonate a publication pair"
+        );
+        std::fs::rename(&second_stable, &pending).expect("restore the publication pair");
+        std::fs::rename(&pending, outside.path().join("external"))
+            .expect("move alias outside the namespace");
+        assert!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                temp.path(),
+                &mut HistoricalAutonomousRecoveryAccountingBudget::new(7)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accounting_budget_is_shared_across_secondary_lane_namespaces() {
+        let first = tempfile::tempdir().expect("first lane namespace");
+        let second = tempfile::tempdir().expect("second lane namespace");
+        let name = format!("{}.norito", "06".repeat(Hash::LENGTH));
+        std::fs::write(first.path().join(&name), [1_u8; 3]).expect("first lane record");
+        std::fs::write(second.path().join(name), [2_u8; 4]).expect("second lane record");
+        let mut budget = HistoricalAutonomousRecoveryAccountingBudget {
+            stable_remaining: 2,
+            temporary_remaining: 0,
+            bytes_remaining: 7,
+        };
+        assert_eq!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                first.path(),
+                &mut budget
+            )
+            .expect("first lane consumes shared budget"),
+            3
+        );
+        assert_eq!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                second.path(),
+                &mut budget
+            )
+            .expect("second lane consumes remaining budget"),
+            4
+        );
+        assert_eq!((budget.stable_remaining, budget.bytes_remaining), (0, 0));
+        assert!(
+            Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                first.path(),
+                &mut budget
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accounting_rejects_unknown_empty_oversized_and_symlink_entries() {
+        for (name, length) in [
+            (".kura-sidecar-obsolete".to_owned(), 1),
+            (format!("{}.norito", "03".repeat(Hash::LENGTH)), 0),
+            (
+                format!("{HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX}oversized"),
+                HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES as u64 + 1,
+            ),
+        ] {
+            let temp = tempfile::tempdir().expect("accounting namespace");
+            let file = std::fs::File::create(temp.path().join(name)).expect("invalid entry");
+            file.set_len(length).expect("entry size");
+            assert!(
+                Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                    temp.path(),
+                    &mut HistoricalAutonomousRecoveryAccountingBudget::new(
+                        HISTORICAL_AUTONOMOUS_RECOVERY_HARD_MAX_AGGREGATE_BYTES
+                    )
+                )
+                .is_err()
+            );
+        }
+        #[cfg(unix)]
+        {
+            let temp = tempfile::tempdir().expect("accounting namespace");
+            let outside = tempfile::NamedTempFile::new().expect("symlink target");
+            std::os::unix::fs::symlink(
+                outside.path(),
+                temp.path()
+                    .join(format!("{}.norito", "04".repeat(Hash::LENGTH))),
+            )
+            .expect("symlink fixture");
+            assert!(
+                Kura::historical_autonomous_recovery_publication_accounting_bytes(
+                    temp.path(),
+                    &mut HistoricalAutonomousRecoveryAccountingBudget::new(100)
+                )
+                .is_err()
+            );
+        }
     }
 }

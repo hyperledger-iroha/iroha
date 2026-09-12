@@ -12,6 +12,9 @@ use iroha_executor_data_model::permission::{
     nft::{CanRegisterNft, CanUnregisterNft},
     trigger::{CanExecuteTrigger, CanUnregisterTrigger},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use std::time::{Duration, Instant};
@@ -399,7 +402,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
 fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Result<()> {
     let manage_aliases: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         ),
     }
     .into();

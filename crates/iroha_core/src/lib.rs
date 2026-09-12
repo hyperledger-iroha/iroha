@@ -1,4 +1,8 @@
 //! Iroha — A simple, enterprise-grade decentralized ledger.
+//!
+//! Framed Core records declare their protocol identity with `NoritoSchema`.
+//! Borrowed query views retain distinct nominal identities and explicitly project
+//! to the owned result's frame; payload serialization does not choose an identity.
 #![allow(unexpected_cfgs)]
 // Nested `if` blocks remain intentional for readability/instrumentation; Clippy's
 // `collapsible_if` lint would force let-chains that obscure the control flow.
@@ -178,6 +182,7 @@ pub mod zk;
 #[cfg(feature = "zk-stark")]
 pub mod zk_stark;
 pub use block::InvalidGenesisError;
+use iroha_model_base::peer::PeerId;
 /// Encode one schema-bound public contract argument record using the canonical IVM ABI.
 pub use ivm::encode_argument_record_from_json;
 /// Pre-validate a genesis block against the expected genesis account prior to startup.
@@ -740,7 +745,7 @@ fn inbound_consensus_v2_decode_limits(
 }
 fn inbound_sumeragi_enum_field(framed: &[u8]) -> Result<(u32, &[u8], u8), norito::core::Error> {
     let view = norito::core::from_bytes_view(framed)?;
-    if view.schema() != <BlockMessage as norito::NoritoSerialize>::schema_hash() {
+    if view.schema() != norito::schema::identity::frame_hash::<BlockMessage>() {
         return Err(norito::core::Error::SchemaMismatch);
     }
     let align = norito::core::archived_payload_align::<BlockMessage>();
@@ -837,7 +842,9 @@ pub type Peers = UniqueVec<PeerId>;
 /// Type of `Sender<EventBox>` which should be used for channels of `Event` messages.
 pub type EventsSender = broadcast::Sender<EventBox>;
 /// Network message envelope exchanged between peers.
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::NetworkMessage")]
+#[norito(decode_from_slice)]
 pub enum NetworkMessage {
     /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
     #[codec(index = 0)]
@@ -905,25 +912,6 @@ impl NetworkMessage {
                 | Self::ToriiProxyResponse(_)
                 | Self::QueuePlanAdmissionPublication(_)
         )
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use std::borrow::Cow;
-        let min_size = norito::core::archived_payload_size::<Self>();
-        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-            let mut padded = Vec::with_capacity(min_size);
-            padded.extend_from_slice(bytes);
-            padded.resize(min_size, 0);
-            Cow::Owned(padded)
-        } else {
-            Cow::Borrowed(bytes)
-        };
-        let archived = norito::core::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-        let _guard = norito::core::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-        let value =
-            <Self as norito::core::NoritoDeserialize>::try_deserialize(archived.archived())?;
-        Ok((value, bytes.len()))
     }
 }
 // Encode/Decode are derived above for `NetworkMessage`.
@@ -1224,6 +1212,8 @@ pub mod role {
     use mv::json::JsonKeyCodec;
     use norito::json;
     /// [`RoleId`] with owner [`AccountId`] attached to it.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::role::RoleIdWithOwner")]
     #[derive(
         Debug,
         Clone,
@@ -1271,19 +1261,23 @@ pub mod role {
         }
     }
     impl FromStr for RoleIdWithOwner {
-        type Err = iroha_data_model::ParseError;
+        type Err = iroha_model_base::error::ParseError;
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             const SEPARATOR: char = '|';
             let (account_raw, role_raw) =
                 s.split_once(SEPARATOR)
-                    .ok_or(iroha_data_model::ParseError::new(
+                    .ok_or(iroha_model_base::error::ParseError::new(
                         "RoleIdWithOwner must be formatted as `account|role`",
                     ))?;
             let account = AccountId::parse_encoded(account_raw).map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid account component in RoleIdWithOwner")
+                iroha_model_base::error::ParseError::new(
+                    "Invalid account component in RoleIdWithOwner",
+                )
             })?;
             let id = role_raw.parse().map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid role component in RoleIdWithOwner")
+                iroha_model_base::error::ParseError::new(
+                    "Invalid role component in RoleIdWithOwner",
+                )
             })?;
             Ok(RoleIdWithOwner { account, id })
         }
@@ -1331,6 +1325,8 @@ mod event_ordering_tests;
 #[path = "../tests/execute_trigger_events.rs"]
 mod execute_trigger_events_tests;
 #[cfg(test)]
+mod frame_identity_tests;
+#[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]
 mod isi_gas_fees_tests;
 #[cfg(test)]
@@ -1338,6 +1334,8 @@ mod isi_gas_fees_tests;
 mod ivm_corehost_axt_tests;
 #[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
 mod kagemusha_v1_test_fixtures;
+#[cfg(test)]
+mod network_payload_tests;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
 mod overlay_chunking_tests;
@@ -1397,11 +1395,11 @@ mod tests {
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::block::BlockHeader;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
-    use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
     use iroha_data_model::transaction::{TransactionBuilder, TransactionEntrypoint};
     use iroha_data_model::{Level, NetworkId, isi::Log};
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_p2p::{
         ClassifyTopic,
         network::message::{SubscriberRoute, Topic as NetworkTopic},
@@ -1586,6 +1584,10 @@ mod tests {
     }
     #[test]
     fn raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts::SingleFieldNetworkMessage"
+        )]
         #[derive(Encode)]
         enum SingleFieldNetworkMessage {
             Field(u8),
@@ -1661,8 +1663,8 @@ mod tests {
         }
         assert_eq!(
             raw_sumeragi_topic_for_synthetic_tag(10)
-                .expect("classify canonical global-v2 safety message"),
-            NetworkTopic::ConsensusSafety,
+                .expect("classify canonical global-v2 chunk message"),
+            NetworkTopic::ConsensusChunk,
             "global-v2 discriminant must preserve its inner protocol topic"
         );
         assert!(
@@ -1672,11 +1674,19 @@ mod tests {
     }
     #[test]
     fn raw_consensus_struct_parser_accepts_each_advertised_packed_layout() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::TwoFieldFixture"
+        )]
         #[derive(Encode)]
         struct TwoFieldFixture {
             version: u16,
             payload: PayloadFixture,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::PayloadFixture"
+        )]
         #[derive(Encode)]
         enum PayloadFixture {
             Safety(u8),
@@ -2050,10 +2060,18 @@ mod tests {
             CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         };
         use iroha_data_model::merge::MergeLedgerEntry;
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::LegacySidecarCarrier"
+        )]
         #[derive(Encode)]
         enum LegacySidecarCarrier {
             Payload(Box<CertifiedMergeSidecarMessage>),
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::SharedSidecarCarrier"
+        )]
         #[derive(Encode)]
         enum SharedSidecarCarrier {
             Payload(Arc<CertifiedMergeSidecarMessage>),
@@ -2325,7 +2343,12 @@ mod tests {
                 "Torii proxy request/response carriers must use recoverable best-effort admission, not the reliable-progress corridor"
             );
         }
-        let target = PeerId::from(checked_topic_keypair().public_key().clone());
+        let target = PeerId::from(
+            KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .expect("generate canonical relay peer")
+                .public_key()
+                .clone(),
+        );
         let capped = crate::IrohaNetwork::closed_for_tests()
             .with_topic_plaintext_frame_cap_for_tests(NetworkTopic::Control, 1);
         for message in [torii_request.clone(), torii_response.clone()] {
@@ -2367,8 +2390,12 @@ mod tests {
     include!("tests/sumeragi_v2_decode_limits.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps::BoxToriiProxyCarrier",
+            frame = "iroha_core::NetworkMessage"
+        )]
         #[derive(Encode)]
-        #[norito(schema_name = "iroha_core::NetworkMessage")]
         enum BoxToriiProxyCarrier {
             #[codec(index = 13)]
             Request(Box<ToriiProxyRequestV1>),
@@ -2393,20 +2420,32 @@ mod tests {
                 response_format: ToriiProxyResponseFormatV1::Json,
             }),
         };
-        let boxed = ncore::to_bytes(&BoxToriiProxyCarrier::Request(Box::new(request.clone())))
-            .expect("encode Box proxy carrier");
+        // This payload-only fixture varies ownership under the actual network frame.
+        let (boxed_payload, boxed_flags) = norito::codec::encode_with_header_flags(
+            &BoxToriiProxyCarrier::Request(Box::new(request.clone())),
+        );
+        let boxed =
+            ncore::frame_bare_with_header_flags::<NetworkMessage>(&boxed_payload, boxed_flags)
+                .expect("frame Box proxy carrier with the live owner");
+        let boxed_view = ncore::from_bytes_view(&boxed).expect("valid Box carrier frame/checksum");
+        assert_eq!(
+            boxed_view.schema(),
+            norito::schema::identity::frame_hash::<NetworkMessage>()
+        );
+        assert_eq!(boxed_view.as_bytes(), boxed_payload);
         let shared = ncore::to_bytes(&NetworkMessage::ToriiProxyRequest(Arc::new(request)))
             .expect("encode Arc proxy carrier");
         assert_eq!(
             shared, boxed,
             "Box-to-Arc ownership must not change wire bytes"
         );
-        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
             .expect("generate proxy relay origin key");
         let origin = PeerId::new(origin_key.public_key().clone());
         let live = ncore::decode_from_bytes::<NetworkMessage>(&shared)
             .expect("decode live Arc proxy carrier");
         let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &live);
+        assert_ne!(p2p_wire_len, usize::MAX, "valid node relay geometry");
         let view = ncore::from_bytes_view(&shared).expect("inspect proxy carrier frame");
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
@@ -2715,7 +2754,11 @@ mod tests {
             NetworkMessage::TransactionGossiper(gossip) => {
                 assert_eq!(gossip.txs.len(), 1);
                 assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                let wire = gossip.txs[0].encode();
+                let (_, wire, certificate) = gossip.txs[0]
+                    .clone()
+                    .into_entrypoint_with_payload()
+                    .expect("recover cached entrypoint frame");
+                assert!(certificate.is_none());
                 assert_eq!(wire.as_slice(), payload.as_slice());
                 assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
@@ -2775,7 +2818,11 @@ mod tests {
                 NetworkMessage::TransactionGossiper(gossip) => {
                     assert_eq!(gossip.txs.len(), 1);
                     assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
-                    let wire = gossip.txs[0].encode();
+                    let (_, wire, certificate) = gossip.txs[0]
+                        .clone()
+                        .into_entrypoint_with_payload()
+                        .expect("recover context-free cached entrypoint frame");
+                    assert!(certificate.is_none());
                     assert_eq!(wire.as_slice(), canonical_payload.as_slice());
                     assert!(wire.starts_with(&ncore::MAGIC));
                     assert_eq!(gossip.routes.len(), 1);

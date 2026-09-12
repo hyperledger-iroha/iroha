@@ -9,10 +9,10 @@ use iroha_data_model::{
     },
     block::consensus_v2::{ConsensusRound, HeightContextId},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::TransactionEntrypoint,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use std::{
@@ -183,6 +183,8 @@ pub(crate) fn native_amx_receipt_requires_separate_participant_application_for(
     }
     Ok(matches)
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningKeyV2")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSigningKeyV2 {
     network_id: NetworkId,
@@ -217,6 +219,8 @@ impl NativeAmxSigningKeyV2 {
 /// One signer-local participant lane slot, deliberately excluding the global
 /// round view so a view-change replay cannot authorize a different proposal at
 /// the same lane-local height/view (ABA equivocation).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningSlotV3")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSigningSlotV3 {
     network_id: NetworkId,
@@ -246,6 +250,8 @@ impl NativeAmxSigningSlotV3 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningSlotClaimV3")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxSigningSlotClaimV3 {
     participant_proposal_hash: Hash,
@@ -262,6 +268,8 @@ impl NativeAmxSigningSlotClaimV3 {
 /// Immutable source-session claim shared by every phase and participant leg.
 /// It binds entrypoint, global context, plan, authority height, and coordinator,
 /// while allowing the same request in a later certified global view.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSourceSessionClaimV4")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct NativeAmxSourceSessionClaimV4 {
     source_id: [u8; Hash::LENGTH],
@@ -300,6 +308,8 @@ impl NativeAmxSourceSessionClaimV4 {
     }
 }
 /// Participant route/incarnation attached to one source-session claim.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSourceParticipantClaimV4")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSourceParticipantClaimV4 {
     lane_id: LaneId,
@@ -347,7 +357,8 @@ impl NativeAmxDurableSourceClaimV4 {
             .or_insert(participant);
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxHeightBindingV2")]
 struct NativeAmxHeightBindingV2 {
     active_height: u64,
     context_id: HeightContextId,
@@ -366,7 +377,8 @@ impl NativeAmxHeightBindingV2 {
         ]))
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningRecordV2")]
 struct NativeAmxSigningRecordV2 {
     version: u8,
     sequence: u32,
@@ -419,7 +431,8 @@ impl NativeAmxSigningRecordV2 {
         ]))
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSigningAnchorV2")]
 struct NativeAmxSigningAnchorV2 {
     version: u8,
     binding: NativeAmxHeightBindingV2,
@@ -2492,7 +2505,7 @@ fn native_amx_set_no_follow_flag(options: &mut OpenOptions) {
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn native_amx_platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -2556,6 +2569,8 @@ fn native_amx_unsafe_journal(
     NativeAmxSigningGuardError::UnsafeJournal(format!("{}: {}", path.display(), message.into()))
 }
 /// Native AMX session key scoped to one source transaction and routing plan.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxSessionKey")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode)]
 pub struct NativeAmxSessionKey {
     /// Source transaction hash/id.
@@ -2574,6 +2589,8 @@ impl NativeAmxSessionKey {
     }
 }
 /// Individual native AMX vote before participant committee aggregation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxVoteV2")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxVoteV2 {
     /// Body signed by the participant validator.
@@ -2584,6 +2601,8 @@ pub struct NativeAmxVoteV2 {
     pub bls_signature: Vec<u8>,
 }
 /// Full-plan request whose body and canonical legs expose any route-list drift.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxAttestationRequestV2")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxAttestationRequestV2 {
     /// Participant attestation body that will be signed after validation.
@@ -2887,6 +2906,8 @@ impl NativeAmxVoteV2 {
     }
 }
 /// Native AMX control-plane request or vote.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxMessage")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum NativeAmxMessage {
     /// Coordinator asks a participant dataspace committee to prepare a leg.
@@ -2899,6 +2920,8 @@ pub enum NativeAmxMessage {
     CommitVote(NativeAmxVoteV2),
 }
 /// Context-bound native AMX Commit request carrying the prerequisite PrepareQC.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::native_amx::NativeAmxCommitRequestV2")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxCommitRequestV2 {
     /// Commit-phase full-plan request presented to the participant committee.
@@ -3640,8 +3663,8 @@ impl NativeAmxSessionCache {
     #[must_use]
     pub(crate) fn has_pending_votes_for_lane(
         &self,
-        lane_id: iroha_data_model::nexus::LaneId,
-        dataspace_id: iroha_data_model::nexus::DataSpaceId,
+        lane_id: iroha_model_base::topology::LaneId,
+        dataspace_id: iroha_model_base::topology::DataSpaceId,
         lane_incarnation: Hash,
     ) -> bool {
         self.sessions.values().any(|session| {

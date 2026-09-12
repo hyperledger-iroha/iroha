@@ -2,12 +2,11 @@
 //!
 //! These instructions move Soracloud service deployment state into the
 //! authoritative on-chain world model instead of Torii-local file persistence.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheJobSpecV1,
@@ -24,6 +23,7 @@ use crate::{
 };
 use core::cmp::Ordering;
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -35,8 +35,17 @@ fn decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
 /// Admit a brand new Soracloud service deployment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::DeploySoracloudService")]
@@ -59,8 +68,17 @@ impl PartialOrd for DeploySoracloudService {
     }
 }
 /// Admit a new candidate revision for an existing Soracloud service.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::UpgradeSoracloudService")]
@@ -83,8 +101,17 @@ impl PartialOrd for UpgradeSoracloudService {
     }
 }
 /// Admit a brand new Soracloud app-level infrastructure topology.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra")]
@@ -136,8 +163,17 @@ impl PartialOrd for DeploySoracloudAppInfra {
     }
 }
 /// Admit an upgraded Soracloud app-level infrastructure topology.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra")]
@@ -189,8 +225,17 @@ impl PartialOrd for UpgradeSoracloudAppInfra {
     }
 }
 /// Roll a Soracloud service back to an already admitted revision.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RollbackSoracloudService")]
@@ -209,8 +254,17 @@ impl PartialOrd for RollbackSoracloudService {
     }
 }
 /// Record or replace an authoritative Soracloud service config entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudServiceConfig")]
@@ -231,8 +285,17 @@ impl PartialOrd for SetSoracloudServiceConfig {
     }
 }
 /// Remove an authoritative Soracloud service config entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::DeleteSoracloudServiceConfig")]
@@ -251,8 +314,17 @@ impl PartialOrd for DeleteSoracloudServiceConfig {
     }
 }
 /// Record or replace an authoritative Soracloud service secret entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudServiceSecret")]
@@ -273,8 +345,17 @@ impl PartialOrd for SetSoracloudServiceSecret {
     }
 }
 /// Remove an authoritative Soracloud service secret entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::DeleteSoracloudServiceSecret")]
@@ -293,8 +374,17 @@ impl PartialOrd for DeleteSoracloudServiceSecret {
     }
 }
 /// Record an ordered Soracloud state mutation against a declared binding.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::MutateSoracloudState")]
@@ -330,8 +420,17 @@ impl PartialOrd for MutateSoracloudState {
     }
 }
 /// Register the first governance-authenticated FHE material version for a service policy.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudFhePolicy")]
@@ -350,8 +449,17 @@ impl PartialOrd for RegisterSoracloudFhePolicy {
     }
 }
 /// Rotate a service-scoped FHE policy to the next immutable material version.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RotateSoracloudFhePolicy")]
@@ -372,8 +480,17 @@ impl PartialOrd for RotateSoracloudFhePolicy {
     }
 }
 /// Permanently revoke the exact active FHE policy version for a service.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RevokeSoracloudFhePolicy")]
@@ -392,8 +509,17 @@ impl PartialOrd for RevokeSoracloudFhePolicy {
     }
 }
 /// Record an ordered Soracloud FHE execution result.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RunSoracloudFheJob")]
@@ -424,8 +550,17 @@ impl PartialOrd for RunSoracloudFheJob {
     }
 }
 /// Record an ordered Soracloud decryption or health-access request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest")]
@@ -446,8 +581,17 @@ impl PartialOrd for RecordSoracloudDecryptionRequest {
     }
 }
 /// Join or create a shared Hugging Face lease window on Soracloud.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease")]
@@ -479,8 +623,17 @@ impl PartialOrd for JoinSoracloudHfSharedLease {
     }
 }
 /// Leave the current shared Hugging Face lease window.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::LeaveSoracloudHfSharedLease")]
@@ -509,8 +662,17 @@ impl PartialOrd for LeaveSoracloudHfSharedLease {
     }
 }
 /// Sponsor a fresh shared Hugging Face lease window after expiry or retirement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RenewSoracloudHfSharedLease")]
@@ -542,8 +704,17 @@ impl PartialOrd for RenewSoracloudHfSharedLease {
     }
 }
 /// Advertise validator-host capabilities for authoritative Inrou placement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost")]
@@ -560,8 +731,17 @@ impl PartialOrd for AdvertiseSoracloudInrouHost {
     }
 }
 /// Withdraw an advertised validator host from authoritative Inrou placement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost")]
@@ -578,9 +758,19 @@ impl PartialOrd for WithdrawSoracloudInrouHost {
     }
 }
 /// Reconcile active hosted Inrou placements against current host adverts and service leases.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements")]
 pub struct ReconcileSoracloudInrouPlacements;
 impl crate::seal::Instruction for ReconcileSoracloudInrouPlacements {}
@@ -590,8 +780,17 @@ impl PartialOrd for ReconcileSoracloudInrouPlacements {
     }
 }
 /// Deploy a Soracloud agent apartment into authoritative world state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment")]
@@ -612,8 +811,17 @@ impl PartialOrd for DeploySoracloudAgentApartment {
     }
 }
 /// Renew a Soracloud agent apartment lease.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RenewSoracloudAgentLease")]
@@ -632,8 +840,17 @@ impl PartialOrd for RenewSoracloudAgentLease {
     }
 }
 /// Restart a Soracloud agent apartment process.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment")]
@@ -652,8 +869,17 @@ impl PartialOrd for RestartSoracloudAgentApartment {
     }
 }
 /// Revoke an active Soracloud agent apartment policy capability.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RevokeSoracloudAgentPolicy")]
@@ -675,8 +901,17 @@ impl PartialOrd for RevokeSoracloudAgentPolicy {
     }
 }
 /// Submit a policy-gated wallet spend request for an agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RequestSoracloudAgentWalletSpend")]
@@ -699,8 +934,17 @@ impl PartialOrd for RequestSoracloudAgentWalletSpend {
     }
 }
 /// Approve and apply a pending wallet spend request for an agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::ApproveSoracloudAgentWalletSpend")]
@@ -719,8 +963,17 @@ impl PartialOrd for ApproveSoracloudAgentWalletSpend {
     }
 }
 /// Enqueue a deterministic mailbox message between agent apartments.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::EnqueueSoracloudAgentMessage")]
@@ -743,8 +996,17 @@ impl PartialOrd for EnqueueSoracloudAgentMessage {
     }
 }
 /// Acknowledge and consume a queued mailbox message for an agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::AcknowledgeSoracloudAgentMessage")]
@@ -763,8 +1025,17 @@ impl PartialOrd for AcknowledgeSoracloudAgentMessage {
     }
 }
 /// Allowlist an autonomy artifact for an agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::AllowSoracloudAgentAutonomyArtifact")]
@@ -786,8 +1057,17 @@ impl PartialOrd for AllowSoracloudAgentAutonomyArtifact {
     }
 }
 /// Approve a deterministic autonomy run for an agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RunSoracloudAgentAutonomy")]
@@ -816,8 +1096,17 @@ impl PartialOrd for RunSoracloudAgentAutonomy {
     }
 }
 /// Persist an authoritative apartment-level execution audit for a completed autonomy run.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudAgentAutonomyExecution")]
@@ -861,8 +1150,17 @@ impl PartialOrd for RecordSoracloudAgentAutonomyExecution {
     }
 }
 /// Start a deterministic Soracloud training job.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::StartSoracloudTrainingJob")]
@@ -897,8 +1195,17 @@ impl PartialOrd for StartSoracloudTrainingJob {
     }
 }
 /// Record a deterministic Soracloud training checkpoint.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::CheckpointSoracloudTrainingJob")]
@@ -923,8 +1230,17 @@ impl PartialOrd for CheckpointSoracloudTrainingJob {
     }
 }
 /// Move a deterministic Soracloud training job into retry-pending state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RetrySoracloudTrainingJob")]
@@ -945,8 +1261,17 @@ impl PartialOrd for RetrySoracloudTrainingJob {
     }
 }
 /// Register a deterministic Soracloud model artifact.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudModelArtifact")]
@@ -977,8 +1302,17 @@ impl PartialOrd for RegisterSoracloudModelArtifact {
     }
 }
 /// Register a deterministic Soracloud model-weight version.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudModelWeight")]
@@ -1014,8 +1348,17 @@ impl PartialOrd for RegisterSoracloudModelWeight {
     }
 }
 /// Promote an admitted Soracloud model-weight version.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::PromoteSoracloudModelWeight")]
@@ -1040,8 +1383,17 @@ impl PartialOrd for PromoteSoracloudModelWeight {
     }
 }
 /// Roll a Soracloud model registry back to a prior admitted weight version.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RollbackSoracloudModelWeight")]
@@ -1064,8 +1416,17 @@ impl PartialOrd for RollbackSoracloudModelWeight {
     }
 }
 /// Register an uploaded-model bundle root before encrypted chunks arrive.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RegisterSoracloudUploadedModelBundle")]
@@ -1082,8 +1443,17 @@ impl PartialOrd for RegisterSoracloudUploadedModelBundle {
     }
 }
 /// Seal an uploaded-model bundle and publish its artifact metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::FinalizeSoracloudUploadedModelBundle")]
@@ -1120,8 +1490,17 @@ impl PartialOrd for FinalizeSoracloudUploadedModelBundle {
     }
 }
 /// Advance or roll back an in-flight Soracloud rollout.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::AdvanceSoracloudRollout")]
@@ -1150,8 +1529,17 @@ impl PartialOrd for AdvanceSoracloudRollout {
 ///
 /// `CanManageSoracloud` holders may reconcile any service. Other callers must
 /// be active public-lane validators assigned to the exact service revision.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudRuntimeState")]
@@ -1166,8 +1554,17 @@ impl PartialOrd for SetSoracloudRuntimeState {
     }
 }
 /// Upsert authoritative runtime state for one placed Inrou replica.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState")]
@@ -1186,8 +1583,17 @@ impl PartialOrd for SetSoracloudInrouReplicaRuntimeState {
 /// The validator recorded in the row may clear it after its placement or
 /// revision retires. The placement incarnation is an exact compare-and-swap
 /// guard, and clearing an already absent row is idempotent.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState")]
@@ -1216,8 +1622,17 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 /// first terminal update may include its final monotonic delta and requires
 /// the checkpoint to be open, while an exact finalized replay is idempotent.
 /// Manager authority is not a substitute for either reporter identity.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage")]
@@ -1251,8 +1666,17 @@ impl PartialOrd for ReportSoracloudServiceLeaseUsage {
 /// First-release execution rejects this instruction unconditionally until
 /// consensus can re-execute the exact admitted IVM bundle and verify a
 /// self-contained effect certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage")]
@@ -1272,8 +1696,17 @@ impl PartialOrd for RecordSoracloudMailboxMessage {
 /// validators assigned to the exact service revision and must identify themselves as the selected
 /// validator in the receipt. Recorded receipt identifiers are immutable and cannot be replaced.
 /// Mailbox-bound receipts are rejected by the first-release consensus path.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt")]
@@ -1286,8 +1719,17 @@ pub struct RecordSoracloudRuntimeReceipt {
 /// First-release execution rejects this instruction unconditionally until
 /// consensus can re-execute the exact admitted IVM bundle and verify a
 /// self-contained effect certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult")]
@@ -1678,7 +2120,7 @@ impl_soracloud_decode_from_slice!(ApplySoracloudOrderedMailboxResult {
 mod tests {
     use super::*;
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    #[cfg(feature = "json")]
+
     use crate::soracloud::SoraServiceExactCurrentRevisionPreconditionV1;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use norito::core::DecodeFromSlice;
@@ -1703,7 +2145,7 @@ mod tests {
             signature,
         }
     }
-    #[cfg(feature = "json")]
+
     fn deployment_bundle() -> SoraDeploymentBundleV1 {
         norito::json::from_str(include_str!(
             "../../../../fixtures/soracloud/sora_deployment_bundle_v1.json"
@@ -1813,7 +2255,6 @@ mod tests {
             "retired wallet-spend wire payload without request_id must fail closed"
         );
 
-        #[cfg(feature = "json")]
         {
             let mut retired_json =
                 norito::json::to_value(&instruction).expect("serialize wallet instruction");
@@ -1825,7 +2266,7 @@ mod tests {
                 .expect_err("retired wallet-spend JSON without request_id must fail closed");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn rollback_instruction_v1_requires_one_explicit_closed_target() {
         let rollback = RollbackSoracloudService {
@@ -1864,7 +2305,7 @@ mod tests {
         norito::json::from_value::<RollbackSoracloudService>(null)
             .expect_err("rollback target_version must not be null");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn soracloud_inrou_deployment_and_rollout_v1_reject_unknown_fields() {
         macro_rules! assert_unknown_rejected {
@@ -1892,7 +2333,7 @@ mod tests {
         );
         assert_unknown_rejected!(AdvanceSoracloudRollout, "Soracloud rollout instruction");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn soracloud_deploy_upgrade_and_rollout_v1_require_explicit_wire_keys() {
         macro_rules! assert_required_fields {
@@ -1992,27 +2433,26 @@ mod tests {
         norito::json::from_value::<AdvanceSoracloudRollout>(missing)
             .expect_err("omitted rollout promotion target must be rejected");
     }
-    #[cfg(feature = "json")]
+
+    fn assert_instruction_json_closed<T>(value: &T, label: &str)
+    where
+        T: norito::json::JsonSerialize + norito::json::JsonDeserialize + core::fmt::Debug,
+    {
+        let serialize_message = format!("serialize {label}");
+        let canonical_message = format!("canonical {label} must decode");
+        let object_message = format!("{label} JSON object");
+        let unknown_message = format!("{label} must reject unknown fields");
+        let mut value = norito::json::to_value(value).expect(&serialize_message);
+        norito::json::from_value::<T>(value.clone()).expect(&canonical_message);
+        value
+            .as_object_mut()
+            .expect(&object_message)
+            .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+        norito::json::from_value::<T>(value).expect_err(&unknown_message);
+    }
+
     #[test]
     fn soracloud_service_control_v1_is_closed_and_requires_explicit_state_nulls() {
-        macro_rules! assert_closed {
-            ($value:expr, $ty:ty, $label:literal) => {{
-                let mut value =
-                    norito::json::to_value(&$value).expect(concat!("serialize ", $label));
-                norito::json::from_value::<$ty>(value.clone()).expect(concat!(
-                    "canonical ",
-                    $label,
-                    " must decode"
-                ));
-                value
-                    .as_object_mut()
-                    .expect(concat!($label, " JSON object"))
-                    .insert("retired_v0".to_owned(), norito::json::Value::from(true));
-                norito::json::from_value::<$ty>(value)
-                    .expect_err(concat!($label, " must reject unknown fields"));
-            }};
-        }
-
         let secret = SecretEnvelopeV1 {
             schema_version: crate::soracloud::SECRET_ENVELOPE_VERSION_V1,
             encryption: crate::soracloud::SecretEnvelopeEncryptionV1::ClientCiphertext,
@@ -2023,43 +2463,39 @@ mod tests {
             commitment: hash("secret"),
             aad_digest: None,
         };
-        assert_closed!(
-            SetSoracloudServiceConfig {
+        assert_instruction_json_closed::<SetSoracloudServiceConfig>(
+            &SetSoracloudServiceConfig {
                 service_name: name("portal"),
                 config_name: "runtime".to_owned(),
                 value_json: Json::from(norito::json!({"workers": 2_u64})),
                 provenance: provenance(17),
             },
-            SetSoracloudServiceConfig,
-            "service config set instruction"
+            "service config set instruction",
         );
-        assert_closed!(
-            DeleteSoracloudServiceConfig {
+        assert_instruction_json_closed::<DeleteSoracloudServiceConfig>(
+            &DeleteSoracloudServiceConfig {
                 service_name: name("portal"),
                 config_name: "runtime".to_owned(),
                 provenance: provenance(18),
             },
-            DeleteSoracloudServiceConfig,
-            "service config delete instruction"
+            "service config delete instruction",
         );
-        assert_closed!(
-            SetSoracloudServiceSecret {
+        assert_instruction_json_closed::<SetSoracloudServiceSecret>(
+            &SetSoracloudServiceSecret {
                 service_name: name("portal"),
                 secret_name: "api_token".to_owned(),
                 secret,
                 provenance: provenance(19),
             },
-            SetSoracloudServiceSecret,
-            "service secret set instruction"
+            "service secret set instruction",
         );
-        assert_closed!(
-            DeleteSoracloudServiceSecret {
+        assert_instruction_json_closed::<DeleteSoracloudServiceSecret>(
+            &DeleteSoracloudServiceSecret {
                 service_name: name("portal"),
                 secret_name: "api_token".to_owned(),
                 provenance: provenance(20),
             },
-            DeleteSoracloudServiceSecret,
-            "service secret delete instruction"
+            "service secret delete instruction",
         );
 
         let mutation = MutateSoracloudState {
@@ -2074,10 +2510,9 @@ mod tests {
             fhe_input_admission_proof: None,
             provenance: provenance(21),
         };
-        assert_closed!(
-            mutation.clone(),
-            MutateSoracloudState,
-            "state mutation instruction"
+        assert_instruction_json_closed::<MutateSoracloudState>(
+            &mutation.clone(),
+            "state mutation instruction",
         );
         let canonical = norito::json::to_value(&mutation).expect("serialize state mutation");
         for field in [
@@ -2111,7 +2546,7 @@ mod tests {
                 .expect("state mutation must accept an explicit null key");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn soracloud_fhe_job_and_decryption_v1_are_closed_and_require_explicit_proofs() {
         let job = RunSoracloudFheJob {
@@ -2193,7 +2628,7 @@ mod tests {
         norito::json::from_value::<RecordSoracloudDecryptionRequest>(unknown_decryption)
             .expect_err("an unknown decryption instruction key must fail");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn authenticated_soracloud_instruction_graph_rejects_unknown_fields() {
         macro_rules! assert_unknown_rejected {
@@ -2295,57 +2730,52 @@ mod tests {
             "ordered mailbox-result instruction"
         );
     }
-    #[cfg(feature = "json")]
-    #[test]
-    fn authenticated_soracloud_instruction_graph_requires_explicit_nullable_keys() {
-        macro_rules! assert_required_nulls {
-            ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
-                let canonical =
-                    norito::json::to_value(&$value).expect(concat!("serialize ", $label));
-                norito::json::from_value::<$ty>(canonical.clone())
-                    .expect(concat!("canonical ", $label, " must decode"));
-                $(
-                    assert!(
-                        canonical
-                            .get($field)
-                            .is_some_and(norito::json::Value::is_null),
-                        "{} must serialize `{}` as explicit null",
-                        $label,
-                        $field
-                    );
-                    let mut missing = canonical.clone();
-                    assert!(
-                        missing
-                            .as_object_mut()
-                            .expect(concat!($label, " JSON object"))
-                            .remove($field)
-                            .is_some()
-                    );
-                    norito::json::from_value::<$ty>(missing).expect_err(concat!(
-                        $label,
-                        " must reject an omitted nullable key"
-                    ));
 
-                    let mut explicit_null = canonical.clone();
-                    explicit_null
-                        .as_object_mut()
-                        .expect(concat!($label, " JSON object"))
-                        .insert($field.to_owned(), norito::json::Value::Null);
-                    norito::json::from_value::<$ty>(explicit_null).expect(concat!(
-                        $label,
-                        " must accept an explicit null key"
-                    ));
-                )+
-            }};
+    fn assert_instruction_required_nulls<T>(value: &T, fields: &[&str], label: &str)
+    where
+        T: norito::json::JsonSerialize + norito::json::JsonDeserialize + core::fmt::Debug,
+    {
+        let serialize_message = format!("serialize {label}");
+        let canonical_message = format!("canonical {label} must decode");
+        let object_message = format!("{label} JSON object");
+        let omitted_message = format!("{label} must reject an omitted nullable key");
+        let null_message = format!("{label} must accept an explicit null key");
+        let canonical = norito::json::to_value(value).expect(&serialize_message);
+        norito::json::from_value::<T>(canonical.clone()).expect(&canonical_message);
+        for &field in fields {
+            assert!(
+                canonical
+                    .get(field)
+                    .is_some_and(norito::json::Value::is_null),
+                "{label} must serialize `{field}` as explicit null"
+            );
+            let mut missing = canonical.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect(&object_message)
+                    .remove(field)
+                    .is_some()
+            );
+            norito::json::from_value::<T>(missing).expect_err(&omitted_message);
+
+            let mut explicit_null = canonical.clone();
+            explicit_null
+                .as_object_mut()
+                .expect(&object_message)
+                .insert(field.to_owned(), norito::json::Value::Null);
+            norito::json::from_value::<T>(explicit_null).expect(&null_message);
         }
+    }
 
+    fn assert_hf_lease_instruction_nulls() {
         let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
             0xF0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0xF2,
         ])
         .expect("fixed fixture asset identifier is canonical UUIDv4");
         let nominal_fee: Quantity = "1".parse().expect("valid nominal fee");
-        assert_required_nulls!(
-            JoinSoracloudHfSharedLease {
+        assert_instruction_required_nulls::<JoinSoracloudHfSharedLease>(
+            &JoinSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 service_name: name("portal"),
@@ -2356,12 +2786,11 @@ mod tests {
                 base_fee: nominal_fee.clone(),
                 provenance: provenance(24),
             },
-            JoinSoracloudHfSharedLease,
-            ["apartment_name"],
-            "HF lease join instruction"
+            &["apartment_name"],
+            "HF lease join instruction",
         );
-        assert_required_nulls!(
-            LeaveSoracloudHfSharedLease {
+        assert_instruction_required_nulls::<LeaveSoracloudHfSharedLease>(
+            &LeaveSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 storage_class: StorageClass::Warm,
@@ -2370,12 +2799,11 @@ mod tests {
                 apartment_name: None,
                 provenance: provenance(25),
             },
-            LeaveSoracloudHfSharedLease,
-            ["service_name", "apartment_name"],
-            "HF lease leave instruction"
+            &["service_name", "apartment_name"],
+            "HF lease leave instruction",
         );
-        assert_required_nulls!(
-            RenewSoracloudHfSharedLease {
+        assert_instruction_required_nulls::<RenewSoracloudHfSharedLease>(
+            &RenewSoracloudHfSharedLease {
                 repo_id: "openai/gpt-oss".to_owned(),
                 resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 service_name: name("portal"),
@@ -2386,34 +2814,36 @@ mod tests {
                 base_fee: nominal_fee,
                 provenance: provenance(26),
             },
-            RenewSoracloudHfSharedLease,
-            ["apartment_name"],
-            "HF lease renew instruction"
+            &["apartment_name"],
+            "HF lease renew instruction",
         );
-        assert_required_nulls!(
-            RevokeSoracloudAgentPolicy {
+    }
+
+    #[test]
+    fn authenticated_soracloud_instruction_graph_requires_explicit_nullable_keys() {
+        assert_hf_lease_instruction_nulls();
+        assert_instruction_required_nulls::<RevokeSoracloudAgentPolicy>(
+            &RevokeSoracloudAgentPolicy {
                 apartment_name: name("agent_home"),
                 capability: "wallet.spend".to_owned(),
                 reason: None,
                 provenance: provenance(28),
             },
-            RevokeSoracloudAgentPolicy,
-            ["reason"],
-            "agent policy-revoke instruction"
+            &["reason"],
+            "agent policy-revoke instruction",
         );
-        assert_required_nulls!(
-            AllowSoracloudAgentAutonomyArtifact {
+        assert_instruction_required_nulls::<AllowSoracloudAgentAutonomyArtifact>(
+            &AllowSoracloudAgentAutonomyArtifact {
                 apartment_name: name("agent_home"),
                 artifact_hash: "artifact-v1".to_owned(),
                 provenance_hash: None,
                 provenance: provenance(29),
             },
-            AllowSoracloudAgentAutonomyArtifact,
-            ["provenance_hash"],
-            "agent artifact-allow instruction"
+            &["provenance_hash"],
+            "agent artifact-allow instruction",
         );
-        assert_required_nulls!(
-            RunSoracloudAgentAutonomy {
+        assert_instruction_required_nulls::<RunSoracloudAgentAutonomy>(
+            &RunSoracloudAgentAutonomy {
                 apartment_name: name("agent_home"),
                 artifact_hash: "artifact-v1".to_owned(),
                 provenance_hash: None,
@@ -2422,12 +2852,11 @@ mod tests {
                 workflow_input_json: None,
                 provenance: provenance(30),
             },
-            RunSoracloudAgentAutonomy,
-            ["provenance_hash", "workflow_input_json"],
-            "agent autonomy-run instruction"
+            &["provenance_hash", "workflow_input_json"],
+            "agent autonomy-run instruction",
         );
-        assert_required_nulls!(
-            RecordSoracloudAgentAutonomyExecution {
+        assert_instruction_required_nulls::<RecordSoracloudAgentAutonomyExecution>(
+            &RecordSoracloudAgentAutonomyExecution {
                 apartment_name: name("agent_home"),
                 run_id: "run-1".to_owned(),
                 process_generation: 1,
@@ -2441,8 +2870,7 @@ mod tests {
                 checkpoint_artifact_hash: None,
                 error: None,
             },
-            RecordSoracloudAgentAutonomyExecution,
-            [
+            &[
                 "service_name",
                 "service_version",
                 "handler_name",
@@ -2451,10 +2879,10 @@ mod tests {
                 "checkpoint_artifact_hash",
                 "error",
             ],
-            "agent autonomy-execution instruction"
+            "agent autonomy-execution instruction",
         );
-        assert_required_nulls!(
-            RegisterSoracloudModelWeight {
+        assert_instruction_required_nulls::<RegisterSoracloudModelWeight>(
+            &RegisterSoracloudModelWeight {
                 service_name: name("portal"),
                 model_name: "vision".to_owned(),
                 weight_version: "v2".to_owned(),
@@ -2467,12 +2895,11 @@ mod tests {
                 provenance_attestation_hash: hash("attestation"),
                 provenance: provenance(31),
             },
-            RegisterSoracloudModelWeight,
-            ["parent_version"],
-            "model-weight register instruction"
+            &["parent_version"],
+            "model-weight register instruction",
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn inrou_instruction_v1_wrappers_reject_unknown_fields() {
         macro_rules! assert_unknown_rejected {
@@ -2490,7 +2917,8 @@ mod tests {
 
         let validator = account(11);
         let peer_id =
-            crate::peer::PeerId::from(validator.expect_single_signatory().clone()).to_string();
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone())
+                .to_string();
         assert_unknown_rejected!(
             AdvertiseSoracloudInrouHost {
                 capability: SoraInrouHostCapabilityRecordV1 {

@@ -85,3 +85,9 @@ mod ffi {
 
 #[cfg(test)]
 mod schema_identity;
+
+#[cfg(test)]
+mod address_schema_identity;
+
+#[cfg(all(test, not(feature = "ffi_import")))]
+mod payload_decode_tests;

@@ -89,12 +89,18 @@ pub mod account {
     // Bring required IDs into scope for queries! items
     use crate::prelude::AssetDefinitionId;
     /// API-facing record describing one alias bound to an account.
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, iroha_schema::IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::account::AccountAliasBindingRecord")]
     pub struct AccountAliasBindingRecord {
@@ -576,7 +582,8 @@ pub mod da {
     //! Data availability pin intent query definitions.
     //!
     //! Queries for retrieving DA pin intents stored in the `SoraFS` registry surface.
-    use crate::{da::types::StorageTicketId, nexus::LaneId, sorafs::pin_registry::ManifestDigest};
+    use crate::{da::types::StorageTicketId, sorafs::pin_registry::ManifestDigest};
+    use iroha_model_base::topology::LaneId;
     queries! {
         /// Fetch a DA pin intent by its storage ticket.
         #[repr(transparent)]
@@ -620,7 +627,7 @@ pub mod da {
 }
 pub mod settlement {
     //! Native settlement query definitions.
-    use crate::name::Name;
+    use iroha_model_base::name::Name;
     queries! {
         /// Fetch the complete protected native FX corridor policy registry.
         #[derive(Copy)]
@@ -790,7 +797,7 @@ pub mod domain {
         #[norito_schema(name = "iroha_data_model::query::domain::model::FindDomainById")]
         pub struct FindDomainById {
             /// Fully qualified domain identifier to resolve.
-            pub id: crate::domain::DomainId,
+            pub id: iroha_model_base::domain::DomainId,
         }
         /// [`FindDomains`] Iroha Query finds all `Domain`s presented.
         #[derive(Copy, Display)]
@@ -811,7 +818,7 @@ pub mod domain {
     }
     impl FindDomainById {
         /// Return the queried domain identifier.
-        pub fn domain_id(&self) -> &crate::domain::DomainId {
+        pub fn domain_id(&self) -> &iroha_model_base::domain::DomainId {
             &self.id
         }
     }
@@ -830,8 +837,8 @@ pub mod endorsement {
     //! Domain endorsement-related query definitions.
     //!
     //! Queries related to domain endorsement committees and policies.
-    use crate::domain::DomainId;
     use derive_more::Display;
+    use iroha_model_base::domain::DomainId;
     queries! {
         /// Fetch all recorded endorsements for a given domain.
         #[derive(Display)]
@@ -935,12 +942,10 @@ pub mod runtime {
         norito::codec::Decode,
         norito::codec::Encode,
         iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::runtime::AbiVersion")]
     pub struct AbiVersion {
         /// The ABI version currently active on the node.

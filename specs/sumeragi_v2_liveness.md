@@ -30,6 +30,22 @@ batches, the watchdog is polled on every loop edge, and idle/continue paths use
 the finite 10 ms `IDLE_POLL`. Those checks do not prove host scheduling or I/O
 latency.
 
+Autonomous reservation planning first drives retained pending batches, then
+skips new work when the Queue has no active materialized or replay-owned
+entries. For each remaining route, a conservative Queue ownership snapshot
+may defer an idle route, and a successfully resolved exact-height committee
+may defer a local nonmember. These checks grant no selection authority and
+do not mark skipped routes attempted; bounded producer ticks retry admission
+and authority changes. Resolver errors retain the complete planner's error
+classification. Every actual selection still authenticates State/Kura history,
+incarnation, predecessor and the lane-height elected author.
+
+Bound progress reads reuse the held directory namespace within one operation.
+On Unix, absence of the five fixed recovery paths is checked relative to its
+held parent, with no-follow lookups and fresh namespace and directory-mutation
+checks before and after the batch. Present entries, substitutions and concurrent
+mutations fail closed; no cross-operation filesystem cache authorizes reads.
+
 The release claim is exercised only by networks with at least four voting
 peers. Single-peer and undersized fixtures are not representative Sumeragi v2
 networks and cannot satisfy the production-network release gate, even when a
@@ -448,6 +464,23 @@ repetition cannot bypass that check. The theorem covers these serialized safety
 transitions; map extraction, cryptographic manifest identity, service
 acknowledgement, and eventual scheduling remain explicit production/temporal
 boundaries.
+
+A registered validation wait for a missing sidecar polls its exact dependency
+before classifying the next physical Completion head. If the same registration
+remains waiting, the existing bounded drain may service one ordinary completion
+without releasing the validation registration, its guard, or the reducer fence.
+Dedicated lifecycle completions retain their existing ownership and ordering;
+a classifier error closes output for restart. Polling the dependency first also
+prevents a stream of ordinary completions from starving an available sidecar.
+After runner reconciliation establishes an exact current-height Decision, this
+same registered wait also permits one occurrence through the existing decided
+recovery ingress drain per runner turn. The drain rechecks Decision and retains
+its authenticated replica-advert, certified recovery, and terminal ingress
+ownership rules. Validation remains registered and generic Runtime, Producer,
+and finalization remain fenced until the sidecar is available. Pre-Decision
+validation and unrelated completion barriers cannot grant this recovery permit.
+This bounds service of queued recovery traffic; it does not isolate the shared
+P2P transport or replace the autonomous lane author before payload publication.
 
 `LocalProposalReady` is trusted completion work, not ordinary proposal ingress.
 It uses the runtime Completion reservation and, if the reducer reports Busy,
@@ -1008,7 +1041,17 @@ multiplying reservations. Non-roster reply identities and repeated output for
 an already-owned target/class/kind are confined to shared capacity, while
 partial multi-target completion reopens the exact finished reservation. This
 prevents authenticated observer identity churn from filling validator
-safety/lane reserves. Once Kura has returned the exact applied-height receipt
+safety/lane reserves.
+
+Every lane-output dispatch turn first retires obsolete transport ownership,
+applies pending sidecar admissions, and retries retained output within the
+existing actor-admission budget, even when the adapter has no new effects.
+An actor-ranked Request or Close therefore does not depend on a fresh lane
+effect for its next delivery attempt. Ticketless reconstructible output still
+returns to its source, and the dispatch count continues to count adapter
+effects rather than network attempts.
+
+Once Kura has returned the exact applied-height receipt
 and matching
 finality artifact, the runner applies one atomic preflight to every retained
 fan-out. It rechecks the pinned hash of every network message and accepts only a

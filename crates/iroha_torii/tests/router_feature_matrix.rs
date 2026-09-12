@@ -9,7 +9,8 @@ use axum::http::{Request, StatusCode, Uri};
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
-use iroha_data_model::{ChainId, peer::PeerId};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use norito::json;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
@@ -132,6 +133,7 @@ async fn router_builds_under_current_features() {
     let _ = peers_tx; // keep channel alive
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -447,6 +449,7 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
             ts,
             false,
         )
+        .expect("test telemetry resource registration")
         .0
     };
     let telemetry_profile = iroha_config::parameters::actual::TelemetryProfile::Operator;
@@ -464,7 +467,10 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::from_profile(Some(telemetry), telemetry_profile),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::from_profile(Some(telemetry), telemetry_profile),
+        ),
     )
     .expect("valid Torii route-matrix fixture");
     let runtime = torii
@@ -587,3 +593,6 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

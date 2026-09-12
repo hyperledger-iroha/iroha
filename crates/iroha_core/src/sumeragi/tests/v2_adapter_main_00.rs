@@ -834,7 +834,16 @@ fn successor_context_requires_the_durable_cryptographic_parent() {
 fn fingerprints() -> AdapterFingerprints {
     AdapterFingerprints {
         node: Hash::new(b"node"),
-        build: Hash::new(b"build"),
+        build: crate::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("explicit recovery executable identity")
+        .build_fingerprint(),
         config: Hash::new(b"config"),
     }
 }
@@ -1471,6 +1480,61 @@ fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffec
         Box::new(TestAggregator),
         deferred_admission_ordinals(),
     )
+}
+#[test]
+fn adapter_hot_context_projections_retain_the_verified_registry_identity() {
+    let directory = TempDir::new().expect("context projection directory");
+    let (mut adapter, startup) = open_test(&directory).expect("verified adapter");
+    assert!(startup.is_empty());
+    let expected = adapter.wire_context().id();
+    assert_eq!(adapter.frozen_wire_context_id(), expected);
+    let authority = adapter
+        .leader_wire_recovery_authority()
+        .expect("opened consumer authority");
+    assert!(authority.matches_geometry(
+        expected,
+        adapter.wire_context().height,
+        adapter.fingerprints.node.into(),
+    ));
+    assert_eq!(
+        adapter.status().expect("exact status").height_context_id,
+        expected
+    );
+    let mut independent_context = adapter.wire_context().clone();
+    independent_context.leader_seed[0] ^= 1;
+    assert_ne!(independent_context.id(), expected);
+    assert_eq!(
+        adapter.frozen_wire_context_id(),
+        expected,
+        "changing an external wire-context copy cannot alter the verified owner"
+    );
+    assert!(!authority.matches_geometry(
+        independent_context.id(),
+        independent_context.height,
+        adapter.fingerprints.node.into(),
+    ));
+    drop(adapter);
+    let mut restarted = open_test(&directory)
+        .expect("reopen the same frozen context")
+        .0;
+    assert_eq!(restarted.frozen_wire_context_id(), expected);
+    assert!(
+        restarted
+            .leader_wire_recovery_authority()
+            .expect("reopened consumer authority")
+            .matches_geometry(
+                expected,
+                restarted.wire_context().height,
+                restarted.fingerprints.node.into(),
+            )
+    );
+    assert_eq!(
+        restarted
+            .status()
+            .expect("reopened status")
+            .height_context_id,
+        expected
+    );
 }
 #[test]
 fn production_leader_wire_launch_authority_requires_exact_wal_and_opens_gate() {

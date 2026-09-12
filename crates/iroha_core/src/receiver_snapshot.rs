@@ -23,7 +23,7 @@ pub struct FastpqSourceOpeningBuildLimits {
     pub max_ordinary_write_bytes: usize,
     /// Maximum complete executed-entry count.
     pub max_executed_entries: u32,
-    /// Maximum recorded transfer-operation statements across all entries.
+    /// Maximum complete nonempty execution-entry transfer-bundle statements.
     pub max_statements: u32,
     /// Manifest decoding budget, preserving any stricter enclosing Norito scope.
     pub manifest_decode: norito::DecodeLimits,
@@ -689,7 +689,7 @@ mod tests {
             Hash::new(b"kagemusha-receipt-proof"),
         ));
         let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain"),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("asset name"),
         );
         let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(

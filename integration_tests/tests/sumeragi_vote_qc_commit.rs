@@ -43,7 +43,7 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         let client = network.client();
         let genesis_application_deadline = Instant::now() + network.sync_timeout();
         let baseline_non_empty = loop {
-            match client.client().get_status() {
+            match client.status().get() {
                 Ok(status) if status.blocks >= 1 && status.blocks_non_empty >= 1 => {
                     break status.blocks_non_empty;
                 }

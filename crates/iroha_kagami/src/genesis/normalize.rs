@@ -161,8 +161,9 @@ fn render_text<T: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{ChainId, parameter::system::SumeragiConsensusMode};
+    use iroha_data_model::parameter::system::SumeragiConsensusMode;
     use iroha_genesis::GenesisBuilder;
+    use iroha_model_base::chain::ChainId;
     use std::{fs, path::PathBuf};
     use tempfile::NamedTempFile;
     fn minimal_genesis() -> NamedTempFile {

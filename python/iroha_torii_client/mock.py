@@ -314,44 +314,9 @@ class _MockState:
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
 
-            transaction_payload = b"\x01\x02\x03"
-            signing_message = bytearray(
-                hashlib.blake2b(transaction_payload, digest_size=32).digest()
-            )
-            signing_message[-1] |= 1
-            transaction_payload_b64 = base64.b64encode(transaction_payload).decode("ascii")
-            self.contract_call_response = {
-                "ok": True,
-                "submitted": False,
-                "dataspace": "universal",
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
-                "creation_time_ms": 1,
-                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-                "tx_hash_hex": None,
-                "pipeline_status": None,
-                "entrypoint": "ping",
-                "transaction_ttl_ms": 60_000,
-                "entrypoint_hash_hex": None,
-                "transaction_payload_b64": transaction_payload_b64,
-                "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
-                "operation_receipt": {
-                    "operation_kind": "contract_call",
-                    "status": "pending_signature",
-                    "transport": "torii",
-                    "dataspace": "universal",
-                    "contract_alias": "router::universal",
-                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
-                    "code_hash_hex": "22" * 32,
-                    "abi_hash_hex": "33" * 32,
-                    "tx_hash_hex": None,
-                    "entrypoint": "ping",
-                    "entrypoint_hash_hex": None,
-                    "gas_limit": 5_000,
-                    "gas_used": None,
-                    "payload_digest_hex": "66" * 32,
-                },
-            }
+            # Contract preparation requires an explicitly configured exact QP
+            # payload fixture; a fabricated byte string is never signable.
+            self.contract_call_response = {}
             self.gov_proposals.clear()
             self.gov_propose_deploy_response = _default_governance_proposal_draft()
             self.gov_protected_namespaces = {"found": False, "namespaces": []}
@@ -1062,6 +1027,10 @@ class _MockState:
         gas_limit = fee_payment["value"].get("gas_limit")
         if not isinstance(gas_limit, int) or isinstance(gas_limit, bool) or gas_limit <= 0:
             raise ValueError("contract call fee_payment missing positive 'gas_limit'")
+        if not self.contract_call_response:
+            return _json_response(HTTPStatus.SERVICE_UNAVAILABLE, {
+                "error": "an exact QueuePlanSynced contract draft fixture is required",
+            })
         response = dict(self.contract_call_response)
         tx_hash_hex = None
         response.setdefault(

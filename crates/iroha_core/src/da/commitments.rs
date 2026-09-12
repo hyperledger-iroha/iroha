@@ -3,13 +3,11 @@
 //! This module reads Torii-emitted `da-commitment-*.norito` files from the configured spool
 //! directory and assembles a deterministic bundle ready to embed into a block payload.
 use crate::da::{ReplayFingerprint, commitment_store::DaCommitmentStore};
-use iroha_data_model::{
-    da::{
-        commitment::{DaCommitmentBundle, DaCommitmentRecord},
-        types::StorageTicketId,
-    },
-    nexus::LaneId,
+use iroha_data_model::da::{
+    commitment::{DaCommitmentBundle, DaCommitmentRecord},
+    types::StorageTicketId,
 };
+use iroha_model_base::topology::LaneId;
 use norito::decode_from_bytes;
 use std::{
     collections::BTreeMap,
@@ -418,9 +416,9 @@ mod tests {
             commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use norito::to_bytes;
     use tempfile::tempdir;
     fn sample_record(lane: u32, seq: u64) -> DaCommitmentRecord {

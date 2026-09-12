@@ -6,6 +6,7 @@ use iroha::{
     data_model::{prelude::*, query::trigger::FindTriggers},
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use std::time::{Duration, Instant};
@@ -61,7 +62,7 @@ async fn set_up_trigger(
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
     let failand: DomainId = DomainId::try_new("failand", "universal")?;
-    let create_failand = domain_setup_instruction(&failand, &iroha.client().account)?;
+    let create_failand = domain_setup_instruction(&failand, iroha.client().account())?;
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
     let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
     let fail_on_account_events = "fail".parse::<TriggerId>()?;

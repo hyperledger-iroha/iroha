@@ -28,6 +28,6 @@ fn unregistered_instruction_returns_error_with_name() {
     let bytes = norito::core::to_bytes(&(name.clone(), Vec::<u8>::new())).expect("serialize");
     let archived_tuple = norito::core::from_bytes::<(String, Vec<u8>)>(&bytes).expect("from_bytes");
     let archived = archived_tuple.cast::<InstructionBox>();
-    let _err = norito::core::NoritoDeserialize::try_deserialize(archived)
+    let _err = norito::core::DeserializePayload::try_deserialize(archived)
         .expect_err("deserializing unregistered instruction must fail");
 }

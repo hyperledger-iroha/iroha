@@ -78,4 +78,3 @@ export function curveIdToAlgorithm(curveId) {
   const entry = ensureCurveIdEnabled(curveId, `curve id ${curveId}`);
   return canonicalCurveAlgorithm(entry.id) ?? entry.algorithm;
 }
-

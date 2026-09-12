@@ -64,8 +64,8 @@ fn arm_four_peer_authenticated_vote_fault(
         .iter()
         .map(|peer| {
             peer_client_with_timeout(peer)
-                .client()
-                .get_status()
+                .status()
+                .get()
                 .map(|status| status.blocks)
         })
         .collect::<std::result::Result<Vec<_>, _>>()?

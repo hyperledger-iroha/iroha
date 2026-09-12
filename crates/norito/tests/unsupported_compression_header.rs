@@ -9,7 +9,7 @@ fn from_bytes_rejects_non_none_compression() {
     bytes[4] = norito::core::VERSION_MAJOR;
     bytes[5] = norito::core::VERSION_MINOR;
     // Schema: type u8
-    let schema = <u8 as norito::NoritoSerialize>::schema_hash();
+    let schema = norito::schema::identity::frame_hash::<u8>();
     bytes[6..22].copy_from_slice(&schema);
     // Compression = 1 (Zstd)
     bytes[22] = 1u8;

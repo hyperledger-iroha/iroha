@@ -29,7 +29,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1;
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1;
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1;
 import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1;
-import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1;
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest;
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse;
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent;
@@ -206,7 +206,7 @@ public final class SumeragiHttpTransportTests {
               prepareSponsoredAccountOnboarding(
                   final AccountOnboardingPlanRequestV1 request,
                   final AccountOnboardingPlanReceiptV1 receipt,
-                  final TairaPublicResetMutationBindingV1 binding,
+                  final PreparedOperationBindingV1 binding,
                   final FeePaymentIntent feePayment,
                   final String onboardingToken,
                   final String expectedAuthority,
@@ -221,7 +221,7 @@ public final class SumeragiHttpTransportTests {
                   final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
                   final AccountOnboardingPlanRequestV1 request,
                   final AccountOnboardingPlanReceiptV1 receipt,
-                  final TairaPublicResetMutationBindingV1 binding,
+                  final PreparedOperationBindingV1 binding,
                   final String expectedAuthority,
                   final NetworkId expectedNetworkId,
                   final ToriiCanonicalRequestAuth canonicalAuth) {
@@ -246,7 +246,7 @@ public final class SumeragiHttpTransportTests {
           public CompletableFuture<AccountFaucetPreparedTransactionV1>
               prepareAccountFaucetTransaction(
                   final AccountFaucetClaimV1 claim,
-                  final TairaPublicResetMutationBindingV1 binding,
+                  final PreparedOperationBindingV1 binding,
                   final FeePaymentIntent feePayment,
                   final AccountFaucetPolicyV1 policy,
                   final NetworkId expectedNetworkId) {

@@ -223,7 +223,7 @@ jobs:
               exit 1
               ;;
           esac
-          scripts/check_mobile_sdk_artifacts.sh --apple-only
+          scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
       - name: Verify Swift Numeric V1, quantity builders, and manifest policies
         run: |
           swift test --filter NumericV1Tests

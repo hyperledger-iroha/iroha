@@ -20,11 +20,11 @@ use iroha_data_model::{
     account::AccountId,
     block::decode_framed_signed_block,
     isi::Log,
-    peer::PeerId,
     transaction::{TransactionBuilder, signed::TransactionResultInner},
     trigger::DataTriggerSequence,
 };
 use iroha_logger::Level;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::network::{
     NetworkActorAdmissionError, NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture,
     NetworkReplyRoutes,

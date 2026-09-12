@@ -19,6 +19,7 @@ use iroha::{
 use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, domain::CanModifyDomainMetadata,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::collections::BTreeSet;
@@ -93,9 +94,12 @@ async fn transaction_execution_should_produce_events(
     let baseline_non_empty = status.blocks_non_empty;
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
-        client.client().listen_for_events([DataEventFilter::Domain(
-            DomainEventFilter::new().for_events(DomainEventSet::Created),
-        )]),
+        client
+            .account_client()
+            .events()
+            .subscribe([DataEventFilter::Domain(
+                DomainEventFilter::new().for_events(DomainEventSet::Created),
+            )]),
     )
     .await
     .wrap_err_with(|| format!("{context}: timed out opening domain event stream"))??;
@@ -162,7 +166,7 @@ async fn transaction_execution_should_produce_events(
         Ok(())
     }
     .await;
-    events_stream.close().await;
+    events_stream.close().await?;
     result
 }
 fn unwrap_data_event(event: EventBox) -> DataEvent {
@@ -198,7 +202,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     let account_event_set = AccountEventSet::RoleGranted | AccountEventSet::RoleRevoked;
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
-        network.client().client().listen_for_events([
+        network.client().account_client().events().subscribe([
             DataEventFilter::Role(
                 RoleEventFilter::new()
                     .for_role(role_id.clone())
@@ -354,7 +358,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
         Ok(())
     }
     .await;
-    events_stream.close().await;
+    events_stream.close().await?;
     result
 }
 #[tokio::test]

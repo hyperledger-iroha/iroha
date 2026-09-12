@@ -78,7 +78,7 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
         .expect("checkpoint-store binding");
     assert_eq!(
         checkpoint.provider_ingest_checkpoint_max_bytes(),
-        Some(160 * 1024 * 1024)
+        Some(192 * 1024 * 1024)
     );
     let mut excessive_streams = config;
     excessive_streams.torii.sorafs_storage.max_parallel_fetches =
@@ -90,6 +90,44 @@ fn provider_ingest_catalog_projects_independent_source_and_resolver_qualificatio
             IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
         ))
     ));
+}
+#[test]
+fn provider_ingest_catalog_requires_capacity_for_the_full_retained_checkpoint() {
+    let mut config = default_runtime_config();
+    configure_provider_ingest_runtime(&mut config);
+    let outbox = &mut config
+        .torii
+        .sorafs_storage
+        .provider_ingest_runtime
+        .as_mut()
+        .expect("configured provider ingest")
+        .outbox;
+    let required = provider_ingest_outbox_defaults::worst_case_checkpoint_bytes_v1(
+        outbox.max_active_entries,
+        outbox.max_terminal_entries,
+        outbox.max_signed_transaction_bytes.0,
+    )
+    .expect("fixture checkpoint bound must fit u64");
+    assert!(required > 160 * 1024 * 1024);
+    assert!(required <= outbox.checkpoint_max_bytes.0);
+    outbox.checkpoint_max_bytes = Bytes(required - 1);
+    assert_eq!(
+        IrohaRuntimeProviderBindingsV1::try_from_config(&config),
+        Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::ProviderIngestCheckpointStore,
+        )),
+        "even one byte below the complete retained-state bound is invalid"
+    );
+    config
+        .torii
+        .sorafs_storage
+        .provider_ingest_runtime
+        .as_mut()
+        .expect("configured provider ingest")
+        .outbox
+        .checkpoint_max_bytes = Bytes(required);
+    IrohaRuntimeProviderBindingsV1::try_from_config(&config)
+        .expect("the exact retained-state bound must project");
 }
 #[test]
 fn provider_ingest_catalog_accepts_enabled_default_outbox_capacity() {

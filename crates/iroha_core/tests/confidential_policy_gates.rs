@@ -10,7 +10,6 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
-    account::NewAccount,
     asset::{
         AssetDefinition, AssetId,
         definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
@@ -21,6 +20,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use std::num::NonZeroU64;
@@ -77,15 +77,15 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
     let (state, header, owner, domain_id, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    // Seed domain, account, and asset definition.
+    // Seed the universal account and explicit domain-owned asset definition.
     for instr in [
+        Register::account(Account::new(owner.clone())).into(),
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "shielded".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .into(),
     ] {
@@ -141,14 +141,14 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
     let mut stx = block.transaction();
     let recipient = checked_random_confidential_policy_account_id();
     for instr in [
+        Register::account(Account::new(owner.clone())).into(),
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::account(NewAccount::new(recipient.clone())).into(),
+        Register::account(Account::new(recipient.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "shielded".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .into(),
     ] {
@@ -212,13 +212,13 @@ fn schedule_shielded_only_requires_window() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     for instr in [
+        Register::account(Account::new(owner.clone())).into(),
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "shielded".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .into(),
     ] {
@@ -270,14 +270,14 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
     let mut stx = block.transaction();
     let recipient = checked_random_confidential_policy_account_id();
     for instr in [
+        Register::account(Account::new(owner.clone())).into(),
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::account(NewAccount::new(recipient.clone())).into(),
+        Register::account(Account::new(recipient.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "shielded".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .into(),
     ] {
@@ -391,13 +391,13 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     for instr in [
+        Register::account(Account::new(owner.clone())).into(),
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "shielded".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .into(),
     ] {

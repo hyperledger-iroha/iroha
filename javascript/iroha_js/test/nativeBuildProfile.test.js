@@ -52,7 +52,7 @@ function cargoArtifactProfile(cargoProfile) {
   };
 }
 
-function createFixture(t, { profile = "debug" } = {}) {
+function createFixture(t, { profile = "debug", toolchainDirectory = "rust-1.93.1" } = {}) {
   const repoRoot = realpathSync(
     mkdtempSync(path.join(os.tmpdir(), "iroha-js-live-root-")),
   );
@@ -103,7 +103,7 @@ function createFixture(t, { profile = "debug" } = {}) {
 
   const binDirectory = path.join(
     toolchainsRoot,
-    "1.93.1-fixture",
+    toolchainDirectory,
     "bin",
   );
   mkdirSync(binDirectory, { recursive: true });
@@ -114,6 +114,22 @@ function createFixture(t, { profile = "debug" } = {}) {
     writeFileSync(executable, "#!/bin/sh\nexit 99\n");
     chmodSync(executable, 0o700);
   }
+
+  const runTool = (executable, args, options) => {
+    assert.equal(options.cwd, repoRoot);
+    assert.equal(options.timeout, 15_000);
+    assert.equal(options.maxBuffer, 64 * 1024);
+    assert.deepEqual(options.stdio, ["ignore", "pipe", "pipe"]);
+    const responses = new Map([
+      [cargoPath + " --version", "cargo 1.93.1 (fixture 2026-01-01)\n"],
+      [rustcPath + " -vV", "rustc 1.93.1 (fixture 2026-01-01)\nrelease: 1.93.1\n"],
+      [rustdocPath + " --version", "rustdoc 1.93.1 (fixture 2026-01-01)\n"],
+      [rustcPath + " --print sysroot", path.dirname(binDirectory) + "\n"],
+    ]);
+    const key = executable + " " + args.join(" ");
+    assert.ok(responses.has(key), "unexpected toolchain probe: " + key);
+    return { status: 0, signal: null, stdout: responses.get(key) };
+  };
 
   const env = {
     CARGO_BUILD_JOBS: "1",
@@ -138,6 +154,7 @@ function createFixture(t, { profile = "debug" } = {}) {
   return {
     cargoPath,
     env,
+    runTool,
     nativePath,
     packageRoot,
     profile,
@@ -239,6 +256,75 @@ test("native output requires the caller-provided absolute Cargo target", () => {
   );
 });
 
+test("native build admits standalone and rustup layouts by actual pinned versions and sysroot", (t) => {
+  for (const toolchainDirectory of ["rust-1.93.1", "1.93.1-x86_64-unknown-linux-gnu"]) {
+    const fixture = createFixture(t, { toolchainDirectory });
+    const probes = [];
+    const status = runNativeBuild({
+      repoRoot: fixture.repoRoot,
+      env: fixture.env,
+      platform: "linux",
+      runTool(executable, args, options) {
+        probes.push([path.basename(executable), args]);
+        return fixture.runTool(executable, args, options);
+      },
+      readSourceState: () => sourceState(),
+      runCargo: () => ({ status: 7, stdout: "" }),
+    });
+    assert.equal(status, 7);
+    assert.deepEqual(probes, [
+      ["rustc", ["-vV"]],
+      ["cargo", ["--version"]],
+      ["rustdoc", ["--version"]],
+      ["rustc", ["--print", "sysroot"]],
+    ]);
+  }
+});
+
+test("native build rejects unpinned, mixed, or unverifiable toolchains before Cargo", async (t) => {
+  const cases = [
+    { executable: "rustc", args: "-vV", stdout: "rustc 1.93.1 (fixture)\nrelease: 1.94.0\n", message: /rustc must report exactly release/u },
+    { executable: "rustc", args: "-vV", stdout: "rustc 1.93.1 (fixture)\nrelease: 1.93.1\nrelease: 1.93.1\n", message: /rustc must report exactly release/u },
+    { executable: "cargo", args: "--version", stdout: "cargo 1.94.0 (fixture)\n", message: /cargo must report exactly version/u },
+    { executable: "rustdoc", args: "--version", stdout: "rustdoc 1.93.1-nightly (fixture)\n", message: /rustdoc must report exactly version/u },
+    { executable: "cargo", args: "--version", stdout: "rustdoc 1.93.1 (fixture)\n", message: /cargo must report exactly version/u },
+    { executable: "rustc", args: "--print sysroot", stdout: "relative/sysroot\n", message: /sysroot must be an absolute canonical path/u },
+    { executable: "rustc", args: "--print sysroot", foreignSysroot: true, message: /bin directory of rustc's reported sysroot/u },
+    { executable: "rustc", args: "-vV", result: { status: 9, stdout: "" }, message: /could not verify rustc -vV/u },
+    { executable: "cargo", args: "--version", result: { error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }), status: null, stdout: "" }, message: /could not verify cargo --version/u },
+  ];
+  for (const [index, entry] of cases.entries()) {
+    await t.test(String(index) + ": " + entry.message, () => {
+      const fixture = createFixture(t);
+      assert.throws(() => runNativeBuild({
+        repoRoot: fixture.repoRoot,
+        env: fixture.env,
+        platform: "linux",
+        runTool(executable, args, options) {
+          if (path.basename(executable) === entry.executable && args.join(" ") === entry.args) {
+            return entry.result ?? { status: 0, signal: null, stdout: entry.foreignSysroot ? fixture.repoRoot : entry.stdout };
+          }
+          return fixture.runTool(executable, args, options);
+        },
+        readSourceState: () => sourceState(),
+        runCargo() { throw new Error("Cargo must not run"); },
+      }), entry.message);
+    });
+  }
+  const fixture = createFixture(t);
+  const otherBin = path.join(fixture.repoRoot, "other-bin");
+  mkdirSync(otherBin);
+  const otherRustdoc = path.join(otherBin, "rustdoc");
+  writeFileSync(otherRustdoc, "fixture");
+  chmodSync(otherRustdoc, 0o700);
+  assert.throws(() => runNativeBuild({
+    repoRoot: fixture.repoRoot,
+    env: { ...fixture.env, RUSTDOC: otherRustdoc },
+    runTool() { throw new Error("mixed toolchain must fail before probes"); },
+    runCargo() { throw new Error("Cargo must not run"); },
+  }), /must come from one pinned toolchain/u);
+});
+
 test("native build uses the live root, root lock, pinned Cargo, and shared target", (t) => {
   const fixture = createFixture(t);
   const state = sourceState();
@@ -246,6 +332,7 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
   let written;
   let sourceReads = 0;
   const status = runNativeBuild({
+    runTool: fixture.runTool,
     repoRoot: fixture.repoRoot,
     env: fixture.env,
     platform: "linux",
@@ -330,6 +417,7 @@ test("a fresh Cargo artifact is authenticated without forcing a rebuild", (t) =>
   let written = 0;
   assert.equal(
     runNativeBuild({
+    runTool: fixture.runTool,
       repoRoot: fixture.repoRoot,
       env: fixture.env,
       platform: "linux",
@@ -365,6 +453,7 @@ test("a non-fresh Cargo artifact must update an existing output", (t) => {
   assert.throws(
     () =>
       runNativeBuild({
+    runTool: fixture.runTool,
         repoRoot: fixture.repoRoot,
         env: fixture.env,
         platform: "linux",
@@ -395,6 +484,7 @@ test("Cargo hardlink uplift is replaced by one authenticated output link", (t) =
   );
   assert.equal(
     runNativeBuild({
+    runTool: fixture.runTool,
       repoRoot: fixture.repoRoot,
       env: fixture.env,
       platform: "linux",
@@ -434,6 +524,7 @@ test("Cargo JSON must identify the exact live-root cdylib", (t) => {
   assert.throws(
     () =>
       runNativeBuild({
+    runTool: fixture.runTool,
         repoRoot: fixture.repoRoot,
         env: fixture.env,
         platform: "linux",
@@ -467,6 +558,7 @@ test("source drift after Cargo prevents provenance publication", (t) => {
   assert.throws(
     () =>
       runNativeBuild({
+    runTool: fixture.runTool,
         repoRoot: fixture.repoRoot,
         env: fixture.env,
         platform: "linux",
@@ -498,6 +590,7 @@ for (const profile of ["release", "deploy"]) {
     assert.throws(
       () =>
         runNativeBuild({
+    runTool: fixture.runTool,
           repoRoot: fixture.repoRoot,
           env: fixture.env,
           platform: "linux",
@@ -557,6 +650,7 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
       assert.throws(
         () =>
           runNativeBuild({
+    runTool: fixture.runTool,
             repoRoot: fixture.repoRoot,
             env,
             platform: "linux",
@@ -586,6 +680,7 @@ test("the live build accepts an authenticated external Cargo.lock", (t) => {
   let cargoRuns = 0;
 
   const status = runNativeBuild({
+    runTool: fixture.runTool,
     repoRoot: fixture.repoRoot,
     env,
     platform: "linux",
@@ -609,6 +704,7 @@ test("failed Cargo leaves the output unauthenticated", (t) => {
   let invalidations = 0;
   let writes = 0;
   const status = runNativeBuild({
+    runTool: fixture.runTool,
     repoRoot: fixture.repoRoot,
     env: fixture.env,
     platform: "linux",

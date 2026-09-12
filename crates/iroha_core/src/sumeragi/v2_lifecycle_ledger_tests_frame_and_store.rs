@@ -1,3 +1,37 @@
+/// Decode and validate a retained incident frame without opening or mutating its store.
+#[test]
+#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME pointing to a retained diagnostic frame"]
+fn inspect_retained_lifecycle_ledger_frame() {
+    let path = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_FRAME")
+        .expect("provide the retained lifecycle frame path");
+    let bytes = std::fs::read(path).expect("read retained frame");
+    let ledger = decode_frame(
+        &bytes,
+        u64::try_from(bytes.len()).expect("frame length fits"),
+    )
+    .expect("retained frame has a valid checksum and canonical Norito encoding");
+    ledger
+        .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+        .expect("retained frame satisfies the lifecycle invariants");
+    println!(
+        "context={:?} high_water={} records={}",
+        ledger.context(),
+        ledger.high_water(),
+        ledger.records().len()
+    );
+    for record in ledger.records() {
+        println!(
+            "ordinal={} class={:?} stage={:?} terminal={:?} continuation={:?} payload={:?}",
+            record.ordinal(),
+            record.work_class(),
+            record.stage(),
+            record.terminal(),
+            record.continuation(),
+            record.durable_payload(),
+        );
+    }
+}
+
 fn digest(byte: u8) -> LifecycleDigest {
     LifecycleDigest::new([byte; 32])
 }
@@ -1021,6 +1055,73 @@ fn committed_prepare_broadcast_and_next_sign_pair_retains_validate_lineage() {
     assert!(ledger.high_water() > pair.next_sign_ordinal());
 }
 #[test]
+fn committed_standalone_prepare_pair_preserves_inert_validate_without_a_link() {
+    // This tests frame classification, not executable WAL/body authority.
+    // The real cold owner test independently joins the retained success marker.
+    let mut ledger = committed_prepare_broadcast_and_sign_ledger();
+    let validate = ledger
+        .records
+        .iter_mut()
+        .find(|record| record.ordinal() == 1)
+        .expect("original Validate");
+    validate.continuation =
+        PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+    let terminal_before = validate.encode();
+    ledger
+        .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+        .expect("removing the edge leaves a valid inert terminal frame");
+    assert!(
+        ledger
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .expect("classify unlinked inherited owner")
+            .is_empty()
+    );
+
+    let standalone_root = digest(0xC7);
+    for record in ledger
+        .records
+        .iter_mut()
+        .filter(|record| matches!(record.ordinal(), 3 | 6))
+    {
+        record.causal_root = *standalone_root.as_bytes();
+        record.owner_first_ordinal = 3;
+        record.reconstruction_source = *standalone_root.as_bytes();
+    }
+    ledger
+        .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+        .expect("standalone Sign and Broadcast have one independent WAL owner");
+    let pairs = ledger
+        .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+        .expect("classify standalone Prepare pair");
+    let [pair] = pairs.as_slice() else {
+        panic!("one standalone Prepare pair");
+    };
+    assert_eq!(
+        pair.parent(),
+        RecoveredLifecycleSignedBroadcastAndSignParentV1::StandalonePrepare
+    );
+    assert!(pair.parent().is_standalone());
+    assert_eq!(pair.parent_ordinal(), 3);
+    assert_eq!(pair.broadcast_ordinal(), 6);
+    assert_eq!(pair.next_sign_ordinal(), 7);
+    assert!(pair.exactly_matches_ledger(&ledger));
+    assert_eq!(
+        ledger
+            .records
+            .iter()
+            .find(|record| record.ordinal() == 1)
+            .expect("original inert terminal remains")
+            .encode(),
+        terminal_before
+    );
+    assert!(
+        !RecoveredLifecycleSignedBroadcastAndSignParentV1::PhasePrepare {
+            validate_ordinal: 1,
+        }
+        .is_standalone()
+    );
+}
+#[test]
 fn combined_pair_classifier_rejects_nonadjacent_or_foreign_next_signs() {
     let mut nonadjacent = committed_proposal_broadcast_and_sign_ledger();
     let next_sign = nonadjacent
@@ -1113,6 +1214,21 @@ fn combined_pair_classifier_requires_exact_fresh_owner_histories() {
     missing_validate
         .records
         .retain(|record| record.ordinal != 1);
+    assert!(
+        missing_validate
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .is_err(),
+        "removing Validate must leave its inherited owner invalid"
+    );
+    assert!(
+        missing_validate
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .is_err(),
+        "classification must reject the missing immutable owner history"
+    );
+    // Rewriting the first ordinal changes this into a standalone owner shape.
+    // Frame classification cannot grant it the missing Validate lineage; the
+    // executable recovery corridor must still authenticate its own WAL root.
     for record in missing_validate
         .records
         .iter_mut()
@@ -1123,12 +1239,17 @@ fn combined_pair_classifier_requires_exact_fresh_owner_histories() {
     missing_validate
         .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
         .expect("a standalone Prepare-to-Broadcast owner remains generically valid");
-    assert!(
-        missing_validate
-            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
-            .expect("classify missing Validate lineage")
-            .is_empty()
+    let standalone_pairs = missing_validate
+        .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+        .expect("classify rewritten standalone owner shape");
+    let [standalone_pair] = standalone_pairs.as_slice() else {
+        panic!("rewritten fresh owner has one standalone pair shape");
+    };
+    assert_eq!(
+        standalone_pair.parent(),
+        RecoveredLifecycleSignedBroadcastAndSignParentV1::StandalonePrepare
     );
+    assert!(!standalone_pair.exactly_matches_ledger(&committed_prepare_broadcast_and_sign_ledger()));
     let mut extra_parent_history = committed_prepare_broadcast_and_sign_ledger();
     let parent_owner = extra_parent_history.records[0].owner();
     let later = extra_parent_history

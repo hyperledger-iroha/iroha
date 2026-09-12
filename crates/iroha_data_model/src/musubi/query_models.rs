@@ -1,8 +1,17 @@
 // Resolver, finalized-query, and search wire models included at Musubi module scope.
 /// Compact universal sparse-index row used by exact resolution.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiResolverReleaseRowV1")]
 pub struct MusubiResolverReleaseRowV1 {
@@ -31,7 +40,6 @@ impl MusubiResolverReleaseRowV1 {
     /// # Errors
     ///
     /// Returns an error if canonical JSON encoding fails or exceeds `maximum` bytes.
-    #[cfg(feature = "json")]
     pub fn canonical_json_len_bounded(
         &self,
         maximum: usize,
@@ -74,9 +82,18 @@ impl MusubiResolverReleaseRowV1 {
     }
 }
 /// Paired home-dataspace and universal-index view of one exact release at finality.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiExactReleaseSnapshotV1")]
 pub struct MusubiExactReleaseSnapshotV1 {
@@ -158,9 +175,18 @@ impl MusubiExactReleaseSnapshotV1 {
     }
 }
 /// Finalized cursor binding its exact query, last key, index revision, and optional caller.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiFinalizedCursorV1")]
 pub struct MusubiFinalizedCursorV1 {
@@ -196,12 +222,22 @@ impl MusubiFinalizedCursorV1 {
     }
 }
 /// Explicit stale-cursor classification returned instead of silently restarting.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiCursorFailureV1")]
 pub enum MusubiCursorFailureV1 {
@@ -221,8 +257,8 @@ macro_rules! musubi_page_type {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
         #[norito_schema(name = $schema_name)]
-        #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+        #[norito(deny_unknown_fields)]
         pub struct $name {
             /// Ordered result items.
             pub items: Vec<$item>,
@@ -276,9 +312,18 @@ musubi_page_type!(
     |pair: &[MusubiReleaseRecordV1]| pair[0].manifest.release >= pair[1].manifest.release
 );
 /// Ordered page of structured package versions bound to its exact request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiVersionPageV1")]
 pub struct MusubiVersionPageV1 {
@@ -349,9 +394,18 @@ impl MusubiVersionPageV1 {
     }
 }
 /// Ordered page of package members and invitations bound to its exact request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiMaintainerPageV1")]
 pub struct MusubiMaintainerPageV1 {
@@ -435,9 +489,18 @@ impl MusubiMaintainerPageV1 {
     }
 }
 /// Ordered renewable locations plus their authoritative immutable archive commitment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveLocationPageV1")]
 pub struct MusubiArchiveLocationPageV1 {
@@ -460,12 +523,22 @@ pub struct MusubiArchiveLocationPageV1 {
 /// An identity unknown to the queried registry is retained fail-closed because the user cache is
 /// content-addressed but not chain-scoped. Replication health never makes a published archive
 /// prunable: locked consumers may still need a cached below-quorum or unavailable archive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveRetentionDispositionV1")]
 pub enum MusubiArchiveRetentionDispositionV1 {
@@ -486,9 +559,19 @@ impl MusubiArchiveRetentionDispositionV1 {
     }
 }
 /// One exact finalized cache-retention decision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveRetentionDecisionV1")]
 pub struct MusubiArchiveRetentionDecisionV1 {
@@ -570,9 +653,18 @@ impl MusubiArchiveRetentionDecisionV1 {
 /// `expected_snapshot` is absent on the first batch and binds every later batch
 /// in the same prune operation. A node must reject a mismatching anchor instead
 /// of combining decisions from different finalized registry states.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveRetentionQueryV1")]
 pub struct MusubiArchiveRetentionQueryV1 {
@@ -604,9 +696,18 @@ impl MusubiArchiveRetentionQueryV1 {
     }
 }
 /// Exact finalized cache-retention decisions for one bounded request batch.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveRetentionPageV1")]
 pub struct MusubiArchiveRetentionPageV1 {
@@ -708,9 +809,18 @@ impl MusubiArchiveLocationPageV1 {
     }
 }
 /// Ordered page of permanent alias history bound to its exact request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasHistoryPageV1")]
 pub struct MusubiAliasHistoryPageV1 {
@@ -802,9 +912,18 @@ impl MusubiAliasHistoryPageV1 {
     }
 }
 /// Ordered page of universal resolver-index rows with authoritative lock identity.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiResolverIndexPageV1")]
 pub struct MusubiResolverIndexPageV1 {
@@ -882,7 +1001,7 @@ impl MusubiResolverIndexPageV1 {
             self.snapshot,
             false,
         )?;
-        #[cfg(feature = "json")]
+
         {
             match musubi_json_len_bounded(self, MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1) {
                 Ok(_) => {}
@@ -916,9 +1035,18 @@ impl MusubiResolverIndexPageV1 {
     }
 }
 /// Compact ordered directory row; rich fuzzy search may rebuild this projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiOrderedPackageEntryV1")]
 pub struct MusubiOrderedPackageEntryV1 {
@@ -954,9 +1082,18 @@ impl MusubiOrderedPackageEntryV1 {
     }
 }
 /// Ordered package-directory response with authoritative lock identity.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiOrderedPackagePageV1")]
 pub struct MusubiOrderedPackagePageV1 {
@@ -1056,9 +1193,18 @@ impl MusubiOrderedPackagePageV1 {
     }
 }
 /// Exact package lookup request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiExactPackageQueryV1")]
 pub struct MusubiExactPackageQueryV1 {
@@ -1066,9 +1212,18 @@ pub struct MusubiExactPackageQueryV1 {
     pub package: MusubiPackageIdV1,
 }
 /// Exact release lookup request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiExactReleaseQueryV1")]
 pub struct MusubiExactReleaseQueryV1 {
@@ -1076,9 +1231,21 @@ pub struct MusubiExactReleaseQueryV1 {
     pub release: MusubiReleaseIdV1,
 }
 /// Bounded ordered-prefix selector for deterministic directory/index queries.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiOrderedPrefixV1")]
 pub struct MusubiOrderedPrefixV1(String);
 impl MusubiOrderedPrefixV1 {
@@ -1141,9 +1308,18 @@ impl MusubiOrderedPrefixV1 {
     }
 }
 /// Shared finalized page request for versions, members, locations, aliases, and prefix scans.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPageRequestV1")]
 pub struct MusubiPageRequestV1 {
@@ -1245,9 +1421,18 @@ fn validate_finalized_response_page_with_cursor_cardinality(
     Ok(())
 }
 /// Resolver-index range request; exact resolution never uses fuzzy search.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiResolverIndexQueryV1")]
 pub struct MusubiResolverIndexQueryV1 {
@@ -1273,9 +1458,18 @@ impl MusubiResolverIndexQueryV1 {
     }
 }
 /// Package-scoped versions/members query.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackagePageQueryV1")]
 pub struct MusubiPackagePageQueryV1 {
@@ -1296,9 +1490,18 @@ impl MusubiPackagePageQueryV1 {
     }
 }
 /// Archive-location query.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveLocationQueryV1")]
 pub struct MusubiArchiveLocationQueryV1 {
@@ -1308,9 +1511,18 @@ pub struct MusubiArchiveLocationQueryV1 {
     pub page: MusubiPageRequestV1,
 }
 /// Exact alias lookup or history query.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasQueryV1")]
 pub struct MusubiAliasQueryV1 {
@@ -1331,9 +1543,18 @@ impl MusubiAliasQueryV1 {
     }
 }
 /// Ordered-prefix registry query.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiOrderedPrefixQueryV1")]
 pub struct MusubiOrderedPrefixQueryV1 {
@@ -1358,16 +1579,29 @@ impl MusubiOrderedPrefixQueryV1 {
 /// This anchor is deliberately distinct from [`MusubiRegistrySnapshotV1`]. Search
 /// projection revisions are not resolver-index revisions and must never be used to
 /// select a dependency release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSearchSnapshotV1")]
 pub struct MusubiSearchSnapshotV1 {
     /// Finalized height through which the search projection has been applied.
     pub finalized_height: u64,
     /// Finalized block hash at `finalized_height`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub finalized_block_hash: [u8; 32],
     /// Process-local projection revision, changed on every visible rebuild/update.
     pub projection_revision: u64,
@@ -1389,9 +1623,18 @@ impl MusubiSearchSnapshotV1 {
     }
 }
 /// Continuation cursor for the rebuildable package-search projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSearchCursorV1")]
 pub struct MusubiSearchCursorV1 {
@@ -1420,9 +1663,18 @@ impl MusubiSearchCursorV1 {
     }
 }
 /// Page controls for rich package discovery.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSearchPageRequestV1")]
 pub struct MusubiSearchPageRequestV1 {
@@ -1463,9 +1715,18 @@ impl MusubiSearchPageRequestV1 {
     }
 }
 /// Bounded exact-token query for the rebuildable package discovery projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSearchQueryV1")]
 pub struct MusubiSearchQueryV1 {
@@ -1542,9 +1803,18 @@ impl MusubiSearchQueryV1 {
     }
 }
 /// One deterministic rich package-discovery result.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSearchHitV1")]
 pub struct MusubiSearchHitV1 {
@@ -1588,9 +1858,18 @@ impl MusubiSearchHitV1 {
     }
 }
 /// One deterministic page from the rebuildable package discovery projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSearchPageV1")]
 pub struct MusubiSearchPageV1 {

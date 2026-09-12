@@ -20,19 +20,21 @@ use crate::{
 use core::str::FromStr;
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
-pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer};
+pub use iroha_data_model::prelude::{AssetDefinitionId, Mintable, NftId, Peer};
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetId},
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{
         AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
-        DataSpaceId, LaneId,
     },
     proof::{ProofAttachment, VerifyingKeyId},
     query::QueryRequest,
     smart_contract::ContractAddress,
-    state_path::StatePath,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::state_path::StatePath;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
@@ -3365,7 +3367,7 @@ impl IVMHost for WsvHost {
                     });
                 }
                 let input_len = tlv.payload.len();
-                let nm: iroha_data_model::name::Name =
+                let nm: iroha_model_base::name::Name =
                     decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let body = encode_canonical_norito(&nm)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -5408,7 +5410,7 @@ mod tests_nft_decode {
 #[cfg(test)]
 mod tests_null_decode {
     use super::*;
-    use iroha_data_model::prelude::Name;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
 
     fn load_int_state_map_schema(vm: &mut IVM, name: &str) {

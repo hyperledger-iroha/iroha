@@ -26,14 +26,12 @@ use iroha_data_model::{
     NetworkId,
     block::BlockHeader,
     isi::{InstructionBox, sorafs::CompleteReplicationOrder},
-    metadata::Metadata,
     musubi::{
         MusubiAbiBindingV1, MusubiKotodamaEditionV1, MusubiPackageIdV1, MusubiPackageScopeV1,
         MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationAttestationV1,
         MusubiReleaseIdV1, MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1,
         MusubiVerificationLockV1,
     },
-    nexus::DataSpaceId,
     sorafs::pin_registry::{
         ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1,
         PinManifestRecord, PinPolicy, ProviderIngestFinalizedAnchorV1,
@@ -41,6 +39,8 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 use sorafs_car::{
     CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3, compute_por_root,
     musubi::{

@@ -1,4 +1,3 @@
-#[cfg(feature = "json")]
 #[test]
 fn transaction_result_json_roundtrip() {
     let ok_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
@@ -13,7 +12,7 @@ fn transaction_result_json_roundtrip() {
     let decoded: TransactionResult = norito::json::from_str(&json).expect("deserialize err result");
     assert_eq!(err_result, decoded);
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn transaction_entrypoint_json_roundtrip() {
     let network_id = test_network_id(0x29);

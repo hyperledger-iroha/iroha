@@ -8,6 +8,7 @@ const VERGEN_GIT_SHA_ENV: &str = "VERGEN_GIT_SHA";
 const VERGEN_CARGO_FEATURES_ENV: &str = "VERGEN_CARGO_FEATURES";
 const VERGEN_CARGO_TARGET_TRIPLE_ENV: &str = "VERGEN_CARGO_TARGET_TRIPLE";
 const IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV: &str = "IROHA_DPN_VALIDATOR_RELEASE_COMMIT";
+#[cfg(test)]
 const LOCAL_FAST_BUILD_GIT_SHA: &str = "local-fast-build";
 const GIT_RERUN_ENV_VARS: &[&str] = &[VERGEN_GIT_SHA_ENV, IROHA_DPN_VALIDATOR_RELEASE_COMMIT_ENV];
 #[derive(Debug)]
@@ -51,13 +52,25 @@ fn git_commit_hash() -> Option<String> {
     read_head_commit_hash(&git_dirs)
 }
 fn env_git_commit_hash() -> Option<String> {
-    let sha = env::var(VERGEN_GIT_SHA_ENV).ok()?;
-    let trimmed = sha.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
+    let sha = match env::var(VERGEN_GIT_SHA_ENV) {
+        Ok(sha) => sha,
+        Err(env::VarError::NotPresent) => return None,
+        Err(env::VarError::NotUnicode(_)) => panic!("VERGEN_GIT_SHA must be valid UTF-8"),
+    };
+    // Validate before emitting Cargo directives: padding or a newline must never
+    // be normalized into a different identity or inject another directive.
+    assert!(
+        valid_compiled_source_override(&sha),
+        "VERGEN_GIT_SHA must be an exact lowercase 40-digit commit or local-fast-build"
+    );
+    Some(sha)
+}
+fn valid_compiled_source_override(sha: &str) -> bool {
+    sha == "local-fast-build"
+        || (sha.len() == 40
+            && sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
 }
 fn emit_git_rerun_hints() {
     for env_var in GIT_RERUN_ENV_VARS {
@@ -70,26 +83,51 @@ fn emit_git_rerun_hints() {
     let Some(git_dirs) = resolve_git_directories() else {
         return;
     };
-    let head_path = git_dirs.worktree.join("HEAD");
-    emit_existing_rerun_if_changed(&head_path);
-    emit_existing_rerun_if_changed(&git_dirs.worktree.join("commondir"));
-    emit_existing_rerun_if_changed(&git_dirs.common.join("packed-refs"));
-    if let Some(head_ref) = read_head_reference(&head_path) {
-        let Some(head_ref) = head_ref.to_str() else {
-            return;
-        };
-        let reference_root = if reference_is_worktree_local(head_ref) {
-            &git_dirs.worktree
-        } else {
-            &git_dirs.common
-        };
-        if let Some(path) = reference_watch_path(reference_root, head_ref) {
-            emit_existing_rerun_if_changed(&path);
-        }
+    for path in git_filesystem_rerun_paths(&git_dirs) {
+        emit_existing_rerun_if_changed(&path);
     }
 }
+fn git_filesystem_rerun_paths(git_dirs: &GitDirectories) -> Vec<PathBuf> {
+    let head_path = git_dirs.worktree.join("HEAD");
+    let mut paths = vec![head_path.clone()];
+    let Some(head_ref) = read_head_reference(&head_path) else {
+        // A detached HEAD does not consume loose or packed references.
+        return paths;
+    };
+    let Some(head_ref) = head_ref.to_str() else {
+        return paths;
+    };
+    paths.push(git_dirs.worktree.join("commondir"));
+    let reference_root = if reference_is_worktree_local(head_ref) {
+        &git_dirs.worktree
+    } else {
+        &git_dirs.common
+    };
+    if let Some(path) = reference_watch_path(reference_root, head_ref) {
+        // If packed/unborn, watch the nearest existing loose parent too: a later
+        // loose ref takes precedence. Deleting a watched loose ref also reruns us.
+        paths.push(path);
+    }
+    let loose_hash = [&git_dirs.worktree, &git_dirs.common]
+        .into_iter()
+        .find_map(|directory| read_loose_reference_hash(directory, head_ref));
+    if loose_hash.is_none() {
+        // Unrelated ref packing cannot change an already resolved loose HEAD.
+        // Missing packed-refs requires watching its parent so first creation is seen.
+        let packed = git_dirs.common.join("packed-refs");
+        paths.push(if packed.exists() {
+            packed
+        } else {
+            git_dirs.common.clone()
+        });
+    }
+    paths.retain(|path| path.exists());
+    paths.sort();
+    paths.dedup();
+    paths
+}
 fn should_emit_git_filesystem_rerun_hints(git_sha_override: Option<&str>) -> bool {
-    git_sha_override.is_none_or(|sha| sha.trim() != LOCAL_FAST_BUILD_GIT_SHA)
+    git_sha_override.is_none()
 }
 fn resolve_git_directories() -> Option<GitDirectories> {
     let worktree = resolve_git_dir()?;
@@ -151,15 +189,18 @@ fn read_head_commit_hash(git_dirs: &GitDirectories) -> Option<String> {
     )
 }
 fn read_reference_hash(git_dirs: &GitDirectories, reference: &str) -> Option<String> {
+    safe_reference_path(&git_dirs.worktree, reference)?;
     for git_dir in [&git_dirs.worktree, &git_dirs.common] {
-        let loose_ref_path = safe_reference_path(git_dir, reference)?;
-        if let Ok(contents) = fs::read_to_string(loose_ref_path)
-            && let Some(hash) = parse_commit_hash(&contents)
-        {
-            return Some(hash.to_owned());
+        if let Some(hash) = read_loose_reference_hash(git_dir, reference) {
+            return Some(hash);
         }
     }
     read_packed_reference_hash(&git_dirs.common, reference)
+}
+fn read_loose_reference_hash(git_dir: &Path, reference: &str) -> Option<String> {
+    let path = safe_reference_path(git_dir, reference)?;
+    let contents = fs::read_to_string(path).ok()?;
+    parse_commit_hash(&contents).map(ToOwned::to_owned)
 }
 fn safe_reference_path(git_dir: &Path, reference: &str) -> Option<PathBuf> {
     let reference = Path::new(reference);
@@ -287,15 +328,35 @@ mod tests {
         )));
     }
     #[test]
-    fn exact_git_sha_keeps_git_filesystem_rerun_hints() {
-        assert!(should_emit_git_filesystem_rerun_hints(Some(
+    fn compiled_source_override_rejects_normalization_and_directive_injection() {
+        for source in [
+            "",
+            "unknown",
+            " 1111111111111111111111111111111111111111",
+            "1111111111111111111111111111111111111111\n",
+            "1111111111111111111111111111111111111111\ncargo:rustc-env=VERGEN_GIT_SHA=local-fast-build",
+            "ABCDEF1111111111111111111111111111111111",
+            "local-fast-build ",
+        ] {
+            assert!(!valid_compiled_source_override(source));
+        }
+        assert!(valid_compiled_source_override(
+            "1111111111111111111111111111111111111111"
+        ));
+        assert!(valid_compiled_source_override("local-fast-build"));
+    }
+
+    #[test]
+    fn exact_git_sha_skips_git_filesystem_rerun_hints() {
+        assert!(!should_emit_git_filesystem_rerun_hints(Some(
             "6f4e5a2d3a9ab7cd61234b1234f8aadeadbeef00"
         )));
     }
     #[test]
-    fn missing_or_empty_git_sha_keeps_git_filesystem_rerun_hints() {
-        for git_sha_override in [None, Some(""), Some(" \n")] {
-            assert!(should_emit_git_filesystem_rerun_hints(git_sha_override));
+    fn only_missing_git_sha_uses_git_filesystem_rerun_hints() {
+        assert!(should_emit_git_filesystem_rerun_hints(None));
+        for git_sha_override in [Some(""), Some(" \n"), Some("unknown")] {
+            assert!(!should_emit_git_filesystem_rerun_hints(git_sha_override));
         }
     }
     #[test]
@@ -408,6 +469,201 @@ mod tests {
         assert!(reference_is_worktree_local("refs/worktree/private"));
         assert!(reference_is_worktree_local("refs/rewritten/topic"));
         assert!(!reference_is_worktree_local("refs/heads/optimizations"));
+    }
+    struct GitWatchFixture {
+        root: PathBuf,
+        dirs: GitDirectories,
+    }
+    impl GitWatchFixture {
+        fn new(linked: bool) -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir()
+                .join(format!("iroha-git-watch-{}-{nonce}", std::process::id()));
+            let common = root.join("repo.git");
+            let worktree = if linked {
+                common.join("worktrees/linked")
+            } else {
+                common.clone()
+            };
+            fs::create_dir_all(&worktree).unwrap();
+            fs::create_dir_all(common.join("refs/heads")).unwrap();
+            fs::write(worktree.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            if linked {
+                fs::write(worktree.join("commondir"), "../..\n").unwrap();
+            }
+            Self {
+                root,
+                dirs: GitDirectories { worktree, common },
+            }
+        }
+        fn loose(&self, hash: &str) {
+            fs::write(
+                self.dirs.common.join("refs/heads/main"),
+                format!("{hash}\n"),
+            )
+            .unwrap();
+        }
+        fn packed(&self, hash: &str) {
+            fs::write(
+                self.dirs.common.join("packed-refs"),
+                format!("{hash} refs/heads/main\n"),
+            )
+            .unwrap();
+        }
+        fn watches(&self, path: &Path) -> bool {
+            git_filesystem_rerun_paths(&self.dirs)
+                .iter()
+                .any(|watched| watched == path)
+        }
+    }
+    impl Drop for GitWatchFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+    const WATCH_SHA_A: &str = "1111111111111111111111111111111111111111";
+    const WATCH_SHA_B: &str = "2222222222222222222222222222222222222222";
+    #[test]
+    fn loose_head_ignores_unrelated_packed_refs_but_tracks_commit_change() {
+        let fixture = GitWatchFixture::new(false);
+        fixture.loose(WATCH_SHA_A);
+        fixture.packed(WATCH_SHA_B);
+        let before = git_filesystem_rerun_paths(&fixture.dirs);
+        assert!(fixture.watches(&fixture.dirs.common.join("refs/heads/main")));
+        assert!(!fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        fixture.packed(WATCH_SHA_A);
+        assert_eq!(git_filesystem_rerun_paths(&fixture.dirs), before);
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+        fixture.loose(WATCH_SHA_B);
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_B)
+        );
+    }
+    #[test]
+    fn packed_head_tracks_packed_file_and_future_loose_ref() {
+        let fixture = GitWatchFixture::new(false);
+        fixture.packed(WATCH_SHA_A);
+        assert!(fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        assert!(fixture.watches(&fixture.dirs.common.join("refs/heads")));
+        fixture.packed(WATCH_SHA_B);
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_B)
+        );
+        fixture.loose(WATCH_SHA_A);
+        assert!(fixture.watches(&fixture.dirs.common.join("refs/heads/main")));
+        assert!(!fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+    }
+    #[test]
+    fn packing_current_loose_ref_preserves_identity_and_switches_watch() {
+        let fixture = GitWatchFixture::new(false);
+        fixture.loose(WATCH_SHA_A);
+        fixture.packed(WATCH_SHA_A);
+        let old_watches = git_filesystem_rerun_paths(&fixture.dirs);
+        let loose = fixture.dirs.common.join("refs/heads/main");
+        fs::remove_file(&loose).unwrap();
+        assert!(
+            old_watches.contains(&loose),
+            "deleting the watched input invalidates Cargo"
+        );
+        assert!(fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+    }
+    #[test]
+    fn detached_head_watches_only_head_and_retains_exact_identity() {
+        let fixture = GitWatchFixture::new(true);
+        let head = fixture.dirs.worktree.join("HEAD");
+        fs::write(&head, WATCH_SHA_A).unwrap();
+        fixture.packed(WATCH_SHA_B);
+        assert_eq!(
+            git_filesystem_rerun_paths(&fixture.dirs),
+            vec![head.clone()]
+        );
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+        fs::write(&head, WATCH_SHA_B).unwrap();
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_B)
+        );
+    }
+    #[test]
+    fn linked_worktree_watches_shared_loose_ref_and_own_head_and_commondir() {
+        let fixture = GitWatchFixture::new(true);
+        fixture.loose(WATCH_SHA_A);
+        fixture.packed(WATCH_SHA_B);
+        assert_eq!(
+            git_filesystem_rerun_paths(&fixture.dirs),
+            vec![
+                fixture.dirs.common.join("refs/heads/main"),
+                fixture.dirs.worktree.join("HEAD"),
+                fixture.dirs.worktree.join("commondir"),
+            ]
+        );
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+    }
+    #[test]
+    fn worktree_local_head_watches_local_ref_instead_of_shared_branch_refs() {
+        let fixture = GitWatchFixture::new(true);
+        let local = fixture.dirs.worktree.join("refs/worktree/private");
+        fs::create_dir_all(local.parent().unwrap()).unwrap();
+        fs::write(&local, WATCH_SHA_A).unwrap();
+        fs::write(
+            fixture.dirs.worktree.join("HEAD"),
+            "ref: refs/worktree/private\n",
+        )
+        .unwrap();
+        assert!(fixture.watches(&local));
+        assert!(!fixture.watches(&fixture.dirs.common.join("refs/heads")));
+        assert!(!fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+    }
+    #[test]
+    fn unborn_head_detects_first_packed_file_publication() {
+        let fixture = GitWatchFixture::new(false);
+        assert!(fixture.watches(&fixture.dirs.common));
+        assert!(fixture.watches(&fixture.dirs.common.join("refs/heads")));
+        assert_eq!(read_head_commit_hash(&fixture.dirs), None);
+        fixture.packed(WATCH_SHA_A);
+        assert!(fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
+    }
+    #[test]
+    fn malformed_loose_ref_keeps_consumed_packed_input_watched() {
+        let fixture = GitWatchFixture::new(false);
+        fixture.loose("invalid");
+        fixture.packed(WATCH_SHA_A);
+        assert!(fixture.watches(&fixture.dirs.common.join("refs/heads/main")));
+        assert!(fixture.watches(&fixture.dirs.common.join("packed-refs")));
+        assert_eq!(
+            read_head_commit_hash(&fixture.dirs).as_deref(),
+            Some(WATCH_SHA_A)
+        );
     }
     #[test]
     fn git_reference_paths_reject_directory_escape() {

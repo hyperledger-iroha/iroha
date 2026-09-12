@@ -22,8 +22,8 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 fn sample_account() -> AccountId {
-    let _domain: ivm::mock_wsv::DomainId =
-        iroha_data_model::DomainId::try_new("domain", "universal").expect("domain id");
+    let _domain: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").expect("domain id");
     AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

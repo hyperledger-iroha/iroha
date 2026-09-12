@@ -313,7 +313,8 @@ public sealed partial class ToriiClient : IDisposable
         string path,
         TRequest request,
         string exactOnboardingToken,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ulong? preparedExecutionDeadlineUnixMilliseconds = null)
     {
         using var content = CreateJsonContent(request);
         try
@@ -334,7 +335,8 @@ public sealed partial class ToriiClient : IDisposable
                         throw new InvalidOperationException("Unable to set the account onboarding credential header.");
                     }
                 },
-                cancellationToken);
+                cancellationToken,
+                preparedExecutionDeadlineUnixMilliseconds);
             var value = await DeserializeAccountOnboardingAsync<TResponse>(
                 response,
                 exactOnboardingToken,
@@ -354,7 +356,8 @@ public sealed partial class ToriiClient : IDisposable
     private async Task<(TResponse Value, HttpStatusCode StatusCode)> PostWithStatusAsync<TRequest, TResponse>(
         string path,
         TRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ulong? preparedExecutionDeadlineUnixMilliseconds = null)
     {
         using var content = CreateJsonContent(request);
         using var response = await SendAsync(
@@ -363,7 +366,8 @@ public sealed partial class ToriiClient : IDisposable
             query: null,
             content,
             accept: "application/json",
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken,
+            preparedExecutionDeadlineUnixMilliseconds: preparedExecutionDeadlineUnixMilliseconds);
         var value = await DeserializeAsync<TResponse>(response, cancellationToken);
         return (value, response.StatusCode);
     }
@@ -1056,7 +1060,7 @@ public sealed partial class ToriiClient : IDisposable
     public async Task<ToriiAccountOnboardingPrepareResultV1> PrepareAccountOnboardingAsync(
         ToriiAccountOnboardingPlanRequest expectedRequest,
         ToriiAccountOnboardingPlanReceipt receipt,
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         FeePaymentIntent feePayment,
         string onboardingToken,
         string expectedAuthority,
@@ -1075,10 +1079,14 @@ public sealed partial class ToriiClient : IDisposable
             receipt.Body.Request,
             "account onboarding receipt");
         var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
-        var exactBinding = NormalizePreparedMutationBinding(
+        var exactBinding = NormalizePreparedOperationBinding(
             binding,
             ToriiAccountOnboardingPreparedTransactionV1.OperationV1,
             requireActive: true);
+        ValidatePreparedSemanticBinding(
+            exactBinding,
+            receipt.PlanHash.Substring(5, 64).ToLowerInvariant(),
+            receipt.Body.ValidUntilMilliseconds);
         var exactFeePayment = NormalizeFeePaymentIntent(
             feePayment,
             nameof(feePayment),
@@ -1101,7 +1109,7 @@ public sealed partial class ToriiClient : IDisposable
         {
             var prepared = response.Deserialize<ToriiAccountOnboardingPreparedTransactionV1>(SerializerOptions)
                 ?? throw new JsonException("account onboarding prepared response deserialized to null.");
-            ValidatePreparedAccountOnboarding(
+            VerifyAccountOnboardingPreparedTransactionV1(
                 prepared,
                 exactExpectedRequest,
                 receipt,
@@ -1145,7 +1153,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanRequest expectedRequest,
         ToriiAccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
         ToriiAccountOnboardingPlanReceipt receipt,
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         string expectedAuthority,
         NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
@@ -1200,7 +1208,7 @@ public sealed partial class ToriiClient : IDisposable
             nameof(expectedFeePayment),
             requireGasLimit: false);
         var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
-        ValidatePreparedAccountOnboarding(
+        VerifyAccountOnboardingPreparedTransactionV1(
             prepared,
             NormalizeAccountOnboardingPlanRequest(expectedRequest),
             prepared.Receipt,
@@ -1215,7 +1223,8 @@ public sealed partial class ToriiClient : IDisposable
                 "/v1/accounts/onboard",
                 prepared,
                 exactOnboardingToken,
-                cancellationToken);
+                cancellationToken,
+                prepared.Binding.ExecutionExpiresAtUnixMilliseconds);
         ValidatePreparedSubmitResponse(
             response,
             prepared.Binding,
@@ -1246,7 +1255,7 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiAccountFaucetPreparedTransactionV1> PrepareAccountFaucetAsync(
         ToriiAccountFaucetClaimV1 claim,
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         FeePaymentIntent feePayment,
         ToriiAccountFaucetPolicyV1 policy,
         NetworkId expectedNetworkId,
@@ -1256,10 +1265,11 @@ public sealed partial class ToriiClient : IDisposable
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(expectedNetworkId);
         var normalizedClaim = NormalizeAccountFaucetClaim(claim);
-        var exactBinding = NormalizePreparedMutationBinding(
+        var exactBinding = NormalizePreparedOperationBinding(
             binding,
             ToriiAccountFaucetPreparedTransactionV1.OperationV1,
             requireActive: true);
+        ValidatePreparedSemanticBinding(exactBinding, FaucetClaimSemanticHashHex(normalizedClaim), ulong.MaxValue);
         var exactFeePayment = NormalizeFeePaymentIntent(
             feePayment,
             nameof(feePayment),
@@ -1272,7 +1282,7 @@ public sealed partial class ToriiClient : IDisposable
                 exactFeePayment),
             cancellationToken);
         RequireExactPreparedStatus(statusCode, HttpStatusCode.OK, "account faucet prepare");
-        ValidatePreparedAccountFaucet(
+        VerifyAccountFaucetPreparedTransactionV1(
             response,
             normalizedClaim,
             exactBinding,
@@ -1295,7 +1305,7 @@ public sealed partial class ToriiClient : IDisposable
             expectedFeePayment,
             nameof(expectedFeePayment),
             requireGasLimit: false);
-        ValidatePreparedAccountFaucet(
+        VerifyAccountFaucetPreparedTransactionV1(
             prepared,
             prepared.Claim,
             prepared.Binding,
@@ -1307,7 +1317,8 @@ public sealed partial class ToriiClient : IDisposable
             ToriiPreparedTransactionSubmitResponseV1>(
                 "/v1/accounts/faucet",
                 prepared,
-                cancellationToken);
+                cancellationToken,
+                prepared.Binding.ExecutionExpiresAtUnixMilliseconds);
         ValidatePreparedSubmitResponse(
             response,
             prepared.Binding,
@@ -1571,6 +1582,32 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeContractCallRequest(request);
+        RequireCanonicalRequestCredentials("/v1/contracts/call");
+        if (!AccountIdsHaveSameIdentity(
+                Options.CanonicalRequestCredentials!.AccountId,
+                normalizedRequest.Authority))
+        {
+            throw new InvalidOperationException("Canonical request account must identify the contract-call authority.");
+        }
+        if (normalizedRequest.TransactionPayloadBase64 is not null)
+        {
+            var payload = Convert.FromBase64String(normalizedRequest.TransactionPayloadBase64);
+            ValidateContractTransactionPayload(
+                payload,
+                normalizedRequest,
+                normalizedRequest.CreationTimeMilliseconds!.Value,
+                normalizedRequest.FeePayment,
+                "detached contract call");
+            var publicKey = Convert.FromHexString(normalizedRequest.PublicKeyHex!);
+            var signature = Convert.FromBase64String(normalizedRequest.SignatureBase64!);
+            if (!publicKey.AsSpan().SequenceEqual(
+                    PreparedEd25519PublicKeyFromAccountId(normalizedRequest.Authority, "detached contract call"))
+                || signature.Length != Ed25519Signer.SignatureLength
+                || !Ed25519Signer.Verify(IrohaHash.Hash(payload), signature, publicKey))
+            {
+                throw new ArgumentException("Detached contract-call signature does not authorize the exact retained payload.");
+            }
+        }
 
         var response = await PostAsync<ToriiContractCallRequest, ToriiContractCallResponse>(
             "/v1/contracts/call",
@@ -2296,9 +2333,16 @@ public sealed partial class ToriiClient : IDisposable
         HttpContent? content = null,
         string? accept = null,
         Action<HttpRequestMessage>? configureRequest = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ulong? preparedExecutionDeadlineUnixMilliseconds = null)
     {
         var request = await CreateRequestAsync(method, path, query, content, accept, configureRequest, cancellationToken);
+        if (preparedExecutionDeadlineUnixMilliseconds is { } deadline
+            && deadline <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+        {
+            request.Dispose();
+            throw new ArgumentException("Prepared operation binding is expired for execution.", nameof(preparedExecutionDeadlineUnixMilliseconds));
+        }
         var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.IsSuccessStatusCode)
         {
@@ -3769,19 +3813,9 @@ public sealed partial class ToriiClient : IDisposable
             throw new JsonException($"{context} transaction targets another network.");
         }
 
-        var ttl = new CanonicalNoritoReader(
-            timeToLive,
-            $"{context} transaction TTL",
-            nameof(timeToLive));
-        if (ttl.ReadByte("tag") != 1)
-        {
-            throw new JsonException($"{context} transaction TTL must be present.");
-        }
-        var ttlValue = ttl.ReadField("value");
-        ttl.RequireEnd();
-        if (ttlValue.Length != sizeof(ulong)
-            || BinaryPrimitives.ReadUInt64LittleEndian(ttlValue)
-                != expectedTimeToLiveMilliseconds)
+        if (!timeToLive.SequenceEqual(encoding.EncodeOption<ulong>(
+                expectedTimeToLiveMilliseconds,
+                encoding.EncodeUInt64)))
         {
             throw new JsonException($"{context} transaction TTL differs from the exact request.");
         }
@@ -4581,87 +4615,67 @@ public sealed partial class ToriiClient : IDisposable
         return schema.GetString()!;
     }
 
-    private static ToriiTairaPublicResetMutationBindingV1 NormalizePreparedMutationBinding(
-        ToriiTairaPublicResetMutationBindingV1 binding,
+    private static ToriiPreparedOperationBindingV1 NormalizePreparedOperationBinding(
+        ToriiPreparedOperationBindingV1 binding,
         string expectedKind,
         bool requireActive)
     {
         ArgumentNullException.ThrowIfNull(binding);
         if (!string.Equals(
                 binding.Schema,
-                ToriiTairaPublicResetMutationBindingV1.SchemaV1,
+                ToriiPreparedOperationBindingV1.SchemaV1,
                 StringComparison.Ordinal))
         {
-            throw new ArgumentException("Prepared mutation binding has an unsupported schema.", nameof(binding));
+            throw new ArgumentException("Prepared operation binding has an unsupported schema.", nameof(binding));
         }
-        if (!IsExactLowerHex(binding.AuthorizationSha256, 32)
-            || !IsExactLowerHex(binding.IdempotencyKey, 32))
+        if (!IsExactLowerHex(binding.SemanticHashHex, 32)
+            || !IsExactLowerHex(binding.RequestId, 32))
         {
             throw new ArgumentException(
-                "Prepared mutation binding digests must contain exactly 32 bytes of lowercase hexadecimal.",
-                nameof(binding));
-        }
-        if (binding.AuthorizationNonce is null
-            || binding.AuthorizationNonce.Length != 32
-            || binding.AuthorizationNonce.Any(static value =>
-                value is not (>= 'a' and <= 'z')
-                    and not (>= '0' and <= '9')
-                    and not '-'
-                    and not '_'))
-        {
-            throw new ArgumentException(
-                "Prepared mutation binding authorization_nonce must contain exactly 32 lowercase URL-safe characters.",
-                nameof(binding));
-        }
-        if (binding.Phase is null
-            || binding.Phase.Length is < 1 or > 128
-            || binding.Phase.Any(static value =>
-                value is not (>= 'a' and <= 'z')
-                    and not (>= '0' and <= '9')
-                    and not '-'
-                    and not '_'))
-        {
-            throw new ArgumentException(
-                "Prepared mutation binding phase must be a 1..128 character lowercase reset phase.",
+                "Prepared operation binding hashes and request identity must contain exactly 32 bytes of lowercase hexadecimal.",
                 nameof(binding));
         }
         if (!string.Equals(binding.Kind, expectedKind, StringComparison.Ordinal))
         {
-            throw new ArgumentException("Prepared mutation binding belongs to another operation.", nameof(binding));
+            throw new ArgumentException("Prepared operation binding belongs to another operation.", nameof(binding));
         }
         if (binding.ExecutionExpiresAtUnixMilliseconds == 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(binding),
-                "Prepared mutation binding execution expiry must be positive.");
+                "Prepared operation binding execution expiry must be positive.");
         }
         if (requireActive
             && binding.ExecutionExpiresAtUnixMilliseconds
                 <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
         {
-            throw new ArgumentException("Prepared mutation binding is expired for a new prepare.", nameof(binding));
+            throw new ArgumentException("Prepared operation binding is expired for execution.", nameof(binding));
         }
         return binding with { };
     }
 
-    private void ValidatePreparedAccountOnboarding(
+    /// <summary>Authenticate a retained onboarding envelope without HTTP or a current-time expiry check.</summary>
+    /// <remarks>Caller-trusted request, receipt, authority, network and fee intent remain mandatory.</remarks>
+    public static void VerifyAccountOnboardingPreparedTransactionV1(
         ToriiAccountOnboardingPreparedTransactionV1 prepared,
         ToriiAccountOnboardingPlanRequest exactExpectedRequest,
         ToriiAccountOnboardingPlanReceipt expectedReceipt,
-        ToriiTairaPublicResetMutationBindingV1 expectedBinding,
+        ToriiPreparedOperationBindingV1 expectedBinding,
         FeePaymentIntent expectedFeePayment,
         string expectedAuthority,
         NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        exactExpectedRequest = NormalizeAccountOnboardingPlanRequest(exactExpectedRequest);
+        expectedFeePayment = NormalizeFeePaymentIntent(expectedFeePayment, nameof(expectedFeePayment), requireGasLimit: false);
         if (prepared.Binding is null
             || prepared.Receipt is null
             || prepared.Disposition is null)
         {
             throw new JsonException("prepared onboarding response is missing a required object.");
         }
-        var exactBinding = NormalizePreparedMutationBinding(
+        var exactBinding = NormalizePreparedOperationBinding(
             prepared.Binding,
             ToriiAccountOnboardingPreparedTransactionV1.OperationV1,
             requireActive: false);
@@ -4692,6 +4706,7 @@ public sealed partial class ToriiClient : IDisposable
             prepared.Receipt.Body.Request,
             "prepared onboarding receipt");
         var semanticHash = expectedReceipt.PlanHash.Substring(5, 64).ToLowerInvariant();
+        ValidatePreparedSemanticBinding(exactBinding, semanticHash, expectedReceipt.Body.ValidUntilMilliseconds);
         if (!string.Equals(prepared.SemanticHashHex, semanticHash, StringComparison.Ordinal)
             || !string.Equals(
                 prepared.AccountId,
@@ -4753,7 +4768,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
         ToriiAccountOnboardingPlanRequest exactExpectedRequest,
         ToriiAccountOnboardingPlanReceipt expectedReceipt,
-        ToriiTairaPublicResetMutationBindingV1 expectedBinding,
+        ToriiPreparedOperationBindingV1 expectedBinding,
         string expectedAuthority,
         NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder)
@@ -4763,11 +4778,11 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new JsonException("proof-required onboarding response is missing a required object.");
         }
-        var exactBinding = NormalizePreparedMutationBinding(
+        var exactBinding = NormalizePreparedOperationBinding(
             proofRequired.Binding,
             ToriiAccountOnboardingProofRequiredPrepareResponseV1.OperationV1,
             requireActive: false);
-        var expectedExactBinding = NormalizePreparedMutationBinding(
+        var expectedExactBinding = NormalizePreparedOperationBinding(
             expectedBinding,
             ToriiAccountOnboardingProofRequiredPrepareResponseV1.OperationV1,
             requireActive: false);
@@ -4785,6 +4800,7 @@ public sealed partial class ToriiClient : IDisposable
             expectedReceipt.Body.Request,
             "expected onboarding receipt");
         var semanticHash = expectedReceipt.PlanHash.Substring(5, 64).ToLowerInvariant();
+        ValidatePreparedSemanticBinding(exactBinding, semanticHash, expectedReceipt.Body.ValidUntilMilliseconds);
         if (!string.Equals(proofRequired.Schema, ToriiAccountOnboardingProofRequiredPrepareResponseV1.SchemaV1, StringComparison.Ordinal)
             || !string.Equals(proofRequired.Operation, ToriiAccountOnboardingProofRequiredPrepareResponseV1.OperationV1, StringComparison.Ordinal)
             || !string.Equals(proofRequired.Outcome, ToriiAccountOnboardingProofRequiredPrepareResponseV1.OutcomeV1, StringComparison.Ordinal)
@@ -4878,10 +4894,11 @@ public sealed partial class ToriiClient : IDisposable
             : ToriiAccountOnboardingCurrentStateKindV1.AliasConflict;
     }
 
-    private void ValidatePreparedAccountFaucet(
+    /// <summary>Verifies a durable prepared faucet envelope against caller-trusted network and policy without HTTP or a current-time check.</summary>
+    public static void VerifyAccountFaucetPreparedTransactionV1(
         ToriiAccountFaucetPreparedTransactionV1 prepared,
         ToriiAccountFaucetClaimV1 expectedClaim,
-        ToriiTairaPublicResetMutationBindingV1 expectedBinding,
+        ToriiPreparedOperationBindingV1 expectedBinding,
         FeePaymentIntent expectedFeePayment,
         ToriiAccountFaucetPolicyV1 policy,
         NetworkId expectedNetworkId)
@@ -4889,17 +4906,19 @@ public sealed partial class ToriiClient : IDisposable
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(expectedNetworkId);
+        expectedFeePayment = NormalizeFeePaymentIntent(expectedFeePayment, nameof(expectedFeePayment), requireGasLimit: false);
         if (prepared.Binding is null || prepared.Claim is null)
         {
             throw new JsonException("prepared faucet response is missing a required object.");
         }
-        var exactBinding = NormalizePreparedMutationBinding(
+        var exactBinding = NormalizePreparedOperationBinding(
             prepared.Binding,
             ToriiAccountFaucetPreparedTransactionV1.OperationV1,
             requireActive: false);
         RequireMatchingPreparedBinding(exactBinding, expectedBinding, "prepared faucet binding");
         var claim = NormalizeAccountFaucetClaim(prepared.Claim);
         var expected = NormalizeAccountFaucetClaim(expectedClaim);
+        ValidatePreparedSemanticBinding(exactBinding, FaucetClaimSemanticHashHex(expected), ulong.MaxValue);
         if (!string.Equals(prepared.Schema, ToriiAccountFaucetPreparedTransactionV1.SchemaV1, StringComparison.Ordinal)
             || !string.Equals(prepared.Operation, ToriiAccountFaucetPreparedTransactionV1.OperationV1, StringComparison.Ordinal)
             || !string.Equals(claim.AccountId, expected.AccountId, StringComparison.Ordinal)
@@ -5005,7 +5024,7 @@ public sealed partial class ToriiClient : IDisposable
 
     private static void ValidatePreparedSubmitResponse(
         ToriiPreparedTransactionSubmitResponseV1 response,
-        ToriiTairaPublicResetMutationBindingV1 expectedBinding,
+        ToriiPreparedOperationBindingV1 expectedBinding,
         string expectedOperation,
         string expectedTransactionHashHex,
         HttpStatusCode statusCode,
@@ -5016,7 +5035,7 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new JsonException($"{context}.binding must not be null.");
         }
-        var exactBinding = NormalizePreparedMutationBinding(
+        var exactBinding = NormalizePreparedOperationBinding(
             response.Binding,
             expectedOperation,
             requireActive: false);
@@ -5047,8 +5066,8 @@ public sealed partial class ToriiClient : IDisposable
     }
 
     private static void RequireMatchingPreparedBinding(
-        ToriiTairaPublicResetMutationBindingV1 actual,
-        ToriiTairaPublicResetMutationBindingV1 expected,
+        ToriiPreparedOperationBindingV1 actual,
+        ToriiPreparedOperationBindingV1 expected,
         string context)
     {
         if (actual != expected)
@@ -5062,6 +5081,8 @@ public sealed partial class ToriiClient : IDisposable
     private sealed record PreparedTransactionWireV1(
         byte[] Wire,
         byte[] Payload,
+        ulong CreationTimeMilliseconds,
+        ulong TimeToLiveMilliseconds,
         byte[] NetworkDomain,
         byte[] Authority,
         byte[] FeePayment,
@@ -5149,7 +5170,7 @@ public sealed partial class ToriiClient : IDisposable
             var authority = transactionPayload.ReadField("authority").ToArray();
             var creationTime = transactionPayload.ReadField("creation_time_ms");
             var executable = transactionPayload.ReadField("executable");
-            _ = transactionPayload.ReadField("time_to_live_ms");
+            var timeToLive = transactionPayload.ReadField("time_to_live_ms");
             _ = transactionPayload.ReadField("nonce");
             var feePayment = transactionPayload.ReadField("fee_payment").ToArray();
             var admissionIntent = transactionPayload.ReadField("admission_intent");
@@ -5159,7 +5180,6 @@ public sealed partial class ToriiClient : IDisposable
             if (networkDomain.Length == 0
                 || authority.Length == 0
                 || creationTime.Length != sizeof(ulong)
-                || BinaryPrimitives.ReadUInt64LittleEndian(creationTime) == 0
                 || executable.Length == 0
                 || feePayment.Length == 0
                 || admissionIntent.Length != sizeof(uint)
@@ -5175,9 +5195,22 @@ public sealed partial class ToriiClient : IDisposable
                 throw new JsonException(
                     $"{context}.signed_transaction_wire_hex contains an unknown admission intent.");
             }
+            var ttl = new CanonicalNoritoReader(timeToLive, $"{context} time_to_live_ms", nameof(wireHex));
+            if (ttl.ReadByte("tag") != 1)
+            {
+                throw new JsonException($"{context} requires a positive signed transaction TTL.");
+            }
+            var ttlValue = ttl.ReadField("value");
+            ttl.RequireEnd();
+            if (ttlValue.Length != sizeof(ulong) || BinaryPrimitives.ReadUInt64LittleEndian(ttlValue) == 0)
+            {
+                throw new JsonException($"{context} requires a positive signed transaction TTL.");
+            }
             return new PreparedTransactionWireV1(
                 wire,
                 payload,
+                BinaryPrimitives.ReadUInt64LittleEndian(creationTime),
+                BinaryPrimitives.ReadUInt64LittleEndian(ttlValue),
                 networkDomain,
                 authority,
                 feePayment,
@@ -5199,7 +5232,7 @@ public sealed partial class ToriiClient : IDisposable
         string? expectedAuthority,
         string encodingContextAccountId,
         FeePaymentIntent feePayment,
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         string operation,
         string semanticHashHex,
         string context)
@@ -5217,26 +5250,16 @@ public sealed partial class ToriiClient : IDisposable
             throw new JsonException($"{context} fee_payment differs from the signed transaction.");
         }
 
-        var bindingNode = new JsonObject
+        if (transaction.TimeToLiveMilliseconds > ulong.MaxValue - transaction.CreationTimeMilliseconds
+            || transaction.CreationTimeMilliseconds + transaction.TimeToLiveMilliseconds
+                > binding.ExecutionExpiresAtUnixMilliseconds)
         {
-            ["schema"] = binding.Schema,
-            ["authorization_sha256"] = binding.AuthorizationSha256,
-            ["authorization_nonce"] = binding.AuthorizationNonce,
-            ["kind"] = binding.Kind,
-            ["phase"] = binding.Phase,
-            ["idempotency_key"] = binding.IdempotencyKey,
-            ["execution_expires_at_unix_ms"] = binding.ExecutionExpiresAtUnixMilliseconds,
-        };
-        var expectedMetadata = encoding.EncodeMetadata(
-            new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
-            {
-                ["taira_public_reset_binding"] = bindingNode,
-                ["taira_prepared_operation"] = JsonValue.Create(operation),
-                ["taira_prepared_semantic_hash"] = JsonValue.Create(semanticHashHex),
-            });
+            throw new JsonException($"{context} signed transaction outlives its operation deadline.");
+        }
+        var expectedMetadata = encoding.EncodeMetadata(ExpectedPreparedTransactionMetadata(binding, operation, semanticHashHex));
         if (!transaction.Metadata.AsSpan().SequenceEqual(expectedMetadata))
         {
-            throw new JsonException($"{context} metadata differs from its exact reset binding.");
+            throw new JsonException($"{context} metadata differs from its exact operation binding.");
         }
 
         byte[] signerPublicKey;
@@ -5270,6 +5293,44 @@ public sealed partial class ToriiClient : IDisposable
             throw new JsonException($"{context} transaction signature is invalid.");
         }
         return signerPublicKey;
+    }
+
+    private static void ValidatePreparedSemanticBinding(
+        ToriiPreparedOperationBindingV1 binding,
+        string semanticHashHex,
+        ulong semanticExpiry)
+    {
+        if (!string.Equals(binding.SemanticHashHex, semanticHashHex, StringComparison.Ordinal)
+            || binding.ExecutionExpiresAtUnixMilliseconds == 0
+            || binding.ExecutionExpiresAtUnixMilliseconds > semanticExpiry)
+        {
+            throw new ArgumentException("Prepared operation binding differs from its exact semantic intent or deadline.", nameof(binding));
+        }
+    }
+
+    private static Dictionary<string, JsonNode?> ExpectedPreparedTransactionMetadata(
+        ToriiPreparedOperationBindingV1 binding,
+        string operation,
+        string semanticHashHex)
+    {
+        var metadata = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["prepared_operation_binding"] = new JsonObject
+            {
+                ["schema"] = binding.Schema,
+                ["semantic_hash_hex"] = binding.SemanticHashHex,
+                ["kind"] = binding.Kind,
+                ["request_id"] = binding.RequestId,
+                ["execution_expires_at_unix_ms"] = binding.ExecutionExpiresAtUnixMilliseconds,
+            },
+            ["prepared_operation"] = JsonValue.Create(operation),
+            ["prepared_semantic_hash"] = JsonValue.Create(semanticHashHex),
+        };
+        if (string.Equals(operation, ToriiAccountFaucetPreparedTransactionV1.OperationV1, StringComparison.Ordinal))
+        {
+            metadata["taira_faucet_claim_marker_version"] = JsonValue.Create(1UL);
+        }
+        return metadata;
     }
 
     private static IReadOnlyList<byte[]> DecodePreparedInstructionSequence(
@@ -5975,16 +6036,13 @@ public sealed partial class ToriiClient : IDisposable
                 $"{context} is not bound to the exact requested contract alias.");
         }
 
-        if (response.Submitted)
+        if (response.Submitted != (request.TransactionPayloadBase64 is not null))
         {
-            return;
+            throw new JsonException($"{context} submission status differs from the requested detached envelope.");
         }
         var draftIntent = request.DraftIntent
             ?? throw new JsonException(
                 $"{context} requires an exact caller-trusted DraftIntent before its unsigned draft can be trusted.");
-        var expectedNetworkId = Options.NetworkId
-            ?? throw new JsonException(
-                $"{context} cannot trust an unsigned transaction without ToriiClientOptions.NetworkId.");
         var expectedCodeHashHex = Convert
             .ToHexString(draftIntent.Invocation.ExpectedCodeHash)
             .ToLowerInvariant();
@@ -6005,13 +6063,41 @@ public sealed partial class ToriiClient : IDisposable
                 $"{context} resolved contract binding differs from the exact caller-trusted DraftIntent.");
         }
 
+        var payload = Convert.FromBase64String(
+            request.TransactionPayloadBase64 ?? response.TransactionPayloadBase64!);
+        ValidateContractTransactionPayload(payload, request, response.CreationTimeMilliseconds, responseFeePayment, context);
+        if (response.Submitted)
+        {
+            var entrypoint = new CanonicalNoritoWriter();
+            entrypoint.WriteUInt32LittleEndian(0);
+            entrypoint.WriteField(payload);
+            var expectedHash = Convert.ToHexString(IrohaHash.Hash(entrypoint.ToArray())).ToLowerInvariant();
+            if (!string.Equals(response.TransactionHashHex, expectedHash, StringComparison.Ordinal)
+                || !string.Equals(response.EntrypointHashHex, expectedHash, StringComparison.Ordinal)
+                || !request.FeePayment.Equals(responseFeePayment))
+            {
+                throw new JsonException($"{context} submitted receipt differs from the exact signed payload or quoted fee.");
+            }
+        }
+    }
+
+    private void ValidateContractTransactionPayload(
+        byte[] payload,
+        ToriiContractCallRequest request,
+        ulong expectedCreationTimeMilliseconds,
+        FeePaymentIntent expectedFeePayment,
+        string context)
+    {
+        var draftIntent = request.DraftIntent
+            ?? throw new JsonException($"{context} requires an exact caller-trusted DraftIntent.");
+        var expectedNetworkId = Options.NetworkId
+            ?? throw new JsonException($"{context} requires ToriiClientOptions.NetworkId.");
         try
         {
-            var payload = Convert.FromBase64String(response.TransactionPayloadBase64!);
             var reader = new CanonicalNoritoReader(
                 payload,
                 $"{context} transaction payload",
-                nameof(response.TransactionPayloadBase64));
+                nameof(request.TransactionPayloadBase64));
             var networkDomain = reader.ReadField("domain");
             var authority = reader.ReadField("authority");
             var creationTime = reader.ReadField("creation_time_ms");
@@ -6044,16 +6130,16 @@ public sealed partial class ToriiClient : IDisposable
             }
             if (creationTime.Length != sizeof(ulong)
                 || BinaryPrimitives.ReadUInt64LittleEndian(creationTime)
-                    != response.CreationTimeMilliseconds)
+                    != expectedCreationTimeMilliseconds)
             {
                 throw new JsonException(
                     $"{context}.creation_time_ms differs from the exact transaction payload.");
             }
             if (!feePayment.SequenceEqual(
-                encoding.EncodeFeePaymentIntent(responseFeePayment)))
+                encoding.EncodeFeePaymentIntent(expectedFeePayment)))
             {
                 throw new JsonException(
-                    $"{context}.operation_receipt.fee_payment differs from the exact transaction payload.");
+                    $"{context}.fee_payment differs from the exact transaction payload.");
             }
             if (!metadata.SequenceEqual(encoding.EncodeMetadata(draftIntent.Metadata)))
             {
@@ -8664,10 +8750,21 @@ public sealed partial class ToriiClient : IDisposable
 
     private static ToriiContractCallRequest NormalizeContractCallRequest(ToriiContractCallRequest request)
     {
-        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        var transactionPayloadBase64 = NormalizeOptionalExactBase64(
+            request.TransactionPayloadBase64, nameof(request.TransactionPayloadBase64));
+        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
+        if ((transactionPayloadBase64 is null) != (publicKeyHex is null))
+        {
+            throw new ArgumentException(
+                "Detached signing requires transaction_payload_b64, public_key_hex, and signature_b64 together.",
+                nameof(request.TransactionPayloadBase64));
+        }
+        if (transactionPayloadBase64 is not null && !request.CreationTimeMilliseconds.HasValue)
+        {
+            throw new ArgumentException("Detached signing requires the prepared creation time.", nameof(request.CreationTimeMilliseconds));
+        }
         var (contractAddress, contractAlias) = NormalizeContractTarget(
             request.ContractAddress,
             request.ContractAlias,
@@ -8704,7 +8801,7 @@ public sealed partial class ToriiClient : IDisposable
         return request with
         {
             Authority = authority,
-            PrivateKey = privateKey,
+            TransactionPayloadBase64 = transactionPayloadBase64,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
             ContractAddress = contractAddress,
@@ -9898,20 +9995,6 @@ public sealed partial class ToriiClient : IDisposable
             throw new ArgumentException(
                 "Detached signing requires both public_key_hex and signature_b64.",
                 publicKeyHex is null ? nameof(ToriiContractCallRequest.PublicKeyHex) : nameof(ToriiContractCallRequest.SignatureBase64));
-        }
-    }
-
-    private static void ValidateSigningMaterial(
-        string? privateKey,
-        string? publicKeyHex,
-        string? signatureBase64)
-    {
-        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
-        if (privateKey is not null && publicKeyHex is not null)
-        {
-            throw new ArgumentException(
-                "Provide either private_key or detached public_key_hex/signature_b64, not both.",
-                nameof(ToriiContractCallRequest.PrivateKey));
         }
     }
 

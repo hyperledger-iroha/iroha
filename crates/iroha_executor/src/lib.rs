@@ -269,7 +269,6 @@ mod tests {
     use data_model::query::QueryItemKind;
     use data_model::{
         asset::AssetDefinition,
-        isi::InstructionBox,
         permission::Permission,
         prelude::Json,
         query::{
@@ -284,7 +283,6 @@ mod tests {
     };
     static CALLED: AtomicBool = AtomicBool::new(false);
     thread_local! {
-        static INSTRUCTION_RECORDER: RefCell<Option<Vec<InstructionBox>>> = const { RefCell::new(None) };
         static ASSET_DEFINITIONS: RefCell<Vec<AssetDefinition>> = const { RefCell::new(Vec::new()) };
     }
     fn empty_iterable_batch(
@@ -344,16 +342,7 @@ mod tests {
         QueryOutputBatchBoxTuple::from_batch(batch)
     }
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn execute_instruction(ptr: *const u8, len: usize) -> *const u8 {
-        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        INSTRUCTION_RECORDER.with(|recorder| {
-            if let Some(instructions) = recorder.borrow_mut().as_mut() {
-                instructions.push(
-                    norito::decode_from_bytes(bytes)
-                        .expect("submitted test instruction must decode"),
-                );
-            }
-        });
+    pub unsafe extern "C" fn execute_instruction(_ptr: *const u8, _len: usize) -> *const u8 {
         let body =
             norito::to_bytes(&Result::<(), ValidationFail>::Ok(())).expect("encode instruction ok");
         unsafe { encode_with_len_prefix(&body) }
@@ -430,34 +419,6 @@ mod tests {
         let previous = ASSET_DEFINITIONS.with(|current| current.replace(definitions));
         let _restore = RestoreGuard(previous);
         f()
-    }
-    pub(crate) fn record_submitted_instructions<R>(
-        f: impl FnOnce() -> R,
-    ) -> (R, Vec<InstructionBox>) {
-        INSTRUCTION_RECORDER.with(|recorder| {
-            assert!(
-                recorder.replace(Some(Vec::new())).is_none(),
-                "instruction recorder must not be nested"
-            );
-        });
-        struct ResetRecorder;
-        impl Drop for ResetRecorder {
-            fn drop(&mut self) {
-                INSTRUCTION_RECORDER.with(|recorder| {
-                    recorder.borrow_mut().take();
-                });
-            }
-        }
-        let reset = ResetRecorder;
-        let result = f();
-        let instructions = INSTRUCTION_RECORDER.with(|recorder| {
-            recorder
-                .borrow_mut()
-                .take()
-                .expect("instruction recorder must be active")
-        });
-        drop(reset);
-        (result, instructions)
     }
     unsafe extern "C" fn dummy(_: *const u8, _: usize) {
         CALLED.store(true, Ordering::Relaxed);

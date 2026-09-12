@@ -1,13 +1,15 @@
 use super::*;
 use iroha_data_model::{
-    ChainId, ValidationFail,
+    ValidationFail,
     account::AccountId,
     block::{SignedBlock, consensus_v2::ConsensusMode},
     isi::Log,
-    nexus::{AssetPermissionManifest, DataSpaceId, LaneId, ManifestVersion, UniversalAccountId},
+    nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
     prelude::{Account, Domain},
     transaction::{TransactionBuilder, error::TransactionRejectionReason},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::sync::Arc;
 fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {

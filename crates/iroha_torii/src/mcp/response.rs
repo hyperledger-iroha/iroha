@@ -84,7 +84,11 @@ impl JsonWriteSink for BoundedJsonSizeCounter {
     }
 }
 
-fn bounded_json_value_len(value: &Value, max_bytes: usize) -> Result<usize, BoundedJsonError> {
+/// Measure the exact compact JSON using the final HTTP serializer's byte/depth bounds.
+pub(super) fn bounded_json_value_len(
+    value: &Value,
+    max_bytes: usize,
+) -> Result<usize, BoundedJsonError> {
     let mut counter = BoundedJsonSizeCounter::new(max_bytes);
     value.write_json_to(&mut counter)?;
     Ok(counter.encoded_bytes)

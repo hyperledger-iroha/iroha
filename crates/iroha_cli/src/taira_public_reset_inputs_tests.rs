@@ -1,5 +1,25 @@
 use super::*;
 
+#[test]
+fn validator_pin_fee_asset_must_match_the_typed_faucet_funding_asset() {
+    let inventory = sample_inventory_fixture();
+    let faucet = inventory.faucet_policy.asset_definition_id.parse().unwrap();
+    validate_validator_pin_fee_asset(&faucet, &inventory.faucet_policy.asset_definition_id)
+        .expect("faucet funds the exact validator pin-fee asset");
+    let other = iroha::data_model::asset::AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("feetest", "universal").unwrap(),
+        "other".parse().unwrap(),
+    );
+    assert_ne!(faucet, other);
+    assert!(
+        validate_validator_pin_fee_asset(&other, &inventory.faucet_policy.asset_definition_id)
+            .is_err()
+    );
+    let error =
+        validate_validator_pin_fee_asset(&faucet, "fixture-secret-not-runtime").unwrap_err();
+    assert!(!format!("{error:#}").contains("fixture-secret"));
+}
+
 fn owner() -> (KeyPair, TrustedKeyV1) {
     let key = KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("test owner");
     let trusted = TrustedKeyV1 {
@@ -129,29 +149,103 @@ fn independently_trusted_owner_key_cannot_be_replaced_by_signer() {
 }
 
 #[test]
-fn authorization_cannot_extend_the_bounded_plan_or_overflow_time() {
+fn authorization_cannot_extend_the_bounded_plan() {
     let mut inventory = sample_inventory_fixture();
     let (key, trusted) = owner();
-    assert!(
-        sign_inventory(
-            &inventory,
-            &canonical_inventory_bytes(&inventory).unwrap(),
-            &trusted,
-            &key,
-            u64::MAX
-        )
-        .is_err()
-    );
+    let issued_at = 1_000_000;
     inventory.timeouts.install_secs = 600;
-    assert!(
+    let envelope = sign_inventory(
+        &inventory,
+        &canonical_inventory_bytes(&inventory).unwrap(),
+        &trusted,
+        &key,
+        issued_at,
+    )
+    .expect("the maximum install timeout fits within the complete execution budget");
+    assert_eq!(
+        envelope.claims.execution_expires_at_unix_ms - issued_at,
+        31_260_000,
+    );
+
+    // One physical host requires exactly 42,000 action seconds, plus the
+    // fifteen-minute admission window and five-minute safety margin.
+    inventory.timeouts = TimeoutsV1 {
+        stop_secs: 2,
+        install_secs: 600,
+        reset_secs: 1,
+        preseed_secs: 3_599,
+        start_secs: 1,
+        convergence_secs: 1,
+        canary_secs: 323,
+        restart_secs: 1,
+        edge_secs: 1,
+        cleanup_secs: 2,
+        rollback_secs: 1,
+    };
+    validate_timeouts(&inventory.timeouts).expect("every individual timeout is legal");
+    let bytes = canonical_inventory_bytes(&inventory).unwrap();
+    let mut envelope = sign_inventory(&inventory, &bytes, &trusted, &key, issued_at)
+        .expect("the exact twelve-hour execution limit is signable");
+    assert_eq!(
+        envelope.claims.execution_expires_at_unix_ms - issued_at,
+        MAX_EXECUTION_LIFETIME_MS,
+    );
+    envelope.claims.execution_expires_at_unix_ms += 1;
+    let signature = Signature::try_new(
+        key.private_key(),
+        &authorization_message(&envelope.claims).unwrap(),
+    )
+    .unwrap();
+    envelope.signature_hex = hex::encode(signature.payload());
+    assert_eq!(
+        verify_authorization(
+            &inventory,
+            &sha256_hex(&bytes),
+            &envelope,
+            &trusted,
+            issued_at
+        )
+        .expect_err("even the trusted owner cannot sign a longer execution lease")
+        .to_string(),
+        "authorization execution lease does not exactly cover the bounded execution plan",
+    );
+
+    inventory.timeouts.preseed_secs += 1;
+    validate_timeouts(&inventory.timeouts).expect("the longer preseed timeout remains legal");
+    assert_eq!(
         sign_inventory(
             &inventory,
             &canonical_inventory_bytes(&inventory).unwrap(),
             &trusted,
             &key,
-            1_000_000
+            issued_at,
         )
-        .is_err()
+        .expect_err("one additional preseed second exceeds the complete execution budget")
+        .to_string(),
+        "bounded execution plan requires 43202 seconds (actions: 42002 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 2 seconds",
+    );
+}
+
+#[test]
+fn authorization_cannot_overflow_admission_or_execution_expiry() {
+    let inventory = sample_inventory_fixture();
+    let (key, trusted) = owner();
+    let bytes = canonical_inventory_bytes(&inventory).unwrap();
+    let last_issued_at = u64::MAX - execution_lifetime_ms(&inventory).unwrap();
+    let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, last_issued_at)
+        .expect("the last representable execution expiry is signable");
+    assert_eq!(envelope.claims.execution_expires_at_unix_ms, u64::MAX);
+    assert_eq!(
+        sign_inventory(&inventory, &bytes, &trusted, &key, last_issued_at + 1,)
+            .expect_err("one millisecond later overflows the execution expiry")
+            .to_string(),
+        "execution expiry overflow",
+    );
+    assert_eq!(
+        sign_inventory(&inventory, &bytes, &trusted, &key, u64::MAX)
+            .expect_err("the admission expiry must also use checked arithmetic")
+            .to_string(),
+        "authorization expiry overflow",
     );
 }
 
@@ -243,6 +337,7 @@ fn assembler_rejects_incomplete_topology_before_reading_runtime_inputs() {
         runtime_client_config: PathBuf::from("/missing"),
         validator_client_config: vec![],
         onboarding_token: PathBuf::from("/missing"),
+        validator_operator_key: PathBuf::from("/missing"),
         inrou_stage_dir: PathBuf::from("/missing"),
         validator_unit: vec![],
         edge_unit: PathBuf::from("/missing"),
@@ -268,6 +363,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         stop_secs: 600,
         install_secs: 600,
         reset_secs: 600,
+        preseed_secs: 3_600,
         start_secs: 600,
         convergence_secs: 600,
         canary_secs: 600,
@@ -294,6 +390,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
             .map(|slug| absent.join(format!("{slug}.toml")))
             .collect(),
         onboarding_token: absent.join("onboarding-token"),
+        validator_operator_key: absent.join("operator.key"),
         inrou_stage_dir: absent.join("stage"),
         validator_unit: VALIDATOR_SLUGS
             .iter()
@@ -302,7 +399,7 @@ fn aggregate_timeout_budget_rejects_assembly_and_authorization_before_input_or_c
         edge_unit: absent.join("edge.service"),
         known_hosts: absent.join("known-hosts"),
     };
-    let expected = "bounded execution plan requires 72000 seconds (actions: 70800 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 14400-second limit by 57600 seconds";
+    let expected = "bounded execution plan requires 78600 seconds (actions: 77400 seconds, admission: 900 seconds, safety: 300 seconds), exceeding the 43200-second limit by 35400 seconds";
     assert_eq!(
         derive_inventory(&mut inventory, &local())
             .expect_err("budget must fail before opening the absent source manifest")
@@ -358,6 +455,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         stop_secs: 60,
         install_secs: 90,
         reset_secs: 60,
+        preseed_secs: 1_800,
         start_secs: 120,
         convergence_secs: 180,
         canary_secs: 120,
@@ -370,7 +468,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
     validate_inventory(&inventory).expect("deployment defaults pass structural admission");
     assert_eq!(
         execution_lifetime_ms(&inventory).expect("bounded deployment lease"),
-        13_140_000,
+        16_680_000,
     );
     let (key, trusted) = owner();
     let bytes = canonical_inventory_bytes(&inventory).expect("inventory");
@@ -379,7 +477,7 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
         .expect("admitted defaults are signable under the same budget");
     assert_eq!(
         envelope.claims.execution_expires_at_unix_ms - issued_at,
-        13_140_000,
+        16_680_000,
     );
 
     inventory.timeouts.stop_secs = 0;
@@ -396,4 +494,31 @@ fn aggregate_timeout_policy_accepts_deployment_defaults_and_preserves_individual
             .to_string(),
         "stop timeout must be within 1..=600 seconds",
     );
+}
+
+#[test]
+fn preseed_timeout_is_required_and_has_its_own_physical_work_bound() {
+    let mut inventory = sample_inventory_fixture();
+    let mut encoded = json::to_value(&inventory.timeouts).expect("encode timeout policy");
+    encoded
+        .as_object_mut()
+        .expect("timeout object")
+        .remove("preseed_secs");
+    assert!(
+        json::from_value::<TimeoutsV1>(encoded).is_err(),
+        "old timeout policy must not silently borrow reset time"
+    );
+    for value in [0, 3_601, u64::MAX] {
+        inventory.timeouts.preseed_secs = value;
+        assert_eq!(
+            validate_timeouts(&inventory.timeouts)
+                .unwrap_err()
+                .to_string(),
+            "preseed timeout must be within 1..=3600 seconds"
+        );
+    }
+    for value in [1, 1_800, 3_600] {
+        inventory.timeouts.preseed_secs = value;
+        validate_timeouts(&inventory.timeouts).expect("independent bounded preseed work");
+    }
 }

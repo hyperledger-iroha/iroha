@@ -10,7 +10,6 @@ use crate::{
 use iroha_crypto::Hash;
 pub use iroha_data_model::nexus::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES;
 use iroha_data_model::{
-    DataSpaceId,
     account::AccountId,
     asset::id::AssetDefinitionId,
     fastpq::{
@@ -24,6 +23,7 @@ use iroha_data_model::{
     },
     transaction::signed::TransactionEntrypoint,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
@@ -63,7 +63,7 @@ pub const AXT_FASTPQ_BATCH_SEAL_METADATA_KEY: &str = "axt_fastpq_batch_seal_v1";
 pub const AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY: &str = "axt_fastpq_remote_spend_claims_v1";
 /// Canonical FASTPQ parameter name used by maintained AXT flows.
 pub const DEFAULT_PARAMETER: &str = fastpq_isi::FASTPQ_FINAL_V1_ID;
-/// Nominal first-release schema identity for the outer AXT proof payload.
+/// First-release root-frame identity for the outer AXT proof payload.
 #[cfg(test)]
 const AXT_FASTPQ_PROOF_PAYLOAD_SCHEMA_NAME: &str =
     "fastpq_prover::axt_binding::AxtFastpqProofPayloadV1";
@@ -73,8 +73,11 @@ const AXT_STATEMENT_DOMAIN: &[u8] = b"fastpq:axt:statement:v1";
 const AXT_BATCH_SEAL_DOMAIN: &[u8] = b"fastpq:axt:batch-seal:v1";
 const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// `FastPQ` payload carried inside an [`AxtProofEnvelope`] proof field.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::axt_binding::AxtFastpqProofPayloadV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::axt_binding::AxtFastpqProofPayload",
+    frame = "fastpq_prover::axt_binding::AxtFastpqProofPayloadV1"
+)]
 pub struct AxtFastpqProofPayload {
     /// Canonical transition batch proven by the embedded `FastPQ` proof.
     pub batch: FastpqTransitionBatch,
@@ -1435,8 +1438,11 @@ pub(crate) struct AxtPublicMetadataBytes<'a> {
 }
 
 /// Pre-proof outer metadata mirrors; completed-proof commitments are excluded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtProofContextMirrorsV1")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::axt_binding::AxtProofContextMirrors",
+    frame = "fastpq_prover::compact_v1::AxtProofContextMirrorsV1"
+)]
 pub(crate) struct AxtProofContextMirrors {
     /// Exact outer envelope dataspace.
     pub(crate) dsid: DataSpaceId,
@@ -1813,10 +1819,11 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::id::AssetDefinitionId,
-        domain::DomainId,
         fastpq::{TransferDeltaTranscript, TransferSmtWitness, TransferTranscript},
-        nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId},
+        nexus::{AxtAssetIncarnationV1, AxtHandleIssuerContextV1, AxtHandleReplayKey},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     fn finalized_transaction(seed: u8) -> TransactionEntrypoint {
         let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
@@ -4061,7 +4068,7 @@ mod tests {
         let release_schema =
             norito::core::schema_hash_for_name(AXT_FASTPQ_PROOF_PAYLOAD_SCHEMA_NAME);
         assert_eq!(
-            <AxtFastpqProofPayload as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<AxtFastpqProofPayload>(),
             release_schema
         );
         let mut pre_release = canonical.clone();

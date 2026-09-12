@@ -1,20 +1,34 @@
 //! Space Directory manifest representations and evaluation helpers.
-use super::DataSpaceId;
-#[cfg(feature = "json")]
+use iroha_model_base::topology::DataSpaceId;
+
+use crate::asset::AssetDefinitionId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{asset::AssetDefinitionId, error::ParseError, name::Name};
 use iroha_crypto::Hash;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonSerialize, Map, Value};
 use std::{convert::TryFrom, fmt, str::FromStr};
 /// Universal account identifier shared across all dataspaces.
 ///
 /// UAIDs provide a stable capability anchor for multi-lane Nexus deployments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[cfg_attr(
@@ -80,8 +94,20 @@ impl FromStr for UniversalAccountId {
     }
 }
 /// Canonical smart-contract identifier scoped to a dataspace.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[cfg_attr(
@@ -121,17 +147,29 @@ impl From<SmartContractId> for Name {
     }
 }
 impl FromStr for SmartContractId {
-    type Err = crate::ParseError;
+    type Err = iroha_model_base::error::ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Name::from_str(s).map(Self::new)
     }
 }
 /// Manifest version supported by the Space Directory.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "version", content = "state"))]
+#[norito(tag = "version", content = "state")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -153,6 +191,8 @@ impl From<ManifestVersion> for u16 {
     }
 }
 /// Capability manifest describing deterministic allowances for a UAID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::manifest::AssetPermissionManifest")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -245,7 +285,7 @@ impl AssetPermissionManifest {
         u32::try_from(idx).unwrap_or(u32::MAX)
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonSerialize for AssetPermissionManifest {
     fn json_serialize(&self, out: &mut String) {
         let value = manifest_to_json_value(self);
@@ -286,7 +326,7 @@ impl json::JsonSerialize for AssetPermissionManifest {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 fn entry_json_serialize_to(
     entry: &ManifestEntry,
     out: &mut dyn json::JsonWriteSink,
@@ -306,7 +346,7 @@ fn entry_json_serialize_to(
     out.end_container();
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn scope_json_serialize_to(
     scope: &CapabilityScope,
     out: &mut dyn json::JsonWriteSink,
@@ -355,7 +395,7 @@ fn scope_json_serialize_to(
     out.end_container();
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn effect_json_serialize_to(
     effect: &ManifestEffect,
     out: &mut dyn json::JsonWriteSink,
@@ -389,7 +429,7 @@ fn effect_json_serialize_to(
     out.end_container();
     Ok(())
 }
-#[cfg(feature = "json")]
+
 impl json::JsonDeserialize for AssetPermissionManifest {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
@@ -399,7 +439,7 @@ impl json::JsonDeserialize for AssetPermissionManifest {
         manifest_from_json_value(value)
     }
 }
-#[cfg(feature = "json")]
+
 fn manifest_to_json_value(manifest: &AssetPermissionManifest) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -420,7 +460,7 @@ fn manifest_to_json_value(manifest: &AssetPermissionManifest) -> Value {
     root.insert("entries".into(), Value::Array(entries));
     Value::Object(root)
 }
-#[cfg(feature = "json")]
+
 fn entry_to_json_value(entry: &ManifestEntry) -> Value {
     let mut entry_obj = Map::new();
     entry_obj.insert("scope".into(), scope_to_json_value(&entry.scope));
@@ -430,7 +470,7 @@ fn entry_to_json_value(entry: &ManifestEntry) -> Value {
     }
     Value::Object(entry_obj)
 }
-#[cfg(feature = "json")]
+
 fn scope_to_json_value(scope: &CapabilityScope) -> Value {
     let mut scope_obj = Map::new();
     if let Some(dataspace) = scope.dataspace {
@@ -450,14 +490,14 @@ fn scope_to_json_value(scope: &CapabilityScope) -> Value {
     }
     Value::Object(scope_obj)
 }
-#[cfg(feature = "json")]
+
 fn role_label(role: AmxRole) -> &'static str {
     match role {
         AmxRole::Initiator => "Initiator",
         AmxRole::Participant => "Participant",
     }
 }
-#[cfg(feature = "json")]
+
 fn effect_to_json_value(effect: &ManifestEffect) -> Value {
     let mut effect_obj = Map::new();
     match effect {
@@ -479,7 +519,7 @@ fn effect_to_json_value(effect: &ManifestEffect) -> Value {
     }
     Value::Object(effect_obj)
 }
-#[cfg(feature = "json")]
+
 fn window_label(window: AllowanceWindow) -> &'static str {
     match window {
         AllowanceWindow::PerSlot => "PerSlot",
@@ -487,7 +527,7 @@ fn window_label(window: AllowanceWindow) -> &'static str {
         AllowanceWindow::PerDay => "PerDay",
     }
 }
-#[cfg(feature = "json")]
+
 fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, json::Error> {
     let manifest_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
         field: "manifest".into(),
@@ -568,7 +608,7 @@ fn manifest_from_json_value(value: &Value) -> Result<AssetPermissionManifest, js
         entries,
     })
 }
-#[cfg(feature = "json")]
+
 fn ensure_known_manifest_fields(
     object: &Map,
     allowed: &[&str],
@@ -585,18 +625,18 @@ fn ensure_known_manifest_fields(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn noncanonical_optional_manifest_field(field: &'static str) -> json::Error {
     json::Error::InvalidField {
         field: field.into(),
         message: "optional manifest fields must be omitted instead of null".into(),
     }
 }
-#[cfg(feature = "json")]
+
 fn reserve_manifest_decode_allocation(bytes: usize) -> Result<(), json::Error> {
     norito::core::reserve_decode_allocation(bytes).map_err(json::Error::from_decode_resource)
 }
-#[cfg(feature = "json")]
+
 fn parse_manifest_version(value: &Value) -> Result<ManifestVersion, json::Error> {
     let Some(raw) = value.as_u64() else {
         return Err(json::Error::InvalidField {
@@ -612,7 +652,7 @@ fn parse_manifest_version(value: &Value) -> Result<ManifestVersion, json::Error>
         }),
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
     let Some(text) = value.as_str() else {
         return Err(json::Error::InvalidField {
@@ -642,14 +682,14 @@ fn parse_uaid_value(value: &Value) -> Result<UniversalAccountId, json::Error> {
     })?;
     Ok(UniversalAccountId::from_hash(hash))
 }
-#[cfg(feature = "json")]
+
 fn parse_u64_field(value: &Value, field: &str) -> Result<u64, json::Error> {
     value.as_u64().ok_or_else(|| json::Error::InvalidField {
         field: field.to_string(),
         message: "value must be an unsigned integer".into(),
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> {
     let entry_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
         field: format!("entries[{idx}]"),
@@ -691,7 +731,7 @@ fn parse_entry(value: &Value, idx: usize) -> Result<ManifestEntry, json::Error> 
         notes,
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error> {
     let scope_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
         field: format!("entries[{idx}].scope"),
@@ -781,7 +821,7 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
         role,
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_optional_manifest_value<'a>(
     object: &'a Map,
     field: &str,
@@ -794,7 +834,7 @@ fn parse_optional_manifest_value<'a>(
         Some(value) => Ok(Some(value)),
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_canonical_manifest_name(value: &Value, field: &'static str) -> Result<Name, json::Error> {
     let text = value.as_str().ok_or_else(|| json::Error::InvalidField {
         field: field.into(),
@@ -818,7 +858,7 @@ fn parse_canonical_manifest_name(value: &Value, field: &'static str) -> Result<N
     }
     Ok(name)
 }
-#[cfg(feature = "json")]
+
 fn parse_role(value: &str, idx: usize) -> Result<AmxRole, json::Error> {
     match value {
         "Initiator" => Ok(AmxRole::Initiator),
@@ -829,7 +869,7 @@ fn parse_role(value: &str, idx: usize) -> Result<AmxRole, json::Error> {
         }),
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_effect(value: &Value, idx: usize) -> Result<ManifestEffect, json::Error> {
     let effect_obj = value.as_object().ok_or_else(|| json::Error::InvalidField {
         field: format!("entries[{idx}].effect"),
@@ -853,7 +893,7 @@ fn parse_effect(value: &Value, idx: usize) -> Result<ManifestEffect, json::Error
         message: "effect must contain Allow or Deny".into(),
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> {
     let details = value.as_object().ok_or_else(|| json::Error::InvalidField {
         field: format!("entries[{idx}].effect.Allow"),
@@ -878,7 +918,7 @@ fn parse_allowance(value: &Value, idx: usize) -> Result<Allowance, json::Error> 
     };
     Ok(Allowance { max_amount, window })
 }
-#[cfg(feature = "json")]
+
 fn parse_deny(value: &Value, idx: usize) -> Result<DenyDirective, json::Error> {
     let details = value.as_object().ok_or_else(|| json::Error::InvalidField {
         field: format!("entries[{idx}].effect.Deny"),
@@ -904,7 +944,7 @@ fn parse_deny(value: &Value, idx: usize) -> Result<DenyDirective, json::Error> {
     };
     Ok(DenyDirective { reason })
 }
-#[cfg(feature = "json")]
+
 fn parse_window(value: &Value, idx: usize) -> Result<AllowanceWindow, json::Error> {
     let Some(label) = value.as_str() else {
         return Err(json::Error::InvalidField {
@@ -922,7 +962,7 @@ fn parse_window(value: &Value, idx: usize) -> Result<AllowanceWindow, json::Erro
         }),
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
     if !matches!(value, Value::String(_)) {
         return Err(json::Error::InvalidField {
@@ -942,9 +982,20 @@ fn parse_quantity(value: &Value, idx: usize) -> Result<Quantity, json::Error> {
     })
 }
 /// Manifest entry describing a scoped allow/deny rule.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -976,8 +1027,8 @@ pub struct ManifestEntry {
     norito::derive::NoritoDeserialize,
 )]
 #[norito(decode_from_slice)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "role", content = "details"))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[norito(tag = "role", content = "details")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -993,9 +1044,20 @@ pub enum AmxRole {
     Participant,
 }
 /// Scope definition that determines whether a manifest entry matches a capability request.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1050,10 +1112,21 @@ impl CapabilityScope {
     }
 }
 /// Decision encoded by a manifest entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
-#[cfg_attr(feature = "json", norito(tag = "decision", content = "details"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(tag = "decision", content = "details")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1069,9 +1142,20 @@ pub enum ManifestEffect {
     Deny(DenyDirective),
 }
 /// Allowance constraints attached to an `Allow` entry.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1087,9 +1171,22 @@ pub struct Allowance {
     pub window: AllowanceWindow,
 }
 /// Allowance accounting window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "window", content = "details"))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "window", content = "details")]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1118,9 +1215,20 @@ impl AllowanceWindow {
     }
 }
 /// Deny directive metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1223,9 +1331,9 @@ pub enum DenyReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
-    #[cfg(feature = "json")]
+
     use norito::json::JsonDeserialize;
     use std::{fs, path::Path};
     #[derive(Encode)]
@@ -1257,6 +1365,35 @@ mod tests {
             expiry_epoch: None,
             entries: Vec::new(),
         };
+        assert_eq!(
+            <AssetPermissionManifest as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::nexus::manifest::AssetPermissionManifest"
+        );
+        let frame = norito::encode_canonical(&manifest).expect("encode declared owner frame");
+        assert_eq!(
+            frame[6..22],
+            norito::core::schema_hash_for_name(
+                "iroha_data_model::nexus::manifest::AssetPermissionManifest"
+            )
+        );
+        let restored: AssetPermissionManifest =
+            norito::decode_canonical(&frame).expect("decode declared owner frame");
+        assert_eq!(
+            norito::encode_canonical(&restored).expect("reencode restored owner"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<AssetPermissionManifest>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<AssetPermissionManifest>(&frame[..frame.len() - 1]).is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<AssetPermissionManifest>(&trailing).is_err());
         let encoded = manifest.encode();
         let mut input = encoded.as_slice();
         let decoded = AssetPermissionManifest::decode(&mut input)
@@ -1303,7 +1440,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_json_requires_canonical_uaid_literal() {
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1339,7 +1476,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_json_rejects_negative_allowance_quantity() {
         let mut value = manifest_to_json_value(&cbdc_manifest_fixture());
@@ -1364,7 +1501,7 @@ mod tests {
             "manifest JSON must reject a negative amount cap"
         );
     }
-    #[cfg(feature = "json")]
+
     fn manifest_json_entry_mut(value: &mut Value, index: usize) -> &mut Map {
         let Value::Object(root) = value else {
             panic!("manifest fixture must serialize as an object");
@@ -1377,7 +1514,7 @@ mod tests {
         };
         entry
     }
-    #[cfg(feature = "json")]
+
     fn manifest_json_scope_mut(value: &mut Value, index: usize) -> &mut Map {
         let entry = manifest_json_entry_mut(value, index);
         let Value::Object(scope) = entry.get_mut("scope").expect("manifest scope") else {
@@ -1385,7 +1522,7 @@ mod tests {
         };
         scope
     }
-    #[cfg(feature = "json")]
+
     fn manifest_json_effect_mut(value: &mut Value, index: usize) -> &mut Map {
         let entry = manifest_json_entry_mut(value, index);
         let Value::Object(effect) = entry.get_mut("effect").expect("manifest effect") else {
@@ -1393,7 +1530,7 @@ mod tests {
         };
         effect
     }
-    #[cfg(feature = "json")]
+
     fn manifest_json_effect_details_mut<'a>(
         value: &'a mut Value,
         index: usize,
@@ -1406,7 +1543,7 @@ mod tests {
         };
         details
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_json_rejects_unknown_fields_at_every_object_level() {
         let expected = cbdc_manifest_fixture();
@@ -1433,7 +1570,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_json_requires_canonical_owned_literals() {
         let expected = cbdc_manifest_fixture();
@@ -1487,7 +1624,7 @@ mod tests {
             "optional fields must be omitted instead of set to null"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_json_value_decode_obeys_exact_allocation_budget() {
         fn limits(bytes: usize) -> norito::DecodeLimits {
@@ -1523,7 +1660,7 @@ mod tests {
         );
         assert!(usage.total_allocated_bytes() < exact);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_json_value_decode_precharges_retained_strings() {
         fn limits(bytes: usize) -> norito::DecodeLimits {
@@ -1664,7 +1801,7 @@ mod tests {
             norito::json::from_str(&fixture).expect("parse fixture JSON");
         assert_eq!(fixture_value, expected);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manifest_bounded_json_writer_matches_and_balances_depth() {
         #[derive(Default)]

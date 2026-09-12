@@ -11642,7 +11642,7 @@ public struct ToriiTriggerEventFilter: Sendable {
     }
 }
 
-fileprivate enum ToriiCanonicalHashLiteral {
+enum ToriiCanonicalHashLiteral {
     private static let tag = "hash"
     private static let prefix = "hash:"
     private static let bodyLength = 64
@@ -14653,6 +14653,8 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
     public var authority: String
     public var publicKeyHex: String?
     public var signatureB64: String?
+    /// Exact prepared transaction bytes authorized by the detached signature.
+    public var transactionPayloadB64: String?
     public var contractAddress: String?
     public var contractAlias: String?
     public var entrypoint: String
@@ -14668,6 +14670,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
     public init(authority: String,
                 publicKeyHex: String? = nil,
                 signatureB64: String? = nil,
+                transactionPayloadB64: String? = nil,
                 contractAddress: String? = nil,
                 contractAlias: String? = nil,
                 entrypoint: String,
@@ -14680,6 +14683,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         self.authority = authority
         self.publicKeyHex = publicKeyHex
         self.signatureB64 = signatureB64
+        self.transactionPayloadB64 = transactionPayloadB64
         self.contractAddress = contractAddress
         self.contractAlias = contractAlias
         self.entrypoint = entrypoint
@@ -14695,6 +14699,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         case authority
         case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
+        case transactionPayloadB64 = "transaction_payload_b64"
         case contractAddress = "contract_address"
         case contractAlias = "contract_alias"
         case entrypoint
@@ -14713,6 +14718,21 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         )
         let normalizedSignatureB64 = try signatureB64.map {
             try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
+        }
+        let normalizedTransactionPayloadB64 = try transactionPayloadB64.map {
+            try ToriiRequestValidation.normalizedExactBase64($0, field: "transaction_payload_b64")
+        }
+        let detachedFields = [normalizedPublicKeyHex, normalizedSignatureB64, normalizedTransactionPayloadB64]
+            .compactMap { $0 }.count
+        guard detachedFields == 0 || detachedFields == 3 else {
+            throw ToriiClientError.invalidPayload(
+                "detached contract calls require transaction_payload_b64, public_key_hex, and signature_b64 together."
+            )
+        }
+        if detachedFields == 3, creationTimeMs == nil {
+            throw ToriiClientError.invalidPayload(
+                "detached contract calls require the prepared creation_time_ms."
+            )
         }
         let normalizedTarget = try normalizeToriiContractTargetSelector(
             contractAddress: contractAddress,
@@ -14741,6 +14761,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
         try container.encode(normalizedAuthority, forKey: .authority)
         try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
+        try container.encodeIfPresent(normalizedTransactionPayloadB64, forKey: .transactionPayloadB64)
         try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
         try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(normalizedEntrypoint, forKey: .entrypoint)
@@ -14756,9 +14777,9 @@ public struct ToriiContractCallRequest: Encodable, Sendable, Equatable {
     fileprivate func normalizedForDetachedPreparation(
         nowMilliseconds: UInt64
     ) throws -> Self {
-        guard publicKeyHex == nil, signatureB64 == nil else {
+        guard publicKeyHex == nil, signatureB64 == nil, transactionPayloadB64 == nil else {
             throw ToriiClientError.invalidPayload(
-                "detached contract-call preparation must not include a public key or signature."
+                "detached contract-call preparation must not include transaction bytes, a public key, or a signature."
             )
         }
         let normalizedAuthority = try normalizeToriiAccountIdQueryValue(
@@ -15104,12 +15125,13 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
 
         if submitted {
             guard txHashHex != nil,
+                  pipelineStatus == nil,
                   transactionPayloadB64 == nil,
                   signingMessageB64 == nil else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .submitted,
                     in: container,
-                    debugDescription: "submitted contract call must contain only the final transaction hash"
+                    debugDescription: "submitted contract call must contain the final transaction hash without synthetic pipeline status"
                 )
             }
         } else {
@@ -15252,6 +15274,7 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
         var deterministicRequest = preparedRequest
         deterministicRequest.creationTimeMs = response.creationTimeMs
         deterministicRequest.transactionTtlMs = response.transactionTtlMs
+        deterministicRequest.feePayment = receiptFeePayment
         self.request = deterministicRequest
         transactionPayload = draft.transactionPayload
         signingMessage = draft.signingMessage
@@ -15285,12 +15308,7 @@ public struct ToriiContractCallDraft: Sendable, Equatable {
               response.signingMessageB64 == nil,
               let txHash = response.txHashHex,
               txHash == finalizedTransactionHashHex,
-              let pipelineStatus = response.pipelineStatus,
-              pipelineStatus.hash == txHash,
-              pipelineStatus.state == .queued,
-              pipelineStatus.scope == "local",
-              pipelineStatus.resolvedFrom == "queue",
-              pipelineStatus.status.blockHeight == nil,
+              response.pipelineStatus == nil,
               response.operationReceipt.operationKind == "contract_call",
               response.operationReceipt.status == "submitted",
               response.operationReceipt.transport == "torii",
@@ -22608,13 +22626,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ draft: ToriiContractCallDraft,
         publicKeyHex: String,
         signatureB64: String,
+        canonicalAuth: ToriiCanonicalRequestAuth? = nil,
         completion: @escaping (Result<ToriiDetachedContractCallSubmission, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) {
             try await self.submitDetachedContractCall(
                 draft,
                 publicKeyHex: publicKeyHex,
-                signatureB64: signatureB64
+                signatureB64: signatureB64,
+                canonicalAuth: canonicalAuth
             )
         }
     }
@@ -22842,7 +22862,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountOnboarding(
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -22873,7 +22893,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ proofRequired: ToriiAccountOnboardingProofRequiredPrepareResponseV1,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -22928,7 +22948,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
@@ -23076,7 +23096,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountOnboarding(
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -23157,7 +23177,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ proofRequired: ToriiAccountOnboardingProofRequiredPrepareResponseV1,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -23326,7 +23346,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId
@@ -25806,15 +25826,29 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiContractManifestRecord.self, from: data)
     }
 
-    public func callContract(_ requestBody: ToriiContractCallRequest) async throws -> ToriiContractCallResponse {
-        let request = try makeRequest(path: "/v1/contracts/call",
+    public func callContract(
+        _ requestBody: ToriiContractCallRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth? = nil
+    ) async throws -> ToriiContractCallResponse {
+        guard let canonicalAuth = canonicalAuth ?? canonicalRequestAuth else {
+            throw ToriiClientError.invalidPayload(
+                "contract calls require canonical account authentication."
+            )
+        }
+        guard canonicalAuth.accountId == (try normalizeToriiAccountIdQueryValue(requestBody.authority, field: "authority")) else {
+            throw ToriiClientError.invalidPayload(
+                "canonicalAuth.accountId must identify the contract-call authority."
+            )
+        }
+        let request = try makeCanonicalAccountRequest(path: "/v1/contracts/call",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: [
                                         "Content-Type": "application/json",
                                         "Accept": "application/json",
-                                      ])
+                                      ],
+                                      canonicalAuth: canonicalAuth)
         let (data, response) = try await sendBoundedSccpResponse(
             request,
             context: "contract call",
@@ -25894,7 +25928,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func prepareDetachedContractCall(
-        _ requestBody: ToriiContractCallRequest
+        _ requestBody: ToriiContractCallRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth? = nil
     ) async throws -> ToriiContractCallDraft {
         guard let localSigningContext else {
             throw ToriiClientError.invalidPayload(
@@ -25904,7 +25939,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let normalized = try requestBody.normalizedForDetachedPreparation(
             nowMilliseconds: currentEpochMs()
         )
-        let response = try await callContract(normalized)
+        let response = try await callContract(normalized, canonicalAuth: canonicalAuth)
         return try ToriiContractCallDraft(
             preparedRequest: normalized,
             response: response,
@@ -25915,7 +25950,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func submitDetachedContractCall(
         _ draft: ToriiContractCallDraft,
         publicKeyHex: String,
-        signatureB64: String
+        signatureB64: String,
+        canonicalAuth: ToriiCanonicalRequestAuth? = nil
     ) async throws -> ToriiDetachedContractCallSubmission {
         let exactPublicKey = try ToriiRequestValidation.exactLowercase32ByteHex(
             publicKeyHex,
@@ -25966,7 +26002,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         var request = draft.request
         request.publicKeyHex = exactPublicKey
         request.signatureB64 = exactSignature
-        let response = try await callContract(request)
+        request.transactionPayloadB64 = draft.transactionPayload.base64EncodedString()
+        let response = try await callContract(request, canonicalAuth: canonicalAuth)
         try draft.validateSubmittedResponse(
             response,
             finalization: finalized.finalization

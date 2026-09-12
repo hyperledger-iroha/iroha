@@ -7,6 +7,8 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;

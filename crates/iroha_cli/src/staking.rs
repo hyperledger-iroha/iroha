@@ -7,11 +7,11 @@ use iroha::data_model::{
         ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
         RegisterPublicLaneValidator,
     },
-    metadata::Metadata,
-    nexus::LaneId,
-    peer::PeerId,
     prelude::AccountId,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use std::{fs, path::PathBuf};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {

@@ -83,7 +83,7 @@ impl KagemushaRecoverySeedV1 {
     /// HKDF-SHA256 uses a fixed KAGEMUSHA V1 recovery salt and the unambiguous
     /// info transcript `domain || purpose_length_u64_le || purpose || context32`.
     /// The resulting zeroizing 32-byte seed initializes the crate's deterministic
-    /// ChaCha RNG. The same operation seed, purpose, and context reproduce the
+    /// `ChaCha` RNG. The same operation seed, purpose, and context reproduce the
     /// same stream; each distinct proof/fold/encryption purpose must use a
     /// separate label and bind all protocol-relevant ordered inputs in context.
     /// The caller must retain the returned secret RNG inside the provider.

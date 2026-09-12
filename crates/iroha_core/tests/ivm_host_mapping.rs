@@ -13,7 +13,10 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prelude::*};
+use iroha_data_model::{account::NewAccount, nft::NftId, prelude::*};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
@@ -211,7 +214,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
     let amount_tlv = quantity_tlv(Quantity::from(1000_u64));
     let dataspace_tlv = tlv_blob(
-        &iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        &iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         PointerType::DataSpaceId as u16,
     );
     // Setup world: domain, accounts, asset def, mint only 100

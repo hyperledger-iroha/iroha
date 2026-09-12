@@ -15,7 +15,7 @@ use iroha_data_model::{
         prelude::{AssetDefinitionId, AssetId},
     },
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{
         Grant, InstructionBox,
         settlement::{
@@ -23,11 +23,12 @@ use iroha_data_model::{
             SettlementLeg, SettlementPlan,
         },
     },
-    metadata::Metadata,
     permission::Permission,
     prelude::{AccountId, NumericSpec, Quantity, ValidationFail},
 };
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

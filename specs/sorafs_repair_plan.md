@@ -362,7 +362,7 @@ record, or confer transaction authority.
   non-zero digests and provider identifiers, timestamps, SLA and escalation
   policy, exact route/instruction matching, signed-transaction verification,
   authority/permission checks, revisions, leases, and idempotency.
-- `sorafs-validate repair` exposes the same checks for fixture and release
+- `iroha app sorafs toolkit validate repair` exposes the same checks for fixture and release
   validation across repair evidence, reports, task records, slash proposals,
   escalation policy/approval payloads, task events, and audit events.
 - Production PoR/PoTR Merkle replay archives, object-storage evidence retention,
@@ -556,7 +556,7 @@ Implemented engineering coverage:
   failures. Local golden and integration coverage exercises native authority,
   route matching, query cursors, and cross-peer duplicate submission.
 - `iroha sorafs repair` and `iroha sorafs gc` provide operator CLI coverage;
-  `sorafs-validate repair` validates the remaining canonical manifest repair
+  `iroha app sorafs toolkit validate repair` validates the remaining canonical manifest repair
   payloads, not deleted custom request envelopes.
 - `scripts/build_sorafs_repair_canary.py` provides checked-in payload-free
   canary generation for the local SF-8b rollout gate.

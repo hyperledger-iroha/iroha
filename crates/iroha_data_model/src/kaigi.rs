@@ -4,10 +4,13 @@ pub mod authorization;
 pub mod participation;
 /// Exact canonical Pasta field encodings used by Kaigi authorization.
 pub mod scalar;
-use crate::{account::AccountId, domain::DomainId, metadata::Metadata, name::Name};
+use crate::account::AccountId;
 use derive_more::Display;
 use getset::Getters;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -104,6 +107,8 @@ fn compute_roster_root_from(commitments: &[KaigiParticipantCommitment]) -> Hash 
 )]
 #[norito(reuse_archived)]
 #[display("{domain_id}:{call_name}")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kaigi::KaigiId")]
 pub struct KaigiId {
     /// Domain that owns the call.
     pub domain_id: DomainId,
@@ -143,7 +148,7 @@ impl KaigiId {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "mode", content = "state"))]
+#[norito(tag = "mode", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiPrivacyMode {
     /// Participants are stored explicitly.
@@ -175,7 +180,7 @@ pub enum KaigiPrivacyMode {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "policy", content = "state"))]
+#[norito(tag = "policy", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiRoomPolicy {
     /// Viewers may join without presenting authentication tokens.
@@ -270,7 +275,7 @@ pub struct KaigiRelayHop {
     /// Account offering relay services.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub hpke_public_key: Vec<u8>,
     /// Relative weight for load-balancing decisions.
     pub weight: u8,
@@ -336,7 +341,7 @@ pub struct KaigiRelayRegistration {
     /// select the relay governance domain.
     pub relay_id: AccountId,
     /// HPKE public key bytes advertised by the relay.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub hpke_public_key: Vec<u8>,
     /// Bandwidth class signalled by the relay (larger value == higher capacity).
     pub bandwidth_class: u8,
@@ -364,7 +369,7 @@ pub struct KaigiRelayRegistration {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "state"))]
+#[norito(tag = "status", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiRelayHealthStatus {
     /// Relay is operating as expected.
@@ -580,7 +585,7 @@ impl NewKaigi {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "state"))]
+#[norito(tag = "status", content = "state")]
 #[norito(reuse_archived)]
 pub enum KaigiStatus {
     /// Call has been created but not yet ended.
@@ -663,10 +668,7 @@ pub struct KaigiRecord {
     /// Participants currently associated with the call; the host is always implicit and absent.
     pub participants: Vec<AccountId>,
     /// Additional participant metadata (keyed by participant id) for future expansion.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::account_metadata_map")
-    )]
+    #[norito(json = "crate::json_helpers::account_metadata_map")]
     pub participant_metadata: BTreeMap<AccountId, Metadata>,
 }
 impl KaigiRecord {
@@ -790,7 +792,7 @@ impl KaigiRecord {
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates
 /// the [`Name`] invariants enforced by the parser.
-pub fn kaigi_metadata_key(call_name: &Name) -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_metadata_key(call_name: &Name) -> Result<Name, iroha_model_base::error::ParseError> {
     let composite = format!("kaigi__{}", call_name.as_ref());
     Name::from_str(&composite)
 }
@@ -806,7 +808,9 @@ fn relay_account_key_fragment(relay_id: &AccountId) -> String {
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
-pub fn kaigi_relay_metadata_key(relay_id: &AccountId) -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_relay_metadata_key(
+    relay_id: &AccountId,
+) -> Result<Name, iroha_model_base::error::ParseError> {
     let key = format!("kaigi_relay__{}", relay_account_key_fragment(relay_id));
     Name::from_str(&key)
 }
@@ -818,7 +822,9 @@ pub fn kaigi_relay_metadata_key(relay_id: &AccountId) -> Result<Name, crate::err
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
-pub fn kaigi_relay_feedback_key(relay_id: &AccountId) -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_relay_feedback_key(
+    relay_id: &AccountId,
+) -> Result<Name, iroha_model_base::error::ParseError> {
     let key = format!(
         "kaigi_relay_feedback__{}",
         relay_account_key_fragment(relay_id)
@@ -830,7 +836,7 @@ pub fn kaigi_relay_feedback_key(relay_id: &AccountId) -> Result<Name, crate::err
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the key violates [`Name`] rules.
-pub fn kaigi_relay_allowlist_key() -> Result<Name, crate::error::ParseError> {
+pub fn kaigi_relay_allowlist_key() -> Result<Name, iroha_model_base::error::ParseError> {
     Name::from_str("kaigi_relay_allowlist")
 }
 /// Prelude re-export for Kaigi data structures.
@@ -889,7 +895,7 @@ mod tests {
         record
             .participant_metadata
             .insert(record.host.clone(), Metadata::default());
-        #[cfg(feature = "json")]
+
         {
             let ordinary = norito::json::to_json(&record).expect("serialize call record JSON");
             assert_eq!(
@@ -994,7 +1000,7 @@ mod tests {
         let decoded: NewKaigi = decode_adaptive(&bytes).expect("decode create kaigi payload");
         assert_eq!(decoded, call);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn kaigi_json_requires_explicit_room_policy() {
         let domain = DomainId::try_new("kaigi", "universal").expect("domain");
@@ -1057,7 +1063,7 @@ mod tests {
         let template = NewKaigi::with_defaults(call_id, host.clone());
         let mut record = KaigiRecord::from_new(&template, 0);
         assert_eq!(record.roster_root(), empty_roster_root());
-        record.push_commitment(commitment.clone());
+        record.push_commitment(commitment);
         assert_eq!(record.roster_root(), populated_root);
         assert!(record.has_commitment(&commitment));
         let removed = record.remove_commitment(&commitment);
@@ -1161,5 +1167,17 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod final_wire_tests;
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::KaigiId>(
+            "iroha_data_model::kaigi::KaigiId",
+        );
+    }
+}

@@ -4,7 +4,8 @@
 //! port allocations, and external binary paths without recompiling the application. This module
 //! discovers that file (or an explicit `MOCHI_CONFIG` override), parses the TOML document, and
 //! yields a strongly typed configuration for the UI to apply while constructing the supervisor.
-use iroha_data_model::{id::ChainId, parameter::system::SumeragiConsensusMode};
+use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_model_base::chain::ChainId;
 use mochi_core::{
     GenesisProfile, NetworkProfile, ProfilePreset, SupervisorBuilder,
     config::sandbox_root_for_workspace, supervisor::RestartPolicy,
@@ -1417,13 +1418,16 @@ mode = "never"
     }
     #[test]
     fn load_uses_explicit_env_override() {
+        let _lock = super::super::test_support::env_lock()
+            .lock()
+            .expect("env lock");
         let (dir, path) = temp_file(
             r#"
 [supervisor]
 data_root = "./env-data"
 "#,
         );
-        let _guard = EnvGuard::new("MOCHI_CONFIG", path.to_string_lossy());
+        let _guard = super::super::test_support::TestEnvGuard::set("MOCHI_CONFIG", &path);
         let resolved = load_bundle_config()
             .expect("config load")
             .expect("config present");
@@ -1617,6 +1621,9 @@ backoff_ms = 1000
     }
     #[test]
     fn apply_to_overrides_profile() {
+        let _lock = super::super::test_support::env_lock()
+            .lock()
+            .expect("env lock");
         let mut config = BundleConfig::default();
         config.set_profile(Some(NetworkProfile::from_preset(
             ProfilePreset::FourPeerBft,
@@ -1706,27 +1713,6 @@ custom_route_setting = "keep"
             .write_to_path(&path)
             .expect_err("the writer must not carry retired fields forward");
         assert!(error.to_string().contains("supervisor.custom"));
-    }
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-    impl EnvGuard {
-        fn new(key: &'static str, value: impl AsRef<str>) -> Self {
-            let prev = env::var(key).ok();
-            // SAFETY: Tests run single-threaded and values are owned strings.
-            unsafe { env::set_var(key, value.as_ref()) };
-            Self { key, prev }
-        }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            if let Some(prev) = self.prev.as_ref() {
-                unsafe { env::set_var(self.key, prev) };
-            } else {
-                unsafe { env::remove_var(self.key) };
-            }
-        }
     }
     #[test]
     fn parse_profile_accepts_only_canonical_name() {

@@ -11,8 +11,11 @@ use core::{fmt::Write as _, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
-    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
+    prelude::{AssetDefinitionId, AssetId, NftId},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,
@@ -241,7 +244,7 @@ fn load_tlv<'a>(
 }
 fn decode_canonical<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: norito::codec::Decode + norito::codec::Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     ivm_abi::codec::decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }

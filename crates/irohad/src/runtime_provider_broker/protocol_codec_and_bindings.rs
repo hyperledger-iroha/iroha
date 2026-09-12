@@ -313,19 +313,22 @@ fn validate_billing_publication_receipt_shape(
     Ok(())
 }
 define_broker_wire_struct!(owned ProviderIngestSourceMusubiArchiveWireV1 { network_id: iroha_data_model::NetworkId, observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1, binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1, });
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::ProviderIngestSourceFetchRequestWireV1"
+)]
 struct ProviderIngestSourceFetchRequestWireV1 {
     authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
     source_provider_ids: Vec<[u8; 32]>,
     musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
 }
-define_broker_wire_struct!(owned ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestCarPlanWireV1"; ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
 define_broker_wire_struct!(copy ProviderIngestChunkProfileWireV1 { min_size: u64, target_size: u64, max_size: u64, break_mask: u64, });
 define_broker_wire_struct!(copy ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], });
 define_broker_wire_struct!(owned ProviderIngestFilePlanWireV1 { path: Vec<String>, first_chunk: u64, chunk_count: u64, size: u64, });
-define_broker_wire_struct!(owned ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
-define_broker_wire_struct!(owned ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
-define_broker_wire_struct!(copy ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestSourceHeaderWireV1"; ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::ProviderIngestSourceChunkWireV1"; ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
+define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::ProviderIngestSourceTrailerWireV1"; ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BrokerError {
     Unavailable,
@@ -675,9 +678,10 @@ fn source_retained_memory_bytes(plan: &sorafs_car::CarBuildPlan) -> Result<usize
         .ok_or(BrokerError::Protocol)
 }
 fn acquire_source_retained_memory(
+    pool: &Arc<DecodeResourcePoolV1>,
     plan: &sorafs_car::CarBuildPlan,
 ) -> Result<DecodeResourcePoolPermitV1, BrokerError> {
-    shared_decode_resource_pool().try_acquire(source_retained_memory_bytes(plan)?)
+    pool.try_acquire(source_retained_memory_bytes(plan)?)
 }
 fn source_plan_to_wire(
     plan: &sorafs_car::CarBuildPlan,
@@ -930,7 +934,7 @@ fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 fn encode_canonical<T: NoritoSerialize>(value: &T, limit: usize) -> Result<Vec<u8>, BrokerError> {
-    let framed_len = norito::core::encoded_frame_len(value).map_err(|_| BrokerError::Protocol)?;
+    let framed_len = norito::canonical_frame_len(value).map_err(|_| BrokerError::Protocol)?;
     if framed_len == 0 || framed_len > limit {
         return Err(BrokerError::Rejected);
     }
@@ -996,10 +1000,24 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    decode_canonical_with_policy_from(bytes, limit, policy, shared_decode_resource_pool())
+}
+// Keep standalone defaults and selected connection decodes on the same narrow
+// boundary; an enclosing operation already owns its reservation and counters.
+fn decode_canonical_with_policy_from<T>(
+    bytes: &[u8],
+    limit: usize,
+    policy: DecodeResourcePolicyV1,
+    pool: Arc<DecodeResourcePoolV1>,
+) -> Result<T, BrokerError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
     if let Some(admission) = current_decode_resource_admission() {
         return decode_canonical_with_admission(bytes, limit, &admission);
     }
-    let admission = DecodeResourceAdmissionV1::acquire(None, policy)?;
+    let admission = DecodeResourceAdmissionV1::acquire_from(pool, None, policy)?;
     admission.reserve_raw_frame(bytes.len(), limit)?;
     let _scope = admission.enter();
     decode_canonical_with_admission(bytes, limit, &admission)
@@ -1037,6 +1055,7 @@ fn encode_frame<T: NoritoSerialize>(
     };
     encode_canonical(&frame, limit).map(ScrubbedBytes::new)
 }
+#[cfg(test)]
 fn decode_frame<T>(bytes: &[u8], expected_kind: u8, limit: usize) -> Result<T, BrokerError>
 where
     T: NoritoSerialize,
@@ -1075,10 +1094,31 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    decode_frame_with_policy_from(
+        bytes,
+        expected_kind,
+        limit,
+        policy,
+        shared_decode_resource_pool(),
+    )
+}
+// Preserve an enclosing operation's exact admission; otherwise charge only
+// this decode to the process that owns the authenticated connection.
+fn decode_frame_with_policy_from<T>(
+    bytes: &[u8],
+    expected_kind: u8,
+    limit: usize,
+    policy: DecodeResourcePolicyV1,
+    pool: Arc<DecodeResourcePoolV1>,
+) -> Result<T, BrokerError>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
     if let Some(admission) = current_decode_resource_admission() {
         return decode_frame_with_admission(bytes, expected_kind, limit, &admission);
     }
-    let admission = DecodeResourceAdmissionV1::acquire(None, policy)?;
+    let admission = DecodeResourceAdmissionV1::acquire_from(pool, None, policy)?;
     admission.reserve_raw_frame(bytes.len(), limit)?;
     let _scope = admission.enter();
     decode_frame_with_admission(bytes, expected_kind, limit, &admission)
@@ -1206,7 +1246,18 @@ fn read_operation_request_frame_inner<R: std::io::Read>(
         .map_err(|_| BrokerError::Unavailable)?;
     let slot = u16::from_be_bytes([discriminator[0], discriminator[1]]);
     let operation = u16::from_be_bytes([discriminator[2], discriminator[3]]);
-    if !operation_is_known(operation) {
+    if !operation_is_known(operation)
+        || (slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id()
+            && !matches!(
+                operation,
+                OPERATION_QUALIFY_V1
+                    | OPERATION_STREAM_TOKEN_SIGN_V1
+                    | OPERATION_STREAM_TOKEN_RECOVER_V1
+                    | OPERATION_STREAM_TOKEN_OBSERVE_V1
+            ))
+    {
+        // The slot-11 discriminator admits only its four bounded operations. Reject a known
+        // bulk operation for another role before reading its length or reserving raw bytes.
         return Err(BrokerError::Protocol);
     }
     let frame = read_length_prefixed_inner(
@@ -1238,8 +1289,9 @@ fn read_operation_request_frame<R: std::io::Read>(
 fn read_operation_request_frame_with_budget<R: std::io::Read>(
     reader: &mut R,
     inbound_budget: std::sync::Arc<tokio::sync::Semaphore>,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<(u16, u16, ScrubbedBytes, Arc<DecodeResourceAdmissionV1>), BrokerError> {
-    read_operation_request_frame_inner(reader, Some(inbound_budget), None)
+    read_operation_request_frame_inner(reader, Some(inbound_budget), Some(decode_pool))
 }
 fn catalog_digest(
     chain_id: &str,
@@ -1340,6 +1392,11 @@ fn make_handshake_request(
     validate_catalog_slot_ids(requested_catalog.iter().map(|binding| binding.slot))?;
     for binding in &requested_catalog {
         validate_wire_binding(binding)?;
+        if let Some(hardware) = &binding.stream_token_hardware_binding {
+            hardware
+                .validate_network(chain_id, network_id.as_bytes())
+                .map_err(|_| BrokerError::BindingMismatch)?;
+        }
     }
     if requested_catalog
         .windows(2)
@@ -1917,6 +1974,15 @@ fn validate_operation_request_with_session(
         return Err(BrokerError::Protocol);
     }
     validate_wire_binding(&request.binding)?;
+    if let Some(hardware) = &request.binding.stream_token_hardware_binding {
+        if let Some(chain_id) = session_chain_id {
+            hardware
+                .validate_network(chain_id, session_network_id.as_bytes())
+                .map_err(|_| BrokerError::BindingMismatch)?;
+        } else if &hardware.custody().network_id != session_network_id.as_bytes() {
+            return Err(BrokerError::BindingMismatch);
+        }
+    }
     let payload_len = u64::try_from(request.payload.len()).map_err(|_| BrokerError::Protocol)?;
     let fields = OperationRequestFieldsV1 {
         session_id: request.session_id,
@@ -1984,28 +2050,6 @@ fn make_operation_response_scrubbed(
 }
 fn validate_signing_payload_len(length: usize) -> Result<(), BrokerError> {
     if length == 0 || length > MAX_SIGNING_PAYLOAD_BYTES_V1 {
-        return Err(BrokerError::Rejected);
-    }
-    Ok(())
-}
-fn validate_stream_token_signing_payload(payload: &[u8]) -> Result<(), BrokerError> {
-    if payload.is_empty() || payload.len() > MAX_STREAM_TOKEN_SIGNING_PAYLOAD_BYTES_V1 {
-        return Err(BrokerError::Rejected);
-    }
-    let canonical_body = payload
-        .strip_prefix(sorafs_manifest::token::STREAM_TOKEN_SIGNATURE_DOMAIN_V1)
-        .filter(|body| !body.is_empty())
-        .ok_or(BrokerError::Rejected)?;
-    let body = decode_canonical::<sorafs_manifest::StreamTokenBodyV1>(
-        canonical_body,
-        MAX_STREAM_TOKEN_SIGNING_PAYLOAD_BYTES_V1,
-    )?;
-    iroha_torii::sorafs::token::validate_token_body(&body).map_err(|_| BrokerError::Rejected)?;
-    if body
-        .signing_payload_bytes()
-        .map_err(|_| BrokerError::Rejected)?
-        != payload
-    {
         return Err(BrokerError::Rejected);
     }
     Ok(())

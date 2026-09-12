@@ -61,8 +61,8 @@ summary: Current SF-6 release automation and QA surfaces.
 - `.github/workflows/sorafs-cli-release.yml` runs the strict release gate,
   validates `release/version-map.toml`, builds native Linux x86_64/aarch64,
   macOS x86_64/aarch64, and additional Windows x86_64 `sorafs_cli`,
-  `sorafs_fetch`, and `sorafs-validate` candidates, packages
-  `sorafs-validate` with its checked FFI header and deterministic manifest,
+  `sorafs_fetch`, and `iroha` candidates, packages
+  `iroha` with its checked FFI header and deterministic manifest,
   generates an SPDX JSON dependency SBOM, fails on known high/critical
   vulnerabilities, rebuilds the whole platform archive for byte-identical
   replay, and executes all three binaries from each clean extraction. For an
@@ -117,7 +117,7 @@ summary: Current SF-6 release automation and QA surfaces.
   through the reviewed `authenticated_external_signer` adapter with exact
   `software` backend, then verifies the raw
   signature and governed raw public key through a SHA256-pinned
-  `sorafs-validate release-manifest` binary. The signer fingerprint, verifier
+  `iroha app sorafs toolkit release-manifest` binary. The signer fingerprint, verifier
   path, and verifier digest are mandatory. The wrapper rejects missing,
   malformed, existing-output, symlinked, non-regular, or aliased inputs before
   producing public signature/key/verification artifacts.
@@ -128,8 +128,8 @@ summary: Current SF-6 release automation and QA surfaces.
   publication fail before external execution instead of using a pathname
   fallback. The HSM custody contract replacement is tracked separately in
   [G02](sorafs/v1_implementation_goals.md).
-- `scripts/package_sorafs_validate_release.sh` builds or packages
-  `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
+- `scripts/package_iroha_cli_release.sh` builds or packages
+  `iroha` into `dist/iroha-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,
   records binary/header/archive SHA256 digests, records manifest and staged-file
   digests, and runs fixture smoke checks before archive creation. It is a
@@ -375,7 +375,7 @@ external-evidence requirement.
   the `sorafs_reference.h`/`reference_ffi.rs` header-contract guard, and focused
   tests. The release workflow generates one source dependency SBOM at the gate
   and a separate Syft SPDX JSON SBOM from each Linux, macOS, and Windows binary
-  package, including its deterministic standalone reference-validator archive
+  package, including its deterministic canonical `iroha` CLI archive
   and FFI header, with Syft v1.44.0 and Grype v0.112.0 pinned explicitly. Both
   the source and platform SBOMs
   fail the candidate on high/critical Grype findings. Every platform package
@@ -413,7 +413,7 @@ external-evidence requirement.
 ## Changelog Automation
 
 - Current SoraFS release evidence comes from `scripts/release_sorafs_cli.sh`,
-  `scripts/package_sorafs_validate_release.sh`,
+  `scripts/package_iroha_cli_release.sh`,
   `scripts/package_sorafs_cli_candidate.py`, `status.md`, `roadmap.md`, and the
   governance release notes template. Keep the package archive, unsigned
   per-package manifest, all SHA256 sidecars, final aggregate-manifest signature

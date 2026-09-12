@@ -22,15 +22,15 @@ use iroha_data_model::{
             RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
     },
-    metadata::Metadata,
     nexus::{
-        LaneId, PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneStakeShare, PublicLaneUnbonding, PublicLaneValidatorRecord,
-        PublicLaneValidatorStatus,
+        PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
+        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
     },
-    peer::PeerId,
     prelude::AccountId,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use std::{collections::BTreeMap, time::Duration};
 /// Canonical storage key for one public-lane stake share.
@@ -2852,9 +2852,9 @@ mod tests {
     use crate::{
         block::ValidBlock,
         query::store::LiveQueryStore,
-        state::{State, StateBlock, StateTransaction, World},
+        state::{State, StateTransaction, World},
     };
-    use core::num::{NonZeroU32, NonZeroU64};
+    use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
@@ -2873,13 +2873,15 @@ mod tests {
         domain::Domain,
         isi::error::InvalidParameterError,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-            LaneConfig, LaneVisibility, PublicLaneRewardShare,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneCatalog, LaneConfig,
+            LaneVisibility, PublicLaneRewardShare,
         },
         parameter::{Parameter, system::SumeragiNposParameters},
         peer::Peer,
         prelude::*,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use nonzero_ext::nonzero;
@@ -2891,8 +2893,8 @@ mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("staking algorithm-specific fixture key generation should succeed")
     }
-    fn checked_peer_id() -> crate::PeerId {
-        crate::PeerId::from(checked_keypair().public_key().clone())
+    fn checked_peer_id() -> iroha_model_base::peer::PeerId {
+        iroha_model_base::peer::PeerId::from(checked_keypair().public_key().clone())
     }
     include!("staking_core_tests.rs");
     #[test]
@@ -2955,8 +2957,7 @@ mod tests {
             1,
             "first block height must start at 1 for snapshot"
         );
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let record = view
             .world
@@ -3098,7 +3099,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3131,7 +3132,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3171,7 +3172,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3231,7 +3232,7 @@ mod tests {
         .execute(&validator, &mut stx);
 
         assert!(
-            matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("unbounded validator consensus key")),
+            matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("unbounded committee or validator consensus key")),
             "unexpected result: {result:?}"
         );
         assert!(
@@ -3388,7 +3389,7 @@ mod tests {
         stx.nexus.staking.restricted_validator_mode =
             iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        let stake_peer = crate::PeerId::from(
+        let stake_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3419,14 +3420,14 @@ mod tests {
             Error::InvalidParameter(InvalidParameterError::SmartContract(msg))
                 if msg.contains("admin-managed")
         ));
+        complete_staking_committee(&mut stx, stake_lane);
         stx.apply();
         assert_eq!(
             block.as_ref().header().height().get(),
             1,
             "first block height must start at 1 for snapshot"
         );
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let block = new_block_with_height(2);
         let mut activation_block = state.block(block.as_ref().header());
         let mut activation_tx = activation_block.transaction();
@@ -3437,16 +3438,23 @@ mod tests {
         .execute(&ALICE_ID, &mut activation_tx)
         .unwrap();
         activation_tx.apply();
-        record_block_commit(&mut activation_block, &block);
-        activation_block.commit().unwrap();
+        activation_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
             .expect("stake-elected roster should be present");
         assert_eq!(
-            roster,
-            vec![stake_peer],
-            "admin-managed lanes must not alter stake-elected roster"
+            roster.len(),
+            4,
+            "stake-elected roster has an exact four-validator committee"
+        );
+        assert!(
+            roster.contains(&stake_peer),
+            "the original stake-elected validator remains selected"
+        );
+        assert!(
+            !roster.contains(&validator_peer_id(&delegator)),
+            "the admin-managed lane contributes no stake-elected validator"
         );
         assert!(
             view.world
@@ -3525,7 +3533,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register multisig admin");
         let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = crate::PeerId::new(bls.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
         let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
         iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop)
             .execute(&admin_id, &mut stx)
@@ -3543,7 +3551,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -3877,10 +3885,6 @@ mod tests {
 
         let mut safe_block = state.block(block_header_with_height(5));
         let mut safe_stx = safe_block.transaction();
-        safe_stx
-            .commit_topology
-            .get_mut()
-            .push(first_replacement.clone());
         RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), first_replacement.clone())
             .execute(&validator, &mut safe_stx)
             .expect("height five is before the height-seven roster freeze");
@@ -3889,10 +3893,6 @@ mod tests {
 
         let mut frozen_block = state.block(block_header_with_height(6));
         let mut frozen_stx = frozen_block.transaction();
-        frozen_stx
-            .commit_topology
-            .get_mut()
-            .push(second_replacement.clone());
         let err =
             RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), second_replacement)
                 .execute(&validator, &mut frozen_stx)
@@ -4146,7 +4146,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let validator_peer = crate::PeerId::from(
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -4928,12 +4928,14 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology.get_mut().push(crate::PeerId::from(
-            replacement
-                .try_signatory()
-                .expect("replacement is single-signatory")
-                .clone(),
-        ));
+        stx.commit_topology
+            .get_mut()
+            .push(iroha_model_base::peer::PeerId::from(
+                replacement
+                    .try_signatory()
+                    .expect("replacement is single-signatory")
+                    .clone(),
+            ));
         Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
@@ -4971,9 +4973,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained validator tenure must reject peer unregistration");
         assert!(
-            unregister_error
-                .to_string()
-                .contains("wait for its deactivation height"),
+            matches!(&unregister_error, Error::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("wait for its deactivation height")),
             "unexpected unregistration rejection: {unregister_error}"
         );
         let error = RegisterPublicLaneValidator {
@@ -5048,8 +5048,7 @@ mod tests {
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let replacement_peer = register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology.get_mut().push(replacement_peer);
+        register_peer_for_account(&mut stx, &replacement);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
@@ -5109,8 +5108,7 @@ mod tests {
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register replacement account");
-        let replacement_peer = register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology.get_mut().push(replacement_peer);
+        register_peer_for_account(&mut stx, &replacement);
         Mint::asset_quantity(
             10_000_u32,
             AssetId::new(asset_definition.clone(), replacement.clone()),
@@ -5267,11 +5265,10 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect_err("exited validator must not overwrite retained slashable custody");
-        assert!(matches!(
-            err,
-            Error::InvariantViolation(message)
-                if message.contains("retains slashable stake custody")
-        ));
+        assert!(
+            matches!(&err, Error::InvariantViolation(message) if message.contains("before deactivation height")),
+            "re-registration before the retained election boundary must reject: {err:?}"
+        );
         let record = stx
             .world
             .public_lane_validators
@@ -5384,6 +5381,8 @@ mod tests {
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+            finalize_validator_lifecycle(&mut stx)
+                .expect("finalize the elapsed exit before replacement admission");
             let error = RegisterPublicLaneValidator {
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
@@ -5399,6 +5398,7 @@ mod tests {
                 Error::InvariantViolation(message)
                     if message.contains("maximum validator capacity")
             ));
+            stx.apply();
         }
         state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
@@ -5458,10 +5458,10 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
+        complete_staking_committee(&mut stx, lane_id);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
-        let validator_peer = crate::PeerId::from(
+        state_block.commit_empty_block_for_testing().unwrap();
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -5482,8 +5482,7 @@ mod tests {
         let mut stx = state_block.transaction();
         seed_validator_consensus_key(&mut stx, &validator_peer, ConsensusKeyStatus::Disabled);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
@@ -5532,10 +5531,10 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
+        complete_staking_committee(&mut stx, lane_id);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
-        let validator_peer = crate::PeerId::from(
+        state_block.commit_empty_block_for_testing().unwrap();
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -5559,8 +5558,7 @@ mod tests {
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
@@ -5609,10 +5607,10 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
+        complete_staking_committee(&mut stx, lane_id);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
-        let validator_peer = crate::PeerId::from(
+        state_block.commit_empty_block_for_testing().unwrap();
+        let validator_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator is single-signatory")
@@ -5640,8 +5638,7 @@ mod tests {
             stx.world.peers.remove(pos);
         }
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
@@ -6101,7 +6098,8 @@ mod tests {
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         // Register matching peer so validator admission passes.
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(2),
@@ -6136,7 +6134,8 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(3),
@@ -6166,11 +6165,10 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect_err("exit alone must not discard slashable custody");
-        assert!(matches!(
-            err,
-            Error::InvariantViolation(message)
-                if message.contains("retains slashable stake custody")
-        ));
+        assert!(
+            matches!(&err, Error::InvariantViolation(message) if message.contains("before deactivation height")),
+            "re-registration before the retained election boundary must reject: {err:?}"
+        );
         let record = stx
             .world
             .public_lane_validators
@@ -6268,7 +6266,8 @@ mod tests {
         let mut stx = state_block.transaction();
         let lane_id = LaneId::new(34);
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
         RegisterPublicLaneValidator {
             lane_id,
@@ -6323,11 +6322,10 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect_err("exit must not erase retained slashable custody");
-        assert!(matches!(
-            err,
-            Error::InvariantViolation(message)
-                if message.contains("retains slashable stake custody")
-        ));
+        assert!(
+            matches!(&err, Error::InvariantViolation(message) if message.contains("before deactivation height")),
+            "re-registration before the retained election boundary must reject: {err:?}"
+        );
         let record = stx
             .world
             .public_lane_validators
@@ -6493,7 +6491,8 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(31),
             peer_id: validator_peer_id(&validator),
@@ -6518,9 +6517,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("active validator tenure must reject peer unregistration");
         assert!(
-            error
-                .to_string()
-                .contains("wait for its deactivation height"),
+            matches!(&error, Error::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("wait for its deactivation height")),
             "unexpected unregistration rejection: {error}"
         );
         assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
@@ -6539,7 +6536,8 @@ mod tests {
         let mut stx = state_block.transaction();
         let lane_id = LaneId::new(32);
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
+        let peer_id =
+            iroha_model_base::peer::PeerId::from(validator.expect_single_signatory().clone());
         RegisterPublicLaneValidator {
             lane_id,
             peer_id: validator_peer_id(&validator),
@@ -6584,9 +6582,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained validator tenure must reject peer unregistration");
         assert!(
-            error
-                .to_string()
-                .contains("wait for its deactivation height"),
+            matches!(&error, Error::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("wait for its deactivation height")),
             "unexpected unregistration rejection: {error}"
         );
         assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
@@ -6830,7 +6826,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let missing_peer = crate::PeerId::from(
+        let missing_peer = iroha_model_base::peer::PeerId::from(
             validator
                 .try_signatory()
                 .expect("validator has signatory")
@@ -6907,6 +6903,8 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect("validator self share occupies the configured capacity");
+        finalize_validator_lifecycle(&mut stx)
+            .expect("settle due lifecycle before admission snapshot");
         let validator_before = stx
             .world
             .public_lane_validators
@@ -7639,7 +7637,8 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("mismatched stake-share row must not satisfy slash");
         assert!(
-            matches!(err, Error::InvariantViolation(msg) if msg.contains("could not be satisfied by stake shares"))
+            matches!(&err, Error::InvariantViolation(msg) if msg.contains("public-lane stake share does not match its storage key")),
+            "malformed share must reject before slash mutation: {err:?}"
         );
         let validator_after = stx
             .world

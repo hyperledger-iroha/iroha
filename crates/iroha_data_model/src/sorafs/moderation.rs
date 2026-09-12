@@ -4,9 +4,9 @@
 //! runners, model artefacts, and threshold parameters, and the `SoraFS`-specific ballot context
 //! used by moderation panels. Validators use explicit helpers to enforce schema versioning,
 //! signature coverage, and commit/reveal binding before accepting moderation evidence.
-#[cfg(feature = "json")]
+
 pub(crate) use crate::json_helpers::fixed_bytes::option as json_option_digest32;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use blake2::digest::Digest;
 use iroha_crypto::{Algorithm, Blake2b256, PublicKey, SignatureOf};
@@ -14,6 +14,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;
 use thiserror::Error;
+mod trust_validation;
 /// Schema version for `ModerationReproManifestV1`.
 pub const MODERATION_REPRO_MANIFEST_VERSION_V1: u16 = 1;
 /// Maximum model weight and threshold value in basis points.
@@ -90,31 +91,61 @@ pub const SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraFsModerationBallotRevealV1`].
 pub const SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1: u16 = 1;
 /// Deterministic bounded integer inference engine used by first-release models.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelEngineV1")]
 pub enum ModerationModelEngineV1 {
     /// Fixed-point linear model followed by monotonic piecewise-linear calibration.
-    #[cfg_attr(feature = "json", norito(rename = "deterministic_linear_v1"))]
+    #[norito(rename = "deterministic_linear_v1")]
     DeterministicLinearV1,
 }
 /// Deterministic feature extraction profile used by first-release models.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1")]
 pub enum ModerationFeatureProfileV1 {
     /// 256 byte-frequency bins followed by 256 stable adjacent-byte bins.
-    #[cfg_attr(feature = "json", norito(rename = "byte_histogram_bigram_v1"))]
+    #[norito(rename = "byte_histogram_bigram_v1")]
     ByteHistogramAndBigramV1,
 }
 /// One point in a monotonic, piecewise-linear calibration curve.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationCalibrationKnotV1")]
 pub struct ModerationCalibrationKnotV1 {
     /// Raw signed linear-model output at this point.
@@ -127,9 +158,18 @@ pub struct ModerationCalibrationKnotV1 {
 /// The artefact intentionally contains no executable code, floating-point values,
 /// external tokenizer state, or implementation-selected operator set. Its exact
 /// operation and memory budgets are committed into the signed manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelArtifactV1")]
 pub struct ModerationModelArtifactV1 {
     /// Artefact schema version; must equal [`MODERATION_MODEL_ARTIFACT_VERSION_V1`].
@@ -139,7 +179,7 @@ pub struct ModerationModelArtifactV1 {
     /// Feature extraction profile required by the weights.
     pub feature_profile: ModerationFeatureProfileV1,
     /// Model UUID, which must match its manifest fingerprint.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub model_id: [u8; 16],
     /// Maximum payload size accepted by this model.
     pub max_input_bytes: u32,
@@ -155,16 +195,26 @@ pub struct ModerationModelArtifactV1 {
     pub calibration: Vec<ModerationCalibrationKnotV1>,
 }
 /// A score emitted for one manifest-bound moderation model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelScoreV1")]
 pub struct ModerationModelScoreV1 {
     /// Model UUID.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub model_id: [u8; 16],
     /// Digest of the exact canonical artefact bytes used for inference.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_digest: [u8; 32],
     /// Calibrated model risk score in basis points.
     pub score_bps: u16,
@@ -366,9 +416,18 @@ impl ModerationModelArtifactV1 {
     }
 }
 /// Governance-signed moderation reproducibility manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproManifestV1")]
 pub struct ModerationReproManifestV1 {
     /// Canonical payload describing the runner, models, and thresholds.
@@ -378,21 +437,30 @@ pub struct ModerationReproManifestV1 {
     pub signatures: Vec<ModerationReproSignatureV1>,
 }
 /// Canonical payload hashed and signed in the reproducibility manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproBodyV1")]
 pub struct ModerationReproBodyV1 {
     /// Schema version; must equal [`MODERATION_REPRO_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
     /// UUID of the moderation committee manifest this record attests to.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_id: [u8; 16],
     /// BLAKE3 digest of the manifest payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// BLAKE3 digest of the compiled runner binary.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub runner_hash: [u8; 32],
     /// Runner version string (e.g., `sorafs-ai-runner 0.4.0`).
     pub runtime_version: String,
@@ -410,23 +478,32 @@ pub struct ModerationReproBodyV1 {
     pub notes: Option<String>,
 }
 /// Complete execution fingerprint for one model artefact referenced by the runner.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationModelFingerprintV1")]
 pub struct ModerationModelFingerprintV1 {
     /// Model UUID.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub model_id: [u8; 16],
     /// Canonical portable path relative to the configured artefact root.
     pub artifact_path: String,
     /// Exact byte length of the canonical encoded artefact.
     pub artifact_bytes: u64,
     /// Digest of the exact canonical encoded artefact bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_digest: [u8; 32],
     /// Digest binding every value that can affect model behaviour.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub weights_digest: [u8; 32],
     /// Inference engine required to execute the artefact.
     pub engine: ModerationModelEngineV1,
@@ -445,9 +522,18 @@ pub struct ModerationModelFingerprintV1 {
     pub weight: Option<u16>,
 }
 /// Seed derivation metadata used to generate deterministic RNG inputs.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationSeedMaterialV1")]
 pub struct ModerationSeedMaterialV1 {
     /// Signed calibration-provenance label; integer inference never consumes it.
@@ -455,13 +541,24 @@ pub struct ModerationSeedMaterialV1 {
     /// Version of the provenance derivation scheme; must be non-zero.
     pub seed_version: u16,
     /// Governance-signed calibration nonce; integer inference never consumes it.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub run_nonce: [u8; 32],
 }
 /// Threshold values used when aggregating moderation verdicts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationThresholdsV1")]
 pub struct ModerationThresholdsV1 {
     /// Minimum combined score required to quarantine content (basis points, 0-10_000).
@@ -470,9 +567,18 @@ pub struct ModerationThresholdsV1 {
     pub escalate: u16,
 }
 /// Signature and signer metadata for a reproducibility manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproSignatureV1")]
 pub struct ModerationReproSignatureV1 {
     /// Governance role (e.g., `council`, `sre_lead`, `audit`).
@@ -483,13 +589,23 @@ pub struct ModerationReproSignatureV1 {
     pub signature: SignatureOf<ModerationReproBodyV1>,
 }
 /// Validation summary returned after checking a reproducibility manifest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationReproManifestSummary")]
 pub struct ModerationReproManifestSummary {
     /// Referenced manifest UUID.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_id: [u8; 16],
     /// Unix timestamp (seconds) when the manifest was issued.
     pub issued_at_unix: u64,
@@ -499,9 +615,18 @@ pub struct ModerationReproManifestSummary {
     pub signer_count: u32,
 }
 /// Governance-signed runner trust policy bound to one reproducibility manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicyV1")]
 pub struct ModerationTrustPolicyV1 {
     /// Canonical policy body.
@@ -511,27 +636,36 @@ pub struct ModerationTrustPolicyV1 {
     pub signatures: Vec<ModerationTrustPolicySignatureV1>,
 }
 /// Canonical body of a runner trust and freshness policy.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicyBodyV1")]
 pub struct ModerationTrustPolicyBodyV1 {
     /// Schema version; must equal [`MODERATION_TRUST_POLICY_VERSION_V1`].
     pub schema_version: u16,
     /// Stable policy identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_id: [u8; 16],
     /// Domain-separated digest of this body with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
     /// Manifest identifier authorized by this policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_id: [u8; 16],
     /// Exact manifest digest authorized by this policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// Exact runner executable hash authorized by this policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub runner_hash: [u8; 32],
     /// Policy issue timestamp.
     pub issued_at_unix: u64,
@@ -557,9 +691,18 @@ pub struct ModerationTrustPolicyBodyV1 {
     pub notes: Option<String>,
 }
 /// One runner signer authorization and its validity/revocation window.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustedSignerV1")]
 pub struct ModerationTrustedSignerV1 {
     /// Canonical operational role label.
@@ -575,9 +718,18 @@ pub struct ModerationTrustedSignerV1 {
     pub revoked_at_unix: Option<u64>,
 }
 /// Governance signature over a moderation trust policy body.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicySignatureV1")]
 pub struct ModerationTrustPolicySignatureV1 {
     /// Governance role label.
@@ -588,9 +740,18 @@ pub struct ModerationTrustPolicySignatureV1 {
     pub signature: SignatureOf<ModerationTrustPolicyBodyV1>,
 }
 /// Canonical runner-signed screening result envelope.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationSignedScreeningResultV1")]
 pub struct ModerationSignedScreeningResultV1 {
     /// Signed screening body.
@@ -601,32 +762,41 @@ pub struct ModerationSignedScreeningResultV1 {
     pub signature: SignatureOf<ModerationSignedScreeningBodyV1>,
 }
 /// Canonical body signed by an authorized deterministic runner.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationSignedScreeningBodyV1")]
 pub struct ModerationSignedScreeningBodyV1 {
     /// Schema version; must equal [`MODERATION_SIGNED_RESULT_VERSION_V1`].
     pub schema_version: u16,
     /// Manifest identifier used for inference.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_id: [u8; 16],
     /// Exact manifest body digest used for inference.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// Exact runner executable hash used for inference.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub runner_hash: [u8; 32],
     /// Trust-policy identifier authorizing the signer.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trust_policy_id: [u8; 16],
     /// Exact trust-policy digest authorizing the signer.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trust_policy_digest: [u8; 32],
     /// Canonical subject identifier.
     pub subject: String,
     /// Digest of the screened payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub subject_digest: [u8; 32],
     /// Per-model scores in manifest order.
     #[norito(default)]
@@ -640,19 +810,29 @@ pub struct ModerationSignedScreeningBodyV1 {
     /// Exclusive expiry of this signed result.
     pub expires_at_unix: u64,
     /// Digest of the active screening policy surface.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
     /// Domain-separated digest of this body with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub evidence_digest: [u8; 32],
     /// Optional canonical operator note.
     #[norito(default)]
     pub notes: Option<String>,
 }
 /// Successful external trust-policy validation summary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationTrustPolicySummaryV1")]
 pub struct ModerationTrustPolicySummaryV1 {
     /// Number of authorized runner signers.
@@ -663,15 +843,24 @@ pub struct ModerationTrustPolicySummaryV1 {
     pub result_quorum: u16,
 }
 /// One authenticated runner contribution committed by a committee aggregate.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationCommitteeMemberV1")]
 pub struct ModerationCommitteeMemberV1 {
     /// Distinct policy-authorized runner key.
     pub signer_public_key: PublicKey,
     /// Evidence digest of the exact signed result body.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub evidence_digest: [u8; 32],
     /// Runner aggregate score in basis points.
     pub combined_score_bps: u16,
@@ -683,29 +872,38 @@ pub struct ModerationCommitteeMemberV1 {
     pub expires_at_unix: u64,
 }
 /// Deterministic aggregate over distinct, authenticated runner results.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationCommitteeAggregateV1")]
 pub struct ModerationCommitteeAggregateV1 {
     /// Schema version; must equal [`MODERATION_COMMITTEE_AGGREGATE_VERSION_V1`].
     pub schema_version: u16,
     /// Manifest identifier shared by every member result.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_id: [u8; 16],
     /// Exact manifest digest shared by every member result.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// External trust-policy identifier used for authorization.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trust_policy_id: [u8; 16],
     /// Exact external trust-policy digest used for authorization.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub trust_policy_digest: [u8; 32],
     /// Canonical subject identifier shared by every result.
     pub subject: String,
     /// Digest of the screened payload shared by every result.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub subject_digest: [u8; 32],
     /// Distinct authenticated member results, ordered by signer key.
     pub members: Vec<ModerationCommitteeMemberV1>,
@@ -720,13 +918,22 @@ pub struct ModerationCommitteeAggregateV1 {
     /// Earliest exclusive expiry across all member results.
     pub expires_at_unix: u64,
     /// Domain-separated digest of this aggregate with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub aggregate_digest: [u8; 32],
 }
 /// Payload retained in a tamper-evident moderation provenance record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationProvenancePayloadV1")]
 pub enum ModerationProvenancePayloadV1 {
@@ -736,18 +943,27 @@ pub enum ModerationProvenancePayloadV1 {
     CommitteeAggregate(ModerationCommitteeAggregateV1),
 }
 /// One hash-chained moderation provenance entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationProvenanceEntryV1")]
 pub struct ModerationProvenanceEntryV1 {
     /// Zero-based sequence number.
     pub sequence: u64,
     /// Digest of the preceding entry, or zero for the first entry.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub previous_entry_digest: [u8; 32],
     /// Domain-separated digest of this entry with this slot zeroed.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub entry_digest: [u8; 32],
     /// Local durable-record timestamp.
     pub recorded_at_unix: u64,
@@ -755,18 +971,27 @@ pub struct ModerationProvenanceEntryV1 {
     pub payload: ModerationProvenancePayloadV1,
 }
 /// Bounded tamper-evident moderation provenance segment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::ModerationProvenanceLogV1")]
 pub struct ModerationProvenanceLogV1 {
     /// Schema version; must equal [`MODERATION_PROVENANCE_LOG_VERSION_V1`].
     pub schema_version: u16,
     /// Operator-assigned non-zero segment identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub log_id: [u8; 16],
     /// Digest of the final entry, or zero for an empty segment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub head_digest: [u8; 32],
     /// Ordered bounded entry inventory.
     pub entries: Vec<ModerationProvenanceEntryV1>,
@@ -1731,245 +1956,6 @@ impl ModerationTrustPolicyBodyV1 {
         Ok(())
     }
 }
-impl ModerationTrustPolicyV1 {
-    /// Validate structure, manifest binding, signatures, external trust roots,
-    /// quorum downgrade resistance, and current policy activity.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModerationTrustPolicyError`] when the manifest binding, policy
-    /// structure, signer set, signatures, quorum, or validity window is invalid.
-    pub fn validate_with_trust_anchors(
-        &self,
-        manifest: &ModerationReproManifestV1,
-        trust_anchors: &BTreeSet<PublicKey>,
-        minimum_governance_quorum: u16,
-        now_unix: u64,
-    ) -> Result<ModerationTrustPolicySummaryV1, ModerationTrustPolicyError> {
-        manifest
-            .validate()
-            .map_err(|error| ModerationTrustPolicyError::InvalidManifest(error.to_string()))?;
-        self.validate_structure(manifest, now_unix)?;
-        if minimum_governance_quorum == 0 {
-            return Err(ModerationTrustPolicyError::InvalidQuorum {
-                field: "minimum_governance_quorum",
-                found: 0,
-            });
-        }
-        if self.body.governance_quorum < minimum_governance_quorum {
-            return Err(ModerationTrustPolicyError::GovernanceQuorumDowngrade {
-                policy: self.body.governance_quorum,
-                minimum: minimum_governance_quorum,
-            });
-        }
-        let trusted_count = self
-            .signatures
-            .iter()
-            .filter(|signature| trust_anchors.contains(&signature.public_key))
-            .count();
-        let trusted_count = u16::try_from(trusted_count).map_err(|_| {
-            ModerationTrustPolicyError::InvalidSignatureCount {
-                found: self.signatures.len(),
-                maximum: MODERATION_TRUST_MAX_SIGNATURES_V1,
-            }
-        })?;
-        let required = self.body.governance_quorum.max(minimum_governance_quorum);
-        if trusted_count < required {
-            return Err(ModerationTrustPolicyError::InsufficientTrustedGovernance {
-                found: trusted_count,
-                required,
-            });
-        }
-        Ok(ModerationTrustPolicySummaryV1 {
-            trusted_signer_count: u16::try_from(self.body.trusted_signers.len())
-                .expect("validated signer count fits u16"),
-            trusted_governance_signature_count: trusted_count,
-            result_quorum: self.body.result_quorum,
-        })
-    }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fail-closed policy validator keeps all signed-field invariants together"
-    )]
-    fn validate_structure(
-        &self,
-        manifest: &ModerationReproManifestV1,
-        now_unix: u64,
-    ) -> Result<(), ModerationTrustPolicyError> {
-        if self.body.schema_version != MODERATION_TRUST_POLICY_VERSION_V1 {
-            return Err(ModerationTrustPolicyError::UnsupportedVersion {
-                expected: MODERATION_TRUST_POLICY_VERSION_V1,
-                found: self.body.schema_version,
-            });
-        }
-        for (field, missing) in [
-            ("policy_id", self.body.policy_id == [0; 16]),
-            ("policy_digest", self.body.policy_digest == [0; 32]),
-            ("manifest_id", self.body.manifest_id == [0; 16]),
-            ("manifest_digest", self.body.manifest_digest == [0; 32]),
-            ("runner_hash", self.body.runner_hash == [0; 32]),
-        ] {
-            if missing {
-                return Err(ModerationTrustPolicyError::MissingIdentity { field });
-            }
-        }
-        let computed = self
-            .body
-            .computed_policy_digest()
-            .map_err(|error| ModerationTrustPolicyError::Encoding(error.to_string()))?;
-        if computed != self.body.policy_digest {
-            return Err(ModerationTrustPolicyError::DigestMismatch);
-        }
-        if self.body.manifest_id != manifest.body.manifest_id
-            || self.body.manifest_digest != manifest.body.manifest_digest
-            || self.body.runner_hash != manifest.body.runner_hash
-        {
-            return Err(ModerationTrustPolicyError::ManifestBindingMismatch);
-        }
-        if self.body.issued_at_unix == 0
-            || self.body.valid_from_unix == 0
-            || self.body.valid_until_unix <= self.body.valid_from_unix
-            || self.body.issued_at_unix > self.body.valid_from_unix
-        {
-            return Err(ModerationTrustPolicyError::InvalidTimeWindow { field: "policy" });
-        }
-        let policy_skew_end = self
-            .body
-            .valid_until_unix
-            .checked_add(self.body.max_clock_skew_secs)
-            .ok_or(ModerationTrustPolicyError::InvalidTimeWindow {
-                field: "policy_expiry",
-            })?;
-        if now_unix
-            < self
-                .body
-                .valid_from_unix
-                .saturating_sub(self.body.max_clock_skew_secs)
-            || now_unix >= policy_skew_end
-        {
-            return Err(ModerationTrustPolicyError::InvalidTimeWindow {
-                field: "policy_inactive",
-            });
-        }
-        for (field, found, maximum) in [
-            (
-                "max_result_age_secs",
-                self.body.max_result_age_secs,
-                MODERATION_TRUST_MAX_RESULT_AGE_SECS_V1,
-            ),
-            (
-                "max_result_ttl_secs",
-                self.body.max_result_ttl_secs,
-                MODERATION_TRUST_MAX_RESULT_TTL_SECS_V1,
-            ),
-            (
-                "max_clock_skew_secs",
-                self.body.max_clock_skew_secs,
-                MODERATION_TRUST_MAX_CLOCK_SKEW_SECS_V1,
-            ),
-        ] {
-            if found == 0 || found > maximum {
-                return Err(ModerationTrustPolicyError::InvalidBound {
-                    field,
-                    found,
-                    maximum,
-                });
-            }
-        }
-        if self.body.trusted_signers.is_empty()
-            || self.body.trusted_signers.len() > MODERATION_TRUST_MAX_SIGNERS_V1
-        {
-            return Err(ModerationTrustPolicyError::InvalidSignerCount {
-                found: self.body.trusted_signers.len(),
-                maximum: MODERATION_TRUST_MAX_SIGNERS_V1,
-            });
-        }
-        if self.body.result_quorum == 0
-            || usize::from(self.body.result_quorum) > self.body.trusted_signers.len()
-        {
-            return Err(ModerationTrustPolicyError::InvalidQuorum {
-                field: "result_quorum",
-                found: self.body.result_quorum,
-            });
-        }
-        if self.body.governance_quorum == 0
-            || usize::from(self.body.governance_quorum) > self.signatures.len()
-        {
-            return Err(ModerationTrustPolicyError::InvalidQuorum {
-                field: "governance_quorum",
-                found: self.body.governance_quorum,
-            });
-        }
-        if let Some(notes) = &self.body.notes {
-            validate_repro_text(
-                notes,
-                MODERATION_REPRO_MAX_NOTES_BYTES_V1,
-                "trust_policy.notes",
-            )
-            .map_err(|_| ModerationTrustPolicyError::InvalidText {
-                field: "trust_policy.notes",
-            })?;
-        }
-        let mut previous_runner_key: Option<&PublicKey> = None;
-        for signer in &self.body.trusted_signers {
-            validate_repro_text(
-                &signer.role,
-                MODERATION_REPRO_MAX_SIGNATURE_ROLE_BYTES_V1,
-                "trust_policy.trusted_signers.role",
-            )
-            .map_err(|_| ModerationTrustPolicyError::InvalidText {
-                field: "trust_policy.trusted_signers.role",
-            })?;
-            if previous_runner_key.is_some_and(|previous| previous >= &signer.public_key) {
-                return Err(ModerationTrustPolicyError::NonCanonicalKeyOrder {
-                    field: "trusted_signers",
-                });
-            }
-            previous_runner_key = Some(&signer.public_key);
-            if signer.valid_from_unix < self.body.valid_from_unix
-                || signer.valid_until_unix > self.body.valid_until_unix
-                || signer.valid_until_unix <= signer.valid_from_unix
-                || signer.revoked_at_unix.is_some_and(|revoked| {
-                    revoked <= signer.valid_from_unix || revoked > signer.valid_until_unix
-                })
-            {
-                return Err(ModerationTrustPolicyError::InvalidTimeWindow {
-                    field: "trusted_signer",
-                });
-            }
-        }
-        if self.signatures.is_empty() || self.signatures.len() > MODERATION_TRUST_MAX_SIGNATURES_V1
-        {
-            return Err(ModerationTrustPolicyError::InvalidSignatureCount {
-                found: self.signatures.len(),
-                maximum: MODERATION_TRUST_MAX_SIGNATURES_V1,
-            });
-        }
-        let mut previous_governance_key: Option<&PublicKey> = None;
-        for signature in &self.signatures {
-            validate_repro_text(
-                &signature.role,
-                MODERATION_REPRO_MAX_SIGNATURE_ROLE_BYTES_V1,
-                "trust_policy.signatures.role",
-            )
-            .map_err(|_| ModerationTrustPolicyError::InvalidText {
-                field: "trust_policy.signatures.role",
-            })?;
-            if previous_governance_key.is_some_and(|previous| previous >= &signature.public_key) {
-                return Err(ModerationTrustPolicyError::NonCanonicalKeyOrder {
-                    field: "signatures",
-                });
-            }
-            previous_governance_key = Some(&signature.public_key);
-            verify_trust_policy_signature(&signature.signature, &signature.public_key, &self.body)
-                .map_err(|source| ModerationTrustPolicyError::BadSignature {
-                    role: signature.role.clone(),
-                    source,
-                })?;
-        }
-        Ok(())
-    }
-}
 impl ModerationSignedScreeningBodyV1 {
     /// Compute the domain-separated evidence digest with its slot zeroed.
     ///
@@ -2011,235 +1997,6 @@ impl ModerationReproBodyV1 {
         hasher.update(MODERATION_SCREENING_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
         Ok(*hasher.finalize().as_bytes())
-    }
-}
-impl ModerationSignedScreeningResultV1 {
-    /// Verify manifest/policy bindings, signer authorization and revocation,
-    /// deterministic score derivation, signature validity, and freshness.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModerationSignedResultError`] when any binding, score, signer,
-    /// signature, digest, or time invariant is invalid.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one fail-closed verifier keeps every signed result invariant in a fixed order"
-    )]
-    pub fn validate(
-        &self,
-        manifest: &ModerationReproManifestV1,
-        policy: &ModerationTrustPolicyV1,
-        now_unix: u64,
-    ) -> Result<(), ModerationSignedResultError> {
-        let body = &self.body;
-        if body.schema_version != MODERATION_SIGNED_RESULT_VERSION_V1 {
-            return Err(ModerationSignedResultError::UnsupportedVersion {
-                expected: MODERATION_SIGNED_RESULT_VERSION_V1,
-                found: body.schema_version,
-            });
-        }
-        for (field, mismatch) in [
-            ("manifest_id", body.manifest_id != manifest.body.manifest_id),
-            (
-                "manifest_digest",
-                body.manifest_digest != manifest.body.manifest_digest,
-            ),
-            ("runner_hash", body.runner_hash != manifest.body.runner_hash),
-            (
-                "trust_policy_id",
-                body.trust_policy_id != policy.body.policy_id,
-            ),
-            (
-                "trust_policy_digest",
-                body.trust_policy_digest != policy.body.policy_digest,
-            ),
-        ] {
-            if mismatch {
-                return Err(ModerationSignedResultError::BindingMismatch { field });
-            }
-        }
-        for (field, missing) in [
-            ("subject_digest", body.subject_digest == [0; 32]),
-            ("policy_digest", body.policy_digest == [0; 32]),
-            ("evidence_digest", body.evidence_digest == [0; 32]),
-        ] {
-            if missing {
-                return Err(ModerationSignedResultError::MissingDigest { field });
-            }
-        }
-        let expected_policy_digest = manifest
-            .body
-            .computed_screening_policy_digest()
-            .map_err(|error| ModerationSignedResultError::Encoding(error.to_string()))?;
-        if body.policy_digest != expected_policy_digest {
-            return Err(ModerationSignedResultError::BindingMismatch {
-                field: "policy_digest",
-            });
-        }
-        validate_repro_text(
-            &body.subject,
-            MODERATION_SIGNED_RESULT_MAX_SUBJECT_BYTES_V1,
-            "signed_result.subject",
-        )
-        .map_err(|_| ModerationSignedResultError::InvalidText { field: "subject" })?;
-        if let Some(notes) = &body.notes {
-            validate_repro_text(
-                notes,
-                MODERATION_REPRO_MAX_NOTES_BYTES_V1,
-                "signed_result.notes",
-            )
-            .map_err(|_| ModerationSignedResultError::InvalidText { field: "notes" })?;
-        }
-        if body.screened_at_unix == 0 || body.expires_at_unix <= body.screened_at_unix {
-            return Err(ModerationSignedResultError::InvalidTime {
-                field: "result_lifetime",
-            });
-        }
-        let ttl = body.expires_at_unix - body.screened_at_unix;
-        if ttl > policy.body.max_result_ttl_secs {
-            return Err(ModerationSignedResultError::InvalidTime {
-                field: "expires_at_unix",
-            });
-        }
-        let future_limit = now_unix
-            .checked_add(policy.body.max_clock_skew_secs)
-            .ok_or(ModerationSignedResultError::InvalidTime { field: "now_unix" })?;
-        if body.screened_at_unix > future_limit {
-            return Err(ModerationSignedResultError::Freshness {
-                reason: "screened_at_unix is too far in the future",
-            });
-        }
-        let expiry_with_skew = body
-            .expires_at_unix
-            .checked_add(policy.body.max_clock_skew_secs)
-            .ok_or(ModerationSignedResultError::InvalidTime {
-                field: "expires_at_unix",
-            })?;
-        if now_unix >= expiry_with_skew {
-            return Err(ModerationSignedResultError::Freshness {
-                reason: "result expired",
-            });
-        }
-        let maximum_age = policy
-            .body
-            .max_result_age_secs
-            .checked_add(policy.body.max_clock_skew_secs)
-            .ok_or(ModerationSignedResultError::InvalidTime {
-                field: "max_result_age_secs",
-            })?;
-        if now_unix.saturating_sub(body.screened_at_unix) > maximum_age {
-            return Err(ModerationSignedResultError::Freshness {
-                reason: "result is too old",
-            });
-        }
-        if body.model_scores.len() != manifest.body.models.len() {
-            return Err(ModerationSignedResultError::ModelScoreMismatch {
-                index: body.model_scores.len(),
-                field: "count",
-            });
-        }
-        let mut weighted = 0_u64;
-        let mut total_weight = 0_u64;
-        for (index, (score, model)) in body
-            .model_scores
-            .iter()
-            .zip(&manifest.body.models)
-            .enumerate()
-        {
-            if score.model_id != model.model_id {
-                return Err(ModerationSignedResultError::ModelScoreMismatch {
-                    index,
-                    field: "model_id",
-                });
-            }
-            if score.artifact_digest != model.artifact_digest {
-                return Err(ModerationSignedResultError::ModelScoreMismatch {
-                    index,
-                    field: "artifact_digest",
-                });
-            }
-            if score.score_bps > MODERATION_REPRO_MAX_BPS {
-                return Err(ModerationSignedResultError::ModelScoreMismatch {
-                    index,
-                    field: "score_bps",
-                });
-            }
-            let weight = model.weight.unwrap_or(MODERATION_REPRO_MAX_BPS);
-            weighted = weighted
-                .checked_add(u64::from(score.score_bps) * u64::from(weight))
-                .ok_or(ModerationSignedResultError::CombinedScoreMismatch)?;
-            total_weight = total_weight
-                .checked_add(u64::from(weight))
-                .ok_or(ModerationSignedResultError::CombinedScoreMismatch)?;
-        }
-        if total_weight == 0 {
-            return Err(ModerationSignedResultError::CombinedScoreMismatch);
-        }
-        let combined = weighted
-            .checked_add(total_weight / 2)
-            .ok_or(ModerationSignedResultError::CombinedScoreMismatch)?
-            / total_weight;
-        if u64::from(body.combined_score_bps) != combined {
-            return Err(ModerationSignedResultError::CombinedScoreMismatch);
-        }
-        let expected_verdict = if body.combined_score_bps >= manifest.body.thresholds.escalate {
-            "escalate"
-        } else if body.combined_score_bps >= manifest.body.thresholds.quarantine {
-            "quarantine"
-        } else {
-            "pass"
-        };
-        if body.verdict != expected_verdict {
-            return Err(ModerationSignedResultError::VerdictMismatch {
-                found: body.verdict.clone(),
-                expected: expected_verdict,
-            });
-        }
-        let signer = policy
-            .body
-            .trusted_signers
-            .iter()
-            .find(|signer| signer.public_key == self.signer_public_key)
-            .ok_or(ModerationSignedResultError::UnauthorizedSigner {
-                reason: "signer key is absent from policy",
-            })?;
-        if body.screened_at_unix < signer.valid_from_unix
-            || body.screened_at_unix >= signer.valid_until_unix
-        {
-            return Err(ModerationSignedResultError::UnauthorizedSigner {
-                reason: "result is outside signer validity window",
-            });
-        }
-        if body.expires_at_unix > signer.valid_until_unix
-            || body.expires_at_unix > policy.body.valid_until_unix
-        {
-            return Err(ModerationSignedResultError::UnauthorizedSigner {
-                reason: "result outlives signer or policy authorization",
-            });
-        }
-        if let Some(revoked) = signer.revoked_at_unix {
-            // Signed runner timestamps are not trusted time sources. Once the
-            // externally signed policy marks a key revoked, fail closed even
-            // for a compromised key that backdates a newly forged result.
-            if body.screened_at_unix >= revoked || now_unix >= revoked {
-                return Err(ModerationSignedResultError::UnauthorizedSigner {
-                    reason: "signer was revoked",
-                });
-            }
-            if body.expires_at_unix > revoked {
-                return Err(ModerationSignedResultError::UnauthorizedSigner {
-                    reason: "result outlives signer revocation",
-                });
-            }
-        }
-        let computed = body
-            .computed_evidence_digest()
-            .map_err(|error| ModerationSignedResultError::Encoding(error.to_string()))?;
-        if computed != body.evidence_digest {
-            return Err(ModerationSignedResultError::EvidenceDigestMismatch);
-        }
-        verify_signed_result_signature(&self.signature, &self.signer_public_key, body)
-            .map_err(ModerationSignedResultError::BadSignature)
     }
 }
 impl ModerationCommitteeAggregateV1 {
@@ -2608,39 +2365,22 @@ fn moderation_verdict_v1(score_bps: u16, thresholds: ModerationThresholdsV1) -> 
         "pass"
     }
 }
-fn verify_trust_policy_signature(
-    signature: &SignatureOf<ModerationTrustPolicyBodyV1>,
-    public_key: &PublicKey,
-    body: &ModerationTrustPolicyBodyV1,
-) -> Result<(), iroha_crypto::Error> {
-    validate_typed_signature_payload(signature.payload(), public_key)?;
-    signature.verify(public_key, body)
-}
-fn verify_signed_result_signature(
-    signature: &SignatureOf<ModerationSignedScreeningBodyV1>,
-    public_key: &PublicKey,
-    body: &ModerationSignedScreeningBodyV1,
-) -> Result<(), iroha_crypto::Error> {
-    validate_typed_signature_payload(signature.payload(), public_key)?;
-    signature.verify(public_key, body)
-}
-fn validate_typed_signature_payload(
-    payload: &[u8],
-    public_key: &PublicKey,
-) -> Result<(), iroha_crypto::Error> {
-    match public_key.try_algorithm() {
-        Ok(Algorithm::Ed25519) => iroha_crypto::ed25519_parse_signature(payload).map(|_| ()),
-        Ok(Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(payload).map(|_| ()),
-        _ => Ok(()),
-    }
-}
 /// `SoraFS` moderation-panel vote choices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(tag = "choice", content = "value", rename_all = "kebab-case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
+#[norito(tag = "choice", content = "value", rename_all = "kebab-case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationVoteChoice")]
 pub enum SoraFsModerationVoteChoice {
@@ -2664,9 +2404,20 @@ impl SoraFsModerationVoteChoice {
     }
 }
 /// Immutable case scope that every moderation commit/reveal payload must bind.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationBallotContextV1")]
 pub struct SoraFsModerationBallotContextV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1`].
@@ -2674,12 +2425,12 @@ pub struct SoraFsModerationBallotContextV1 {
     /// Moderation or appeal case identifier.
     pub case_id: String,
     /// Digest of the evidence bundle reviewed by the panel.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub evidence_bundle_digest: [u8; 32],
     /// Appeal pricing/settlement config version used for this case.
     pub appeal_finance_config_version: String,
     /// Digest of the selected panel roster and failover policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub panel_roster_hash: [u8; 32],
     /// Moderation policy reference reviewed by the panel.
     pub policy_reference: String,
@@ -2735,9 +2486,18 @@ impl SoraFsModerationBallotContextV1 {
     }
 }
 /// Juror commitment for a `SoraFS` moderation case.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationBallotCommitV1")]
 pub struct SoraFsModerationBallotCommitV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1`].
@@ -2749,7 +2509,7 @@ pub struct SoraFsModerationBallotCommitV1 {
     /// Stable juror identifier or pseudonym.
     pub juror_id: String,
     /// Blake2b commitment over context, round, juror, choice, and nonce.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment_blake2b_256: [u8; 32],
     /// UTC timestamp (milliseconds) when the commitment was recorded.
     pub committed_at_unix_ms: u64,
@@ -2811,9 +2571,18 @@ impl SoraFsModerationBallotCommitV1 {
     }
 }
 /// Juror reveal for a `SoraFS` moderation case.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::SoraFsModerationBallotRevealV1")]
 pub struct SoraFsModerationBallotRevealV1 {
     /// Schema version; must equal [`SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1`].
@@ -2827,7 +2596,7 @@ pub struct SoraFsModerationBallotRevealV1 {
     /// Moderation outcome selected by the juror.
     pub choice: SoraFsModerationVoteChoice,
     /// Random nonce used when generating the commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub nonce: Vec<u8>,
     /// UTC timestamp (milliseconds) when the reveal was recorded.
     pub revealed_at_unix_ms: u64,
@@ -2961,9 +2730,18 @@ fn is_zero_digest(digest: &[u8; 32]) -> bool {
 /// Schema version for [`AdversarialCorpusManifestV1`].
 pub const ADVERSARIAL_CORPUS_VERSION_V1: u16 = 1;
 /// Governance-signed registry describing adversarial corpus families.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::AdversarialCorpusManifestV1")]
 pub struct AdversarialCorpusManifestV1 {
     /// Schema version; must equal [`ADVERSARIAL_CORPUS_VERSION_V1`].
@@ -2978,13 +2756,22 @@ pub struct AdversarialCorpusManifestV1 {
     pub families: Vec<AdversarialPerceptualFamilyV1>,
 }
 /// Perceptual hash/embedding family describing one moderated cluster.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::AdversarialPerceptualFamilyV1")]
 pub struct AdversarialPerceptualFamilyV1 {
     /// Deterministic family identifier (UUID).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub family_id: [u8; 16],
     /// Free-form description for operator tooling.
     pub description: String,
@@ -2993,13 +2780,22 @@ pub struct AdversarialPerceptualFamilyV1 {
     pub variants: Vec<AdversarialPerceptualVariantV1>,
 }
 /// Entry describing a single adversarial variant and its fingerprints.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::moderation::AdversarialPerceptualVariantV1")]
 pub struct AdversarialPerceptualVariantV1 {
     /// Variant identifier (UUID).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub variant_id: [u8; 16],
     /// Attack vector description (`jpeg_jitter`, `mosaic`, `zip_bomb`, …).
     pub attack_vector: String,
@@ -3007,20 +2803,14 @@ pub struct AdversarialPerceptualVariantV1 {
     #[norito(default)]
     pub reference_cid_b64: Option<String>,
     /// Optional canonical perceptual hash (BLAKE3-domain separated, 256-bit).
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::sorafs::moderation::json_option_digest32")
-    )]
+    #[norito(json = "crate::sorafs::moderation::json_option_digest32")]
     #[norito(default)]
     pub perceptual_hash: Option<[u8; 32]>,
     /// Maximum Hamming distance tolerated for perceptual hash matches.
     #[norito(default)]
     pub hamming_radius: u8,
     /// Optional embedding digest (BLAKE3 of quantised embedding vector).
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::sorafs::moderation::json_option_digest32")
-    )]
+    #[norito(json = "crate::sorafs::moderation::json_option_digest32")]
     #[norito(default)]
     pub embedding_digest: Option<[u8; 32]>,
     /// Optional free-form notes captured during benchmarking.

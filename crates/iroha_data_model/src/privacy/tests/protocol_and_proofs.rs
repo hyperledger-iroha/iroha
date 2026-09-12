@@ -11,8 +11,9 @@ use super::{
     },
     *,
 };
-use crate::{domain::DomainId, name::Name};
 use hex_literal::hex;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use std::str::FromStr as _;
 fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
     (1..=count)
@@ -167,11 +168,11 @@ where
         "permanent schema-name KAT changed for {schema_name}"
     );
     assert_eq!(
-        <T as norito::NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<T>(),
         expected_schema_hash
     );
     assert_eq!(
-        <T as norito::NoritoDeserialize<'static>>::schema_hash(),
+        norito::schema::identity::frame_hash::<T>(),
         expected_schema_hash
     );
     let legacy_type_name_hash = norito::core::type_name_schema_hash::<T>();
@@ -497,7 +498,7 @@ fn proof_envelope_wire_rejects_pre_release_layout_magic_and_catalog() {
         .to_le_bytes();
     assert_eq!(magic_bytes, PRIVACY_PROOF_WIRE_MAGIC_BYTES_V1);
     assert_eq!(usize::from(encoded[0]), magic_bytes.len());
-    assert_eq!(&encoded[1..1 + magic_bytes.len()], &magic_bytes);
+    assert_eq!(&encoded[1..=magic_bytes.len()], &magic_bytes);
     let catalog_length_offset = 1 + magic_bytes.len();
     assert_eq!(
         usize::from(encoded[catalog_length_offset]),
@@ -2785,7 +2786,6 @@ fn zk_ace_digest384_wrappers_reject_noncanonical_field_elements() {
     assert!(PrivacyZkAceReplayNullifierV1::from_le_bytes(noncanonical).is_none());
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn goldilocks_digest384_json_rejects_noncanonical_words() {
     let digest = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).expect("canonical words");

@@ -10,25 +10,29 @@ use iroha_data_model::query::{
 use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
 use std::sync::Arc;
 // Canonical schema type definitions used by the default registry for encoding/decoding.
-// Keep these at module scope so Norito type identity remains stable across encode/decode.
-#[derive(norito::Decode, norito::Encode, Clone, Debug)]
+// Each owner explicitly declares the identity shared by its encoder and decoder.
+#[derive(norito::Decode, norito::Encode, Clone, Debug, norito::NoritoSchema)]
+#[norito_schema(name = "ivm::schema_registry::OrderSchema")]
 struct OrderSchema {
     qty: i64,
     side: String,
 }
-#[derive(norito::Decode, norito::Encode, Clone, Debug)]
+#[derive(norito::Decode, norito::Encode, Clone, Debug, norito::NoritoSchema)]
+#[norito_schema(name = "ivm::schema_registry::OrderByTimeSchema")]
 struct OrderByTimeSchema {
     qty: i64,
     side: String,
     tif: u32,
 }
-#[derive(norito::Decode, norito::Encode, Clone, Debug)]
+#[derive(norito::Decode, norito::Encode, Clone, Debug, norito::NoritoSchema)]
+#[norito_schema(name = "ivm::schema_registry::TradeV1Schema")]
 struct TradeV1Schema {
     qty: i64,
     price: i64,
     side: String,
 }
-#[derive(norito::Decode, norito::Encode, Clone, Debug)]
+#[derive(norito::Decode, norito::Encode, Clone, Debug, norito::NoritoSchema)]
+#[norito_schema(name = "ivm::schema_registry::TradeV2Schema")]
 struct TradeV2Schema {
     qty: i64,
     price: i64,
@@ -525,3 +529,6 @@ mod tests {
         assert!(eq_json(&json_bytes, &dec));
     }
 }
+
+#[cfg(test)]
+mod frame_identity_tests;

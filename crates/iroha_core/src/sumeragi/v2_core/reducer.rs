@@ -3679,9 +3679,18 @@ impl Reducer {
         };
         if !valid {
             let key = CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
+            // Installing a timeout clears pending_prepare, but its exact
+            // durable lock still authorizes the protected body's validation.
+            // Rejection must report that certificate without requiring it to
+            // arrive again. A different proposal round is not this authority.
             let effects = self
                 .pending_prepare
                 .get(&key)
+                .or_else(|| {
+                    self.durable
+                        .locked()
+                        .filter(|certificate| certificate.reference() == key)
+                })
                 .map_or_else(Vec::new, |certificate| {
                     vec![Effect::ReportInvalidCertifiedBody {
                         subject,

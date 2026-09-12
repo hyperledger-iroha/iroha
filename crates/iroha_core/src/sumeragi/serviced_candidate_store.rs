@@ -25,7 +25,8 @@ use super::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::block::consensus_v2 as wire;
+use iroha_model_base::peer::PeerId;
 use norito::codec::{Decode, DecodeAll, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -73,6 +74,10 @@ pub(crate) const fn serviced_candidate_stage_for_kind_code(kind: u8) -> Option<u
 /// This is node-local admission metadata, not a wire field. It is repeated in
 /// the producer record so a decoded snapshot cannot silently reclassify a
 /// transport-conditional or volatile-body occurrence as locally replayable.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::ProducerContinuationSourceClass"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum ProducerContinuationSourceClass {
     /// A durable local body-pipeline, safety-WAL, or Decision root exists.
@@ -99,6 +104,8 @@ pub(crate) const fn producer_continuation_source_class_for_kind_code(
 /// binding, so a decoded record cannot be transplanted between otherwise
 /// valid files or validators. The adapter may use this key transiently for any
 /// successful service; this store persists it only after terminal retirement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::serviced_candidate_store::ServicedCandidateKey")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServicedCandidateKey {
@@ -189,6 +196,10 @@ impl ServicedCandidateKey {
         self.context_id == context_id && self.height == height && self.owner == owner
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::PersistedServicedCandidate"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedServicedCandidate {
@@ -197,6 +208,10 @@ struct PersistedServicedCandidate {
     service_view: wire::View,
 }
 /// Node-local index into the immutable lifecycle-stage address space.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::ProducerContinuationAddress"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ProducerContinuationAddress {
@@ -217,6 +232,10 @@ impl ProducerContinuationAddress {
     }
 }
 /// Full route-neutral identity stored behind a node-local continuation index.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::ProducerContinuationIdentity"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ProducerContinuationIdentity {
@@ -286,6 +305,10 @@ impl ProducerContinuationIdentity {
     }
 }
 /// Monotone producer-continuation lifecycle state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::ProducerContinuationStatus"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum ProducerContinuationStatus {
     /// Frozen handoff awaits an exact owned successor or semantic retirement.
@@ -338,6 +361,10 @@ impl ProducerContinuationHandoffToken {
 /// This token can only be reconstructed from a validated v4 terminal record.
 /// It lets outer ingress ownership reconcile a replay against durable
 /// consumer memory without consulting process-local ordinals or ambient flags.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::ProducerContinuationTerminalToken"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ProducerContinuationTerminalToken {
@@ -371,6 +398,10 @@ pub(crate) enum ProducerContinuationReservation {
     ReplacedTerminal,
 }
 /// Persisted value for one exact producer-continuation lifecycle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::ProducerContinuationRecord"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ProducerContinuationRecord {
@@ -441,12 +472,20 @@ impl ProducerContinuationRecord {
         ProducerContinuationTerminalToken::from_terminal(self)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::PersistedProducerContinuation"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedProducerContinuation {
     address: ProducerContinuationAddress,
     record: ProducerContinuationRecord,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::PersistedServicedCandidatesV4"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedServicedCandidatesV4 {
@@ -481,6 +520,8 @@ pub(crate) struct RestoredServicedCandidates {
     pub(crate) decision_reclaimed: bool,
 }
 /// Durable position of one generic productive leader-wire lifecycle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::serviced_candidate_store::LeaderWireLifecycleStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) enum LeaderWireLifecycleStatus {
     /// Restart-restored exact identity with no surviving physical carrier.
@@ -516,6 +557,8 @@ impl LeaderWireLifecycleStatus {
     }
 }
 /// Exact serialized-runtime identity bound when ingress drains successfully.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::serviced_candidate_store::LeaderWireRuntimeOwner")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LeaderWireRuntimeOwner {
@@ -547,6 +590,10 @@ impl LeaderWireRuntimeOwner {
 /// Construction requires the non-forgeable receipt returned by `V2BodyStore`.
 /// On restart the projection is compared with the recovery catalog from a
 /// separately opened body store; the gate snapshot is never its own authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::LeaderWireDurableBodyTerminalEvidence"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LeaderWireDurableBodyTerminalEvidence {
@@ -586,6 +633,10 @@ impl LeaderWireDurableBodyTerminalEvidence {
     }
 }
 /// Restart-stable terminal authority for one generic leader-wire lifecycle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::LeaderWireStableTerminalEvidence"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum LeaderWireStableTerminalEvidence {
     /// The adapter first published the exact producer continuation terminal.
@@ -599,6 +650,10 @@ impl From<ProducerContinuationTerminalToken> for LeaderWireStableTerminalEvidenc
     }
 }
 pub(crate) use super::v2::LeaderWireRecoveryAuthority;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::PersistedLeaderWireLifecycleRecord"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLeaderWireLifecycleRecord {
@@ -607,6 +662,10 @@ struct PersistedLeaderWireLifecycleRecord {
     runtime_owner: Option<LeaderWireRuntimeOwner>,
     terminal_evidence: Option<LeaderWireStableTerminalEvidence>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::serviced_candidate_store::PersistedLeaderWireLifecycles"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLeaderWireLifecycles {

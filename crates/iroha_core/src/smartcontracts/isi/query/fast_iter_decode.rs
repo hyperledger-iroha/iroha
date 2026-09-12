@@ -1,6 +1,6 @@
 //! Exact, cumulative decoding for opaque iterable-query components.
 use super::{Error, QueryLimits};
-use norito::core::{NoritoDeserialize, NoritoSerialize};
+use norito::core::{DeserializePayload, SerializePayload};
 struct ExactBareWriter<'a> {
     expected: &'a [u8],
     written: usize,
@@ -23,7 +23,7 @@ impl std::io::Write for ExactBareWriter<'_> {
 }
 pub(super) fn decode_exact_in_scope<T>(bytes: &[u8]) -> Result<T, Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let value = norito::codec::decode_adaptive::<T>(bytes)
         .map_err(|_| Error::Conversion("failed to decode iterable query component".to_owned()))?;
@@ -70,7 +70,7 @@ impl FastIterComponentDecoder {
     }
     pub(super) fn decode<T>(&mut self, bytes: &[u8]) -> Result<T, Error>
     where
-        T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+        T: SerializePayload + for<'de> DeserializePayload<'de>,
     {
         self.try_decode_measured(bytes)?.ok_or_else(|| {
             Error::Conversion("failed to decode iterable query component".to_owned())
@@ -79,13 +79,13 @@ impl FastIterComponentDecoder {
     /// Try one of several concrete query variants sharing an item kind.
     pub(super) fn try_decode<T>(&mut self, bytes: &[u8]) -> Result<Option<T>, Error>
     where
-        T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+        T: SerializePayload + for<'de> DeserializePayload<'de>,
     {
         self.try_decode_measured(bytes)
     }
     fn try_decode_measured<T>(&mut self, bytes: &[u8]) -> Result<Option<T>, Error>
     where
-        T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+        T: SerializePayload + for<'de> DeserializePayload<'de>,
     {
         if bytes.len() > self.maximum_component_bytes {
             return Err(Error::CapacityLimit);
@@ -113,10 +113,58 @@ impl FastIterComponentDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        peer::PeerId,
-        query::{domain::prelude::FindDomains, dsl::CompoundPredicate},
-    };
+    use iroha_data_model::query::{domain::prelude::FindDomains, dsl::CompoundPredicate};
+    use iroha_model_base::peer::PeerId;
+    // Iterable components are embedded payloads; this fixture intentionally has no frame identity.
+    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+    struct PayloadOnlyComponent {
+        values: Vec<String>,
+    }
+    #[test]
+    fn payload_only_components_require_exact_canonical_bytes() {
+        let value = PayloadOnlyComponent {
+            values: vec!["first".to_owned(), "second".to_owned()],
+        };
+        let bytes = norito::codec::Encode::encode(&value);
+        assert_eq!(
+            decode_exact_in_scope::<PayloadOnlyComponent>(&bytes).unwrap(),
+            value
+        );
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_exact_in_scope::<PayloadOnlyComponent>(&trailing).is_err());
+        assert!(decode_exact_in_scope::<PayloadOnlyComponent>(&bytes[..bytes.len() - 1]).is_err());
+    }
+    #[test]
+    fn payload_only_components_share_the_cumulative_allocation_budget() {
+        let value = PayloadOnlyComponent {
+            values: vec!["first".to_owned(), "second".to_owned()],
+        };
+        let bytes = norito::codec::Encode::encode(&value);
+        let mut decoder = FastIterComponentDecoder::new(QueryLimits::default(), [&bytes, &[], &[]])
+            .expect("payload fits default limits");
+        let before = decoder.remaining_allocated_bytes;
+        assert_eq!(
+            decoder.decode::<PayloadOnlyComponent>(&bytes).unwrap(),
+            value
+        );
+        let charge = before - decoder.remaining_allocated_bytes;
+        assert!(charge > 0, "decoded vectors and strings must be charged");
+        decoder.remaining_allocated_bytes = charge;
+        assert_eq!(
+            decoder.try_decode::<PayloadOnlyComponent>(&bytes).unwrap(),
+            Some(value)
+        );
+        assert_eq!(decoder.remaining_allocated_bytes, 0);
+        assert!(
+            decoder
+                .try_decode::<PayloadOnlyComponent>(&bytes)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(decoder.remaining_allocated_bytes, 0);
+        assert!(decoder.decode::<PayloadOnlyComponent>(&bytes).is_err());
+    }
     #[test]
     fn exact_decode_accepts_canonical_unit_and_rejects_trailing_or_incomplete_values() {
         let bytes = norito::codec::Encode::encode(&FindDomains);

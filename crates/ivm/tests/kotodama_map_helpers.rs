@@ -236,7 +236,7 @@ fn runtime_durable_ensure_state_map() {
     assert_eq!(common::decode_i64_register(&vm, 10), 0);
     let host_ref = vm.host_mut_any().unwrap();
     let host = host_ref.downcast_ref::<WsvHost>().unwrap();
-    let base = iroha_data_model::prelude::Name::from_str("S").expect("valid Name literal");
+    let base = iroha_model_base::name::Name::from_str("S").expect("valid Name literal");
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
         .expect("encode canonical pointer-backed StateMap key");
     let expected_path = format!("{}/{}", base.as_ref(), hex::encode(key));

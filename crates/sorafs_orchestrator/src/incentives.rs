@@ -7,14 +7,14 @@
 use hex::encode as hex_encode;
 use iroha_data_model::{
     account::AccountId,
-    metadata::Metadata,
-    name::Name,
     soranet::{
         RelayId,
         incentives::RelayRewardInstructionV1,
         prelude::{Digest32, RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayEpochMetricsV1},
     },
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use soranet_incentives::{
     RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
@@ -22,7 +22,7 @@ use soranet_incentives::{
 };
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
@@ -430,115 +430,17 @@ impl<'a> MetricsLogOutcome<'a> {
         }
     }
 }
-#[derive(Debug, Error)]
-pub enum MetricsLogError {
-    #[error("failed to create metrics log directory {path:?}: {source}")]
-    CreateDir { path: PathBuf, source: io::Error },
-    #[error("failed to open metrics log at {path:?}: {source}")]
-    Open { path: PathBuf, source: io::Error },
-    #[error("failed to write metrics log at {path:?}: {source}")]
-    Write { path: PathBuf, source: io::Error },
-    #[error("failed to encode relay metrics entry: {0}")]
-    Encode(#[from] norito::Error),
-    #[error("failed to decode metrics log at {path:?}: {source}")]
-    Decode {
-        path: PathBuf,
-        source: norito::Error,
-    },
-    #[error("failed to read metrics log at {path:?}: {source}")]
-    Read { path: PathBuf, source: io::Error },
-}
-#[derive(Debug)]
-struct MetricsLog {
-    path: PathBuf,
-    writer: Mutex<File>,
-}
-impl MetricsLog {
-    fn open(path: PathBuf) -> Result<Self, MetricsLogError> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(|source| MetricsLogError::CreateDir {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| MetricsLogError::Open {
-                path: path.clone(),
-                source,
-            })?;
-        Ok(Self {
-            path,
-            writer: Mutex::new(file),
-        })
-    }
-    fn append(&self, entry: &RelayEpochMetricsV1) -> Result<(), MetricsLogError> {
-        let (payload, flags) = norito::codec::encode_with_header_flags(entry);
-        let framed =
-            norito::core::frame_bare_with_header_flags::<RelayEpochMetricsV1>(&payload, flags)?;
-        let mut guard = self.writer.lock().expect("metrics log mutex poisoned");
-        guard
-            .write_all(&framed)
-            .map_err(|source| MetricsLogError::Write {
-                path: self.path.clone(),
-                source,
-            })?;
-        guard.flush().map_err(|source| MetricsLogError::Write {
-            path: self.path.clone(),
-            source,
-        })?;
-        Ok(())
-    }
-}
-/// Read all relay metrics entries stored in a Norito log.
-pub fn read_metrics_log(
-    path: impl AsRef<Path>,
-) -> Result<Vec<RelayEpochMetricsV1>, MetricsLogError> {
-    let path = path.as_ref();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = File::open(path).map_err(|source| MetricsLogError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mut reader = BufReader::new(file);
-    let mut entries = Vec::new();
-    loop {
-        {
-            let buffer = reader.fill_buf().map_err(|source| MetricsLogError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            if buffer.is_empty() {
-                break;
-            }
-        }
-        match norito::deserialize_stream::<_, RelayEpochMetricsV1>(&mut reader) {
-            Ok(entry) => entries.push(entry),
-            Err(norito::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(source) => {
-                return Err(MetricsLogError::Decode {
-                    path: path.to_path_buf(),
-                    source,
-                });
-            }
-        }
-    }
-    Ok(entries)
-}
+include!("incentives/metrics_log.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
-        soranet::incentives::RelayComplianceStatusV1,
+        asset::AssetDefinitionId, soranet::incentives::RelayComplianceStatusV1,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use std::convert::TryFrom;
     use tempfile::tempdir;
     fn quantity(value: u32) -> Quantity {
@@ -735,6 +637,55 @@ mod tests {
         assert_eq!(instruction.payout_amount, Quantity::zero());
     }
     #[test]
+    fn metrics_log_bounds_each_canonical_record_and_rejects_partial_tail() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("metrics.log");
+        let log = MetricsLog::open(path.clone()).expect("open log");
+        let entry = metrics(1_000, 1_000);
+        let canonical = norito::encode_canonical(&entry).expect("canonical entry");
+        let mut count = 0;
+        for flags in (0..=norito::core::supported_header_flags())
+            .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            log.append(&entry).expect("append under caller layout");
+            count += 1;
+        }
+        drop(log);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes, canonical.repeat(count));
+        assert_eq!(
+            read_metrics_log(&path, log_test_limits()).unwrap(),
+            vec![entry; count]
+        );
+        for length in [
+            1,
+            norito::core::Header::SIZE - 1,
+            canonical.len() - 1,
+            bytes.len() - 1,
+        ] {
+            std::fs::write(&path, &bytes[..length]).unwrap();
+            assert!(
+                read_metrics_log(&path, log_test_limits()).is_err(),
+                "partial log at {length} accepted"
+            );
+        }
+        let mut header = canonical[..norito::core::Header::SIZE].to_vec();
+        // Header layout: magic/version/owner/compression precede the u64 length.
+        header[23..31].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(
+            norito::core::Header::read(header.as_slice())
+                .unwrap()
+                .length,
+            u64::MAX
+        );
+        std::fs::write(&path, header).unwrap();
+        assert!(
+            read_metrics_log(&path, log_test_limits()).is_err(),
+            "unbacked declared size accepted"
+        );
+    }
+    #[test]
     fn metrics_log_records_entries() {
         let dir = tempdir().expect("temp dir");
         let log_path = dir.path().join("relay_metrics.log");
@@ -764,8 +715,26 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        let records = read_metrics_log(&log_path).expect("read metrics log");
+        let records = read_metrics_log(&log_path, log_test_limits()).expect("read metrics log");
         assert_eq!(records.len(), 2);
+        let recorded_bytes = std::fs::read(&log_path).expect("read actual producer bytes");
+        assert_eq!(
+            recorded_bytes[6..22],
+            norito::schema::identity::frame_hash::<RelayEpochMetricsV1>()
+        );
+        let mut wrong_owner = recorded_bytes;
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<
+            iroha_data_model::soranet::incentives::RelayBandwidthProofPayloadV1,
+        >());
+        let corrupt_path = dir.path().join("wrong-owner.log");
+        std::fs::write(&corrupt_path, wrong_owner).expect("write owner substitution");
+        assert!(matches!(
+            read_metrics_log(&corrupt_path, log_test_limits()),
+            Err(MetricsLogError::Decode {
+                source: norito::Error::SchemaMismatch,
+                ..
+            })
+        ));
         let decision_key = Name::from_str("reward_decision").expect("name");
         assert_eq!(
             records[0].metadata.get(&decision_key),
@@ -787,4 +756,5 @@ mod tests {
             Some(&Json::new("epoch-1"))
         );
     }
+    include!("incentives/metrics_log_tests.rs");
 }

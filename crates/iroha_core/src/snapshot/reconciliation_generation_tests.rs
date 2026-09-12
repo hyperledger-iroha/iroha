@@ -1,5 +1,80 @@
 use crate::state::storage_transactions::TransactionsReadOnly;
 
+#[test]
+fn initial_snapshot_generation_owned_root_without_current_is_not_found() {
+    let root = tempdir().expect("owned empty snapshot root");
+    for with_reset_marker in [false, true] {
+        if with_reset_marker {
+            std::fs::write(root.path().join("reset-marker.json"), b"{}\n")
+                .expect("independent reset custody marker");
+        }
+        for emergency_fast in [false, true] {
+            let error = bind_current_snapshot_generation_with_mode(
+                root.path(),
+                1024,
+                TEST_CHUNK_SIZE,
+                emergency_fast,
+            )
+            .err()
+            .expect("no snapshot has been published");
+            assert!(matches!(error, TryReadError::NotFound));
+            assert!(
+                !root.path().join(SNAPSHOT_GENERATIONS_DIR_NAME).exists(),
+                "reading a fresh root must not create snapshot state"
+            );
+            assert!(!root.path().join(SNAPSHOT_CURRENT_FILE_NAME).exists());
+        }
+    }
+}
+
+#[test]
+fn initial_snapshot_generation_current_without_generations_is_fatal_io() {
+    let root = tempdir().expect("owned snapshot root");
+    let pointer_path = root.path().join(SNAPSHOT_CURRENT_FILE_NAME);
+    let pointer = format!("{}\n", "11".repeat(32));
+    std::fs::write(&pointer_path, &pointer).expect("published current pointer");
+    for emergency_fast in [false, true] {
+        let error = bind_current_snapshot_generation_with_mode(
+            root.path(),
+            1024,
+            TEST_CHUNK_SIZE,
+            emergency_fast,
+        )
+        .err()
+        .expect("published pointer cannot refer to missing storage");
+        assert!(matches!(
+            error,
+            TryReadError::IO(ref error, ref path)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && path == &root.path().join(SNAPSHOT_GENERATIONS_DIR_NAME)
+        ));
+        assert_eq!(std::fs::read_to_string(&pointer_path).unwrap(), pointer);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn initial_snapshot_generation_absent_current_does_not_bypass_root_custody() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let root = tempdir().expect("owned snapshot root");
+    let alias = root.path().join("alias");
+    symlink(root.path(), &alias).expect("untrusted root alias");
+    let error = bind_current_snapshot_generation(&alias, 1024, TEST_CHUNK_SIZE)
+        .err()
+        .expect("snapshot root cannot be a symlink");
+    assert!(matches!(error, TryReadError::SnapshotBindingChanged(_)));
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o777))
+        .expect("untrusted root mode");
+    let error = bind_current_snapshot_generation(root.path(), 1024, TEST_CHUNK_SIZE)
+        .err()
+        .expect("snapshot root cannot be writable by another user");
+    assert!(matches!(
+        error,
+        TryReadError::SnapshotGenerationInvalid { .. }
+    ));
+}
+
 #[tokio::test]
 async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation() {
     let tmp_root = tempdir().unwrap();
@@ -120,6 +195,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         Kura::open_test_kura_with_configured_lane_config(&tail_loss_kura_config, &lane_config)
             .expect("tail-loss Kura init");
     assert_eq!(initial_height, 0);
+    drop(state_factory_with_kura(Arc::clone(&tail_loss_kura)));
     tail_loss_kura
         .store_block(Arc::clone(&block1))
         .expect("persist retained prefix block");
@@ -387,7 +463,10 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
 
     let payload_path = current_generation_artifact(&snapshot_store_dir, SNAPSHOT_FILE_NAME);
     let payload_bytes = std::fs::read(&payload_path).expect("read deferred snapshot payload");
-    assert!(!payload_bytes.is_empty(), "snapshot fixture must be non-empty");
+    assert!(
+        !payload_bytes.is_empty(),
+        "snapshot fixture must be non-empty"
+    );
     std::fs::write(&payload_path, vec![b'!'; payload_bytes.len()])
         .expect("replace deferred snapshot payload without changing its size");
     let restored_without_reading_payload = try_read_snapshot(
@@ -1280,7 +1359,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     ) else {
         panic!("should not be ok")
     };
-    assert_eq!(format!("{error}"), "Error (de)serializing state snapshot");
+    assert!(matches!(error, TryReadError::NonCanonicalSnapshotPayload));
 }
 #[tokio::test]
 async fn checksum_mismatch_rejected() {

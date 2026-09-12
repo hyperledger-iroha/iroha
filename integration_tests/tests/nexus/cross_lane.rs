@@ -8,12 +8,13 @@ use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
 use iroha_data_model::{
     block::{consensus::LaneBlockCommitment, consensus_v2::finality::V2FinalityArtifact},
     nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig, LaneFinalityAuthorityV1, LaneId, LanePrivacyProof,
-        LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, compute_settlement_hash,
+        LaneCatalog, LaneConfig, LaneFinalityAuthorityV1, LanePrivacyProof, LaneRelayEnvelope,
+        LaneRelayError, LaneStorageProfile, compute_settlement_hash,
     },
-    peer::PeerId,
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{core as norito_core, json};
 use std::{
@@ -95,7 +96,7 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
         .expect("one attachment is a valid bounded proof list");
     let norito_bytes = norito::to_bytes(&list)?;
     let archived = norito::from_bytes::<ProofAttachmentList>(&norito_bytes)?;
-    let decoded: ProofAttachmentList = norito_core::NoritoDeserialize::deserialize(archived);
+    let decoded: ProofAttachmentList = norito_core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded, list);
     let decoded_privacy = decoded
         .as_slice()
@@ -224,7 +225,7 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
 #[allow(clippy::unnecessary_wraps)]
 fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
     let lane_id = LaneId::new(9);
-    let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(5);
+    let dataspace_id = iroha_model_base::topology::DataSpaceId::new(5);
     let settlement = LaneBlockCommitment {
         block_height: 12,
         lane_id,
@@ -265,7 +266,10 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
     } = err
     {
         assert_eq!(lane_id, LaneId::new(9));
-        assert_eq!(dataspace_id, iroha_data_model::nexus::DataSpaceId::new(5));
+        assert_eq!(
+            dataspace_id,
+            iroha_model_base::topology::DataSpaceId::new(5)
+        );
         assert_eq!(block_height, 12);
     } else {
         panic!("expected duplicate proof error, got {err:?}");
@@ -276,7 +280,7 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
 #[allow(clippy::unnecessary_wraps)]
 fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
     let lane_id = LaneId::new(4);
-    let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(8);
+    let dataspace_id = iroha_model_base::topology::DataSpaceId::new(8);
     let settlement = LaneBlockCommitment {
         block_height: 3,
         lane_id,

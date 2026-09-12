@@ -30,8 +30,8 @@ fn zk_ballot_verifies_with_registered_production_vote_vk() {
     // Build a state with production Halo2 verification enabled.
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let domain_id: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = iroha_core::state::World::with([domain], [account], []);

@@ -3,7 +3,7 @@ use iroha_schema::IntoSchema;
 use norito::{Decode, Encode};
 
 use super::entrypoint::EntrypointValueKindV1;
-use crate::{name::Name, state_path::StatePath};
+use iroha_model_base::{name::Name, state_path::StatePath};
 
 /// Maximum complete canonical Norito cursor frame accepted by V1 boundaries.
 pub const MAX_STATE_CURSOR_BYTES_V1: usize = 64 * 1024;
@@ -18,6 +18,8 @@ pub const STATE_CURSOR_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"KOTODAMA_STATE_MAP_CURSO
 /// map, complete map schema, and canonical encoded key before using the continuation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::state_cursor::StateCursorV1")]
 pub struct StateCursorV1 {
     /// Exact host-provided contract instance identity.
     pub instance: String,
@@ -137,13 +139,13 @@ mod tests {
         boundary.map = map.parse().unwrap();
         boundary.last_key = format!(
             "{map}/{}",
-            "ab".repeat((crate::state_path::MAX_STATE_PATH_BYTES - 256) / 2)
+            "ab".repeat((iroha_model_base::state_path::MAX_STATE_PATH_BYTES - 256) / 2)
         )
         .parse()
         .unwrap();
         assert_eq!(
             boundary.last_key.as_ref().len(),
-            crate::state_path::MAX_STATE_PATH_BYTES
+            iroha_model_base::state_path::MAX_STATE_PATH_BYTES
         );
         let frame = boundary.encode_frame().unwrap();
         assert!(frame.len() <= MAX_STATE_CURSOR_BYTES_V1);
@@ -196,5 +198,17 @@ mod tests {
         invalid = cursor();
         invalid.map = "balances/child".parse().unwrap();
         assert!(!invalid.validate());
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::StateCursorV1>(
+            "iroha_data_model::smart_contract::state_cursor::StateCursorV1",
+        );
     }
 }

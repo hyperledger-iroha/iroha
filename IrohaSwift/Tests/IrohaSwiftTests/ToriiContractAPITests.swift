@@ -43,7 +43,7 @@ final class ToriiContractAPITests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeClient() -> ToriiClient {
+    private func makeClient(includeCanonicalAuth: Bool = true) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         return ToriiClient(
@@ -52,6 +52,7 @@ final class ToriiContractAPITests: XCTestCase {
             localSigningContext: ToriiLocalSigningContext(
                 networkId: TestNetworkIds.canonical
             ),
+            canonicalRequestAuth: includeCanonicalAuth ? canonicalReadAuth : nil,
             currentTimeMilliseconds: { 4_102_444_801_000 }
         )
     }
@@ -65,7 +66,7 @@ final class ToriiContractAPITests: XCTestCase {
         )
     }
 
-    private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
+    private func requestBodyData(_ request: URLRequest) throws -> Data {
         let data: Data
         if let body = request.httpBody {
             data = body
@@ -83,9 +84,11 @@ final class ToriiContractAPITests: XCTestCase {
         } else {
             throw NSError(domain: "ToriiContractAPITests", code: 1)
         }
-        return try XCTUnwrap(
-            JSONSerialization.jsonObject(with: data) as? [String: Any]
-        )
+        return data
+    }
+
+    private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any])
     }
 
     private func response(
@@ -120,6 +123,9 @@ final class ToriiContractAPITests: XCTestCase {
             "gas_limit": 500_000,
             "fee_payment": testFeePaymentObject(testFeePayment(gasLimit: 500_000)),
             "payload_digest_hex": payloadDigest,
+            "gas_used": NSNull(),
+            "tx_hash_hex": NSNull(),
+            "entrypoint_hash_hex": NSNull(),
         ]
         if submitted {
             receipt["tx_hash_hex"] = txHash
@@ -136,16 +142,15 @@ final class ToriiContractAPITests: XCTestCase {
             "transaction_ttl_ms": 120_000,
             "entrypoint": "spend_to_merchant",
             "operation_receipt": receipt,
+            "pipeline_status": NSNull(),
+            "tx_hash_hex": NSNull(),
+            "entrypoint_hash_hex": NSNull(),
+            "transaction_payload_b64": NSNull(),
+            "signing_message_b64": NSNull(),
         ]
         if submitted {
             value["tx_hash_hex"] = txHash
             value["entrypoint_hash_hex"] = entrypointHash
-            value["pipeline_status"] = [
-                "hash": txHash,
-                "status": ["kind": "Queued"],
-                "scope": "local",
-                "resolved_from": "queue",
-            ]
         } else {
             value["transaction_payload_b64"] = contractTransactionPayload.base64EncodedString()
             value["signing_message_b64"] = IrohaHash.hash(contractTransactionPayload).base64EncodedString()
@@ -324,13 +329,73 @@ final class ToriiContractAPITests: XCTestCase {
         }
     }
 
+    func testContractCallRequiresBoundCanonicalAuthBeforeNetworkRequest() async throws {
+        var calls = 0
+        StubURLProtocol.handler = { request in
+            calls += 1
+            return try self.response(for: request, json: self.contractCallResponse(submitted: false))
+        }
+        let unsignedClient = makeClient(includeCanonicalAuth: false)
+        do {
+            _ = try await unsignedClient.callContract(detachedRequest())
+            XCTFail("missing canonical auth was accepted")
+        } catch {}
+        let otherKey = try Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+        let otherAuth = ToriiCanonicalRequestAuth(
+            accountId: try otherKey.accountId(networkPrefix: AccountId.defaultNetworkPrefix),
+            privateKey: Data(repeating: 0x42, count: 32)
+        )
+        do {
+            _ = try await makeClient().callContract(detachedRequest(), canonicalAuth: otherAuth)
+            XCTFail("foreign canonical authority was accepted")
+        } catch {}
+        XCTAssertEqual(calls, 0)
+        _ = try await unsignedClient.prepareDetachedContractCall(detachedRequest(), canonicalAuth: canonicalReadAuth)
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testContractCallRequiresCompleteRetainedPayloadEnvelope() throws {
+        let encoder = JSONEncoder()
+        for bits in 1..<7 {
+            var request = detachedRequest()
+            if bits & 1 != 0 { request.publicKeyHex = signingPublicKeyHex }
+            if bits & 2 != 0 { request.signatureB64 = try detachedSignatureB64() }
+            if bits & 4 != 0 { request.transactionPayloadB64 = contractTransactionPayload.base64EncodedString() }
+            XCTAssertThrowsError(try encoder.encode(request), "partial detached envelope \(bits)")
+        }
+        var request = detachedRequest()
+        request.publicKeyHex = signingPublicKeyHex
+        request.signatureB64 = try detachedSignatureB64()
+        request.transactionPayloadB64 = contractTransactionPayload.base64EncodedString()
+        XCTAssertNoThrow(try encoder.encode(request))
+        request.creationTimeMs = nil
+        XCTAssertThrowsError(try encoder.encode(request))
+        request.creationTimeMs = detachedCreationTimeMs
+        request.transactionPayloadB64! += "\n"
+        XCTAssertThrowsError(try encoder.encode(request))
+    }
+
     func testPrepareAndSubmitDetachedContractCallPreservesEveryBinding() async throws {
         var requestIndex = 0
         let detachedSignature = try detachedSignatureB64()
         StubURLProtocol.handler = { request in
             requestIndex += 1
             XCTAssertEqual(request.url?.path, "/v1/contracts/call")
-            let body = try self.jsonBody(request)
+            let bodyData = try self.requestBodyData(request)
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
+            let expectedHeaders = try ToriiCanonicalRequest.buildHeaders(
+                method: "POST",
+                url: try XCTUnwrap(request.url),
+                body: bodyData,
+                accountId: self.authority,
+                privateKey: self.signingSeed,
+                networkId: TestNetworkIds.canonical,
+                timestampMs: 4_102_444_801_000,
+                nonce: "canonical-read-test"
+            )
+            for (name, value) in expectedHeaders {
+                XCTAssertEqual(request.value(forHTTPHeaderField: name), value)
+            }
             XCTAssertNil(body["private_key"])
             XCTAssertNil(body["draft_intent"])
             XCTAssertEqual(
@@ -341,6 +406,7 @@ final class ToriiContractAPITests: XCTestCase {
             if requestIndex == 1 {
                 XCTAssertNil(body["public_key_hex"])
                 XCTAssertNil(body["signature_b64"])
+                XCTAssertNil(body["transaction_payload_b64"])
                 return try self.response(
                     for: request,
                     json: self.contractCallResponse(submitted: false)
@@ -352,6 +418,7 @@ final class ToriiContractAPITests: XCTestCase {
             )
             XCTAssertEqual(body["public_key_hex"] as? String, self.signingPublicKeyHex)
             XCTAssertEqual(body["signature_b64"] as? String, detachedSignature)
+            XCTAssertEqual(body["transaction_payload_b64"] as? String, self.contractTransactionPayload.base64EncodedString())
             return try self.response(
                 for: request,
                 json: self.contractCallResponse(submitted: true)
@@ -391,18 +458,48 @@ final class ToriiContractAPITests: XCTestCase {
             networkId: TestNetworkIds.canonical,
             feePayment: enrichedFee
         )
+        var calls = 0
+        let expectedHash = CanonicalUnsignedTransactionTestSupport.transactionHash(for: enrichedPayload)
+            .map { String(format: "%02x", $0) }.joined()
         StubURLProtocol.handler = { request in
-            var json = self.contractCallResponse(submitted: false)
+            calls += 1
+            let submitted = calls == 2
+            let body = try self.jsonBody(request)
+            if submitted {
+                XCTAssertEqual(body["transaction_payload_b64"] as? String, enrichedPayload.base64EncodedString())
+                XCTAssertEqual(body["fee_payment"] as? NSDictionary, testFeePaymentObject(enrichedFee) as NSDictionary)
+                XCTAssertEqual(body["creation_time_ms"] as? NSNumber, self.detachedCreationTimeMs as NSNumber)
+                XCTAssertEqual(body["transaction_ttl_ms"] as? Int, 120_000)
+                XCTAssertEqual(body["contract_alias"] as? String, self.contractAlias)
+            }
+            var json = self.contractCallResponse(submitted: submitted)
             var receipt = json["operation_receipt"] as! [String: Any]
             receipt["fee_payment"] = testFeePaymentObject(enrichedFee)
+            if submitted {
+                receipt["tx_hash_hex"] = expectedHash
+                receipt["entrypoint_hash_hex"] = expectedHash
+                json["tx_hash_hex"] = expectedHash
+                json["entrypoint_hash_hex"] = expectedHash
+                XCTAssertTrue(json["pipeline_status"] is NSNull)
+            } else {
+                json["transaction_payload_b64"] = enrichedPayload.base64EncodedString()
+                json["signing_message_b64"] = IrohaHash.hash(enrichedPayload).base64EncodedString()
+            }
             json["operation_receipt"] = receipt
-            json["transaction_payload_b64"] = enrichedPayload.base64EncodedString()
-            json["signing_message_b64"] = IrohaHash.hash(enrichedPayload).base64EncodedString()
             return try self.response(for: request, json: json)
         }
 
-        let draft = try await makeClient().prepareDetachedContractCall(detachedRequest())
+        let client = makeClient()
+        let draft = try await client.prepareDetachedContractCall(detachedRequest())
         XCTAssertEqual(draft.transactionPayload, enrichedPayload)
+        XCTAssertEqual(draft.request.feePayment, enrichedFee)
+        let submitted = try await client.submitDetachedContractCall(
+            draft,
+            publicKeyHex: signingPublicKeyHex,
+            signatureB64: try signingKeypair.sign(draft.signingMessage).base64EncodedString()
+        )
+        XCTAssertEqual(submitted.transactionHashHex, expectedHash)
+        XCTAssertEqual(calls, 2)
     }
 
     func testDetachedPreparationBindsCallerTrustedEventMetadata() async throws {
@@ -461,6 +558,7 @@ final class ToriiContractAPITests: XCTestCase {
             { $0.creationTimeMs = UInt64.max },
             { $0.feePayment = testFeePayment() },
             { $0.draftIntent = nil },
+            { $0.transactionPayloadB64 = "AQ==" },
         ]
         for mutation in mutations {
             var request = detachedRequest()
@@ -697,15 +795,16 @@ final class ToriiContractAPITests: XCTestCase {
     func testDetachedSubmitRejectsTamperedReceiptAndPipelineBindings() async throws {
         let mutations: [(inout [String: Any]) -> Void] = [
             {
-                var pipeline = $0["pipeline_status"] as! [String: Any]
-                pipeline["hash"] = String(repeating: "f", count: 64)
-                $0["pipeline_status"] = pipeline
+                $0["pipeline_status"] = [
+                    "hash": self.txHash, "status": ["kind": "Queued"],
+                    "scope": "local", "resolved_from": "queue",
+                ]
             },
             {
-                var pipeline = $0["pipeline_status"] as! [String: Any]
-                pipeline["scope"] = "global"
-                pipeline["resolved_from"] = "state"
-                $0["pipeline_status"] = pipeline
+                $0["pipeline_status"] = [
+                    "hash": self.txHash, "status": ["kind": "Committed", "block_height": 12],
+                    "scope": "global", "resolved_from": "state",
+                ]
             },
             {
                 var receipt = $0["operation_receipt"] as! [String: Any]

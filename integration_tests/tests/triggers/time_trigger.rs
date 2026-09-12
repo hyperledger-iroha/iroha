@@ -7,6 +7,9 @@ use iroha::{
     blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in, load_sample_ivm};
@@ -102,18 +105,14 @@ async fn submit_all_with_context(
 }
 async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
     let peer_count = network.peers().len();
-    let (status, sumeragi) = spawn_blocking({
+    let status = probe.client().status().get().await.ok();
+    let sumeragi = spawn_blocking({
         let client = probe.clone();
-        move || {
-            (
-                client.client().get_status(),
-                client.client().get_sumeragi_status(),
-            )
-        }
+        move || client.client().get_sumeragi_status()
     })
     .await
-    .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
-    .unwrap_or((None, None));
+    .ok()
+    .and_then(Result::ok);
     let leader_index = sumeragi
         .as_ref()
         .map(|status| status.leader)

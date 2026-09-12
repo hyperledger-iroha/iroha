@@ -37,12 +37,12 @@ use iroha_data_model::{
     },
     consensus::{NposConsensusEffects, NposMarkConsensusEvidenceAppliedAction, NposPenaltyAction},
     isi::{InstructionBox, bridge::RecordSccpMessage},
-    peer::PeerId,
     transaction::{
         DataTriggerSequence, Executable, IvmBytecode, IvmProved, TransactionBuilder,
         TransactionEntrypoint, TransactionResult, TransactionResultInner,
     },
 };
+use iroha_model_base::peer::PeerId;
 use norito::to_bytes;
 use std::collections::BTreeSet;
 

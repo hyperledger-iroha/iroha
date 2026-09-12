@@ -5292,15 +5292,21 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(try string(vector, "key_id"), try string(bootstrap, "key_id"))
             let refreshRounds = try int(vector, "refresh_rounds")
             XCTAssertGreaterThan(refreshRounds, 0)
-            XCTAssertLessThanOrEqual(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
             guard let plaintextSlots = vector["input_plaintext_slots"] as? [Int] else {
                 throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "input_plaintext_slots must be an integer array"])
             }
             XCTAssertFalse(plaintextSlots.isEmpty)
             XCTAssertTrue(plaintextSlots.allSatisfy { $0 >= 0 })
             XCTAssertGreaterThan(try int(vector, "expected_input_ciphertext_bytes"), 0)
-            XCTAssertGreaterThan(try int(vector, "expected_output_ciphertext_bytes"), 0)
             assertBfvUpperSha256("bootstrap refresh vector \(name) input", try string(vector, "expected_input_ciphertext_sha256"))
+            if let expectedError = vector["expected_error"] as? String {
+                XCTAssertGreaterThan(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
+                XCTAssertEqual(expectedError, "invalid BFV parameters: BFV bootstrap refresh rounds 2 exceeds bootstrap key max_refresh_rounds 1")
+                XCTAssertNil(vector["expected_output_ciphertext_sha256"])
+                continue
+            }
+            XCTAssertLessThanOrEqual(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
+            XCTAssertGreaterThan(try int(vector, "expected_output_ciphertext_bytes"), 0)
             assertBfvUpperSha256("bootstrap refresh vector \(name) output", try string(vector, "expected_output_ciphertext_sha256"))
             assertBfvUpperSha256("bootstrap refresh vector \(name) plaintext", try string(vector, "expected_plaintext_sha256"))
             let components = try object(vector, "output_components")
@@ -18410,7 +18416,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let fixtureData = try Data(contentsOf: fixtureURL)
         guard let fixture = try JSONSerialization.jsonObject(with: fixtureData) as? [String: Any],
               let boundary = fixture["torii_boundary"] as? [String: Any],
-              let authority = boundary["authority"] as? String,
+              let fixtureAuthority = boundary["authority"] as? String,
               let contractAlias = boundary["contract_alias"] as? String,
               let entrypoint = boundary["entrypoint"] as? String,
               let fixturePayload = boundary["payload"] as? [String: Any],
@@ -18421,6 +18427,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
               let recordHex = record["norito_hex"] as? String else {
             return XCTFail("invalid shared Kotodama argument-record fixture")
         }
+        XCTAssertNoThrow(try AccountAddress.parseEncoded(fixtureAuthority))
+        let authority = self.authority
         XCTAssertEqual(fixture["codec"] as? String, "EntrypointArgumentRecordV1")
         XCTAssertEqual(fixture["generator"] as? String, "ivm::encode_argument_record_from_json")
         XCTAssertNotNil(schemaHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression))
@@ -18491,7 +18499,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    func testCallContractParsesResponse() {
+    func testCallContractParsesResponse() throws {
         let expectation = expectation(description: "call contract")
         let feePayment = testFeePayment(gasLimit: 7)
         let codeHash = String(repeating: "d", count: 64)
@@ -18499,6 +18507,35 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let txHash = String(repeating: "f", count: 64)
         let entrypointHash = String(repeating: "a", count: 64)
         let payloadDigest = String(repeating: "b", count: 64)
+        let contractAddress = "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+        let payload = ToriiJSONValue.object(["amount": .string("10")])
+        let invocation = try TransactionContractInvocation(
+            contractAddress: contractAddress,
+            expectedCodeHash: Data(hexString: codeHash)!,
+            entrypoint: "create",
+            arguments: CanonicalUnsignedTransactionTestSupport.contractArgumentRecord(for: payload)
+        )
+        var requestBody = ToriiContractCallRequest(
+            authority: authority,
+            contractAlias: "mint::universal",
+            entrypoint: "create",
+            payload: payload,
+            draftIntent: try ToriiContractCallDraftIntent(invocation: invocation, metadata: [:]),
+            creationTimeMs: 321,
+            transactionTtlMs: 60_000,
+            feePayment: feePayment
+        )
+        let retainedPayload = try CanonicalUnsignedTransactionTestSupport.contractPayload(
+            request: requestBody,
+            contractAddress: contractAddress,
+            codeHashHex: codeHash,
+            networkId: TestNetworkIds.canonical
+        )
+        let keypair = try Keypair(privateKeyBytes: canonicalSigningSeed)
+        requestBody.publicKeyHex = keypair.publicKey.map { String(format: "%02x", $0) }.joined()
+        requestBody.signatureB64 = try keypair.sign(IrohaHash.hash(retainedPayload)).base64EncodedString()
+        requestBody.transactionPayloadB64 = retainedPayload.base64EncodedString()
+        let signedRequestBody = requestBody
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/contracts/call")
             XCTAssertEqual(request.httpMethod, "POST")
@@ -18508,10 +18545,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTFail("missing JSON body")
                 throw NSError(domain: "stub", code: -1)
             }
-            XCTAssertEqual(json["authority"] as? String, "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
+            XCTAssertEqual(json["authority"] as? String, self.authority)
             XCTAssertNil(json["private_key"])
-            XCTAssertEqual(json["public_key_hex"] as? String, String(repeating: "1", count: 64))
-            XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
+            XCTAssertEqual(json["public_key_hex"] as? String, signedRequestBody.publicKeyHex)
+            XCTAssertEqual(json["signature_b64"] as? String, signedRequestBody.signatureB64)
+            XCTAssertEqual(json["transaction_payload_b64"] as? String, signedRequestBody.transactionPayloadB64)
             XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "create")
             XCTAssertEqual(
@@ -18526,22 +18564,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Rejected","block_height":12},"scope":"local","resolved_from":"state"},"entrypoint_hash_hex":"\(entrypointHash)","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":3,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"transaction_ttl_ms":60000,"tx_hash_hex":"\(txHash)","pipeline_status":null,"transaction_payload_b64":null,"signing_message_b64":null,"entrypoint_hash_hex":"\(entrypointHash)","entrypoint":"create","operation_receipt":{"operation_kind":"contract_call","status":"submitted","transport":"torii","dataspace":"universal","contract_alias":"mint::universal","contract_address":"irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","tx_hash_hex":"\(txHash)","entrypoint":"create","entrypoint_hash_hex":"\(entrypointHash)","gas_limit":7,"gas_used":null,"fee_payment":{"payer":"authority","value":{"charge_limits":[],"gas_limit":7}},"payload_digest_hex":"\(payloadDigest)"}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
 
-        let request = ToriiContractCallRequest(
-            authority: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-            publicKeyHex: String(repeating: "1", count: 64),
-            signatureB64: "AQ==",
-            contractAlias: "mint::universal",
-            entrypoint: "create",
-            payload: .object(["amount": .string("10")]),
-            creationTimeMs: 321,
-            feePayment: feePayment
-        )
-        makeClient().callContract(request) { result in
+        makeClient().callContract(signedRequestBody) { result in
             switch result {
             case .success(let response):
                 XCTAssertTrue(response.ok)
@@ -18552,8 +18580,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
-                XCTAssertEqual(response.pipelineStatus?.status.blockHeight, 12)
-                XCTAssertEqual(response.pipelineStatus?.isRejected, true)
+                XCTAssertNil(response.pipelineStatus)
                 XCTAssertEqual(response.transactionTtlMs, 60_000)
                 XCTAssertEqual(response.entrypointHashHex, entrypointHash)
                 XCTAssertNil(response.transactionPayloadB64)
@@ -18561,7 +18588,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 XCTAssertEqual(response.entrypoint, "create")
                 XCTAssertEqual(response.operationReceipt.operationKind, "contract_call")
                 XCTAssertEqual(response.operationReceipt.gasLimit, 7)
-                XCTAssertEqual(response.operationReceipt.gasUsed, 3)
+                XCTAssertNil(response.operationReceipt.gasUsed)
                 XCTAssertEqual(response.operationReceipt.feePayment, feePayment)
                 XCTAssertEqual(response.operationReceipt.payloadDigestHex, payloadDigest)
             case .failure(let error):

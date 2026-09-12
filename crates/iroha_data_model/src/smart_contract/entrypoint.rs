@@ -3,14 +3,14 @@
 //! JSON is accepted only at client-facing boundaries. The compiler embeds these
 //! schemas in the signed contract interface so hosts can bind argument records
 //! and return registers to one canonical, recursively typed ABI description.
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
 };
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
-use norito::{Decode, Encode, NoritoDeserialize};
+use norito::{Decode, DeserializePayload, Encode};
 // BEGIN GENERATED: kotodama-v1-source-identifier-policy
 /// Exact identifier spellings forbidden in every Kotodama V1 source position.
 const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
@@ -170,9 +170,22 @@ pub const DECODED_ARGUMENT_TABLE_OFFSET: i16 = 8;
 /// Width of one decoded argument word in the returned table.
 pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
 /// Leaf representation used at a public Kotodama boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[norito(decode_from_slice)]
 pub enum EntrypointValueKindV1 {
@@ -188,7 +201,7 @@ pub enum EntrypointValueKindV1 {
     String,
     /// Nested JSON value carried as a `Json` pointer.
     Json,
-    /// Validated [`crate::name::Name`] pointer.
+    /// Validated [`iroha_model_base::name::Name`] pointer.
     Name,
     /// Validated universal account identifier pointer.
     AccountId,
@@ -211,11 +224,42 @@ impl EntrypointValueKindV1 {
     pub const fn is_pointer(self) -> bool {
         !matches!(self, Self::Bool)
     }
+    // One source spelling for both leaf schemas and scalar cursor keys.
+    const fn canonical_type_name(self) -> &'static str {
+        match self {
+            Self::Int => "int",
+            Self::Decimal => "decimal",
+            Self::Quantity => "quantity",
+            Self::Bool => "bool",
+            Self::String => "string",
+            Self::Json => "Json",
+            Self::Name => "Name",
+            Self::AccountId => "AccountId",
+            Self::AssetDefinitionId => "AssetDefinitionId",
+            Self::AssetId => "AssetId",
+            Self::DomainId => "DomainId",
+            Self::NftId => "NftId",
+            Self::DataSpaceId => "DataSpaceId",
+            Self::Blob => "bytes",
+        }
+    }
 }
 /// Named product metadata carried by a [`EntrypointValueTypeNodeV1::Struct`] node.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointStructTypeNodeV1 {
     /// Source type name, included in the schema identity.
@@ -228,18 +272,43 @@ pub struct EntrypointStructTypeNodeV1 {
 /// The exact element subtree immediately follows this node in the enclosing preorder tape. Keeping
 /// every aggregate in one flat tape makes decoding, validation, cloning, comparison, and
 /// destruction bounded by the explicit V1 node budget rather than the native call stack.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointListTypeNodeV1 {
     /// Compile-time capacity in the inclusive range 1 through 64.
     pub capacity: u8,
 }
 /// One preorder node in an exact public boundary type.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueTypeNodeV1 {
     /// Named product represented by an exact JSON object.
@@ -266,9 +335,10 @@ pub enum EntrypointValueTypeNodeV1 {
 }
 /// Flat, compiler-emitted recursive value type schema.
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, crate :: DeriveJsonSerialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1")]
 pub struct EntrypointValueTypeV1 {
@@ -278,9 +348,8 @@ pub struct EntrypointValueTypeV1 {
 /// Decode-only wire twin retaining the derive-generated V1 layout while the
 /// public type validates the decoded schema before returning it.
 #[repr(transparent)]
-#[derive(Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(Decode, IntoSchema, crate :: DeriveJsonDeserialize)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -289,10 +358,8 @@ pub struct EntrypointValueTypeV1 {
 struct DecodedEntrypointValueTypeV1 {
     nodes: Vec<EntrypointValueTypeNodeV1>,
 }
-impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
+
+impl<'de> DeserializePayload<'de> for EntrypointValueTypeV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .unwrap_or_else(|error| panic!("invalid V1 entrypoint value schema: {error}"))
@@ -302,7 +369,7 @@ impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
         // archived layouts are identical. The private twin exists solely to
         // reuse the derive-generated wire decoder.
         let decoded =
-            <DecodedEntrypointValueTypeV1 as NoritoDeserialize>::try_deserialize(archived.cast())?;
+            <DecodedEntrypointValueTypeV1 as DeserializePayload>::try_deserialize(archived.cast())?;
         let value = Self {
             nodes: decoded.nodes,
         };
@@ -314,7 +381,7 @@ impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
         Ok(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for EntrypointValueTypeV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -333,7 +400,7 @@ impl norito::json::JsonDeserialize for EntrypointValueTypeV1 {
         Self::from_decoded_json(decoded)
     }
 }
-#[cfg(feature = "json")]
+
 impl<'a> norito::json::FastFromJson<'a> for EntrypointValueTypeV1 {
     fn parse(
         walker: &mut norito::json::TapeWalker<'a>,
@@ -581,7 +648,6 @@ fn take_rendered_entrypoint_children(
     Some(children)
 }
 impl EntrypointValueTypeV1 {
-    #[cfg(feature = "json")]
     fn from_decoded_json(
         decoded: DecodedEntrypointValueTypeV1,
     ) -> Result<Self, norito::json::Error> {
@@ -763,13 +829,7 @@ impl EntrypointValueTypeV1 {
         for node in self.nodes.iter().rev() {
             let value = match node {
                 EntrypointValueTypeNodeV1::StateCursor(key) => RenderedEntrypointType {
-                    text: format!(
-                        "StateCursor<{}>",
-                        Self {
-                            nodes: vec![EntrypointValueTypeNodeV1::Leaf(*key)]
-                        }
-                        .canonical_type_name()?
-                    ),
+                    text: format!("StateCursor<{}>", key.canonical_type_name()),
                     core_view: None,
                     list_element_core_view: None,
                 },
@@ -852,22 +912,7 @@ impl EntrypointValueTypeV1 {
                     }
                 }
                 EntrypointValueTypeNodeV1::Leaf(kind) => RenderedEntrypointType {
-                    text: match kind {
-                        EntrypointValueKindV1::Int => "int".to_owned(),
-                        EntrypointValueKindV1::Decimal => "decimal".to_owned(),
-                        EntrypointValueKindV1::Quantity => "quantity".to_owned(),
-                        EntrypointValueKindV1::Bool => "bool".to_owned(),
-                        EntrypointValueKindV1::String => "string".to_owned(),
-                        EntrypointValueKindV1::Json => "Json".to_owned(),
-                        EntrypointValueKindV1::Name => "Name".to_owned(),
-                        EntrypointValueKindV1::AccountId => "AccountId".to_owned(),
-                        EntrypointValueKindV1::AssetDefinitionId => "AssetDefinitionId".to_owned(),
-                        EntrypointValueKindV1::AssetId => "AssetId".to_owned(),
-                        EntrypointValueKindV1::DomainId => "DomainId".to_owned(),
-                        EntrypointValueKindV1::NftId => "NftId".to_owned(),
-                        EntrypointValueKindV1::DataSpaceId => "DataSpaceId".to_owned(),
-                        EntrypointValueKindV1::Blob => "bytes".to_owned(),
-                    },
+                    text: kind.canonical_type_name().to_owned(),
                     core_view: None,
                     list_element_core_view: None,
                 },
@@ -959,9 +1004,21 @@ pub struct EntrypointReturnRecordV1 {
     pub atoms: Vec<EntrypointValueAtomV1>,
 }
 /// One named field in a public entrypoint argument record.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointArgumentFieldV1 {
     /// Source-level parameter name used as the boundary object key.
@@ -970,10 +1027,24 @@ pub struct EntrypointArgumentFieldV1 {
     pub ty: EntrypointValueTypeV1,
 }
 /// Compiler-emitted schema for one public entrypoint invocation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1")]
 pub struct EntrypointArgumentSchemaV1 {
     /// Fields in source declaration and ABI register order.
     pub fields: Vec<EntrypointArgumentFieldV1>,
@@ -1104,6 +1175,27 @@ fn max_entrypoint_word_kinds(
     *node_index = end;
     (rendered.len() == 1).then(|| rendered.pop().expect("length checked"))
 }
+// Terminal atoms consume exactly one word; aggregate scheduling stays in the iterative walker.
+fn entrypoint_atom_word_kind(
+    node: &EntrypointValueTypeNodeV1,
+    atom: &EntrypointValueAtomV1,
+) -> Option<EntrypointValueWordKindV1> {
+    use EntrypointValueAtomV1 as Atom;
+    use EntrypointValueTypeNodeV1 as Node;
+    use EntrypointValueWordKindV1 as Word;
+    match (node, atom) {
+        (Node::StateCursor(key), Atom::Pointer(_)) => Some(Word::StateCursor(*key)),
+        (Node::Unit, Atom::Unit) => Some(Word::Unit),
+        (Node::Error(error), Atom::ErrorCode(code)) if error.variant(*code).is_some() => {
+            Some(Word::Error)
+        }
+        (Node::Leaf(EntrypointValueKindV1::Bool), Atom::Bool(_)) => {
+            Some(Word::Leaf(EntrypointValueKindV1::Bool))
+        }
+        (Node::Leaf(kind), Atom::Pointer(_)) if kind.is_pointer() => Some(Word::Leaf(*kind)),
+        _ => None,
+    }
+}
 fn walk_entrypoint_value_atoms(
     nodes: &[EntrypointValueTypeNodeV1],
     atoms: &[EntrypointValueAtomV1],
@@ -1126,34 +1218,19 @@ fn walk_entrypoint_value_atoms(
             return false;
         };
         match node {
-            EntrypointValueTypeNodeV1::StateCursor(key) => {
-                if !matches!(atoms.get(cursor), Some(EntrypointValueAtomV1::Pointer(_))) {
-                    return false;
-                }
-                cursor += 1;
-                if emit_kind && let Some(kinds) = kinds.as_deref_mut() {
-                    kinds.push(EntrypointValueWordKindV1::StateCursor(*key));
-                }
-            }
-            EntrypointValueTypeNodeV1::Unit => {
-                if !matches!(atoms.get(cursor), Some(EntrypointValueAtomV1::Unit)) {
-                    return false;
-                }
-                cursor += 1;
-                if emit_kind && let Some(kinds) = kinds.as_deref_mut() {
-                    kinds.push(EntrypointValueWordKindV1::Unit);
-                }
-            }
-            EntrypointValueTypeNodeV1::Error(error) => {
-                let Some(EntrypointValueAtomV1::ErrorCode(code)) = atoms.get(cursor) else {
+            EntrypointValueTypeNodeV1::StateCursor(_)
+            | EntrypointValueTypeNodeV1::Unit
+            | EntrypointValueTypeNodeV1::Error(_)
+            | EntrypointValueTypeNodeV1::Leaf(_) => {
+                let Some(word_kind) = atoms
+                    .get(cursor)
+                    .and_then(|atom| entrypoint_atom_word_kind(node, atom))
+                else {
                     return false;
                 };
-                if error.variant(*code).is_none() {
-                    return false;
-                }
                 cursor += 1;
                 if emit_kind && let Some(kinds) = kinds.as_deref_mut() {
-                    kinds.push(EntrypointValueWordKindV1::Error);
+                    kinds.push(word_kind);
                 }
             }
             EntrypointValueTypeNodeV1::Struct(node) => {
@@ -1222,23 +1299,6 @@ fn walk_entrypoint_value_atoms(
                     (element_start, false),
                     usize::from(*item_count),
                 ));
-            }
-            EntrypointValueTypeNodeV1::Leaf(kind) => {
-                let Some(atom) = atoms.get(cursor) else {
-                    return false;
-                };
-                cursor += 1;
-                let valid = matches!(
-                    (kind, atom),
-                    (EntrypointValueKindV1::Bool, EntrypointValueAtomV1::Bool(_))
-                ) || (kind.is_pointer()
-                    && matches!(atom, EntrypointValueAtomV1::Pointer(_)));
-                if !valid {
-                    return false;
-                }
-                if emit_kind && let Some(kinds) = kinds.as_deref_mut() {
-                    kinds.push(EntrypointValueWordKindV1::Leaf(*kind));
-                }
             }
         }
     }
@@ -1342,7 +1402,6 @@ pub fn is_canonical_kotodama_identifier(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[cfg(feature = "json")]
     fn exported_struct_names_use_shared_locked_identity_vectors() {
         use super::*;
         let vectors: norito::json::Value = norito::json::from_str(include_str!(
@@ -1689,7 +1748,7 @@ mod tests {
             assert!(!invalid.validate());
             assert_eq!(invalid.subtree_nodes(0), None);
         }
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_string(&nested).expect("encode flat list schema JSON");
             assert!(json.contains("capacity"));
@@ -1729,7 +1788,7 @@ mod tests {
                 Err(norito::Error::Message(message))
                     if message == "invalid V1 entrypoint value schema"
             ));
-            #[cfg(feature = "json")]
+
             {
                 let json =
                     norito::json::to_string(&schema).expect("encode malformed flat schema JSON");
@@ -1955,7 +2014,7 @@ mod tests {
             Err(norito::Error::Message(message))
                 if message == "invalid V1 entrypoint value schema"
         ));
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_string(&over_limit).expect("encode over-node-budget JSON");
             assert!(norito::json::from_str::<EntrypointValueTypeV1>(&json).is_err());
@@ -2003,7 +2062,7 @@ mod tests {
         norito::decode_from_bytes::<EntrypointValueTypeV1>(&leaf_bytes)
             .expect("failed flat-schema validation must not poison later decodes");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_schema_decode_enforces_recursive_and_structural_limits() {
         let at_limit = nested_list_schema(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1);
@@ -2044,7 +2103,7 @@ mod tests {
         norito::json::from_value::<EntrypointValueTypeV1>(leaf_value)
             .expect("failed from_value validation must not poison later decodes");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manual_fast_json_schema_decode_enforces_complete_document_depth() {
         let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;
@@ -2372,7 +2431,126 @@ mod tests {
         };
         assert!(!duplicate_fields.validate());
     }
+    #[test]
+    fn every_leaf_and_cursor_key_has_one_canonical_spelling() {
+        for (kind, expected) in [
+            (EntrypointValueKindV1::Int, "int"),
+            (EntrypointValueKindV1::Decimal, "decimal"),
+            (EntrypointValueKindV1::Quantity, "quantity"),
+            (EntrypointValueKindV1::Bool, "bool"),
+            (EntrypointValueKindV1::String, "string"),
+            (EntrypointValueKindV1::Json, "Json"),
+            (EntrypointValueKindV1::Name, "Name"),
+            (EntrypointValueKindV1::AccountId, "AccountId"),
+            (
+                EntrypointValueKindV1::AssetDefinitionId,
+                "AssetDefinitionId",
+            ),
+            (EntrypointValueKindV1::AssetId, "AssetId"),
+            (EntrypointValueKindV1::DomainId, "DomainId"),
+            (EntrypointValueKindV1::NftId, "NftId"),
+            (EntrypointValueKindV1::DataSpaceId, "DataSpaceId"),
+            (EntrypointValueKindV1::Blob, "bytes"),
+        ] {
+            assert_eq!(kind.canonical_type_name(), expected);
+            assert_eq!(leaf(kind).canonical_type_name().as_deref(), Some(expected));
+            let cursor = EntrypointValueTypeV1 {
+                nodes: vec![EntrypointValueTypeNodeV1::StateCursor(kind)],
+            };
+            if kind == EntrypointValueKindV1::Json {
+                assert_eq!(cursor.canonical_type_name(), None);
+            } else {
+                assert_eq!(
+                    cursor.canonical_type_name(),
+                    Some(format!("StateCursor<{expected}>"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_atoms_match_only_their_exact_scalar_kind() {
+        use crate::smart_contract::manifest::{
+            ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
+        };
+        use EntrypointValueAtomV1 as Atom;
+        use EntrypointValueTypeNodeV1 as Node;
+        let error = ContractErrorTypeDescriptor {
+            identity: "example/vault@1::Vault::VaultError".to_owned(),
+            variants: vec![ContractErrorVariantDescriptor {
+                name: "InvalidQuantity".to_owned(),
+                code: 1,
+            }],
+        };
+        let atoms = [
+            Atom::Pointer(vec![1]),
+            Atom::Bool(false),
+            Atom::Unit,
+            Atom::ErrorCode(1),
+            Atom::ErrorCode(2),
+            Atom::Tag(true),
+            Atom::List(0),
+        ];
+        let mut nodes = vec![
+            (Node::StateCursor(EntrypointValueKindV1::Int), 0),
+            (Node::Unit, 2),
+            (Node::Error(error), 3),
+        ];
+        nodes.extend(
+            [
+                EntrypointValueKindV1::Int,
+                EntrypointValueKindV1::Decimal,
+                EntrypointValueKindV1::Quantity,
+                EntrypointValueKindV1::Bool,
+                EntrypointValueKindV1::String,
+                EntrypointValueKindV1::Json,
+                EntrypointValueKindV1::Name,
+                EntrypointValueKindV1::AccountId,
+                EntrypointValueKindV1::AssetDefinitionId,
+                EntrypointValueKindV1::AssetId,
+                EntrypointValueKindV1::DomainId,
+                EntrypointValueKindV1::NftId,
+                EntrypointValueKindV1::DataSpaceId,
+                EntrypointValueKindV1::Blob,
+            ]
+            .into_iter()
+            .map(|kind| (Node::Leaf(kind), usize::from(!kind.is_pointer()))),
+        );
+        for (node, accepted) in nodes {
+            let schema = EntrypointValueTypeV1 {
+                nodes: vec![node.clone()],
+            };
+            for (index, atom) in atoms.iter().enumerate() {
+                let expected = index == accepted;
+                assert_eq!(
+                    entrypoint_atom_word_kind(&node, atom).is_some(),
+                    expected,
+                    "{node:?}: {atom:?}"
+                );
+                assert_eq!(schema.validate_atoms(std::slice::from_ref(atom)), expected);
+                assert_eq!(
+                    schema
+                        .word_kinds_for_atoms(std::slice::from_ref(atom))
+                        .is_some(),
+                    expected
+                );
+            }
+        }
+        for node in [
+            Node::Option,
+            Node::Result,
+            Node::Tuple(2),
+            Node::List(EntrypointListTypeNodeV1 { capacity: 1 }),
+        ] {
+            for atom in &atoms {
+                assert_eq!(entrypoint_atom_word_kind(&node, atom), None);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod captured_entrypoint_schema_tests;
+
+#[cfg(test)]
+mod frame_identity_tests;

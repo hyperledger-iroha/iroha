@@ -36,6 +36,8 @@ pub const PARLIAMENT_API_VERSION_V1: u16 = 1;
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentAttemptDraftRequestV1")]
 pub struct ParliamentAttemptDraftRequestV1 {
     /// Request layout version; must equal one.
     pub version: u16,
@@ -50,6 +52,8 @@ pub struct ParliamentAttemptDraftRequestV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentInstructionDraftV1")]
 pub struct ParliamentInstructionDraftV1 {
     /// Stable instruction registry identifier.
     pub wire_id: String,
@@ -62,6 +66,8 @@ pub struct ParliamentInstructionDraftV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentAttemptDraftResponseV1")]
 pub struct ParliamentAttemptDraftResponseV1 {
     /// Response layout version.
     pub version: u16,
@@ -78,6 +84,8 @@ pub struct ParliamentAttemptDraftResponseV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTransitionDraftRequestV1")]
 pub struct ParliamentTransitionDraftRequestV1 {
     /// Request layout version; must equal one.
     pub version: u16,
@@ -111,6 +119,8 @@ impl ParliamentTransitionDraftRequestV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTransitionDraftResponseV1")]
 pub struct ParliamentTransitionDraftResponseV1 {
     /// Response layout version.
     pub version: u16,
@@ -137,6 +147,8 @@ pub struct ParliamentTransitionDraftResponseV1 {
     NoritoSerialize,
 )]
 #[norito(tag = "mode", content = "details", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentDecisionModeProjectionV1")]
 pub enum ParliamentDecisionModeProjectionV1 {
     /// Public deliberation ending in a nonbinding finding.
     PublicFinding,
@@ -157,6 +169,8 @@ pub enum ParliamentDecisionModeProjectionV1 {
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::RequiredParliamentBodyProjectionV1")]
 pub struct RequiredParliamentBodyProjectionV1 {
     /// Parliament body role.
     pub body: ParliamentBody,
@@ -180,6 +194,8 @@ pub struct RequiredParliamentBodyProjectionV1 {
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentBodyStateProjectionV1")]
 pub struct ParliamentBodyStateProjectionV1 {
     /// Parliament role in the attempt's exact required-body pipeline.
     pub body: ParliamentBody,
@@ -218,6 +234,10 @@ pub struct ParliamentBodyStateProjectionV1 {
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnProgressProjectionV1"
+)]
 pub struct ParliamentTimedOvnProgressProjectionV1 {
     /// Exact active ballot-attempt identifier.
     pub ballot_attempt_id: BallotAttemptId,
@@ -286,6 +306,8 @@ impl ParliamentTimedOvnProgressProjectionV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentAttemptReadResponseV1")]
 pub struct ParliamentAttemptReadResponseV1 {
     /// Response layout version.
     pub version: u16,
@@ -392,9 +414,11 @@ pub fn parliament_timed_ovn_casting_proof_page_tip(
     NoritoDeserialize,
     NoritoSerialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.parliament.timed_ovn_casting_proof.request",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingProofRequestV1",
+    frame = "iroha.torii.v1.parliament.timed_ovn_casting_proof.request"
 )]
 pub struct ParliamentTimedOvnCastingProofRequestV1 {
     /// Request layout version.
@@ -414,9 +438,11 @@ pub struct ParliamentTimedOvnCastingProofRequestV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.parliament.timed_ovn_casting_proof.response",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingProofResponseV1",
+    frame = "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
 )]
 pub struct ParliamentTimedOvnCastingProofResponseV1 {
     /// Response layout version.
@@ -444,7 +470,12 @@ pub struct ParliamentTimedOvnCastingProofResponseV1 {
 }
 
 /// Cast-capable public phase of one Parliament timed-OVN ballot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingPhaseProjectionV1"
+)]
 pub enum ParliamentTimedOvnCastingPhaseProjectionV1 {
     /// Authenticated participant registrations are still accumulating.
     Registered,
@@ -494,6 +525,8 @@ impl norito::json::JsonDeserialize for ParliamentTimedOvnCastingPhaseProjectionV
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnSessionProjectionV1")]
 pub struct ParliamentTimedOvnSessionProjectionV1 {
     /// Canonical network/genesis binding.
     pub network_id: [u8; 32],
@@ -520,6 +553,10 @@ pub struct ParliamentTimedOvnSessionProjectionV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTleAdaptiveDealerCommitmentV1"
+)]
 pub struct ParliamentTleAdaptiveDealerCommitmentV1 {
     /// Canonical one-based dealer index.
     pub dealer_index: u16,
@@ -544,6 +581,8 @@ pub struct ParliamentTleAdaptiveDealerCommitmentV1 {
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTleAdaptivePublicShareV1")]
 pub struct ParliamentTleAdaptivePublicShareV1 {
     /// Canonical one-based participant index.
     pub index: u16,
@@ -562,6 +601,8 @@ pub struct ParliamentTleAdaptivePublicShareV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTleKeySessionBindingV1")]
 pub struct ParliamentTleKeySessionBindingV1 {
     /// Fixed public-state adapter version; must equal one.
     pub version: u16,
@@ -685,6 +726,8 @@ impl ParliamentTleKeySessionBindingV1 {
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTlePartialReleaseShareV1")]
 pub struct ParliamentTlePartialReleaseShareV1 {
     /// Long-lived TLE key-session binding.
     pub key_session_id: TleKeySessionId,
@@ -749,6 +792,10 @@ impl ParliamentTlePartialReleaseShareV1 {
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnReleaseIdentityProjectionV1"
+)]
 pub struct ParliamentTimedOvnReleaseIdentityProjectionV1 {
     /// Long-lived TLE threshold key-session binding.
     pub tle_key_session_id: TleKeySessionId,
@@ -779,6 +826,10 @@ pub struct ParliamentTimedOvnReleaseIdentityProjectionV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingContextResponseV1"
+)]
 pub struct ParliamentTimedOvnCastingContextResponseV1 {
     /// Response and archive layout version; must equal one.
     pub version: u16,
@@ -1122,6 +1173,8 @@ fn parliament_casting_require_canonical_hash(label: &str, value: &[u8; 32]) -> R
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::parliament_api::ParliamentTleReleaseContextResponseV1")]
 pub struct ParliamentTleReleaseContextResponseV1 {
     /// Response layout version.
     pub version: u16,
@@ -1338,11 +1391,11 @@ mod tests {
             PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_HASH_HEX_V1
         );
         assert_eq!(
-            <ParliamentTimedOvnCastingProofRequestV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<ParliamentTimedOvnCastingProofRequestV1>(),
             request_hash
         );
         assert_eq!(
-            <ParliamentTimedOvnCastingProofRequestV1 as norito::NoritoDeserialize<'static>>::schema_hash(),
+            norito::schema::identity::frame_hash::<ParliamentTimedOvnCastingProofRequestV1>(),
             request_hash
         );
         let request = ParliamentTimedOvnCastingProofRequestV1 {
@@ -1367,11 +1420,11 @@ mod tests {
             PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_SCHEMA_HASH_HEX_V1
         );
         assert_eq!(
-            <ParliamentTimedOvnCastingProofResponseV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<ParliamentTimedOvnCastingProofResponseV1>(),
             response_hash
         );
         assert_eq!(
-            <ParliamentTimedOvnCastingProofResponseV1 as norito::NoritoDeserialize<'static>>::schema_hash(),
+            norito::schema::identity::frame_hash::<ParliamentTimedOvnCastingProofResponseV1>(),
             response_hash
         );
         let response = ParliamentTimedOvnCastingProofResponseV1 {
@@ -2484,5 +2537,77 @@ mod tests {
             private.get("original_seats").and_then(json::Value::as_str),
             Some("ballot.tally.original_seats")
         );
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentAttemptDraftRequestV1,
+        >("iroha_torii_shared::parliament_api::ParliamentAttemptDraftRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentAttemptDraftResponseV1,
+        >("iroha_torii_shared::parliament_api::ParliamentAttemptDraftResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentAttemptReadResponseV1,
+        >("iroha_torii_shared::parliament_api::ParliamentAttemptReadResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentBodyStateProjectionV1,
+        >("iroha_torii_shared::parliament_api::ParliamentBodyStateProjectionV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentDecisionModeProjectionV1,
+        >("iroha_torii_shared::parliament_api::ParliamentDecisionModeProjectionV1");
+        crate::captured_identity_tests::assert_bidirectional::<super::ParliamentInstructionDraftV1>(
+            "iroha_torii_shared::parliament_api::ParliamentInstructionDraftV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnCastingContextResponseV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingContextResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnCastingPhaseProjectionV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingPhaseProjectionV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnCastingProofRequestV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingProofRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnCastingProofResponseV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTimedOvnCastingProofResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnProgressProjectionV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTimedOvnProgressProjectionV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnReleaseIdentityProjectionV1,
+        >(
+            "iroha_torii_shared::parliament_api::ParliamentTimedOvnReleaseIdentityProjectionV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTimedOvnSessionProjectionV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTimedOvnSessionProjectionV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTleAdaptiveDealerCommitmentV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTleAdaptiveDealerCommitmentV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTleAdaptivePublicShareV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTleAdaptivePublicShareV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTleKeySessionBindingV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTleKeySessionBindingV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTlePartialReleaseShareV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTlePartialReleaseShareV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTleReleaseContextResponseV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTleReleaseContextResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTransitionDraftRequestV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTransitionDraftRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ParliamentTransitionDraftResponseV1,
+        >("iroha_torii_shared::parliament_api::ParliamentTransitionDraftResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::RequiredParliamentBodyProjectionV1,
+        >("iroha_torii_shared::parliament_api::RequiredParliamentBodyProjectionV1");
     }
 }

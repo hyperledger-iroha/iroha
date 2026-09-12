@@ -12,13 +12,13 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus::{ExecKv, ExecWitness},
-    domain::DomainId,
     execution_witness::ExecutionWitnessKeyTagV1,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
     isi::KagemushaReserveReceiptV1,
-    name::Name,
     nft::NftId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use std::{
@@ -787,7 +787,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(dom_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(dom), Ok(name)) = (
-                iroha_data_model::domain::DomainId::parse_fully_qualified(dom_s),
+                iroha_model_base::domain::DomainId::parse_fully_qualified(dom_s),
                 Name::from_str(name_s),
             ) {
                 if let Ok(domv) = state_block.world.domain(&dom) {
@@ -966,11 +966,11 @@ mod tests {
         asset::{Asset, AssetDefinition},
         block::BlockHeader,
         domain::Domain,
-        metadata::Metadata,
         nft::Nft,
         permission::{Permission, Permissions},
         role::{Role, RoleId},
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;

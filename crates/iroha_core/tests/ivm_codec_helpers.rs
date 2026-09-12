@@ -2,7 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::*;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
 use ivm::{

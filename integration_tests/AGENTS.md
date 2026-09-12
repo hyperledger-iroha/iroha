@@ -13,7 +13,7 @@ These guidelines apply to the `integration_tests/` crate.
   - `nexus_and_streaming`
 - Scenario files remain under `tests/` and are pulled into those harnesses with `#[path = ...]`; keep a `//!` header on each scenario file.
 - `integration_tests/tests/pipeline_block_rejected.rs` is an additional scaffold kept under `#[ignore]` until a deterministic trigger exists. Run it with `IROHA_RUN_IGNORED=1 cargo test -p integration_tests --test core_api pipeline_block_rejected:: -- --ignored`.
-- `fixtures/` contains pre-baked inputs (e.g., `ivm/*.to`, `sumeragi_*`, `norito_streaming/rans/*.json`). `build.rs` reuses `crates/ivm` to refresh the `.to` programs automatically during `cargo test`.
+- `fixtures/` contains pre-baked inputs (e.g., `ivm/*.to`, `sumeragi_*`, `norito_streaming/rans/*.json`). `iroha_test_samples/build.rs` stages canonical `.to` programs in its Cargo `OUT_DIR`; consumers use the sample crate's path helpers and never write generated fixtures into source.
 
 ## Features and environment
 - Feature flags:

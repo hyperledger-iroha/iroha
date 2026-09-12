@@ -267,14 +267,18 @@ Verifier behavior (native STARK)
   coefficients. The verifier also reconstructs the canonical full-domain trace
   root with a streaming Merkle accumulator and requires exact equality. It also
   reconstructs and exactly matches the Merkle root of the all-zero composition
-  vector. Generic binding domains are therefore capped at `n_log2 = 12`; larger
-  generic binding proofs and verifying keys fail closed. Explicit full-material
+  vector. Generic and IVM execution binding domains are therefore capped at
+  `n_log2 = 12`; larger binding proofs and verifying keys fail closed. Explicit full-material
   AIR verification instead recomputes both roots from every supplied row and
   composition value; private profiles without that material still require a
   separately qualified degree argument.
 - `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
   sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
   backend, circuit id, VK hash, schema descriptor, and public input columns.
+  The reserved canonical `ivm-execution-v1` circuit uses a dedicated IVM binding
+  context with that reconstructed digest and the same full-root, AIR-opening and
+  FRI checks. Generic binding verification rejects reserved IVM circuits, and
+  IVM admission still requires deterministic execution replay.
   ZK-ACE uses its dedicated typed `SubmitPrivacyProofV1` relation and DEEP/FRI
   verifier; generic Binding AIR cannot target that relation. Local ZK-ACE proving
   and verification are implemented, while governed production activation remains
@@ -401,7 +405,12 @@ Verifier behavior (native STARK)
   FRI base-value drift, STARK parameter-profile drift, and caller-supplied
   verifier-limit violations fail before native BFV acceptance. The governed
   full-material verifier performs the public structural checks, then
-  reconstructs and exactly matches the complete trace and composition roots. A
+  reconstructs and exactly matches the complete trace and composition roots.
+  Soracloud preflight authenticates the base-field AIR composition tree in its
+  own Merkle domain. Fp4 FRI layer roots use distinct domains; their connection
+  to the AIR is the authenticated equality of each initial FRI opening and its
+  AIR composition evaluation, with zero extension coefficients. Substituting
+  either tree's root for the other fails its domain-specific authentication. A
   valid envelope also cannot be replayed with stale BFV prover-input material,
   including layout metadata, trace/AIR digests, trace rows, composition values,
   or prover/verifier proof-key roles.

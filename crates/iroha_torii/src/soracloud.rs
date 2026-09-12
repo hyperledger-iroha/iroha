@@ -31,7 +31,6 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     isi::{self, InstructionBox},
-    name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
@@ -95,6 +94,7 @@ use iroha_data_model::{
         derive_sorafs_auto_replication_order_id_v1,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{NumericOperationError, Quantity},
@@ -139,6 +139,8 @@ const SCR_HOST_MAX_OPEN_FILES_PER_PROCESS: u32 = 131_072;
 const SCR_HOST_MAX_TASKS: u16 = 16_384;
 const SCR_HOST_MAX_START_GRACE_SECS: u32 = 600;
 const SCR_HOST_MAX_STOP_GRACE_SECS: u32 = 600;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SoracloudAction")]
 #[derive(
     Clone,
     Copy,
@@ -169,6 +171,8 @@ pub(crate) enum SoracloudAction {
     LeaseUsage,
     LeaseReportingEpochRollover,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentApartmentAction")]
 #[derive(
     Clone,
     Copy,
@@ -195,6 +199,8 @@ pub(crate) enum AgentApartmentAction {
     AutonomyRunApproved,
     AutonomyRunExecuted,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentRuntimeStatus")]
 #[derive(
     Clone,
     Copy,
@@ -212,6 +218,8 @@ pub(crate) enum AgentRuntimeStatus {
     Running,
     LeaseExpired,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::TrainingJobStatus")]
 #[derive(
     Clone,
     Copy,
@@ -236,8 +244,11 @@ enum MutationMode {
     Deploy,
     Upgrade,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedBundleRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedBundleRequest {
     pub bundle: SoraDeploymentBundleV1,
     pub initial_service_configs: BTreeMap<String, Json>,
@@ -245,8 +256,11 @@ pub(crate) struct SignedBundleRequest {
     pub precondition: SoraServiceMutationPreconditionV1,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAppInfraRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAppInfraRequest {
     pub deploy_services: Vec<SignedBundleRequest>,
     pub upgrade_services: Vec<SignedBundleRequest>,
@@ -254,6 +268,8 @@ pub(crate) struct SignedAppInfraRequest {
     pub precondition: SoraAppInfraMutationPreconditionV1,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AppInfraStatusQuery")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AppInfraStatusQuery {
@@ -262,6 +278,8 @@ pub(crate) struct AppInfraStatusQuery {
     #[norito(default)]
     pub audit_limit: Option<usize>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AppInfraStatusResponse")]
 #[derive(Clone, Debug, JsonSerialize, NoritoSerialize)]
 pub(crate) struct AppInfraStatusResponse {
     pub schema_version: u16,
@@ -270,18 +288,25 @@ pub(crate) struct AppInfraStatusResponse {
     pub apps: Vec<SoraAppInfraStateV1>,
     pub recent_audit_events: Vec<SoraAppInfraAuditEventV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::RollbackPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct RollbackPayload {
     pub service_name: String,
     pub target_version: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedRollbackRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedRollbackRequest {
     pub payload: RollbackPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::StateMutationOperation")]
 #[derive(
     Clone,
     Copy,
@@ -299,6 +324,8 @@ pub(crate) enum StateMutationOperation {
     Upsert,
     Delete,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::StateMutationRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct StateMutationRequest {
@@ -315,12 +342,17 @@ pub(crate) struct StateMutationRequest {
     #[norito(required)]
     pub fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedStateMutationRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedStateMutationRequest {
     pub payload: StateMutationRequest,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ServiceConfigSetRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigSetRequest {
@@ -328,24 +360,34 @@ pub(crate) struct ServiceConfigSetRequest {
     pub config_name: String,
     pub value_json: Json,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedServiceConfigSetRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedServiceConfigSetRequest {
     pub payload: ServiceConfigSetRequest,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ServiceConfigDeleteRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigDeleteRequest {
     pub service_name: String,
     pub config_name: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedServiceConfigDeleteRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedServiceConfigDeleteRequest {
     pub payload: ServiceConfigDeleteRequest,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ServiceSecretSetRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretSetRequest {
@@ -353,24 +395,34 @@ pub(crate) struct ServiceSecretSetRequest {
     pub secret_name: String,
     pub secret: SecretEnvelopeV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedServiceSecretSetRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedServiceSecretSetRequest {
     pub payload: ServiceSecretSetRequest,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ServiceSecretDeleteRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretDeleteRequest {
     pub service_name: String,
     pub secret_name: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedServiceSecretDeleteRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedServiceSecretDeleteRequest {
     pub payload: ServiceSecretDeleteRequest,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::RolloutStage")]
 #[derive(
     Clone,
     Copy,
@@ -389,6 +441,8 @@ pub(crate) enum RolloutStage {
     Promoted,
     RolledBack,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::RolloutAdvancePayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct RolloutAdvancePayload {
@@ -399,12 +453,17 @@ pub(crate) struct RolloutAdvancePayload {
     pub promote_to_percent: Option<u8>,
     pub governance_tx_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedRolloutAdvanceRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedRolloutAdvanceRequest {
     pub payload: RolloutAdvancePayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentDeployPayload")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentDeployPayload {
@@ -412,24 +471,34 @@ pub(crate) struct AgentDeployPayload {
     pub lease_blocks: u64,
     pub autonomy_budget_units: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentDeployRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentDeployRequest {
     pub payload: AgentDeployPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentLeaseRenewPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentLeaseRenewPayload {
     pub apartment_name: String,
     pub lease_blocks: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentLeaseRenewRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentLeaseRenewRequest {
     pub payload: AgentLeaseRenewPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::HfSharedLeaseJoinPayload")]
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct HfSharedLeaseJoinPayload {
@@ -443,12 +512,17 @@ pub(crate) struct HfSharedLeaseJoinPayload {
     pub lease_asset_definition_id: AssetDefinitionId,
     pub base_fee: Quantity,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedHfSharedLeaseJoinRequest")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedHfSharedLeaseJoinRequest {
     pub payload: HfSharedLeaseJoinPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::HfLeaseLeavePayload")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct HfLeaseLeavePayload {
@@ -461,12 +535,17 @@ pub(crate) struct HfLeaseLeavePayload {
     #[norito(required)]
     pub apartment_name: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedHfLeaseLeaveRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedHfLeaseLeaveRequest {
     pub payload: HfLeaseLeavePayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::HfLeaseRenewPayload")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct HfLeaseRenewPayload {
@@ -480,24 +559,34 @@ pub(crate) struct HfLeaseRenewPayload {
     pub lease_asset_definition_id: AssetDefinitionId,
     pub base_fee: Quantity,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedHfLeaseRenewRequest")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedHfLeaseRenewRequest {
     pub payload: HfLeaseRenewPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentRestartPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentRestartPayload {
     pub apartment_name: String,
     pub reason: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentRestartRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentRestartRequest {
     pub payload: AgentRestartPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentPolicyRevokePayload")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentPolicyRevokePayload {
@@ -506,12 +595,17 @@ pub(crate) struct AgentPolicyRevokePayload {
     #[norito(required)]
     pub reason: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentPolicyRevokeRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentPolicyRevokeRequest {
     pub payload: AgentPolicyRevokePayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentWalletSpendPayload")]
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentWalletSpendPayload {
@@ -520,24 +614,34 @@ pub(crate) struct AgentWalletSpendPayload {
     pub asset_definition: String,
     pub amount: Quantity,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentWalletSpendRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentWalletSpendRequest {
     pub payload: AgentWalletSpendPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentWalletApprovePayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentWalletApprovePayload {
     pub apartment_name: String,
     pub request_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentWalletApproveRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentWalletApproveRequest {
     pub payload: AgentWalletApprovePayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentMessageSendPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentMessageSendPayload {
@@ -546,24 +650,34 @@ pub(crate) struct AgentMessageSendPayload {
     pub channel: String,
     pub payload: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentMessageSendRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentMessageSendRequest {
     pub payload: AgentMessageSendPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentMessageAckPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentMessageAckPayload {
     pub apartment_name: String,
     pub message_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentMessageAckRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentMessageAckRequest {
     pub payload: AgentMessageAckPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentArtifactAllowPayload")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentArtifactAllowPayload {
@@ -572,12 +686,17 @@ pub(crate) struct AgentArtifactAllowPayload {
     #[norito(required)]
     pub provenance_hash: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedAgentArtifactAllowRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedAgentArtifactAllowRequest {
     pub payload: AgentArtifactAllowPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::FheJobRunPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct FheJobRunPayload {
@@ -591,12 +710,17 @@ pub(crate) struct FheJobRunPayload {
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedFheJobRunRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedFheJobRunRequest {
     pub payload: FheJobRunPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::TrainingJobStartPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobStartPayload {
@@ -611,12 +735,17 @@ pub(crate) struct TrainingJobStartPayload {
     pub compute_budget_units: u64,
     pub storage_budget_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedTrainingJobStartRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedTrainingJobStartRequest {
     pub payload: TrainingJobStartPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::TrainingJobCheckpointPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobCheckpointPayload {
@@ -626,12 +755,17 @@ pub(crate) struct TrainingJobCheckpointPayload {
     pub checkpoint_size_bytes: u64,
     pub metrics_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedTrainingJobCheckpointRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedTrainingJobCheckpointRequest {
     pub payload: TrainingJobCheckpointPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::TrainingJobRetryPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobRetryPayload {
@@ -639,12 +773,17 @@ pub(crate) struct TrainingJobRetryPayload {
     pub job_id: String,
     pub reason: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedTrainingJobRetryRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedTrainingJobRetryRequest {
     pub payload: TrainingJobRetryPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ModelWeightRegisterPayload")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightRegisterPayload {
@@ -660,12 +799,17 @@ pub(crate) struct ModelWeightRegisterPayload {
     pub reproducibility_hash: Hash,
     pub provenance_attestation_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedModelWeightRegisterRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedModelWeightRegisterRequest {
     pub payload: ModelWeightRegisterPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ModelWeightPromotePayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightPromotePayload {
@@ -675,12 +819,17 @@ pub(crate) struct ModelWeightPromotePayload {
     pub gate_approved: bool,
     pub gate_report_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedModelWeightPromoteRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedModelWeightPromoteRequest {
     pub payload: ModelWeightPromotePayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ModelWeightRollbackPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightRollbackPayload {
@@ -689,12 +838,17 @@ pub(crate) struct ModelWeightRollbackPayload {
     pub target_version: String,
     pub reason: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedModelWeightRollbackRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedModelWeightRollbackRequest {
     pub payload: ModelWeightRollbackPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ModelArtifactRegisterPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ModelArtifactRegisterPayload {
@@ -707,12 +861,17 @@ pub(crate) struct ModelArtifactRegisterPayload {
     pub reproducibility_hash: Hash,
     pub provenance_attestation_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedModelArtifactRegisterRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedModelArtifactRegisterRequest {
     pub payload: ModelArtifactRegisterPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::UploadedModelRegisterPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct UploadedModelRegisterPayload {
@@ -725,13 +884,18 @@ pub(crate) struct UploadedModelRegisterPayload {
     pub reproducibility_hash: Hash,
     pub provenance_attestation_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedUploadedModelRegisterRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedUploadedModelRegisterRequest {
     pub payload: UploadedModelRegisterPayload,
     pub bundle_provenance: ManifestProvenance,
     pub finalize_provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::DecryptionRequestPayload")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct DecryptionRequestPayload {
@@ -739,18 +903,26 @@ pub(crate) struct DecryptionRequestPayload {
     pub policy: DecryptionAuthorityPolicyV1,
     pub request: DecryptionRequestV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedDecryptionRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedDecryptionRequest {
     pub payload: DecryptionRequestPayload,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::SignedCiphertextQueryRequest")]
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
+
 pub(crate) struct SignedCiphertextQueryRequest {
     pub query: CiphertextQuerySpecV1,
     pub provenance: ManifestProvenance,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ServiceConfigStatusQuery")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigStatusQuery {
@@ -776,6 +948,8 @@ pub(crate) struct ServiceConfigStatusResponse {
     pub config_entry_count: u32,
     pub configs: Vec<ServiceConfigStatusEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ServiceSecretStatusQuery")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretStatusQuery {
@@ -1220,6 +1394,8 @@ struct ScrHostAdmission {
     healthcheck_path: Option<String>,
     sandbox_profile_hash: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ControlPlaneServiceRevision")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ControlPlaneServiceRevision {
@@ -1292,6 +1468,8 @@ pub(crate) struct ControlPlaneServiceRevision {
     pub process_started_sequence: u64,
     pub signed_by: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::ControlPlaneAuditEvent")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct ControlPlaneAuditEvent {
@@ -1338,6 +1516,8 @@ pub(crate) struct ControlPlaneAuditEvent {
     pub lease_reporting_epoch_rollover: Option<SoraServiceLeaseReportingEpochRolloverV1>,
     pub signed_by: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::CiphertextRuntimeRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 struct CiphertextRuntimeRecord {
@@ -1348,6 +1528,8 @@ struct CiphertextRuntimeRecord {
     governance_tx_hash: Hash,
     source_action: SoracloudAction,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::RolloutRuntimeState")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct RolloutRuntimeState {
@@ -1427,6 +1609,8 @@ pub(crate) struct AgentMailboxMessageEntry {
     pub payload_hash: Hash,
     pub enqueued_sequence: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentRuntimeReceiptRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentRuntimeReceiptRecord {
@@ -1465,6 +1649,8 @@ pub(crate) struct AgentRuntimeWorkflowStepSummary {
     #[norito(required)]
     pub response_text: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentAutonomyExecutionAuditRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyExecutionAuditRecord {
@@ -1594,6 +1780,8 @@ pub(crate) struct AgentAutonomyAllowlistEntry {
     pub provenance_hash: Option<String>,
     pub added_sequence: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::soracloud::AgentAutonomyRunRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyRunRecord {
@@ -8344,10 +8532,8 @@ mod tests {
         Encode,
         account::{Account, AccountId},
         asset::AssetDefinitionId,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::Grant,
-        metadata::Metadata,
-        name::Name,
         permission::Permission,
         prelude::Register,
         sns::{NameControllerV1, NameRecordV1},
@@ -8377,6 +8563,9 @@ mod tests {
             StorageClass,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use std::{
@@ -8850,7 +9039,7 @@ mod tests {
                 .expect("fixture peer seed derives BLS keypair");
                 iroha_data_model::soracloud::SoraInrouPlacementTargetV1 {
                     validator_account_id: AccountId::new(validator_key_pair.public_key().clone()),
-                    peer_id: iroha_data_model::peer::PeerId::from(
+                    peer_id: iroha_model_base::peer::PeerId::from(
                         peer_key_pair.public_key().clone(),
                     )
                     .to_string(),
@@ -9107,6 +9296,73 @@ mod tests {
         ])
         .expect("valid asset definition")
     }
+    fn decode_current_signed_request_frame<T>(request: &T, owner: &str) -> T
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + norito::json::JsonDeserializeOwned
+            + 'static,
+    {
+        let bytes = crate::frame_test_support::assert_current_frame(request, owner);
+        let mut wrong_owner = bytes.clone();
+        wrong_owner[6] ^= 1;
+        for invalid in [wrong_owner, bytes[..bytes.len() - 1].to_vec()] {
+            let error = crate::utils::extractors::decode_body_as_norito_or_json::<T>(
+                &axum::body::Bytes::from(invalid),
+                crate::utils::TypedRequestContentFormat::Norito,
+            )
+            .err()
+            .expect("invalid request frame must fail at the typed HTTP boundary");
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        }
+        crate::utils::extractors::decode_body_as_norito_or_json::<T>(
+            &axum::body::Bytes::from(bytes),
+            crate::utils::TypedRequestContentFormat::Norito,
+        )
+        .expect("current signed request survives HTTP decoding")
+    }
+    #[test]
+    fn signed_control_frames_preserve_provenance_and_reject_frame_owner_substitution() {
+        let key_pair = checked_test_keypair(0x84);
+        let rollback = signed_rollback_request("web_portal", "runtime", &key_pair);
+        let mut rollback = decode_current_signed_request_frame(
+            &rollback,
+            "iroha_torii::soracloud::SignedRollbackRequest",
+        );
+        verify_rollback_signature(&rollback).expect("decoded rollback keeps its valid provenance");
+        let payload = ServiceConfigDeleteRequest {
+            service_name: rollback.payload.service_name.clone(),
+            config_name: rollback.payload.target_version.clone(),
+        };
+        let signed_payload = encode_service_config_delete_signature_payload(&payload)
+            .expect("encode current config-delete signature transcript");
+        let delete = SignedServiceConfigDeleteRequest {
+            payload,
+            provenance: ManifestProvenance {
+                signer: key_pair.public_key().clone(),
+                signature: checked_test_signature(key_pair.private_key(), &signed_payload),
+            },
+        };
+        let delete = decode_current_signed_request_frame(
+            &delete,
+            "iroha_torii::soracloud::SignedServiceConfigDeleteRequest",
+        );
+        verify_service_config_delete_signature(&delete)
+            .expect("decoded config deletion keeps its own valid provenance");
+        assert_ne!(
+            norito::schema::identity::frame_hash::<SignedRollbackRequest>(),
+            norito::schema::identity::frame_hash::<SignedServiceConfigDeleteRequest>(),
+        );
+        // HTTP frame ownership is distinct even though these existing provenance
+        // transcripts have the same two-string tuple layout.
+        let rollback_frame = norito::encode_canonical(&rollback).expect("rollback frame");
+        assert!(matches!(
+            norito::decode_canonical::<SignedServiceConfigDeleteRequest>(&rollback_frame),
+            Err(norito::Error::SchemaMismatch),
+        ));
+        rollback.payload.target_version.push_str("-tampered");
+        assert!(verify_rollback_signature(&rollback).is_err());
+    }
     fn signed_rollback_request(
         service_name: &str,
         target_version: &str,
@@ -9306,7 +9562,7 @@ mod tests {
     fn seed_domain_name_lease(
         world: &mut iroha_core::state::World,
         owner: &AccountId,
-        domain_id: &iroha_data_model::domain::DomainId,
+        domain_id: &iroha_model_base::domain::DomainId,
     ) {
         let selector = iroha_core::sns::selector_for_domain(domain_id).expect("domain selector");
         let address =
@@ -10583,7 +10839,7 @@ mod tests {
         use iroha_data_model::block::BlockHeader;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
-            let wonderland: iroha_data_model::domain::DomainId =
+            let wonderland: iroha_model_base::domain::DomainId =
                 DomainId::try_new("wonderland", "universal")?;
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &SAMPLE_GENESIS_ACCOUNT_ID, &wonderland);
@@ -13039,7 +13295,13 @@ mod tests {
         let payload = sample_uploaded_model_register_payload();
         let finalize_encoded = encode_uploaded_model_register_finalize_signature_payload(&payload)
             .expect("encode uploaded model finalize payload");
-        let mut request = signed_uploaded_model_register_request(payload, &key_pair);
+        let request = signed_uploaded_model_register_request(payload, &key_pair);
+        let mut request = decode_current_signed_request_frame(
+            &request,
+            "iroha_torii::soracloud::SignedUploadedModelRegisterRequest",
+        );
+        verify_uploaded_model_register_signature(&request)
+            .expect("both original signed domains survive the current request frame");
         request.finalize_provenance = ManifestProvenance {
             signer: other_key_pair.public_key().clone(),
             signature: checked_test_signature(other_key_pair.private_key(), &finalize_encoded),

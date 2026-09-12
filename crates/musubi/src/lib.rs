@@ -5,12 +5,15 @@ pub mod cache;
 mod cli;
 mod command;
 mod compiler;
+mod compiler_identity;
 mod graph;
 mod local_file;
 mod lockfile;
 pub mod manifest;
 mod output;
 mod package;
+#[cfg(test)]
+mod persistence_frame_fixture;
 pub mod publication_runtime;
 pub mod publish;
 pub mod registry;

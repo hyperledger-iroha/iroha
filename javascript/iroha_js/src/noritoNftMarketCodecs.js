@@ -1,14 +1,19 @@
 import { Buffer } from "buffer";
 
+const TEXT_PAYMENT_ASSET_ASSET_PRICE_QUANTITY_EXPIRES_AT_HEIGHT_U64_RESERVED_BUYER = " payment_asset:asset price:quantity expires_at_height:u64 reserved_buyer:";
+const TEXT_OPTIONAL_ACCOUNT = "optionalAccount";
+const TEXT_NATIVE_NFT_CUSTODY_PURPOSE = " native NFT custody purpose";
+
+
 export const NFT_MARKET_INSTRUCTION_NAMES_V1 = Object.freeze(["OfferNftV1", "BuyNftV1", "CancelNftOfferV1"]);
 export const NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 = Object.freeze(NFT_MARKET_INSTRUCTION_NAMES_V1.map(name => `iroha.instruction.v1::nft_market::${name}`));
 const fields = value => value.split(" ").map(entry => entry.split(":"));
 const schemas = Object.freeze({
-  NftCustodyRecordV1: fields("version:u16 network_id:hash reservation_id:hash purpose:NftCustodyPurposeV1 nft_id:nft custody:account original_owner:account metadata_hash:hash released_to:optionalAccount"),
-  OfferNftV1: fields("offer_id:hash nft_id:nft payment_asset:asset price:quantity expires_at_height:u64 reserved_buyer:optionalAccount"),
+  NftCustodyRecordV1: fields(("version:u16 network_id:hash reservation_id:hash purpose:NftCustodyPurposeV1 nft_id:nft custody:account original_owner:account metadata_hash:hash released_to:" + TEXT_OPTIONAL_ACCOUNT)),
+  OfferNftV1: fields(("offer_id:hash nft_id:nft" + TEXT_PAYMENT_ASSET_ASSET_PRICE_QUANTITY_EXPIRES_AT_HEIGHT_U64_RESERVED_BUYER + "optionalAccount")),
   BuyNftV1: fields("offer:NftSaleOfferV1"),
   CancelNftOfferV1: fields("offer_id:hash expected_offer_hash:hash"),
-  NftSaleOfferV1: fields("network_id:hash offer_id:hash nft_id:nft seller:account payment_asset:asset price:quantity expires_at_height:u64 reserved_buyer:optionalAccount metadata_hash:hash"),
+  NftSaleOfferV1: fields(("network_id:hash offer_id:hash nft_id:nft seller:account" + TEXT_PAYMENT_ASSET_ASSET_PRICE_QUANTITY_EXPIRES_AT_HEIGHT_U64_RESERVED_BUYER + "optionalAccount metadata_hash:hash")),
   NftSaleRecordV1: fields("version:u16 offer:NftSaleOfferV1 offer_hash:hash custody:account status:status created_at_height:u64 closed_at_height:optionalU64"),
 });
 const kinds = ["open", "purchased", "cancelled"];
@@ -42,7 +47,7 @@ export function createNoritoNftMarketCodecs(h) {
       case "NftCustodyPurposeV1": {
         exact(value, ["kind", "value"], context);
         const tag = custodyPurposes.indexOf(value.kind);
-        if (tag < 0 || value.value !== null) throw new TypeError("unknown native NFT custody purpose");
+        if (tag < 0 || value.value !== null) throw new TypeError(("unknown" + TEXT_NATIVE_NFT_CUSTODY_PURPOSE));
         return h.encodeU32Value(tag, context);
       }
       case "hash": return h.encodeEscrowIdValue(value, context);
@@ -53,9 +58,9 @@ export function createNoritoNftMarketCodecs(h) {
       case "Metadata": return h.encodeMetadataValue(value, context);
       case "u16": return h.encodeU16Value(unsigned(value, 16, context), context);
       case "u64": return h.encodeU64Value(unsigned(value, 64, context), context);
-      case "optionalAccount": case "optionalU64":
+      case TEXT_OPTIONAL_ACCOUNT: case "optionalU64":
         if (value === undefined) throw new TypeError(`${context} requires an explicit null or value`);
-        return h.encodeOptionValue(value, inner => encode(name === "optionalAccount" ? "account" : "u64", inner, context), context);
+        return h.encodeOptionValue(value, inner => encode(name === TEXT_OPTIONAL_ACCOUNT ? "account" : "u64", inner, context), context);
       case "status": {
         exact(value, ["kind", "value"], context);
         const tag = kinds.indexOf(value.kind);
@@ -75,9 +80,9 @@ export function createNoritoNftMarketCodecs(h) {
     }
     switch (name) {
       case "NftCustodyPurposeV1": {
-        if (payload.length !== 4) throw new TypeError("malformed native NFT custody purpose");
+        if (payload.length !== 4) throw new TypeError(("malformed" + TEXT_NATIVE_NFT_CUSTODY_PURPOSE));
         const kind = custodyPurposes[payload.readUInt32LE()];
-        if (!kind) throw new TypeError("unknown native NFT custody purpose");
+        if (!kind) throw new TypeError(("unknown" + TEXT_NATIVE_NFT_CUSTODY_PURPOSE));
         return { kind, value: null };
       }
       case "hash": return h.decodeEscrowIdValue(payload, context);
@@ -88,7 +93,7 @@ export function createNoritoNftMarketCodecs(h) {
       case "Metadata": return h.decodeMetadataValue(payload, context);
       case "u16": return h.decodeU16Value(payload, context);
       case "u64": return h.decodeU64Value(payload, context);
-      case "optionalAccount": case "optionalU64": return h.decodeOptionValue(payload, inner => decode(name === "optionalAccount" ? "account" : "u64", inner, context), context);
+      case TEXT_OPTIONAL_ACCOUNT: case "optionalU64": return h.decodeOptionValue(payload, inner => decode(name === TEXT_OPTIONAL_ACCOUNT ? "account" : "u64", inner, context), context);
       case "status": {
         if (payload.length < 4) throw new TypeError("truncated NFT status");
         const kind = kinds[payload.readUInt32LE()];

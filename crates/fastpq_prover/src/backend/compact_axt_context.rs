@@ -1,4 +1,4 @@
-//! Public AXT transfer context for the unadmitted compact protocol prototype.
+//! Public AXT transfer context for the unadmitted compact V1 protocol.
 //!
 //! The complete canonical binding, exact pre-proof metadata mirrors and remote
 //! spend preimages wrap the typed public-transfer statement before challenges.
@@ -38,8 +38,11 @@ use crate::{
     proof::PublicIO,
 };
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_axt_context::BoundContext",
+    frame = "fastpq_prover::compact_v1::AxtTransferContextV1"
+)]
 #[cfg(test)]
 struct BoundContext {
     version: u16,
@@ -173,13 +176,14 @@ pub(super) mod tests {
     };
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        DataSpaceId, DomainId,
         asset::id::AssetDefinitionId,
         nexus::{
-            AxtEffectBinding, AxtHandleIssuerContextV1, AxtHandleReplayKey, LaneId,
+            AxtEffectBinding, AxtHandleIssuerContextV1, AxtHandleReplayKey,
             compute_remote_spend_claim_commitment_v1,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use iroha_zkp_halo2::poseidon::PoseidonByteHasher;

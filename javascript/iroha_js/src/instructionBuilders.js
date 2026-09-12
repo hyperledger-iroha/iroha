@@ -1,4 +1,4 @@
-import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
+import { createContractManifestNormalizer } from "./contractManifestNormalizer.js";
 import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
 import { blake2b256 } from "./blake2b.js";
@@ -7,38 +7,21 @@ import {
   noritoEncodeInstruction,
   validateSorafsReplicationOrderPayloadV1,
 } from "./norito.js";
-import {
-  canonicalizeMultihashHex,
-  ensureCanonicalAccountId,
-  normalizeAccountAliasLiteral,
-  normalizeAccountId,
-  normalizeAssetDefinitionId,
-  normalizeAssetId,
-  normalizeAssetHoldingId,
-  normalizeRwaId,
-} from "./normalizers.js";
+import { ensureCanonicalAccountId, normalizeAccountAliasLiteral, normalizeAccountId, normalizeAssetDefinitionId, normalizeAssetId, normalizeAssetHoldingId, normalizeRwaId } from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
-import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
-import { validatePublicKeyForCurve } from "./address.js";
+
+
 import {
   createValidationError,
   ValidationErrorCode,
 } from "./validationError.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { canonicalizeDomainIdLabel } from "./domainId.js";
-import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
+
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import { networkIdBytes } from "./networkId.js";
 import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
-import {
-  KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
-  isCanonicalKotodamaDynamicAccessBaseKey,
-  isCanonicalKotodamaIdentifier,
-  isCanonicalKotodamaStateTypeName,
-  isKotodamaV1DynamicAccessBoundKind,
-  isKotodamaV1StateMapKeyTypeName,
-  kotodamaV1StateMapKeyTypeName,
-} from "./kotodamaIdentifiers.js";
+import { KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS, isCanonicalKotodamaDynamicAccessBaseKey, isKotodamaV1DynamicAccessBoundKind, isKotodamaV1StateMapKeyTypeName, kotodamaV1StateMapKeyTypeName } from "./kotodamaIdentifiers.js";
 import {
   KotodamaQuantity,
   NumericV1,
@@ -67,12 +50,75 @@ import {
   parseHashLiteralToBuffer,
 } from "./instructionBuilderPrimitives.js";
 
+const TEXT_ASSET_DEFINITION_ID_2 = "assetDefinitionId";
+const TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX = "validationFeeTransferEntryIndex";
+const TEXT_MUST_BE = " must be ";
+const TEXT_NON_NEGATIVE_INTEGER = "non-negative integer";
+const TEXT_ACCOUNT_ID = "accountId";
+const TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH = "validationFeeHijiriFeeQuoteHash";
+const TEXT_SIGNER_ACCOUNT_ID = "signerAccountId";
+const TEXT_VALIDATION_FEE_INSTRUCTION_INDEX = "validationFeeInstructionIndex";
+const TEXT_VALID_BASE64_STRING = "valid base64 string";
+const TEXT_UNSIGNED_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING = "unsigned integer, bigint, or canonical decimal string";
+const TEXT_IS_REQUIRED = " is required";
+const TEXT_UNSIGNED_64_BIT_INTEGER = " unsigned 64-bit integer";
+const TEXT_CHUNK_COUNT_MUST_EQUAL_CEIL_TOTAL_SIZE_65536 = "chunkCount must equal ceil(totalSize / 65536)";
+const TEXT_CONTRACT_ADDRESS = "contractAddress";
+const TEXT_MUST_CONTAIN = " must contain ";
+const TEXT_MUST_NOT_CONTAIN = " must not contain ";
+const TEXT_NON_EMPTY_BYTE_ARRAY = "non-empty byte array";
+
+
+const TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK = "uploadSmartContractCodeChunk.";
+const TEXT_REGISTER_ASSET_DEFINITION = "registerAssetDefinition.";
+const TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE = " exceeds JavaScript safe integer range";
+const TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE = " must fit in JavaScript's safe integer range";
+const TEXT_SET_ASSET_TRANSFER_AVAILABILITY = "setAssetTransferAvailability.";
+const TEXT_LANE_PRIVACY_MERKLE = ".lanePrivacy.merkle.";
+const TEXT_MULTISIG_PROPOSE = "multisigPropose.";
+const TEXT_SET_ASSET_TRANSFER_CONTROL = "setAssetTransferControl.";
+const TEXT_MUST_BE_A = (TEXT_MUST_BE + "a ");
+const TEXT_MULTISIG_CONTRACT_CALL_PROPOSE = "multisigContractCallPropose.";
+const TEXT_MULTISIG_CONTRACT_CALL_APPROVE = "multisigContractCallApprove.";
+const TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2 = "multisigContractCallPropose";
+const TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION = "scheduleConfidentialPolicyTransition.";
+const TEXT_MULTISIG_CONTRACT_CALL_APPROVE_2 = "multisigContractCallApprove";
+const TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD = "finalizeSmartContractCodeUpload.";
+const TEXT_SET_ASSET_TRANSFER_BLACKLIST = "setAssetTransferBlacklist.";
+const TEXT_COMPLETE_REPLICATION_ORDER = "completeReplicationOrder.";
+const TEXT_COMMIT_CONTRACT_DEPLOYMENT = "commitContractDeployment.";
+const TEXT_ISSUE_REPLICATION_ORDER = "issueReplicationOrder.";
+const TEXT_DESTINATION_ACCOUNT_ID = "destinationAccountId";
+const TEXT_MUST_BE_EXACT_STANDARD_BASE64 = (TEXT_MUST_BE + "exact standard-base64");
+const TEXT_MUST_BE_AN = (TEXT_MUST_BE + "an ");
+const TEXT_MULTISIG_PROPOSE_VALIDATION_FEE = "multisigPropose validation fee ";
+const TEXT_REPORT_KAIGI_RELAY_HEALTH = "reportKaigiRelayHealth.";
+const TEXT_REGISTER_SMART_CONTRACT_BYTES = "registerSmartContractBytes.";
+const TEXT_ASSET_DEFINITION_ID = TEXT_ASSET_DEFINITION_ID_2;
+const TEXT_MUST_CONTAIN_EXACTLY = (TEXT_MUST_CONTAIN + "exactly ");
+const TEXT_CREATE_ELECTION = "createElection.";
+const TEXT_MUST_BE_GREATER_THAN_ZERO = (TEXT_MUST_BE + "greater than zero");
+const TEXT_MULTISIG_PROPOSE_2 = "multisigPropose";
+const TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE = "proposeSccpRouteGovernance";
+const TEXT_GRANT_ACCOUNT_PERMISSION = "grantAccountPermission.";
+const TEXT_INCLUSIVE_FOR_DETERMINISTIC_JSON_ENCODING = " (inclusive) for deterministic JSON encoding";
+const TEXT_VALUE_PROGRAM = ".value.program_";
+const TEXT_MUST_FIT_IN_AN_UNSIGNED_32_BIT_INTEGER = " must fit in an unsigned 32-bit integer";
+const TEXT_MUST_BE_BETWEEN_0_AND = (TEXT_MUST_BE + "between 0 and ");
+const TEXT_MUST_BE_AN_INTEGER_BETWEEN_0_AND_255 = ("]" + TEXT_MUST_BE + "an integer between 0 and 255");
+const TEXT_PROPOSE_DEPLOY_CONTRACT = "proposeDeployContract";
+const TEXT_SOURCE_ACCOUNT_ID = "sourceAccountId";
+const TEXT_MUST_BE_EXACTLY = (TEXT_MUST_BE + "exactly ");
+const TEXT_RECORD_KAIGI_USAGE = "recordKaigiUsage.";
+const TEXT_VALUE_CHARGE = ".value.charge_";
+const TEXT_PROPOSE_DEPLOY_CONTRACT_2 = "proposeDeployContract.";
+
+
 // Alias the immutable public diagnostic codes without changing their values.
 const V_CODE_INVALID_OBJECT = ValidationErrorCode.INVALID_OBJECT;
 const V_CODE_INVALID_NUMERIC = ValidationErrorCode.INVALID_NUMERIC;
 const V_CODE_VALUE_OUT_OF_RANGE = ValidationErrorCode.VALUE_OUT_OF_RANGE;
 const V_CODE_INVALID_JSON_VALUE = ValidationErrorCode.INVALID_JSON_VALUE;
-const V_CODE_MISSING_FIELD = ValidationErrorCode.MISSING_FIELD;
 const V_CODE_INVALID_ACCOUNT_ID = ValidationErrorCode.INVALID_ACCOUNT_ID;
 const V_CODE_INVALID_HEX = ValidationErrorCode.INVALID_HEX;
 const V_CODE_INVALID_STRING = ValidationErrorCode.INVALID_STRING;
@@ -125,9 +171,9 @@ function rejectValidationFeeSnakeCaseInputs(source, context) {
   for (const [snakeName, camelName] of [
     ["validation_fee_policy_version", "validationFeePolicyVersion"],
     ["validation_fee_policy_hash", "validationFeePolicyHash"],
-    ["validation_fee_hijiri_fee_quote_hash", "validationFeeHijiriFeeQuoteHash"],
-    ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
-    ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
+    ["validation_fee_hijiri_fee_quote_hash", TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH],
+    ["validation_fee_instruction_index", TEXT_VALIDATION_FEE_INSTRUCTION_INDEX],
+    ["validation_fee_transfer_entry_index", TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX],
   ]) {
     if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
       fail(
@@ -167,7 +213,7 @@ function asQuantity(value, name) {
     }
     fail(
       V_CODE_INVALID_NUMERIC,
-      `${name} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are not lossless quantity inputs`,
+      `${name}${TEXT_MUST_BE_A}KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are not lossless quantity inputs`,
       name,
     );
   } catch (error) {
@@ -175,7 +221,7 @@ function asQuantity(value, name) {
     const rangeFailure = error.code === "mantissa_overflow" || error.code === "invalid_scale";
     fail(
       rangeFailure ? V_CODE_VALUE_OUT_OF_RANGE : V_CODE_INVALID_NUMERIC,
-      `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+      `${name}${TEXT_MUST_BE_A}canonical non-negative Kotodama V1 quantity (${error.code})`,
       name,
     );
   }
@@ -186,7 +232,7 @@ function asPositiveQuantity(value, name) {
   if (NumericV1.decodeQuantityJson(canonical).mantissa <= 0n) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be greater than zero`,
+      `${name}${TEXT_MUST_BE_GREATER_THAN_ZERO}`,
       name,
     );
   }
@@ -200,7 +246,7 @@ function normalizeAssetLockId(value, name) {
   if (lockIdBytes.length > CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be at most ${CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8 bytes`,
+      `${name}${TEXT_MUST_BE}at most ${CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8 bytes`,
       name,
     );
   }
@@ -210,12 +256,12 @@ function normalizeAssetLockId(value, name) {
 function asU128JsonNumber(value, name) {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
     }
     if (!Number.isSafeInteger(value)) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} must be between 0 and ${MAX_SAFE_INTEGER} (inclusive) for deterministic JSON encoding`,
+        `${name}${TEXT_MUST_BE_BETWEEN_0_AND}${MAX_SAFE_INTEGER}${TEXT_INCLUSIVE_FOR_DETERMINISTIC_JSON_ENCODING}`,
         name,
       );
     }
@@ -225,7 +271,7 @@ function asU128JsonNumber(value, name) {
     if (value < 0n || value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} must be between 0 and ${MAX_SAFE_INTEGER} (inclusive) for deterministic JSON encoding`,
+        `${name}${TEXT_MUST_BE_BETWEEN_0_AND}${MAX_SAFE_INTEGER}${TEXT_INCLUSIVE_FOR_DETERMINISTIC_JSON_ENCODING}`,
         name,
       );
     }
@@ -233,7 +279,7 @@ function asU128JsonNumber(value, name) {
   }
   if (typeof value === "string") {
     if (!/^[0-9]+$/.test(value)) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer string`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}non-negative integer string`, name);
     }
     const numeric = BigInt(value);
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
@@ -245,18 +291,18 @@ function asU128JsonNumber(value, name) {
     }
     return Number(numeric);
   }
-  fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
 }
 
 function asPositiveInteger(value, name) {
   if (typeof value === "bigint") {
     if (value <= 0n) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_BE_GREATER_THAN_ZERO}`, name);
     }
     if (value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} exceeds JavaScript safe integer range`,
+        `${name}${TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE}`,
         name,
       );
     }
@@ -264,12 +310,12 @@ function asPositiveInteger(value, name) {
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value <= 0) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be a positive integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}positive integer`, name);
     }
     if (!Number.isSafeInteger(value)) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} exceeds JavaScript safe integer range`,
+        `${name}${TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE}`,
         name,
       );
     }
@@ -277,28 +323,28 @@ function asPositiveInteger(value, name) {
   }
   if (typeof value === "string") {
     if (!/^[1-9]\d*$/.test(value)) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be a positive integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}positive integer`, name);
     }
     const numeric = BigInt(value);
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} exceeds JavaScript safe integer range`,
+        `${name}${TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE}`,
         name,
       );
     }
     return Number(numeric);
   }
-  fail(V_CODE_INVALID_NUMERIC, `${name} must be a positive integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}positive integer`, name);
 }
 
 function assertPlainObject(value, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be a plain object`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_MUST_BE_A}plain object`, name);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be a plain object`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_MUST_BE_A}plain object`, name);
   }
   return value;
 }
@@ -353,7 +399,7 @@ function normalizeJsonValue(value, path) {
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
-      fail(V_CODE_INVALID_JSON_VALUE, `${path} must not contain non-finite numbers`, path);
+      fail(V_CODE_INVALID_JSON_VALUE, `${path}${TEXT_MUST_NOT_CONTAIN}non-finite numbers`, path);
     }
     return value;
   }
@@ -369,7 +415,7 @@ function normalizeJsonValue(value, path) {
     const result = {};
     for (const [key, nested] of Object.entries(value)) {
       if (typeof key !== "string" || key.length === 0) {
-        fail(V_CODE_INVALID_JSON_VALUE, `${path} keys must be non-empty strings`, path);
+        fail(V_CODE_INVALID_JSON_VALUE, `${path} keys${TEXT_MUST_BE}non-empty strings`, path);
       }
       result[key] = normalizeJsonValue(nested, `${path}.${key}`);
     }
@@ -395,7 +441,7 @@ function normalizeBooleanFlag(value, name) {
     return false;
   }
   if (typeof value !== "boolean") {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be a boolean`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_MUST_BE_A}boolean`, name);
   }
   return value;
 }
@@ -408,7 +454,7 @@ function normalizeJsonObjectLike(value, name) {
     } catch (error) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${name} must be a plain object or JSON object string`,
+        `${name}${TEXT_MUST_BE_A}plain object or JSON object string`,
         name,
       );
     }
@@ -429,7 +475,7 @@ function normalizeRwaParentRefs(value, path) {
     return [];
   }
   if (!Array.isArray(value)) {
-    fail(V_CODE_INVALID_OBJECT, `${path} must be an array`, path);
+    fail(V_CODE_INVALID_OBJECT, `${path}${TEXT_MUST_BE_AN}array`, path);
   }
   return value.map((entry, index) => {
     const source = normalizeJsonObjectLike(entry, `${path}[${index}]`);
@@ -449,14 +495,14 @@ function normalizeRwaControlPolicy(value, path) {
   if (!Array.isArray(controllerAccountsInput)) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${path}.controllerAccounts must be an array`,
+      `${path}.controllerAccounts${TEXT_MUST_BE}an array`,
       `${path}.controllerAccounts`,
     );
   }
   if (!Array.isArray(controllerRolesInput)) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${path}.controllerRoles must be an array`,
+      `${path}.controllerRoles${TEXT_MUST_BE}an array`,
       `${path}.controllerRoles`,
     );
   }
@@ -531,8 +577,8 @@ function normalizeMultisigSpecPayload(spec, path) {
   const quorum = source.quorum ?? source.quorumRaw;
   if (quorum === undefined || quorum === null) {
     fail(
-      V_CODE_MISSING_FIELD,
-      `${path}.quorum is required`,
+      V_CODE_INVALID_NUMERIC,
+      `${path}.quorum${TEXT_IS_REQUIRED}`,
       `${path}.quorum`,
     );
   }
@@ -545,8 +591,8 @@ function normalizeMultisigSpecPayload(spec, path) {
     source.transactionTtl;
   if (ttl === undefined || ttl === null) {
     fail(
-      V_CODE_MISSING_FIELD,
-      `${path}.transaction_ttl_ms is required`,
+      V_CODE_INVALID_NUMERIC,
+      `${path}.transaction_ttl_ms${TEXT_IS_REQUIRED}`,
       `${path}.transaction_ttl_ms`,
     );
   }
@@ -560,8 +606,8 @@ function normalizeMultisigSpecPayload(spec, path) {
   const entries = Object.entries(signatories);
   if (entries.length === 0) {
     fail(
-      V_CODE_MISSING_FIELD,
-      `${path}.signatories must contain at least one entry`,
+      V_CODE_INVALID_OBJECT,
+      `${path}.signatories${TEXT_MUST_CONTAIN}at least one entry`,
       `${path}.signatories`,
     );
   }
@@ -574,22 +620,22 @@ function normalizeMultisigSpecPayload(spec, path) {
 function normalizeSafeIntegerJson(value, name, { allowNegative = false } = {}) {
   if (typeof value === "bigint") {
     if ((!allowNegative && value < 0n) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`, name);
     }
     if (value > MAX_SAFE_INTEGER_BIGINT) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`, name);
     }
     return Number(value);
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value) || !Number.isInteger(value)) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be an integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_AN}integer`, name);
     }
     if (!allowNegative && value < 0) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be non-negative`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_BE}non-negative`, name);
     }
     if (!Number.isSafeInteger(value)) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`, name);
     }
     return value;
   }
@@ -597,18 +643,18 @@ function normalizeSafeIntegerJson(value, name, { allowNegative = false } = {}) {
     const trimmed = value.trim();
     const pattern = allowNegative ? /^-?\d+$/ : /^\d+$/;
     if (!pattern.test(trimmed)) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be an integer literal`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_AN}integer literal`, name);
     }
     const numeric = BigInt(trimmed);
     if ((!allowNegative && numeric < 0n) || numeric < BigInt(Number.MIN_SAFE_INTEGER)) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`, name);
     }
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_FIT_IN_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`, name);
     }
     return Number(numeric);
   }
-  fail(V_CODE_INVALID_NUMERIC, `${name} must be an integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_AN}integer`, name);
 }
 
 function normalizeExecuteTriggerBuilderInput(triggerOrOptions, args, context = "executeTrigger") {
@@ -656,7 +702,7 @@ function normalizeMultisigExecuteTriggerOptions(options, context) {
     signerAccountId:
       source.signerAccountId === undefined || source.signerAccountId === null
         ? null
-        : normalizeAccountId(source.signerAccountId, `${context}.signerAccountId`),
+        : normalizeAccountId(source.signerAccountId, `${context}.${TEXT_SIGNER_ACCOUNT_ID}`),
     strictSignerCheck: Boolean(source.strictSignerCheck ?? source.strict_signer_check),
     multisigSpec:
       source.multisigSpec === undefined && source.spec === undefined
@@ -679,14 +725,14 @@ function normalizeMultisigExecuteTriggerOptions(options, context) {
       fail(
         V_CODE_INVALID_ACCOUNT_ID,
         `${context}.signerAccountId is required when strictSignerCheck is true`,
-        `${context}.signerAccountId`,
+        `${context}.${TEXT_SIGNER_ACCOUNT_ID}`,
       );
     }
     if (!isMultisigSignerAuthorized(normalized.multisigSpec, normalized.signerAccountId)) {
       fail(
         V_CODE_INVALID_ACCOUNT_ID,
         `${context}.signerAccountId is not present in multisigSpec.signatories`,
-        `${context}.signerAccountId`,
+        `${context}.${TEXT_SIGNER_ACCOUNT_ID}`,
       );
     }
   }
@@ -752,7 +798,7 @@ function normalizeOptionalHexString(value, name) {
   const literal = assertString(value, name);
   const compact = literal.replace(/^0x/i, "");
   if (!/^[0-9A-Fa-f]{64}$/.test(compact)) {
-    fail(V_CODE_INVALID_HEX, `${name} must be a 32-byte hex string`, name);
+    fail(V_CODE_INVALID_HEX, `${name}${TEXT_MUST_BE_A}32-byte hex string`, name);
   }
   return compact.toLowerCase();
 }
@@ -760,18 +806,18 @@ function normalizeOptionalHexString(value, name) {
 function normalizeOptionalExactBase64String(value, name) {
   const literal = assertString(value, name);
   if (literal.length === 0 || literal.trim() !== literal || /\s/u.test(literal)) {
-    fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`, name);
   }
   if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(literal) || literal.length % 4 !== 0) {
-    fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`, name);
   }
   try {
     const decoded = Buffer.from(literal, "base64");
     if (decoded.length === 0 || decoded.toString("base64") !== literal) {
-      fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`, name);
     }
   } catch (error) {
-    fail(V_CODE_INVALID_STRING, `${name} must be exact standard-base64`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`, name);
   }
   return literal;
 }
@@ -779,12 +825,12 @@ function normalizeOptionalExactBase64String(value, name) {
 function asNonNegativeInteger(value, name) {
   if (typeof value === "bigint") {
     if (value < 0n) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be greater than or equal to zero`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_BE}greater than or equal to zero`, name);
     }
     if (value > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} exceeds JavaScript safe integer range`,
+        `${name}${TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE}`,
         name,
       );
     }
@@ -793,12 +839,12 @@ function asNonNegativeInteger(value, name) {
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
     }
     if (!Number.isSafeInteger(value)) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} exceeds JavaScript safe integer range`,
+        `${name}${TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE}`,
         name,
       );
     }
@@ -806,19 +852,19 @@ function asNonNegativeInteger(value, name) {
   }
   if (typeof value === "string") {
     if (!/^(?:0|[1-9]\d*)$/.test(value)) {
-      fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+      fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
     }
     const numeric = BigInt(value);
     if (numeric > MAX_SAFE_INTEGER_BIGINT) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} exceeds JavaScript safe integer range`,
+        `${name}${TEXT_EXCEEDS_JAVA_SCRIPT_SAFE_INTEGER_RANGE}`,
         name,
       );
     }
     return Number(numeric);
   }
-  fail(V_CODE_INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+  fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
 }
 
 function asKaigiU64(value, name) {
@@ -832,7 +878,7 @@ function asPositiveKaigiU64(value, name) {
   if (normalized === 0) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be greater than zero`,
+      `${name}${TEXT_MUST_BE_GREATER_THAN_ZERO}`,
       name,
     );
   }
@@ -845,7 +891,7 @@ function asKaigiParticipantLimit(value, name) {
   if (numeric === 0n || numeric > BigInt(KAIGI_MAX_PARTICIPANTS_V1)) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be an integer between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
+      `${name}${TEXT_MUST_BE_AN}integer between 1 and ${KAIGI_MAX_PARTICIPANTS_V1}`,
       name,
     );
   }
@@ -857,7 +903,7 @@ function asByte(value, name) {
   if (numeric > 0xff) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be an integer between 0 and 255`,
+      `${name}${TEXT_MUST_BE_AN}integer between 0 and 255`,
       name,
     );
   }
@@ -869,7 +915,7 @@ function asNonZeroByte(value, name) {
   if (numeric === 0) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be an integer between 1 and 255`,
+      `${name}${TEXT_MUST_BE_AN}integer between 1 and 255`,
       name,
     );
   }
@@ -894,7 +940,7 @@ function toBinaryBuffer(value, name) {
   }
   fail(
     V_CODE_INVALID_OBJECT,
-    `${name} must be a Buffer, ArrayBuffer view, or byte array`,
+    `${name}${TEXT_MUST_BE_A}Buffer, ArrayBuffer view, or byte array`,
     name,
   );
 }
@@ -908,7 +954,7 @@ function normalizeHash(value, name) {
     if (!/^[0-9A-Fa-f]{64}$/.test(trimmed)) {
       fail(
         V_CODE_INVALID_HEX,
-        `${name} must be a 64-character hexadecimal string or hash literal`,
+        `${name}${TEXT_MUST_BE_A}64-character hexadecimal string or hash literal`,
         name,
       );
     }
@@ -916,7 +962,7 @@ function normalizeHash(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length !== 32) {
-    fail(V_CODE_INVALID_HEX, `${name} must be 32 bytes`, name);
+    fail(V_CODE_INVALID_HEX, `${name}${TEXT_MUST_BE}32 bytes`, name);
   }
   return canonicalHashLiteral(buffer);
 }
@@ -958,13 +1004,13 @@ function normalizeKeyedHashInput(value, name) {
 
 function normalizeFixedBytes(value, name, length = 32) {
   if (value === undefined || value === null) {
-    fail(V_CODE_INVALID_OBJECT, `${name} is required`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_IS_REQUIRED}`, name);
   }
   if (Array.isArray(value)) {
     if (value.length !== length) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name} must contain exactly ${length} elements`,
+        `${name}${TEXT_MUST_CONTAIN_EXACTLY}${length} elements`,
         name,
       );
     }
@@ -972,7 +1018,7 @@ function normalizeFixedBytes(value, name, length = 32) {
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
         fail(
           V_CODE_VALUE_OUT_OF_RANGE,
-          `${name}[${index}] must be an integer between 0 and 255`,
+          `${name}[${index}${TEXT_MUST_BE_AN_INTEGER_BETWEEN_0_AND_255}`,
           `${name}[${index}]`,
         );
       }
@@ -984,7 +1030,7 @@ function normalizeFixedBytes(value, name, length = 32) {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty string`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}non-empty string`, name);
     }
     if (trimmed.startsWith("hash:")) {
       buffer = parseHashLiteralToBuffer(trimmed, name);
@@ -1000,7 +1046,7 @@ function normalizeFixedBytes(value, name, length = 32) {
   if (buffer.length !== length) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be ${length} bytes; received ${buffer.length}`,
+      `${name}${TEXT_MUST_BE}${length} bytes; received ${buffer.length}`,
       name,
     );
   }
@@ -1017,17 +1063,17 @@ function normalizeOptionalFixedBytes(value, name, length = 32) {
 
 function normalizeByteArray(value, name) {
   if (value === undefined || value === null) {
-    fail(V_CODE_INVALID_OBJECT, `${name} is required`, name);
+    fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_IS_REQUIRED}`, name);
   }
   if (Array.isArray(value)) {
     if (value.length === 0) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty byte array`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_NON_EMPTY_BYTE_ARRAY}`, name);
     }
     return value.map((byte, index) => {
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
         fail(
           V_CODE_VALUE_OUT_OF_RANGE,
-          `${name}[${index}] must be an integer between 0 and 255`,
+          `${name}[${index}${TEXT_MUST_BE_AN_INTEGER_BETWEEN_0_AND_255}`,
           `${name}[${index}]`,
         );
       }
@@ -1036,7 +1082,7 @@ function normalizeByteArray(value, name) {
   }
   if (Buffer.isBuffer(value)) {
     if (value.length === 0) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty byte array`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_NON_EMPTY_BYTE_ARRAY}`, name);
     }
     return Array.from(value.values());
   }
@@ -1046,7 +1092,7 @@ function normalizeByteArray(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length === 0) {
-    fail(V_CODE_INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_NON_EMPTY_BYTE_ARRAY}`, name);
   }
   return Array.from(buffer.values());
 }
@@ -1057,7 +1103,7 @@ function normalizeHexHashString(value, name) {
     if (!/^[0-9A-Fa-f]{64}$/.test(trimmed)) {
       fail(
         V_CODE_INVALID_HEX,
-        `${name} must be a 64-character hexadecimal string`,
+        `${name}${TEXT_MUST_BE_A}64-character hexadecimal string`,
         name,
       );
     }
@@ -1065,7 +1111,7 @@ function normalizeHexHashString(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length !== 32) {
-    fail(V_CODE_INVALID_HEX, `${name} must be 32 bytes`, name);
+    fail(V_CODE_INVALID_HEX, `${name}${TEXT_MUST_BE}32 bytes`, name);
   }
   return Buffer.from(buffer).toString("hex");
 }
@@ -1094,7 +1140,7 @@ function normalizeGovernanceHex32(value, name) {
   if (body.length !== 64 || !/^[0-9A-Fa-f]{64}$/u.test(body)) {
     fail(
       V_CODE_INVALID_HEX,
-      `${name} must be exactly 32-byte hexadecimal with no whitespace`,
+      `${name}${TEXT_MUST_BE_EXACTLY}32-byte hexadecimal with no whitespace`,
       name,
     );
   }
@@ -1109,7 +1155,7 @@ function normalizeGovernanceU64(value, name) {
     if (!Number.isSafeInteger(value) || value < 0) {
       fail(
         V_CODE_INVALID_NUMERIC,
-        `${name} must be a lossless unsigned 64-bit integer`,
+        `${name}${TEXT_MUST_BE_A}lossless${TEXT_UNSIGNED_64_BIT_INTEGER}`,
         name,
       );
     }
@@ -1118,7 +1164,7 @@ function normalizeGovernanceU64(value, name) {
     if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
       fail(
         V_CODE_INVALID_NUMERIC,
-        `${name} must be a canonical unsigned 64-bit integer`,
+        `${name}${TEXT_MUST_BE_A}canonical${TEXT_UNSIGNED_64_BIT_INTEGER}`,
         name,
       );
     }
@@ -1126,14 +1172,14 @@ function normalizeGovernanceU64(value, name) {
   } else {
     fail(
       V_CODE_INVALID_NUMERIC,
-      `${name} must be a lossless unsigned 64-bit integer`,
+      `${name}${TEXT_MUST_BE_A}lossless${TEXT_UNSIGNED_64_BIT_INTEGER}`,
       name,
     );
   }
   if (integer < 0n || integer > UINT64_MAX_BIGINT) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must be at most ${UINT64_MAX_BIGINT.toString(10)}`,
+      `${name}${TEXT_MUST_BE}at most ${UINT64_MAX_BIGINT.toString(10)}`,
       name,
     );
   }
@@ -1147,13 +1193,13 @@ function normalizeVerifyingKeyId(value, name) {
   if (typeof value === "string") {
     const raw = value;
     if (raw.trim().length === 0) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a non-empty string`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}non-empty string`, name);
     }
     const parts = raw.split(":");
     if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
       fail(
         V_CODE_INVALID_STRING,
-        `${name} must be in 'backend:name' format`,
+        `${name}${TEXT_MUST_BE}in 'backend:name' format`,
         name,
       );
     }
@@ -1167,7 +1213,7 @@ function normalizeVerifyingKeyId(value, name) {
     ) {
       fail(
         V_CODE_INVALID_STRING,
-        `${name} must be in clean 'backend:name' format`,
+        `${name}${TEXT_MUST_BE}in clean 'backend:name' format`,
         name,
       );
     }
@@ -1220,7 +1266,7 @@ function normalizeConfidentialPolicyMode(value, name) {
     default:
       fail(
         V_CODE_INVALID_STRING,
-        `${name} must be TransparentOnly, ShieldedOnly, or Convertible`,
+        `${name}${TEXT_MUST_BE}TransparentOnly, ShieldedOnly, or Convertible`,
         name,
       );
   }
@@ -1332,26 +1378,26 @@ function normalizeProofAttachment(value, name) {
     );
     const leaf = normalizeFixedBytes(
       merklePayload.leaf,
-      `${name}.lanePrivacy.merkle.leaf`,
+      `${name}${TEXT_LANE_PRIVACY_MERKLE}leaf`,
       32,
     );
     const leafIndex = asNonNegativeInteger(
       merklePayload.leafIndex,
-      `${name}.lanePrivacy.merkle.leafIndex`,
+      `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex`,
     );
     if (leafIndex > UINT32_MAX) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name}.lanePrivacy.merkle.leafIndex must fit within a u32`,
-        `${name}.lanePrivacy.merkle.leafIndex`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex must fit within a u32`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex`,
       );
     }
     const rawAudit = merklePayload.auditPath;
     if (!Array.isArray(rawAudit)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${name}.lanePrivacy.merkle.auditPath must be an array`,
-        `${name}.lanePrivacy.merkle.auditPath`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath${TEXT_MUST_BE}an array`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath`,
       );
     }
     if (
@@ -1360,22 +1406,22 @@ function normalizeProofAttachment(value, name) {
     ) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${name}.lanePrivacy.merkle.auditPath must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`,
-        `${name}.lanePrivacy.merkle.auditPath`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath${TEXT_MUST_CONTAIN}1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath`,
       );
     }
     const auditPath = rawAudit.map((entry, index) => {
       if (entry === null || entry === undefined) {
         fail(
           V_CODE_INVALID_OBJECT,
-          `${name}.lanePrivacy.merkle.auditPath[${index}] must contain a sibling`,
-          `${name}.lanePrivacy.merkle.auditPath[${index}]`,
+          `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]${TEXT_MUST_CONTAIN}a sibling`,
+          `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]`,
         );
       }
       return canonicalizePrehashedBytes(
         normalizeFixedBytes(
           entry,
-          `${name}.lanePrivacy.merkle.auditPath[${index}]`,
+          `${name}${TEXT_LANE_PRIVACY_MERKLE}auditPath[${index}]`,
           32,
         ),
       );
@@ -1383,8 +1429,8 @@ function normalizeProofAttachment(value, name) {
     if (!laneMerkleLeafIndexFitsDepth(leafIndex, auditPath.length)) {
       fail(
         V_CODE_VALUE_OUT_OF_RANGE,
-        `${name}.lanePrivacy.merkle.leafIndex is impossible for the Merkle path depth`,
-        `${name}.lanePrivacy.merkle.leafIndex`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex is impossible for the Merkle path depth`,
+        `${name}${TEXT_LANE_PRIVACY_MERKLE}leafIndex`,
       );
     }
     payload.lane_privacy = {
@@ -1432,7 +1478,7 @@ function assertOnlyProofObjectKeys(value, expectedKeys, name) {
   ) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${name} must contain exactly ${expectedKeys.join(", ")}`,
+      `${name}${TEXT_MUST_CONTAIN_EXACTLY}${expectedKeys.join(", ")}`,
       name,
     );
   }
@@ -1451,7 +1497,7 @@ function normalizeBoundedProofBytes(value, backend, name) {
     } catch {
       fail(
         V_CODE_INVALID_STRING,
-        `${name} must be canonical standard base64`,
+        `${name}${TEXT_MUST_BE}canonical standard base64`,
         name,
       );
     }
@@ -1462,7 +1508,7 @@ function normalizeBoundedProofBytes(value, backend, name) {
     if (decoded.toString("base64") !== value) {
       fail(
         V_CODE_INVALID_STRING,
-        `${name} must be canonical standard base64`,
+        `${name}${TEXT_MUST_BE}canonical standard base64`,
         name,
       );
     }
@@ -1502,7 +1548,7 @@ function assertNonZeroProofDigest(bytes, name) {
   if (bytes.every((byte) => byte === 0)) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${name} must be non-zero`,
+      `${name}${TEXT_MUST_BE}non-zero`,
       name,
     );
   }
@@ -1513,7 +1559,7 @@ function normalizeU32(value, name) {
   if (numeric > UINT32_MAX) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must fit in an unsigned 32-bit integer`,
+      `${name}${TEXT_MUST_FIT_IN_AN_UNSIGNED_32_BIT_INTEGER}`,
       name,
     );
   }
@@ -1525,7 +1571,7 @@ function normalizePositiveU32(value, name) {
   if (numeric > UINT32_MAX) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must fit in an unsigned 32-bit integer`,
+      `${name}${TEXT_MUST_FIT_IN_AN_UNSIGNED_32_BIT_INTEGER}`,
       name,
     );
   }
@@ -1542,7 +1588,7 @@ function normalizeAccessSetHints(value, context) {
       return [];
     }
     if (!Array.isArray(keys)) {
-      fail(V_CODE_INVALID_OBJECT, `${name} must be an array of strings`, name);
+      fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_MUST_BE_AN}array of strings`, name);
     }
     return keys.map((entry, index) =>
       assertString(entry, `${name}[${index}]`),
@@ -1553,7 +1599,7 @@ function normalizeAccessSetHints(value, context) {
       return [];
     }
     if (!Array.isArray(entries)) {
-      fail(V_CODE_INVALID_OBJECT, `${name} must be an array of dynamic access hints`, name);
+      fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_MUST_BE_AN}array of dynamic access hints`, name);
     }
     return entries.map((entry, index) => {
       const hint = assertPlainObject(entry, `${name}[${index}]`);
@@ -1570,14 +1616,14 @@ function normalizeAccessSetHints(value, context) {
       if (maxKeys === 0) {
         fail(
           V_CODE_VALUE_OUT_OF_RANGE,
-          `${hintName}.maxKeys must be positive`,
+          `${hintName}.maxKeys${TEXT_MUST_BE}positive`,
           `${hintName}.maxKeys`,
         );
       }
       if (maxKeys > KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS) {
         fail(
           V_CODE_VALUE_OUT_OF_RANGE,
-          `${hintName}.maxKeys must be at most ${KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS}`,
+          `${hintName}.maxKeys${TEXT_MUST_BE}at most ${KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS}`,
           `${hintName}.maxKeys`,
         );
       }
@@ -1593,7 +1639,7 @@ function normalizeAccessSetHints(value, context) {
       if (!isKotodamaV1StateMapKeyTypeName(keyType)) {
         fail(
           V_CODE_INVALID_STRING,
-          `${hintName}.keyType must be an exact Kotodama V1 StateMap key scalar`,
+          `${hintName}.keyType${TEXT_MUST_BE}an exact Kotodama V1 StateMap key scalar`,
           `${hintName}.keyType`,
         );
       }
@@ -1609,7 +1655,7 @@ function normalizeAccessSetHints(value, context) {
       if (!isCanonicalKotodamaDynamicAccessBaseKey(baseKey)) {
         fail(
           V_CODE_INVALID_STRING,
-          `${hintName}.baseKey must be state: plus one canonical state declaration identifier`,
+          `${hintName}.baseKey${TEXT_MUST_BE}state: plus one canonical state declaration identifier`,
           `${hintName}.baseKey`,
         );
       }
@@ -1732,7 +1778,7 @@ function decodeBase64Strict(value, name) {
   if (compact.length === 0) {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must be a non-empty base64 string`,
+      `${name}${TEXT_MUST_BE_A}non-empty base64 string`,
       name,
     );
   }
@@ -1743,14 +1789,14 @@ function decodeBase64Strict(value, name) {
     const head = compact.slice(0, paddingIndex);
     const padding = compact.slice(paddingIndex);
     if (!/^[0-9A-Za-z+/]*$/.test(head) || !/^={1,2}$/.test(padding)) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_VALID_BASE64_STRING}`, name);
     }
     if (compact.length % 4 !== 0) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_VALID_BASE64_STRING}`, name);
     }
   } else {
     if (!/^[0-9A-Za-z+/]+$/.test(compact) || compact.length % 4 === 1) {
-      fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
+      fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_VALID_BASE64_STRING}`, name);
     }
     const padLength = (4 - (compact.length % 4)) % 4;
     padded = compact + "=".repeat(padLength);
@@ -1758,7 +1804,7 @@ function decodeBase64Strict(value, name) {
 
   const decoded = Buffer.from(padded, "base64");
   if (decoded.toString("base64") !== padded) {
-    fail(V_CODE_INVALID_STRING, `${name} must be a valid base64 string`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}${TEXT_VALID_BASE64_STRING}`, name);
   }
   return decoded;
 }
@@ -1769,7 +1815,7 @@ function normalizeBase64(value, name) {
   }
   const buffer = toBinaryBuffer(value, name);
   if (buffer.length === 0) {
-    fail(V_CODE_INVALID_STRING, `${name} must be a non-empty base64 string`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}non-empty base64 string`, name);
   }
   return buffer.toString("base64");
 }
@@ -1789,7 +1835,7 @@ function normalizeKaigiHpkePublicKey(value, name) {
   if (key.length === 0) {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must be a non-empty HPKE public key`,
+      `${name}${TEXT_MUST_BE_A}non-empty HPKE public key`,
       name,
     );
   }
@@ -1809,7 +1855,7 @@ function normalizeKaigiId(value, name) {
     if (trimmed.length === 0 || !trimmed.includes(":")) {
       fail(
         V_CODE_INVALID_STRING,
-        `${name} must be in 'domain:callName' format`,
+        `${name}${TEXT_MUST_BE}in 'domain:callName' format`,
         name,
       );
     }
@@ -1847,7 +1893,7 @@ function normalizeCanonicalKaigiId(value, name) {
   } catch {
     fail(
       V_CODE_INVALID_STRING,
-      `${name}.domain_id must be a valid domain.dataspace identifier`,
+      `${name}.domain_id${TEXT_MUST_BE}a valid domain.dataspace identifier`,
       `${name}.domain_id`,
     );
   }
@@ -1861,7 +1907,7 @@ function normalizeCanonicalKaigiId(value, name) {
   ) {
     fail(
       V_CODE_INVALID_STRING,
-      `${name}.call_name must be a canonical Iroha Name`,
+      `${name}.call_name${TEXT_MUST_BE}a canonical Iroha Name`,
       `${name}.call_name`,
     );
   }
@@ -1892,7 +1938,7 @@ function normalizeKaigiRelayManifest(value, context) {
   if (!Array.isArray(hopsValue)) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${context}.hops must be an array`,
+      `${context}.hops${TEXT_MUST_BE}an array`,
       `${context}.hops`,
     );
   }
@@ -1914,7 +1960,7 @@ function normalizeKaigiRelayManifest(value, context) {
     if (!Object.prototype.hasOwnProperty.call(hopsValue, index)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${context}.hops must be a dense array`,
+        `${context}.hops${TEXT_MUST_BE}a dense array`,
         `${context}.hops[${index}]`,
       );
     }
@@ -1928,7 +1974,7 @@ function normalizeKaigiRelayManifest(value, context) {
     if (seenRelayIds.has(relayId)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${context}.hops must not contain duplicate relays`,
+        `${context}.hops${TEXT_MUST_NOT_CONTAIN}duplicate relays`,
         `${context}.hops[${index}].relayId`,
       );
     }
@@ -1946,7 +1992,7 @@ function normalizePrivacyMode(value) {
     if (value.state !== undefined && value.state !== null) {
       fail(
         V_CODE_INVALID_OBJECT,
-        "privacyMode.state must be null because Kaigi privacy modes are unit variants",
+        ("privacyMode.state" + TEXT_MUST_BE + "null because Kaigi privacy modes are unit variants"),
         "privacyMode.state",
       );
     }
@@ -1979,7 +2025,7 @@ function normalizePrivacyModeTag(value) {
   }
   fail(
     V_CODE_INVALID_STRING,
-    "privacyMode must be either 'Transparent' or 'ZkRosterV1'",
+    ("privacyMode" + TEXT_MUST_BE + "either 'Transparent' or 'ZkRosterV1'"),
   );
 }
 
@@ -1990,7 +2036,7 @@ function normalizeRoomPolicy(value) {
     if (value.state !== undefined && value.state !== null) {
       fail(
         V_CODE_INVALID_OBJECT,
-        "roomPolicy.state must be null because Kaigi room policies are unit variants",
+        ("roomPolicy.state" + TEXT_MUST_BE + "null because Kaigi room policies are unit variants"),
         "roomPolicy.state",
       );
     }
@@ -2027,7 +2073,7 @@ function normalizeRoomPolicyTag(value) {
   }
   fail(
     V_CODE_INVALID_STRING,
-    "roomPolicy must be either 'Public' or 'Authenticated'",
+    ("roomPolicy" + TEXT_MUST_BE + "either 'Public' or 'Authenticated'"),
   );
 }
 
@@ -2052,7 +2098,7 @@ function normalizeKaigiParticipantCommitment(value, context) {
   }
   const scalar = normalizeOptionalKaigiScalarV1(commitment.commitment, `${context}.commitment`);
   if (scalar === null) {
-    fail(V_CODE_INVALID_OBJECT, `${context}.commitment is required`, context);
+    fail(V_CODE_INVALID_OBJECT, `${context}.commitment${TEXT_IS_REQUIRED}`, context);
   }
   return { commitment: scalar };
 }
@@ -2067,7 +2113,7 @@ function normalizeKaigiParticipantNullifier(value, context) {
   }
   const digest = normalizeOptionalKaigiScalarV1(nullifier.digest, `${context}.digest`);
   if (digest === null) {
-    fail(V_CODE_INVALID_OBJECT, `${context}.digest is required`, context);
+    fail(V_CODE_INVALID_OBJECT, `${context}.digest${TEXT_IS_REQUIRED}`, context);
   }
   return { digest };
 }
@@ -2222,22 +2268,22 @@ function normalizeKaigiUsageInput(options) {
   const source = assertPlainObject(options, "recordKaigiUsage");
   const callId = source.call_id ?? source.callId ?? source.id;
   return {
-    call_id: normalizeKaigiId(callId, "recordKaigiUsage.callId"),
+    call_id: normalizeKaigiId(callId, (TEXT_RECORD_KAIGI_USAGE + "callId")),
     duration_ms: asPositiveKaigiU64(
       source.duration_ms ?? source.durationMs ?? source.duration,
-      "recordKaigiUsage.durationMs",
+      (TEXT_RECORD_KAIGI_USAGE + "durationMs"),
     ),
     billed_gas: asKaigiU64(
       source.billed_gas ?? source.billedGas ?? source.gas ?? 0,
-      "recordKaigiUsage.billedGas",
+      (TEXT_RECORD_KAIGI_USAGE + "billedGas"),
     ),
     usage_commitment: normalizeOptionalKaigiScalarV1(
       source.usage_commitment ?? source.usageCommitment,
-      "recordKaigiUsage.usageCommitment",
+      (TEXT_RECORD_KAIGI_USAGE + "usageCommitment"),
     ),
     proof: normalizeOptionalBase64(
       source.proof,
-      "recordKaigiUsage.proof",
+      (TEXT_RECORD_KAIGI_USAGE + "proof"),
     ),
   };
 }
@@ -2298,7 +2344,7 @@ function normalizeKaigiRelayHealthStatus(value, name) {
   if (value !== "Healthy" && value !== "Degraded" && value !== "Unavailable") {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must be exactly "Healthy", "Degraded", or "Unavailable"`,
+      `${name}${TEXT_MUST_BE_EXACTLY}"Healthy", "Degraded", or "Unavailable"`,
       name,
     );
   }
@@ -2310,7 +2356,7 @@ function normalizeKaigiRelayHealthNotes(value, name) {
     return null;
   }
   if (typeof value !== "string") {
-    fail(V_CODE_INVALID_STRING, `${name} must be a string`, name);
+    fail(V_CODE_INVALID_STRING, `${name}${TEXT_MUST_BE_A}string`, name);
   }
   assertWellFormedUtf16(value, name);
   let scalarCount = 0;
@@ -2332,852 +2378,50 @@ function normalizeReportKaigiRelayHealthInput(options) {
   return {
     call_id: normalizeCanonicalKaigiId(
       source.call_id ?? source.callId,
-      "reportKaigiRelayHealth.callId",
+      (TEXT_REPORT_KAIGI_RELAY_HEALTH + "callId"),
     ),
     relay_id: normalizeAccountId(
       source.relay_id ?? source.relayId,
-      "reportKaigiRelayHealth.relayId",
+      (TEXT_REPORT_KAIGI_RELAY_HEALTH + "relayId"),
     ),
     status: normalizeKaigiRelayHealthStatus(
       source.status,
-      "reportKaigiRelayHealth.status",
+      (TEXT_REPORT_KAIGI_RELAY_HEALTH + "status"),
     ),
     reported_at_ms: asKaigiU64(
       source.reported_at_ms ?? source.reportedAtMs,
-      "reportKaigiRelayHealth.reportedAtMs",
+      (TEXT_REPORT_KAIGI_RELAY_HEALTH + "reportedAtMs"),
     ),
     notes: normalizeKaigiRelayHealthNotes(
       source.notes,
-      "reportKaigiRelayHealth.notes",
+      (TEXT_REPORT_KAIGI_RELAY_HEALTH + "notes"),
     ),
   };
 }
 
-function normalizeManifestTypeDeclarationIdentifier(value, name) {
-  const identifier = assertString(value, name);
-  if (!isCanonicalKotodamaIdentifier(identifier, { typeDeclaration: true })) {
-    fail(
-      V_CODE_INVALID_STRING,
-      `${name} must be a canonical Kotodama V1 type declaration identifier`,
-      name,
-    );
-  }
-  return identifier;
-}
-
-function normalizeManifestStateTypeName(value, name) {
-  const typeName = assertString(value, name);
-  if (!isCanonicalKotodamaStateTypeName(typeName)) {
-    fail(
-      V_CODE_INVALID_STRING,
-      `${name} must be a canonical Kotodama V1 state type`,
-      name,
-    );
-  }
-  return typeName;
-}
-
-function normalizeManifestFeaturesBitmap(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const normalized = asNonNegativeInteger(value, name);
-  if (normalized > 3) {
-    fail(
-      V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} contains unsupported Kotodama V1 feature bits`,
-      name,
-    );
-  }
-  return normalized;
-}
-
-function normalizeContractManifest(manifest) {
-  const source = assertPlainObject(manifest, "manifest");
-  const seiyakuName = source.seiyaku_name ?? source.seiyakuName;
-  const compilerFingerprint = source.compiler_fingerprint ?? source.compilerFingerprint;
-  const featuresBitmap = source.features_bitmap ?? source.featuresBitmap;
-  const entrypoints = source.entrypoints ?? source.entryPoints;
-  const normalized = {
-    seiyaku_name:
-      seiyakuName === undefined || seiyakuName === null
-        ? null
-        : normalizeManifestTypeDeclarationIdentifier(
-            seiyakuName,
-            "manifest.seiyakuName",
-          ),
-    code_hash: normalizeOptionalHash(
-      source.code_hash ?? source.codeHash,
-      "manifest.codeHash",
-    ),
-    abi_hash: normalizeOptionalHash(
-      source.abi_hash ?? source.abiHash,
-      "manifest.abiHash",
-    ),
-    compiler_fingerprint:
-      compilerFingerprint === undefined || compilerFingerprint === null
-        ? null
-        : assertString(
-            compilerFingerprint,
-            "manifest.compilerFingerprint",
-          ),
-    features_bitmap: normalizeManifestFeaturesBitmap(
-      featuresBitmap,
-      "manifest.featuresBitmap",
-    ),
-    access_set_hints: normalizeAccessSetHints(
-      source.access_set_hints ?? source.accessSetHints,
-      "manifest.accessSetHints",
-    ),
-    entrypoints: normalizeEntrypoints(entrypoints, "manifest.entrypoints"),
-    states: normalizeManifestStates(source.states, "manifest.states"),
-    error_types: normalizeManifestErrorTypes(
-      source.error_types ?? source.errorTypes,
-      "manifest.errorTypes",
-    ),
-    kotoba:
-      source.kotoba === undefined || source.kotoba === null
-        ? null
-        : normalizeContractKotobaEntries(source.kotoba, "manifest.kotoba"),
-    provenance:
-      source.provenance === undefined || source.provenance === null
-        ? null
-        : normalizeManifestProvenance(source.provenance, "manifest.provenance"),
-  };
-  validateManifestErrorTypeBindingsV1(normalized);
-  validateManifestDynamicAccessHintStateMaps(normalized);
-  return normalized;
-}
-
-function normalizeContractKotobaEntries(value, name) {
-  if (!Array.isArray(value)) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      `${name} must be an array of translation entries`,
-      name,
-    );
-  }
-  return value.map((entry, index) => {
-    const normalizedEntry = assertPlainObject(entry, `${name}[${index}]`);
-    return {
-      msg_id: assertString(
-        normalizedEntry.msg_id ?? normalizedEntry.msgId,
-        `${name}[${index}].msg_id`,
-      ),
-      translations: normalizeContractKotobaTranslations(
-        normalizedEntry.translations,
-        `${name}[${index}].translations`,
-      ),
-    };
-  });
-}
-
-function normalizeContractKotobaTranslations(value, name) {
-  if (!Array.isArray(value)) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      `${name} must be an array of translations`,
-      name,
-    );
-  }
-  return value.map((translation, index) => {
-    const source = assertPlainObject(translation, `${name}[${index}]`);
-    return {
-      lang: assertString(source.lang, `${name}[${index}].lang`),
-      text: assertString(source.text, `${name}[${index}].text`),
-    };
-  });
-}
-
-function decodeManifestVarint(buffer, startIndex, context) {
-  let value = 0n;
-  let shift = 0n;
-  let index = startIndex;
-  while (index < buffer.length) {
-    const byte = BigInt(buffer[index]);
-    value |= (byte & 0x7fn) << shift;
-    index += 1;
-    if ((byte & 0x80n) === 0n) {
-      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        fail(
-          V_CODE_INVALID_MULTIHASH,
-          `${context} contains an oversized multihash varint`,
-          context,
-        );
-      }
-      return { value: Number(value), nextIndex: index };
-    }
-    shift += 7n;
-    if (shift > 63n) {
-      fail(
-        V_CODE_INVALID_MULTIHASH,
-        `${context} contains an invalid multihash varint`,
-        context,
-      );
-    }
-  }
-  fail(
-    V_CODE_INVALID_MULTIHASH,
-    `${context} contains a truncated multihash varint`,
-    context,
-  );
-}
-
-function normalizeManifestPublicKeyLiteral(value, name) {
-  const literal = assertString(value, name).trim();
-  let prefixedAlgorithm = null;
-  let multihashLiteral = literal;
-  const separator = literal.indexOf(":");
-  if (separator > 0) {
-    prefixedAlgorithm = literal.slice(0, separator).trim().toLowerCase();
-    multihashLiteral = literal.slice(separator + 1);
-  }
-  const canonical = canonicalizeMultihashHex(multihashLiteral, name);
-  const bytes = Buffer.from(canonical, "hex");
-  const functionCode = decodeManifestVarint(bytes, 0, name);
-  const digestLength = decodeManifestVarint(bytes, functionCode.nextIndex, name);
-  const payload = bytes.subarray(digestLength.nextIndex);
-  if (payload.length !== digestLength.value) {
-    fail(
-      V_CODE_INVALID_MULTIHASH,
-      `${name} multihash payload length does not match its digest header`,
-      name,
-    );
-  }
-  const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
-  if (!entry) {
-    fail(
-      V_CODE_INVALID_MULTIHASH,
-      `${name} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
-      name,
-    );
-  }
-  if (
-    prefixedAlgorithm &&
-    prefixedAlgorithm !== entry.algorithm &&
-    !(prefixedAlgorithm === "mldsa" && entry.algorithm === "ml-dsa")
-  ) {
-    fail(
-      V_CODE_INVALID_MULTIHASH,
-      `${name} algorithm prefix does not match the multihash payload`,
-      name,
-    );
-  }
-  validatePublicKeyForCurve(entry.id, payload, name);
-  const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
-  const lenHex = bytes.subarray(functionCode.nextIndex, digestLength.nextIndex).toString("hex");
-  const payloadHex = payload.toString("hex").toUpperCase();
-  return `${fnHex}${lenHex}${payloadHex}`;
-}
-
-function normalizeManifestSignatureLiteral(value, name) {
-  let body;
-  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
-    body = Buffer.from(value).toString("hex");
-  } else if (Array.isArray(value)) {
-    body = Buffer.from(normalizeByteArray(value, name)).toString("hex");
-  } else {
-    const literal = assertString(value, name).trim();
-    body =
-      literal.includes(":") && literal.indexOf(":") > 0
-        ? literal.slice(literal.indexOf(":") + 1)
-        : literal;
-  }
-  if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
-    fail(
-      V_CODE_INVALID_HEX,
-      `${name} must be an even-length hexadecimal string`,
-      name,
-    );
-  }
-  const canonical = body.toUpperCase();
-  if (/^0+$/u.test(canonical)) {
-    fail(
-      V_CODE_INVALID_HEX,
-      `${name} must not be all zero`,
-      name,
-    );
-  }
-  return canonical;
-}
-
-function normalizeManifestProvenance(value, name) {
-  const source = assertPlainObject(value, name);
-  return {
-    signer: normalizeManifestPublicKeyLiteral(source.signer, `${name}.signer`),
-    signature: normalizeManifestSignatureLiteral(source.signature, `${name}.signature`),
-  };
-}
-
-function normalizeEntrypoints(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!Array.isArray(value)) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      `${name} must be an array of entrypoint descriptors`,
-      name,
-    );
-  }
-  if (value.length === 0) {
-    return [];
-  }
-  return value.map((entry, index) => normalizeEntrypoint(entry, `${name}[${index}]`));
-}
-
-function normalizeEntrypoint(entry, name) {
-  const source = assertPlainObject(entry, name);
-  const entrypointName = assertString(source.name, `${name}.name`).trim();
-  if (!entrypointName) {
-    fail(
-      V_CODE_INVALID_STRING,
-      `${name}.name must be a non-empty string`,
-      `${name}.name`,
-    );
-  }
-  const rawPermission = source.permission;
-  const permission =
-    rawPermission === undefined || rawPermission === null
-      ? null
-      : assertString(rawPermission, `${name}.permission`).trim();
-  const kind = normalizeEntrypointKind(
-    source.kind,
-    `${name}.kind`,
-  );
-  const params = normalizeEntrypointParams(source.params, `${name}.params`);
-  const argumentSchema = normalizeEntrypointArgumentSchema(
-    source.argument_schema ?? source.argumentSchema,
-    `${name}.argument_schema`,
-  );
-  const returnType = normalizeOptionalManifestString(
-    source.return_type ?? source.returnType,
-    `${name}.return_type`,
-  );
-  const returnSchema = normalizeEntrypointValueType(
-    source.return_schema ?? source.returnSchema,
-    `${name}.return_schema`,
-  );
-  validateEntrypointSchemaBindings(
-    params,
-    argumentSchema,
-    returnType,
-    returnSchema,
-    name,
-  );
-  return {
-    name: entrypointName,
-    kind,
-    params,
-    argument_schema: argumentSchema,
-    return_type: returnType,
-    return_schema: returnSchema,
-    permission,
-    read_keys: normalizeManifestStringArray(
-      source.read_keys ?? source.readKeys,
-      `${name}.read_keys`,
-    ),
-    write_keys: normalizeManifestStringArray(
-      source.write_keys ?? source.writeKeys,
-      `${name}.write_keys`,
-    ),
-    access_hints_complete: normalizeOptionalManifestBoolean(
-      source.access_hints_complete ?? source.accessHintsComplete,
-      `${name}.access_hints_complete`,
-    ),
-    access_hints_skipped: normalizeManifestStringArray(
-      source.access_hints_skipped ?? source.accessHintsSkipped,
-      `${name}.access_hints_skipped`,
-    ),
-    triggers: normalizeManifestTriggers(source.triggers, `${name}.triggers`),
-  };
-}
-
-function validateEntrypointSchemaBindings(
-  params,
-  argumentSchema,
-  returnType,
-  returnSchema,
-  name,
-) {
-  const paramNames = new Set();
-  params.forEach((param, index) => {
-    if (
-      !isCanonicalKotodamaIdentifier(param.name) ||
-      paramNames.has(param.name)
-    ) {
-      fail(
-        V_CODE_INVALID_STRING,
-        `${name}.params[${index}].name must be unique and canonical`,
-        `${name}.params[${index}].name`,
-      );
-    }
-    paramNames.add(param.name);
-  });
-  if (params.length === 0) {
-    if (argumentSchema !== null) {
-      fail(
-        V_CODE_INVALID_OBJECT,
-        `${name}.argument_schema must be null without parameters`,
-        `${name}.argument_schema`,
-      );
-    }
-  } else if (argumentSchema === null) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      `${name}.argument_schema is required for declared parameters`,
-      `${name}.argument_schema`,
-    );
-  } else {
-    if (
-      argumentSchema.fields.length === 0 ||
-      argumentSchema.fields.length > 13 ||
-      argumentSchema.fields.length !== params.length
-    ) {
-      fail(
-        V_CODE_INVALID_OBJECT,
-        `${name}.argument_schema.fields must exactly match 1..13 declared parameters`,
-        `${name}.argument_schema.fields`,
-      );
-    }
-    const fieldNames = new Set();
-    let argumentWords = 0;
-    argumentSchema.fields.forEach((field, index) => {
-      if (
-        !isCanonicalKotodamaIdentifier(field.name) ||
-        fieldNames.has(field.name)
-      ) {
-        fail(
-          V_CODE_INVALID_STRING,
-          `${name}.argument_schema.fields[${index}].name must be unique and canonical`,
-          `${name}.argument_schema.fields[${index}].name`,
-        );
-      }
-      fieldNames.add(field.name);
-      const analysis = analyzeEntrypointValueTypeV1(
-        field.ty,
-        `${name}.argument_schema.fields[${index}].ty`,
-      );
-      argumentWords += analysis.wordCount;
-      if (
-        field.name !== params[index].name ||
-        analysis.canonicalName !== params[index].type_name
-      ) {
-        fail(
-          V_CODE_INVALID_OBJECT,
-          `${name}.argument_schema.fields[${index}] does not match its declared parameter`,
-          `${name}.argument_schema.fields[${index}]`,
-        );
-      }
-    });
-    if (argumentWords > 13) {
-      fail(
-        V_CODE_VALUE_OUT_OF_RANGE,
-        `${name}.argument_schema exceeds the V1 13-word argument window`,
-        `${name}.argument_schema`,
-      );
-    }
-  }
-  if (returnType === null || returnSchema === null) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      `${name}.return_type and return_schema must be present together`,
-      name,
-    );
-  }
-  if (returnSchema !== null) {
-    const analysis = analyzeEntrypointValueTypeV1(
-      returnSchema,
-      `${name}.return_schema`,
-    );
-    if (analysis.canonicalName !== returnType) {
-      fail(
-        V_CODE_INVALID_OBJECT,
-        `${name}.return_schema does not match return_type`,
-        `${name}.return_schema`,
-      );
-    }
-    if (analysis.wordCount > 13) {
-      fail(
-        V_CODE_VALUE_OUT_OF_RANGE,
-        `${name}.return_schema exceeds the V1 13-word return window`,
-        `${name}.return_schema`,
-      );
-    }
-  }
-}
-
-function normalizeEntrypointKind(value, name) {
-  const raw =
-    value !== null && typeof value === "object" && !Array.isArray(value)
-      ? value.kind
-      : value;
-  const normalized = String(raw ?? "")
-    .trim()
-    .toLowerCase();
-  switch (normalized) {
-    case "kotoage":
-      return { kind: "Kotoage", value: null };
-    case "view":
-      return { kind: "View", value: null };
-    case "hajimari":
-      return { kind: "Hajimari", value: null };
-    case "kaizen":
-      return { kind: "Kaizen", value: null };
-    default:
-      fail(
-        V_CODE_INVALID_STRING,
-        `${name} must be one of 'Kotoage', 'View', 'Hajimari', or 'Kaizen'`,
-        name,
-      );
-  }
-}
-
-function normalizeOptionalManifestString(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const normalized = assertString(value, name).trim();
-  if (normalized.length === 0) {
-    fail(V_CODE_INVALID_STRING, `${name} must not be empty`, name);
-  }
-  return normalized;
-}
-
-function normalizeOptionalManifestBoolean(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (typeof value !== "boolean") {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be a boolean`, name);
-  }
-  return value;
-}
-
-function normalizeManifestStringArray(value, name) {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
-  }
-  return value.map((entry, index) => {
-    const normalized = assertString(entry, `${name}[${index}]`).trim();
-    if (normalized.length === 0) {
-      fail(
-        V_CODE_INVALID_STRING,
-        `${name}[${index}] must not be empty`,
-        `${name}[${index}]`,
-      );
-    }
-    return normalized;
-  });
-}
-
-function normalizeEntrypointParams(value, name) {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
-  }
-  return value.map((param, index) => {
-    const source = assertPlainObject(param, `${name}[${index}]`);
-    return {
-      name: normalizeRequiredManifestString(source.name, `${name}[${index}].name`),
-      type_name: normalizeRequiredManifestString(
-        selectEqualManifestAlias(
-          source,
-          "type_name",
-          "typeName",
-          `${name}[${index}].type_name`,
-        ),
-        `${name}[${index}].type_name`,
-      ),
-    };
-  });
-}
-
-function normalizeRequiredManifestString(value, name) {
-  const normalized = assertString(value, name).trim();
-  if (normalized.length === 0) {
-    fail(V_CODE_INVALID_STRING, `${name} must not be empty`, name);
-  }
-  return normalized;
-}
-
-function normalizeEntrypointArgumentSchema(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  const source = assertPlainObject(value, name);
-  if (!Array.isArray(source.fields)) {
-    fail(V_CODE_INVALID_OBJECT, `${name}.fields must be an array`, name);
-  }
-  return {
-    fields: source.fields.map((field, index) => {
-      const fieldSource = assertPlainObject(field, `${name}.fields[${index}]`);
-      return {
-        name: normalizeRequiredManifestString(
-          fieldSource.name,
-          `${name}.fields[${index}].name`,
-        ),
-        ty: normalizeRequiredEntrypointValueType(
-          fieldSource.ty,
-          `${name}.fields[${index}].ty`,
-        ),
-      };
-    }),
-  };
-}
-
-function normalizeEntrypointValueType(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  return normalizeRequiredEntrypointValueType(value, name);
-}
-
-function normalizeRequiredEntrypointValueType(value, name) {
-  const source = assertPlainObject(value, name);
-  if (!Array.isArray(source.nodes)) {
-    fail(V_CODE_INVALID_OBJECT, `${name}.nodes must be an array`, name);
-  }
-  const normalized = {
-    nodes: source.nodes.map((node, index) =>
-      normalizeEntrypointValueTypeNode(node, `${name}.nodes[${index}]`),
-    ),
-  };
-  analyzeEntrypointValueTypeV1(normalized, name);
-  return normalized;
-}
-
-function normalizeEntrypointValueTypeNode(value, name) {
-  const source = assertPlainObject(value, name);
-  const kind = normalizeRequiredManifestString(source.kind, `${name}.kind`);
-  switch (kind) {
-    case "Struct": {
-      const struct = assertPlainObject(source.value, `${name}.value`);
-      return {
-        kind,
-        value: {
-          name: normalizeRequiredManifestString(struct.name, `${name}.value.name`),
-          fields: normalizeManifestStringArray(struct.fields, `${name}.value.fields`),
-        },
-      };
-    }
-    case "Tuple":
-      return { kind, value: normalizeU16(source.value, `${name}.value`) };
-    case "Unit":
-    case "Option":
-    case "Result":
-      requireManifestNull(source.value, `${name}.value`);
-      return { kind, value: null };
-    case "List": {
-      const list = assertPlainObject(source.value, `${name}.value`);
-      const keys = Object.keys(list);
-      if (keys.length !== 1 || keys[0] !== "capacity") {
-        fail(
-          V_CODE_INVALID_OBJECT,
-          `${name}.value must contain only capacity; the element subtree follows in the enclosing node tape`,
-          `${name}.value`,
-        );
-      }
-      const capacity = asByte(list.capacity, `${name}.value.capacity`);
-      if (capacity < 1 || capacity > 64) {
-        fail(
-          V_CODE_VALUE_OUT_OF_RANGE,
-          `${name}.value.capacity must be in 1..64`,
-          `${name}.value.capacity`,
-        );
-      }
-      return {
-        kind,
-        value: { capacity },
-      };
-    }
-    case "Error":
-      return { kind, value: normalizeContractErrorTypeV1(source.value, `${name}.value`) };
-    case "Leaf":
-      return {
-        kind,
-        value: normalizeEntrypointValueKind(source.value, `${name}.value`),
-      };
-    default:
-      fail(
-        V_CODE_INVALID_STRING,
-        `${name}.kind is not a V1 entrypoint value-type node`,
-        `${name}.kind`,
-      );
-  }
-}
-
-function normalizeEntrypointValueKind(value, name) {
-  const source = assertPlainObject(value, name);
-  const kind = normalizeRequiredManifestString(source.kind, `${name}.kind`);
-  const allowed = new Set([
-    "Int",
-    "Decimal",
-    "Quantity",
-    "Bool",
-    "String",
-    "Json",
-    "Name",
-    "AccountId",
-    "AssetDefinitionId",
-    "AssetId",
-    "DomainId",
-    "NftId",
-    "DataSpaceId",
-    "Blob",
-  ]);
-  if (!allowed.has(kind)) {
-    fail(
-      V_CODE_INVALID_STRING,
-      `${name}.kind is not a V1 entrypoint value kind`,
-      `${name}.kind`,
-    );
-  }
-  requireManifestNull(source.value, `${name}.value`);
-  return { kind, value: null };
-}
-
-function normalizeU16(value, name) {
-  const normalized = asNonNegativeInteger(value, name);
-  if (normalized > 0xffff) {
-    fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in u16`, name);
-  }
-  return normalized;
-}
-
-function requireManifestNull(value, name) {
-  if (value !== undefined && value !== null) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be null`, name);
-  }
-}
-
-function normalizeManifestStates(value, name) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!Array.isArray(value)) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
-  }
-  const names = new Set();
-  return value.map((state, index) => {
-    const source = assertPlainObject(state, `${name}[${index}]`);
-    const stateName = normalizeRequiredManifestString(
-      source.name,
-      `${name}[${index}].name`,
-    );
-    if (names.has(stateName)) {
-      fail(
-        V_CODE_INVALID_OBJECT,
-        `${name} contains duplicate state name ${stateName}`,
-        name,
-      );
-    }
-    names.add(stateName);
-    return {
-      name: stateName,
-      type_name: normalizeManifestStateTypeName(
-        selectEqualManifestAlias(
-          source,
-          "type_name",
-          "typeName",
-          `${name}[${index}].type_name`,
-        ),
-        `${name}[${index}].type_name`,
-      ),
-    };
-  });
-}
-
-function normalizeManifestErrorTypes(value, context) {
-  return normalizeContractErrorTypesV1(value, context);
-}
-
-function normalizeManifestTriggers(value, name) {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    fail(V_CODE_INVALID_OBJECT, `${name} must be an array`, name);
-  }
-  return value.map((trigger, index) => {
-    const source = assertPlainObject(trigger, `${name}[${index}]`);
-    const callback = assertPlainObject(
-      source.callback,
-      `${name}[${index}].callback`,
-    );
-    const metadata = source.metadata ?? {};
-    if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
-      fail(
-        V_CODE_INVALID_OBJECT,
-        `${name}[${index}].metadata must be an object`,
-        `${name}[${index}].metadata`,
-      );
-    }
-    return {
-      id: normalizeRequiredManifestString(source.id, `${name}[${index}].id`),
-      repeats: normalizeManifestTriggerRepeats(
-        source.repeats,
-        `${name}[${index}].repeats`,
-      ),
-      filter: normalizeOptionalExactBase64String(
-        source.filter,
-        `${name}[${index}].filter`,
-      ),
-      authority:
-        source.authority === undefined || source.authority === null
-          ? null
-          : normalizeAccountId(source.authority, `${name}[${index}].authority`),
-      metadata: normalizeJsonValue(metadata, `${name}[${index}].metadata`),
-      callback: {
-        namespace: normalizeOptionalManifestString(
-          callback.namespace,
-          `${name}[${index}].callback.namespace`,
-        ),
-        entrypoint: normalizeRequiredManifestString(
-          callback.entrypoint,
-          `${name}[${index}].callback.entrypoint`,
-        ),
-      },
-    };
-  });
-}
-
-function normalizeManifestTriggerRepeats(value, name) {
-  const source = assertPlainObject(value, name);
-  const keys = Object.keys(source);
-  if (keys.length !== 1) {
-    fail(
-      V_CODE_INVALID_OBJECT,
-      `${name} must contain exactly one repeat variant`,
-      name,
-    );
-  }
-  if (keys[0] === "Indefinitely") {
-    requireManifestNull(source.Indefinitely, `${name}.Indefinitely`);
-    return { Indefinitely: null };
-  }
-  if (keys[0] === "Exactly") {
-    const count = asNonNegativeInteger(source.Exactly, `${name}.Exactly`);
-    if (count > 0xffff_ffff) {
-      fail(
-        V_CODE_VALUE_OUT_OF_RANGE,
-        `${name}.Exactly must fit in u32`,
-        `${name}.Exactly`,
-      );
-    }
-    return { Exactly: count };
-  }
-  fail(
-    V_CODE_INVALID_STRING,
-    `${name} must be Indefinitely or Exactly`,
-    name,
-  );
-}
+const contractManifestNormalizers = /* @__PURE__ */ createContractManifestNormalizer(
+  TEXT_MUST_BE,
+  TEXT_MUST_BE_A,
+  TEXT_MUST_BE_AN,
+  TEXT_MUST_CONTAIN,
+  TEXT_MUST_CONTAIN_EXACTLY,
+  V_CODE_INVALID_HEX,
+  V_CODE_INVALID_MULTIHASH,
+  V_CODE_INVALID_OBJECT,
+  V_CODE_INVALID_STRING,
+  V_CODE_VALUE_OUT_OF_RANGE,
+  asByte,
+  asNonNegativeInteger,
+  assertPlainObject,
+  fail,
+  normalizeAccessSetHints,
+  normalizeByteArray,
+  normalizeJsonValue,
+  normalizeOptionalExactBase64String,
+  normalizeOptionalHash,
+  selectEqualManifestAlias,
+  validateManifestDynamicAccessHintStateMaps,
+);
 
 function normalizeJsonPayload(value, name) {
   if (value === null || value === undefined) {
@@ -3251,7 +2495,7 @@ function normalizeGovernanceBallotDirection(value, name) {
   }
   fail(
     V_CODE_INVALID_STRING,
-    `${name} must be exactly Aye, Nay, or Abstain`,
+    `${name}${TEXT_MUST_BE_EXACTLY}Aye, Nay, or Abstain`,
     name,
   );
 }
@@ -3263,7 +2507,7 @@ function normalizeDirection(value, name) {
   if (typeof value === "number") {
     const byte = asByte(value, name);
     if (byte > 2) {
-      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must be between 0 and 2`, name);
+      fail(V_CODE_VALUE_OUT_OF_RANGE, `${name}${TEXT_MUST_BE_BETWEEN_0_AND}2`, name);
     }
     return byte;
   }
@@ -3279,7 +2523,7 @@ function normalizeDirection(value, name) {
   }
   fail(
     V_CODE_INVALID_STRING,
-    `${name} must be 0, 1, 2 or a recognized direction string`,
+    `${name}${TEXT_MUST_BE}0, 1, 2 or a recognized direction string`,
     name,
   );
 }
@@ -3288,7 +2532,7 @@ function normalizeSorafsReplicationIdentifier(value, name) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
     fail(
       V_CODE_INVALID_HEX,
-      `${name} must contain exactly 64 lowercase hexadecimal characters`,
+      `${name}${TEXT_MUST_CONTAIN_EXACTLY}64 lowercase hexadecimal characters`,
       name,
     );
   }
@@ -3306,7 +2550,7 @@ function normalizeSorafsProviderOwner(value, name) {
   if (typeof value !== "string" || value.trim() !== value) {
     fail(
       V_CODE_INVALID_ACCOUNT_ID,
-      `${name} must be an exact canonical I105 account id`,
+      `${name}${TEXT_MUST_BE_AN}exact canonical I105 account id`,
       name,
     );
   }
@@ -3314,7 +2558,7 @@ function normalizeSorafsProviderOwner(value, name) {
   if (normalized !== value) {
     fail(
       V_CODE_INVALID_ACCOUNT_ID,
-      `${name} must be an exact canonical I105 account id`,
+      `${name}${TEXT_MUST_BE_AN}exact canonical I105 account id`,
       name,
     );
   }
@@ -3334,7 +2578,7 @@ function normalizeProviderIngestCompletionSignerPolicy(value, name) {
     if (predecessorDigest !== null) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${name}.predecessorDigest must be null at revision 1`,
+        `${name}.predecessorDigest${TEXT_MUST_BE}null at revision 1`,
         `${name}.predecessorDigest`,
       );
     }
@@ -3440,34 +2684,34 @@ export function buildIssueReplicationOrderInstruction(options) {
   );
   const issuedEpoch = asNonNegativeInteger(
     source.issuedEpoch,
-    "issueReplicationOrder.issuedEpoch",
+    (TEXT_ISSUE_REPLICATION_ORDER + "issuedEpoch"),
   );
   const deadlineEpoch = asNonNegativeInteger(
     source.deadlineEpoch,
-    "issueReplicationOrder.deadlineEpoch",
+    (TEXT_ISSUE_REPLICATION_ORDER + "deadlineEpoch"),
   );
   if (deadlineEpoch <= issuedEpoch) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      "issueReplicationOrder.deadlineEpoch must be greater than issuedEpoch",
-      "issueReplicationOrder.deadlineEpoch",
+      (TEXT_ISSUE_REPLICATION_ORDER + "deadlineEpoch" + TEXT_MUST_BE + "greater than issuedEpoch"),
+      (TEXT_ISSUE_REPLICATION_ORDER + "deadlineEpoch"),
     );
   }
   const orderId = normalizeSorafsReplicationIdentifier(
     source.orderId,
-    "issueReplicationOrder.orderId",
+    (TEXT_ISSUE_REPLICATION_ORDER + "orderId"),
   );
   const { canonical: orderPayload, decoded: orderPayloadBytes } =
     normalizeSorafsReplicationPayload(
       source.orderPayload,
-      "issueReplicationOrder.orderPayload",
+      (TEXT_ISSUE_REPLICATION_ORDER + "orderPayload"),
     );
   validateSorafsReplicationOrderPayloadV1(orderPayloadBytes, orderId);
   const musubiArchive = source.musubiArchiveId == null
     ? null
     : normalizeSorafsReplicationIdentifier(
       source.musubiArchiveId,
-      "issueReplicationOrder.musubiArchiveId",
+      (TEXT_ISSUE_REPLICATION_ORDER + "musubiArchiveId"),
     );
   return {
     IssueReplicationOrder: {
@@ -3508,27 +2752,27 @@ export function buildCompleteReplicationOrderInstruction(options) {
     CompleteReplicationOrder: {
       order_id: normalizeSorafsReplicationIdentifier(
         source.orderId,
-        "completeReplicationOrder.orderId",
+        (TEXT_COMPLETE_REPLICATION_ORDER + "orderId"),
       ),
       provider_id: normalizeSorafsReplicationIdentifier(
         source.providerId,
-        "completeReplicationOrder.providerId",
+        (TEXT_COMPLETE_REPLICATION_ORDER + "providerId"),
       ),
       completion_epoch: asNonNegativeInteger(
         source.completionEpoch,
-        "completeReplicationOrder.completionEpoch",
+        (TEXT_COMPLETE_REPLICATION_ORDER + "completionEpoch"),
       ),
       expected_authority: normalizeProviderIngestCompletionAuthority(
         source.expectedAuthority,
-        "completeReplicationOrder.expectedAuthority",
+        (TEXT_COMPLETE_REPLICATION_ORDER + "expectedAuthority"),
       ),
       expected_assignment_revision: asPositiveInteger(
         source.expectedAssignmentRevision,
-        "completeReplicationOrder.expectedAssignmentRevision",
+        (TEXT_COMPLETE_REPLICATION_ORDER + "expectedAssignmentRevision"),
       ),
       finalized_anchor: normalizeProviderIngestFinalizedAnchor(
         source.finalizedAnchor,
-        "completeReplicationOrder.finalizedAnchor",
+        (TEXT_COMPLETE_REPLICATION_ORDER + "finalizedAnchor"),
       ),
     },
   };
@@ -3598,7 +2842,7 @@ function normalizeAssetTransferAvailability(value, name) {
   if (value !== "Enabled" && value !== "Disabled") {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must be exactly "Enabled" or "Disabled"`,
+      `${name}${TEXT_MUST_BE_EXACTLY}"Enabled" or "Disabled"`,
       name,
     );
   }
@@ -3610,7 +2854,7 @@ function normalizeAssetTransferAvailabilityReason(value, name) {
   if (/[\u0000-\u001f\u007f-\u009f]/u.test(reason)) {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must not contain control characters`,
+      `${name}${TEXT_MUST_NOT_CONTAIN}control characters`,
       name,
     );
   }
@@ -3652,8 +2896,8 @@ export function buildSetAssetTransferAvailabilityInstruction(options) {
   assertAllowedFields(
     source,
     new Set([
-      "accountId",
-      "assetDefinitionId",
+      TEXT_ACCOUNT_ID,
+      TEXT_ASSET_DEFINITION_ID,
       "expectedRevision",
       "incoming",
       "outgoing",
@@ -3663,40 +2907,40 @@ export function buildSetAssetTransferAvailabilityInstruction(options) {
   );
   const accountLiteral = assertExactNonBlankString(
     source.accountId,
-    "setAssetTransferAvailability.accountId",
+    (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ACCOUNT_ID),
   );
   const assetDefinitionLiteral = assertExactNonBlankString(
     source.assetDefinitionId,
-    "setAssetTransferAvailability.assetDefinitionId",
+    (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ASSET_DEFINITION_ID_2),
   );
   const reason =
     source.reason === undefined || source.reason === null
       ? null
       : normalizeAssetTransferAvailabilityReason(
           source.reason,
-          "setAssetTransferAvailability.reason",
+          (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "reason"),
         );
   return {
     SetAssetTransferAvailability: {
       account_id: ensureCanonicalAccountId(
         accountLiteral,
-        "setAssetTransferAvailability.accountId",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ACCOUNT_ID),
       ),
       asset_definition_id: normalizeAssetDefinitionId(
         assetDefinitionLiteral,
-        "setAssetTransferAvailability.assetDefinitionId",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ASSET_DEFINITION_ID_2),
       ),
       expected_revision: normalizeCanonicalU64(
         source.expectedRevision,
-        "setAssetTransferAvailability.expectedRevision",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "expectedRevision"),
       ),
       incoming: normalizeAssetTransferAvailability(
         source.incoming,
-        "setAssetTransferAvailability.incoming",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "incoming"),
       ),
       outgoing: normalizeAssetTransferAvailability(
         source.outgoing,
-        "setAssetTransferAvailability.outgoing",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "outgoing"),
       ),
       reason,
     },
@@ -3717,33 +2961,33 @@ export function buildSetAssetTransferBlacklistInstruction(options) {
   const source = assertPlainObject(options, "setAssetTransferBlacklist");
   assertAllowedFields(
     source,
-    new Set(["accountId", "assetDefinitionId", "blacklisted"]),
+    new Set([TEXT_ACCOUNT_ID, TEXT_ASSET_DEFINITION_ID, "blacklisted"]),
     "setAssetTransferBlacklist",
   );
   const accountLiteral = assertExactNonBlankString(
     source.accountId,
-    "setAssetTransferBlacklist.accountId",
+    (TEXT_SET_ASSET_TRANSFER_BLACKLIST + TEXT_ACCOUNT_ID),
   );
   const assetDefinitionLiteral = assertExactNonBlankString(
     source.assetDefinitionId,
-    "setAssetTransferBlacklist.assetDefinitionId",
+    (TEXT_SET_ASSET_TRANSFER_BLACKLIST + TEXT_ASSET_DEFINITION_ID_2),
   );
   if (typeof source.blacklisted !== "boolean") {
     fail(
       V_CODE_INVALID_OBJECT,
-      "setAssetTransferBlacklist.blacklisted must be a boolean",
-      "setAssetTransferBlacklist.blacklisted",
+      (TEXT_SET_ASSET_TRANSFER_BLACKLIST + "blacklisted" + TEXT_MUST_BE + "a boolean"),
+      (TEXT_SET_ASSET_TRANSFER_BLACKLIST + "blacklisted"),
     );
   }
   return {
     SetAssetTransferBlacklist: {
       account_id: ensureCanonicalAccountId(
         accountLiteral,
-        "setAssetTransferBlacklist.accountId",
+        (TEXT_SET_ASSET_TRANSFER_BLACKLIST + TEXT_ACCOUNT_ID),
       ),
       asset_definition_id: normalizeAssetDefinitionId(
         assetDefinitionLiteral,
-        "setAssetTransferBlacklist.assetDefinitionId",
+        (TEXT_SET_ASSET_TRANSFER_BLACKLIST + TEXT_ASSET_DEFINITION_ID_2),
       ),
       blacklisted: source.blacklisted,
     },
@@ -3763,7 +3007,7 @@ function normalizeAssetTransferControlWindow(value, name) {
   ) {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must be exactly "DAY", "WEEK", or "MONTH"`,
+      `${name}${TEXT_MUST_BE_EXACTLY}"DAY", "WEEK", or "MONTH"`,
       name,
     );
   }
@@ -3797,36 +3041,36 @@ export function buildSetAssetTransferControlInstruction(options) {
   const source = assertPlainObject(options, "setAssetTransferControl");
   assertAllowedFields(
     source,
-    new Set(["accountId", "assetDefinitionId", "limits"]),
+    new Set([TEXT_ACCOUNT_ID, TEXT_ASSET_DEFINITION_ID, "limits"]),
     "setAssetTransferControl",
   );
   const accountLiteral = assertExactNonBlankString(
     source.accountId,
-    "setAssetTransferControl.accountId",
+    (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ACCOUNT_ID),
   );
   const assetDefinitionLiteral = assertExactNonBlankString(
     source.assetDefinitionId,
-    "setAssetTransferControl.assetDefinitionId",
+    (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ASSET_DEFINITION_ID_2),
   );
   if (!Array.isArray(source.limits)) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "setAssetTransferControl.limits must be an array",
-      "setAssetTransferControl.limits",
+      (TEXT_SET_ASSET_TRANSFER_CONTROL + "limits" + TEXT_MUST_BE + "an array"),
+      (TEXT_SET_ASSET_TRANSFER_CONTROL + "limits"),
     );
   }
   for (let index = 0; index < source.limits.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(source.limits, index)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        "setAssetTransferControl.limits must not contain holes",
-        "setAssetTransferControl.limits",
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + "limits" + TEXT_MUST_NOT_CONTAIN + "holes"),
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + "limits"),
       );
     }
   }
   const windows = new Set();
   const limits = source.limits.map((limit, index) => {
-    const name = `setAssetTransferControl.limits[${index}]`;
+    const name = `${TEXT_SET_ASSET_TRANSFER_CONTROL}limits[${index}]`;
     const item = assertPlainObject(limit, name);
     assertAllowedFields(item, new Set(["window", "capAmount"]), name);
     if (!Object.prototype.hasOwnProperty.call(item, "capAmount")) {
@@ -3864,11 +3108,11 @@ export function buildSetAssetTransferControlInstruction(options) {
     SetAssetTransferControl: {
       account_id: ensureCanonicalAccountId(
         accountLiteral,
-        "setAssetTransferControl.accountId",
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ACCOUNT_ID),
       ),
       asset_definition_id: normalizeAssetDefinitionId(
         assetDefinitionLiteral,
-        "setAssetTransferControl.assetDefinitionId",
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ASSET_DEFINITION_ID_2),
       ),
       limits: limits.map(({ value }) => value),
     },
@@ -3976,7 +3220,7 @@ export function buildTransferAssetInstruction({
   );
   const destination = normalizeAccountId(
     destinationAccountId,
-    "destinationAccountId",
+    TEXT_DESTINATION_ACCOUNT_ID,
   );
   const object = asQuantity(quantity, "quantity");
   return {
@@ -4000,11 +3244,11 @@ export function buildTransferDomainInstruction({
   domainId,
   destinationAccountId,
 }) {
-  const source = normalizeAccountId(sourceAccountId, "sourceAccountId");
+  const source = normalizeAccountId(sourceAccountId, TEXT_SOURCE_ACCOUNT_ID);
   const object = assertString(domainId, "domainId");
   const destination = normalizeAccountId(
     destinationAccountId,
-    "destinationAccountId",
+    TEXT_DESTINATION_ACCOUNT_ID,
   );
   return {
     Transfer: {
@@ -4027,11 +3271,11 @@ export function buildTransferAssetDefinitionInstruction({
   assetDefinitionId,
   destinationAccountId,
 }) {
-  const source = normalizeAccountId(sourceAccountId, "sourceAccountId");
-  const object = assertString(assetDefinitionId, "assetDefinitionId");
+  const source = normalizeAccountId(sourceAccountId, TEXT_SOURCE_ACCOUNT_ID);
+  const object = assertString(assetDefinitionId, TEXT_ASSET_DEFINITION_ID);
   const destination = normalizeAccountId(
     destinationAccountId,
-    "destinationAccountId",
+    TEXT_DESTINATION_ACCOUNT_ID,
   );
   return {
     Transfer: {
@@ -4054,11 +3298,11 @@ export function buildTransferNftInstruction({
   nftId,
   destinationAccountId,
 }) {
-  const source = normalizeAccountId(sourceAccountId, "sourceAccountId");
+  const source = normalizeAccountId(sourceAccountId, TEXT_SOURCE_ACCOUNT_ID);
   const object = assertString(nftId, "nftId");
   const destination = normalizeAccountId(
     destinationAccountId,
-    "destinationAccountId",
+    TEXT_DESTINATION_ACCOUNT_ID,
   );
   return {
     Transfer: {
@@ -4098,10 +3342,10 @@ export function buildTransferRwaInstruction({
 }) {
   return {
     TransferRwa: {
-      source: normalizeAccountId(sourceAccountId, "sourceAccountId"),
+      source: normalizeAccountId(sourceAccountId, TEXT_SOURCE_ACCOUNT_ID),
       rwa: normalizeRwaId(rwaId, "rwaId"),
       quantity: asQuantity(quantity, "quantity"),
-      destination: normalizeAccountId(destinationAccountId, "destinationAccountId"),
+      destination: normalizeAccountId(destinationAccountId, TEXT_DESTINATION_ACCOUNT_ID),
     },
   };
 }
@@ -4203,7 +3447,7 @@ export function buildForceTransferRwaInstruction({
     ForceTransferRwa: {
       rwa: normalizeRwaId(rwaId, "rwaId"),
       quantity: asQuantity(quantity, "quantity"),
-      destination: normalizeAccountId(destinationAccountId, "destinationAccountId"),
+      destination: normalizeAccountId(destinationAccountId, TEXT_DESTINATION_ACCOUNT_ID),
     },
   };
 }
@@ -4290,7 +3534,7 @@ export function buildRegisterAccountInstruction({
   if (domainId !== undefined || domain !== undefined) {
     throw new TypeError("account registration is domainless; bind account aliases separately");
   }
-  const id = normalizeAccountId(accountId, "accountId");
+  const id = normalizeAccountId(accountId, TEXT_ACCOUNT_ID);
   const normalizedMetadata = normalizeMetadata(metadata);
   return {
     Register: {
@@ -4339,7 +3583,7 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const hasSnakeOwningDomain = Object.prototype.hasOwnProperty.call(source, "owning_domain");
   if (!hasOwningDomain && !hasSnakeOwningDomain) {
     throw new TypeError(
-      "registerAssetDefinition.owningDomain is required; use null for an intentionally unowned global definition",
+      (TEXT_REGISTER_ASSET_DEFINITION + "owningDomain is required; use null for an intentionally unowned global definition"),
     );
   }
   if (
@@ -4352,19 +3596,19 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
   const rawOwningDomain = hasOwningDomain ? source.owningDomain : source.owning_domain;
   const owningDomain = rawOwningDomain === null
     ? null
-    : assertString(rawOwningDomain, "registerAssetDefinition.owningDomain");
+    : assertString(rawOwningDomain, (TEXT_REGISTER_ASSET_DEFINITION + "owningDomain"));
   const scale = source.scale === undefined || source.scale === null
     ? null
-    : asU128JsonNumber(source.scale, "registerAssetDefinition.scale");
+    : asU128JsonNumber(source.scale, (TEXT_REGISTER_ASSET_DEFINITION + "scale"));
   const description = source.description === undefined || source.description === null
     ? null
-    : assertString(source.description, "registerAssetDefinition.description");
+    : assertString(source.description, (TEXT_REGISTER_ASSET_DEFINITION + "description"));
   const alias = source.alias === undefined || source.alias === null
     ? null
-    : assertString(source.alias, "registerAssetDefinition.alias");
+    : assertString(source.alias, (TEXT_REGISTER_ASSET_DEFINITION + "alias"));
   const logo = source.logo === undefined || source.logo === null
     ? null
-    : assertString(source.logo, "registerAssetDefinition.logo");
+    : assertString(source.logo, (TEXT_REGISTER_ASSET_DEFINITION + "logo"));
   const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
     source,
     "balanceScopePolicy",
@@ -4374,7 +3618,7 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
     "balance_scope_policy",
   );
   if (!hasBalanceScopePolicy && !hasSnakeBalanceScopePolicy) {
-    throw new TypeError("registerAssetDefinition.balanceScopePolicy is required");
+    throw new TypeError((TEXT_REGISTER_ASSET_DEFINITION + "balanceScopePolicy" + TEXT_IS_REQUIRED));
   }
   if (
     hasBalanceScopePolicy &&
@@ -4385,16 +3629,16 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
   }
   const balanceScopePolicy = assertString(
     hasBalanceScopePolicy ? source.balanceScopePolicy : source.balance_scope_policy,
-    "registerAssetDefinition.balanceScopePolicy",
+    (TEXT_REGISTER_ASSET_DEFINITION + "balanceScopePolicy"),
   );
   if (balanceScopePolicy !== "Global" && balanceScopePolicy !== "DataspaceRestricted") {
     throw new TypeError(
-      "registerAssetDefinition.balanceScopePolicy must be Global or DataspaceRestricted",
+      (TEXT_REGISTER_ASSET_DEFINITION + "balanceScopePolicy" + TEXT_MUST_BE + "Global or DataspaceRestricted"),
     );
   }
   if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
     throw new TypeError(
-      "registerAssetDefinition.owningDomain is required for DataspaceRestricted balances",
+      (TEXT_REGISTER_ASSET_DEFINITION + "owningDomain is required for DataspaceRestricted balances"),
     );
   }
   return {
@@ -4402,15 +3646,15 @@ export function buildRegisterAssetDefinitionInstruction(options = {}) {
       AssetDefinition: {
         id: assertString(
           source.assetDefinitionId ?? source.asset_definition_id ?? source.id,
-          "registerAssetDefinition.assetDefinitionId",
+          (TEXT_REGISTER_ASSET_DEFINITION + TEXT_ASSET_DEFINITION_ID_2),
         ),
-        name: normalizeAssetDefinitionName(source.name, "registerAssetDefinition.name"),
+        name: normalizeAssetDefinitionName(source.name, (TEXT_REGISTER_ASSET_DEFINITION + "name")),
         description,
         alias,
         spec: { scale },
         mintable: source.mintOnce === true
           ? "Once"
-          : assertString(source.mintable ?? "Infinitely", "registerAssetDefinition.mintable"),
+          : assertString(source.mintable ?? "Infinitely", (TEXT_REGISTER_ASSET_DEFINITION + "mintable")),
         logo,
         metadata: normalizeMetadata(source.metadata),
         balance_scope_policy: balanceScopePolicy,
@@ -4429,25 +3673,25 @@ export function buildGrantAccountPermissionInstruction(options = {}) {
   const source = assertPlainObject(options, "grantAccountPermission");
   const permissionSource = source.permission === undefined || source.permission === null
     ? source
-    : assertPlainObject(source.permission, "grantAccountPermission.permission");
+    : assertPlainObject(source.permission, (TEXT_GRANT_ACCOUNT_PERMISSION + "permission"));
   return {
     Grant: {
       Permission: {
         object: {
           name: assertString(
             permissionSource.name,
-            "grantAccountPermission.permission.name",
+            (TEXT_GRANT_ACCOUNT_PERMISSION + "permission.name"),
           ),
           payload: permissionSource.payload === undefined
             ? null
             : normalizeJsonValue(
                 permissionSource.payload,
-                "grantAccountPermission.permission.payload",
+                (TEXT_GRANT_ACCOUNT_PERMISSION + "permission.payload"),
               ),
         },
         destination: normalizeAccountId(
           source.accountId ?? source.destinationAccountId ?? source.destination,
-          "grantAccountPermission.accountId",
+          (TEXT_GRANT_ACCOUNT_PERMISSION + TEXT_ACCOUNT_ID),
         ),
       },
     },
@@ -4470,7 +3714,7 @@ export function buildSetAccountKeyValueInstruction(options = {}) {
       Account: {
         object: normalizeAccountId(
           source.accountId,
-          "setAccountKeyValue.accountId",
+          ("setAccountKeyValue." + TEXT_ACCOUNT_ID),
         ),
         key: assertString(source.key, "setAccountKeyValue.key"),
         value: normalizeJsonValue(source.value, "setAccountKeyValue.value"),
@@ -4491,7 +3735,7 @@ export function buildSetAssetDefinitionAliasInstruction(options = {}) {
     SetAssetDefinitionAlias: {
       asset_definition_id: assertString(
         source.assetDefinitionId ?? source.asset_definition_id,
-        "setAssetDefinitionAlias.assetDefinitionId",
+        ("setAssetDefinitionAlias." + TEXT_ASSET_DEFINITION_ID_2),
       ),
       alias: source.alias === undefined || source.alias === null
         ? null
@@ -4598,7 +3842,7 @@ export function buildMultisigTriggerArgs(preset, input = {}) {
   }
   fail(
     V_CODE_INVALID_STRING,
-    'preset must be either "lifecycle" or "lookup"',
+    ("preset" + TEXT_MUST_BE + "either \"lifecycle\" or \"lookup\""),
     "preset",
   );
 }
@@ -4611,7 +3855,7 @@ export function buildMultisigTriggerArgs(preset, input = {}) {
  */
 export function isMultisigSignerAuthorized(spec, signerAccountId) {
   const normalizedSpec = normalizeMultisigSpecPayload(spec, "spec");
-  const normalizedSigner = normalizeAccountId(signerAccountId, "signerAccountId");
+  const normalizedSigner = normalizeAccountId(signerAccountId, TEXT_SIGNER_ACCOUNT_ID);
   return Object.prototype.hasOwnProperty.call(
     normalizedSpec.signatories,
     normalizedSigner,
@@ -4646,7 +3890,7 @@ export function buildMultisigExecuteTriggerNorito(options) {
  * @returns {{Custom: {payload: {Register: {account: string, spec: object}}}}}
  */
 export function buildRegisterMultisigInstruction({ accountId, spec }) {
-  const controller = normalizeAccountId(accountId, "accountId");
+  const controller = normalizeAccountId(accountId, TEXT_ACCOUNT_ID);
   const normalizedSpec = normalizeMultisigSpecPayload(spec, "spec");
   return {
     Custom: {
@@ -4671,9 +3915,9 @@ export function buildProposeMultisigInstruction({
   spec,
   transactionTtlMs,
 }) {
-  const controller = normalizeAccountId(accountId, "accountId");
+  const controller = normalizeAccountId(accountId, TEXT_ACCOUNT_ID);
   if (!Array.isArray(instructions) || instructions.length === 0) {
-    throw new TypeError("instructions must be a non-empty array");
+    throw new TypeError(("instructions" + TEXT_MUST_BE + "a non-empty array"));
   }
   const normalizedSpec = normalizeMultisigSpecPayload(spec, "spec");
 
@@ -4750,7 +3994,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
     if (!trimmed) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${context} must be a JSON instruction object or native Norito instruction payload input`,
+        `${context}${TEXT_MUST_BE_A}JSON instruction object or native Norito instruction payload input`,
         context,
       );
     }
@@ -4791,7 +4035,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
   if (payer !== "authority" && payer !== "sponsor") {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${context}.payer must be authority or sponsor`,
+      `${context}.payer${TEXT_MUST_BE}authority or sponsor`,
       `${context}.payer`,
     );
   }
@@ -4805,8 +4049,8 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
   if (!Array.isArray(rawValue.charge_limits)) {
     fail(
       V_CODE_INVALID_OBJECT,
-      `${context}.value.charge_limits must be an array`,
-      `${context}.value.charge_limits`,
+      `${context}${TEXT_VALUE_CHARGE}limits${TEXT_MUST_BE}an array`,
+      `${context}${TEXT_VALUE_CHARGE}limits`,
     );
   }
   let previousKind = -1;
@@ -4814,11 +4058,11 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
     if (!Object.prototype.hasOwnProperty.call(rawValue.charge_limits, index)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${context}.value.charge_limits must not contain holes`,
-        `${context}.value.charge_limits[${index}]`,
+        `${context}${TEXT_VALUE_CHARGE}limits${TEXT_MUST_NOT_CONTAIN}holes`,
+        `${context}${TEXT_VALUE_CHARGE}limits[${index}]`,
       );
     }
-    const itemContext = `${context}.value.charge_limits[${index}]`;
+    const itemContext = `${context}${TEXT_VALUE_CHARGE}limits[${index}]`;
     const item = assertPlainObject(entry, itemContext);
     assertAllowedFields(
       item,
@@ -4839,15 +4083,15 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
     if (kindIndex < 0 || taggedKind.value !== null) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`,
+        `${itemContext}.kind${TEXT_MUST_BE}the canonical nexus or pipeline_gas tagged unit`,
         `${itemContext}.kind`,
       );
     }
     if (kindIndex <= previousKind) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
-        `${context}.value.charge_limits`,
+        `${context}${TEXT_VALUE_CHARGE}limits${TEXT_MUST_BE}unique and ordered nexus before pipeline_gas`,
+        `${context}${TEXT_VALUE_CHARGE}limits`,
       );
     }
     previousKind = kindIndex;
@@ -4855,7 +4099,7 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
     if (NumericV1.decodeQuantityJson(maxAmount).mantissa <= 0n) {
       fail(
         V_CODE_INVALID_NUMERIC,
-        `${itemContext}.max_amount must be greater than zero`,
+        `${itemContext}.max_amount${TEXT_MUST_BE}greater than zero`,
         `${itemContext}.max_amount`,
       );
     }
@@ -4883,32 +4127,32 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
   if (payer === "sponsor") {
     const programId = assertPlainObject(
       rawValue.program_id,
-      `${context}.value.program_id`,
+      `${context}${TEXT_VALUE_PROGRAM}id`,
     );
     assertAllowedFields(
       programId,
       new Set(["sponsor", "name"]),
-      `${context}.value.program_id`,
+      `${context}${TEXT_VALUE_PROGRAM}id`,
     );
     const sponsor = normalizeAccountId(
       programId.sponsor,
-      `${context}.value.program_id.sponsor`,
+      `${context}${TEXT_VALUE_PROGRAM}id.sponsor`,
     );
     const name = assertExactNonBlankString(
       programId.name,
-      `${context}.value.program_id.name`,
+      `${context}${TEXT_VALUE_PROGRAM}id.name`,
     );
     if (name.normalize("NFC") !== name || /[\s@#$\/]/u.test(name)) {
       fail(
         V_CODE_INVALID_STRING,
-        `${context}.value.program_id.name must be a canonical Iroha Name`,
-        `${context}.value.program_id.name`,
+        `${context}${TEXT_VALUE_PROGRAM}id.name${TEXT_MUST_BE}a canonical Iroha Name`,
+        `${context}${TEXT_VALUE_PROGRAM}id.name`,
       );
     }
     normalizedValue.program_id = { sponsor, name };
     normalizedValue.program_revision = asPositiveInteger(
       rawValue.program_revision,
-      `${context}.value.program_revision`,
+      `${context}${TEXT_VALUE_PROGRAM}revision`,
     );
   }
   return { payer, value: normalizedValue };
@@ -4920,49 +4164,49 @@ function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } 
  * @returns {object}
  */
 export function buildMultisigProposeRequest(options) {
-  const source = assertPlainObject(options, "multisigPropose");
-  rejectInlinePrivateKeyForMultisigRequest(source, "multisigPropose");
-  rejectValidationFeeSnakeCaseInputs(source, "multisigPropose");
-  rejectRetiredFeeRequestFields(source, "multisigPropose");
+  const source = assertPlainObject(options, TEXT_MULTISIG_PROPOSE_2);
+  rejectInlinePrivateKeyForMultisigRequest(source, TEXT_MULTISIG_PROPOSE_2);
+  rejectValidationFeeSnakeCaseInputs(source, TEXT_MULTISIG_PROPOSE_2);
+  rejectRetiredFeeRequestFields(source, TEXT_MULTISIG_PROPOSE_2);
   const instructions = source.instructions;
   if (!Array.isArray(instructions) || instructions.length === 0) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "multisigPropose.instructions must be a non-empty array",
-      "multisigPropose.instructions",
+      (TEXT_MULTISIG_PROPOSE + "instructions" + TEXT_MUST_BE + "a non-empty array"),
+      (TEXT_MULTISIG_PROPOSE + "instructions"),
     );
   }
   const payload = {
-    ...normalizeMultisigAccountSelectorInput(source, "multisigPropose"),
+    ...normalizeMultisigAccountSelectorInput(source, TEXT_MULTISIG_PROPOSE_2),
     signer_account_id: normalizeAccountId(
       source.signerAccountId ?? source.signer_account_id,
-      "multisigPropose.signerAccountId",
+      (TEXT_MULTISIG_PROPOSE + TEXT_SIGNER_ACCOUNT_ID),
     ),
     instructions: instructions.map((instruction, index) =>
       normalizeMultisigProposeInstructionInput(
         instruction,
-        `multisigPropose.instructions[${index}]`,
+        `${TEXT_MULTISIG_PROPOSE}instructions[${index}]`,
       ),
     ),
   };
   payload.fee_payment = normalizeFeePaymentRequest(
     source.feePayment ?? source.fee_payment,
-    "multisigPropose.feePayment",
+    (TEXT_MULTISIG_PROPOSE + "feePayment"),
   );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
-    payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, "multisigPropose.publicKeyHex");
+    payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, (TEXT_MULTISIG_PROPOSE + "publicKeyHex"));
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
     payload.signature_b64 = normalizeOptionalExactBase64String(
       signatureB64,
-      "multisigPropose.signatureB64",
+      (TEXT_MULTISIG_PROPOSE + "signatureB64"),
     );
   }
   const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
   if (creationTimeMs !== undefined && creationTimeMs !== null) {
-    payload.creation_time_ms = asNonNegativeInteger(creationTimeMs, "multisigPropose.creationTimeMs");
+    payload.creation_time_ms = asNonNegativeInteger(creationTimeMs, (TEXT_MULTISIG_PROPOSE + "creationTimeMs"));
   }
   const validationFeePolicyVersion = source.validationFeePolicyVersion;
   const validationFeePolicyHash = source.validationFeePolicyHash;
@@ -4983,60 +4227,60 @@ export function buildMultisigProposeRequest(options) {
   if (hasValidationFeePolicyVersion !== hasValidationFeePolicyHash) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "multisigPropose validation fee policy version and hash must be provided together",
-      "multisigPropose.validationFeePolicy",
+      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "policy version and hash" + TEXT_MUST_BE + "provided together"),
+      (TEXT_MULTISIG_PROPOSE + "validationFeePolicy"),
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeHijiriFeeQuoteHash) {
     fail(
       V_CODE_INVALID_OBJECT,
       "multisigPropose Hijiri fee quote hash requires policy metadata",
-      "multisigPropose.validationFeeHijiriFeeQuoteHash",
+      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH),
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeInstructionIndex) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "multisigPropose validation fee instruction index requires policy metadata",
-      "multisigPropose.validationFeeInstructionIndex",
+      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "instruction index requires policy metadata"),
+      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_INSTRUCTION_INDEX),
     );
   }
   if (!hasValidationFeePolicyVersion && hasValidationFeeTransferEntryIndex) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "multisigPropose validation fee transfer entry index requires policy metadata",
-      "multisigPropose.validationFeeTransferEntryIndex",
+      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "transfer entry index requires policy metadata"),
+      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX),
     );
   }
   if (hasValidationFeeTransferEntryIndex && !hasValidationFeeInstructionIndex) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "multisigPropose validation fee transfer entry index requires instruction index",
-      "multisigPropose.validationFeeTransferEntryIndex",
+      (TEXT_MULTISIG_PROPOSE_VALIDATION_FEE + "transfer entry index requires instruction index"),
+      (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX),
     );
   }
   if (hasValidationFeePolicyVersion) {
     payload.validation_fee_policy_version = String(
       asNonNegativeInteger(
         validationFeePolicyVersion,
-        "multisigPropose.validationFeePolicyVersion",
+        (TEXT_MULTISIG_PROPOSE + "validationFeePolicyVersion"),
       ),
     );
     payload.validation_fee_policy_hash = normalizeOptionalHexString(
       validationFeePolicyHash,
-      "multisigPropose.validationFeePolicyHash",
+      (TEXT_MULTISIG_PROPOSE + "validationFeePolicyHash"),
     );
     if (hasValidationFeeHijiriFeeQuoteHash) {
       payload.validation_fee_hijiri_fee_quote_hash = normalizeOptionalHexString(
         validationFeeHijiriFeeQuoteHash,
-        "multisigPropose.validationFeeHijiriFeeQuoteHash",
+        (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH),
       );
     }
     if (hasValidationFeeInstructionIndex) {
       payload.validation_fee_instruction_index = String(
         asNonNegativeInteger(
           validationFeeInstructionIndex,
-          "multisigPropose.validationFeeInstructionIndex",
+          (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_INSTRUCTION_INDEX),
         ),
       );
     }
@@ -5044,7 +4288,7 @@ export function buildMultisigProposeRequest(options) {
       payload.validation_fee_transfer_entry_index = String(
         asNonNegativeInteger(
           validationFeeTransferEntryIndex,
-          "multisigPropose.validationFeeTransferEntryIndex",
+          (TEXT_MULTISIG_PROPOSE + TEXT_VALIDATION_FEE_TRANSFER_ENTRY_INDEX),
         ),
       );
     }
@@ -5058,12 +4302,12 @@ export function buildMultisigProposeRequest(options) {
  * @returns {object}
  */
 export function buildMultisigContractCallProposeRequest(options) {
-  const source = assertPlainObject(options, "multisigContractCallPropose");
-  rejectInlinePrivateKeyForMultisigRequest(source, "multisigContractCallPropose");
-  rejectRetiredFeeRequestFields(source, "multisigContractCallPropose");
+  const source = assertPlainObject(options, TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2);
+  rejectInlinePrivateKeyForMultisigRequest(source, TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2);
+  rejectRetiredFeeRequestFields(source, TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2);
   const selector = normalizeMultisigAccountSelectorInput(
     source,
-    "multisigContractCallPropose",
+    TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2,
   );
   const normalized = normalizeMultisigExecuteTriggerOptions(
     {
@@ -5075,22 +4319,22 @@ export function buildMultisigContractCallProposeRequest(options) {
       multisigSpec: source.multisigSpec ?? source.spec,
       strictSignerCheck: source.strictSignerCheck,
     },
-    "multisigContractCallPropose",
+    TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2,
   );
   const payload = {
     ...selector,
     signer_account_id: normalized.signerAccountId ?? normalizeAccountId(
       source.signerAccountId,
-      "multisigContractCallPropose.signerAccountId",
+      (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + TEXT_SIGNER_ACCOUNT_ID),
     ),
-    ...normalizeContractTargetSelectorInput(source, "multisigContractCallPropose"),
+    ...normalizeContractTargetSelectorInput(source, TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_2),
     entrypoint: assertString(
       source.entrypoint,
-      "multisigContractCallPropose.entrypoint",
+      (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "entrypoint"),
     ),
     payload:
       source.payload !== undefined
-        ? normalizeJsonValue(source.payload, "multisigContractCallPropose.payload")
+        ? normalizeJsonValue(source.payload, (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "payload"))
         : {
             trigger: normalized.trigger,
             args: normalized.args,
@@ -5099,28 +4343,28 @@ export function buildMultisigContractCallProposeRequest(options) {
 
   payload.fee_payment = normalizeFeePaymentRequest(
     source.feePayment ?? source.fee_payment,
-    "multisigContractCallPropose.feePayment",
+    (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "feePayment"),
     { requireGasLimit: true },
   );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeOptionalHexString(
       publicKeyHex,
-      "multisigContractCallPropose.publicKeyHex",
+      (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "publicKeyHex"),
     );
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
     payload.signature_b64 = normalizeOptionalExactBase64String(
       signatureB64,
-      "multisigContractCallPropose.signatureB64",
+      (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "signatureB64"),
     );
   }
   const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
   if (creationTimeMs !== undefined && creationTimeMs !== null) {
     payload.creation_time_ms = asNonNegativeInteger(
       creationTimeMs,
-      "multisigContractCallPropose.creationTimeMs",
+      (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE + "creationTimeMs"),
     );
   }
   return payload;
@@ -5142,7 +4386,7 @@ function normalizeContractTargetSelectorInput(source, context) {
     return {
       contract_address: assertString(
         contractAddress,
-        `${context}.contractAddress`,
+        `${context}.${TEXT_CONTRACT_ADDRESS}`,
       ),
     };
   }
@@ -5163,7 +4407,7 @@ function normalizeGovernanceContractAddress(value, name) {
 function normalizeGovernanceManifestProvenance(value, name) {
   const source = assertPlainObject(value, name);
   assertExactFields(source, ["signer", "signature"], name);
-  return normalizeManifestProvenance(source, name);
+  return (0, contractManifestNormalizers[1])(source, name);
 }
 
 function normalizeGovernanceProof(value, name) {
@@ -5179,65 +4423,65 @@ function normalizeGovernanceProof(value, name) {
  * @returns {object}
  */
 export function buildMultisigContractCallApproveRequest(options) {
-  const source = assertPlainObject(options, "multisigContractCallApprove");
-  rejectInlinePrivateKeyForMultisigRequest(source, "multisigContractCallApprove");
-  rejectRetiredFeeRequestFields(source, "multisigContractCallApprove");
+  const source = assertPlainObject(options, TEXT_MULTISIG_CONTRACT_CALL_APPROVE_2);
+  rejectInlinePrivateKeyForMultisigRequest(source, TEXT_MULTISIG_CONTRACT_CALL_APPROVE_2);
+  rejectRetiredFeeRequestFields(source, TEXT_MULTISIG_CONTRACT_CALL_APPROVE_2);
   const selector = normalizeMultisigAccountSelectorInput(
     source,
-    "multisigContractCallApprove",
+    TEXT_MULTISIG_CONTRACT_CALL_APPROVE_2,
   );
   const payload = {
     ...selector,
     signer_account_id: normalizeAccountId(
       source.signerAccountId ?? source.signer_account_id,
-      "multisigContractCallApprove.signerAccountId",
+      (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + TEXT_SIGNER_ACCOUNT_ID),
     ),
   };
   const proposalId = source.proposalId ?? source.proposal_id;
   if (proposalId !== undefined && proposalId !== null) {
     payload.proposal_id = assertString(
       proposalId,
-      "multisigContractCallApprove.proposalId",
+      (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "proposalId"),
     );
   }
   const instructionsHash = source.instructionsHash ?? source.instructions_hash;
   if (instructionsHash !== undefined && instructionsHash !== null) {
     payload.instructions_hash = normalizeOptionalHexString(
       instructionsHash,
-      "multisigContractCallApprove.instructionsHash",
+      (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "instructionsHash"),
     );
   }
   if (!payload.proposal_id && !payload.instructions_hash) {
     fail(
       V_CODE_INVALID_OBJECT,
       "multisigContractCallApprove requires proposalId or instructionsHash",
-      "multisigContractCallApprove",
+      TEXT_MULTISIG_CONTRACT_CALL_APPROVE_2,
     );
   }
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeOptionalHexString(
       publicKeyHex,
-      "multisigContractCallApprove.publicKeyHex",
+      (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "publicKeyHex"),
     );
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
     payload.signature_b64 = normalizeOptionalExactBase64String(
       signatureB64,
-      "multisigContractCallApprove.signatureB64",
+      (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "signatureB64"),
     );
   }
   const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
   if (creationTimeMs !== undefined && creationTimeMs !== null) {
     payload.creation_time_ms = asNonNegativeInteger(
       creationTimeMs,
-      "multisigContractCallApprove.creationTimeMs",
+      (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "creationTimeMs"),
     );
   }
   payload.fee_payment = normalizeFeePaymentRequest(
     source.feePayment ?? source.fee_payment,
-    "multisigContractCallApprove.feePayment",
+    (TEXT_MULTISIG_CONTRACT_CALL_APPROVE + "feePayment"),
   );
   return payload;
 }
@@ -5374,25 +4618,25 @@ export function buildReportKaigiRelayHealthInstruction(options) {
  * @returns {{ProposeDeployContract: object}}
  */
 export function buildProposeDeployContractInstruction(options) {
-  const source = assertPlainObject(options, "proposeDeployContract");
-  rejectGovernancePrivateKeyFieldsDeep(source, "proposeDeployContract");
+  const source = assertPlainObject(options, TEXT_PROPOSE_DEPLOY_CONTRACT);
+  rejectGovernancePrivateKeyFieldsDeep(source, TEXT_PROPOSE_DEPLOY_CONTRACT);
   assertAllowedFields(
     source,
     new Set([
-      "contractAddress",
+      TEXT_CONTRACT_ADDRESS,
       "codeHash",
       "abiHash",
       "abiVersion",
       "manifestProvenance",
     ]),
-    "proposeDeployContract",
+    TEXT_PROPOSE_DEPLOY_CONTRACT,
   );
-  for (const field of ["contractAddress", "codeHash", "abiHash"]) {
+  for (const field of [TEXT_CONTRACT_ADDRESS, "codeHash", "abiHash"]) {
     if (!Object.prototype.hasOwnProperty.call(source, field)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `proposeDeployContract.${field} is required`,
-        `proposeDeployContract.${field}`,
+        `${TEXT_PROPOSE_DEPLOY_CONTRACT_2}${field}${TEXT_IS_REQUIRED}`,
+        `${TEXT_PROPOSE_DEPLOY_CONTRACT_2}${field}`,
       );
     }
   }
@@ -5402,14 +4646,14 @@ export function buildProposeDeployContractInstruction(options) {
   if (abiVersion !== 1) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      "abiVersion must be exactly 1",
+      ("abiVersion" + TEXT_MUST_BE + "exactly 1"),
       "abiVersion",
     );
   }
   const payload = {
     contract_address: normalizeGovernanceContractAddress(
       source.contractAddress,
-      "proposeDeployContract.contractAddress",
+      (TEXT_PROPOSE_DEPLOY_CONTRACT_2 + TEXT_CONTRACT_ADDRESS),
     ),
     code_hash: normalizeGovernanceHex32(source.codeHash, "codeHash"),
     abi_hash: normalizeGovernanceHex32(source.abiHash, "abiHash"),
@@ -5434,12 +4678,12 @@ export function buildProposeDeployContractInstruction(options) {
  * @returns {{ProposeSccpRouteGovernance: object}}
  */
 export function buildProposeSccpRouteGovernanceInstruction(options) {
-  const source = assertPlainObject(options, "proposeSccpRouteGovernance");
-  rejectGovernancePrivateKeyFieldsDeep(source, "proposeSccpRouteGovernance");
+  const source = assertPlainObject(options, TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE);
+  rejectGovernancePrivateKeyFieldsDeep(source, TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE);
   assertAllowedFields(
     source,
     new Set(["networkId", "action"]),
-    "proposeSccpRouteGovernance",
+    TEXT_PROPOSE_SCCP_ROUTE_GOVERNANCE,
   );
   networkIdBytes(source.networkId, "proposeSccpRouteGovernance.networkId");
   return {
@@ -5469,7 +4713,7 @@ export function buildCastZkBallotInstruction(options) {
     if (!Object.prototype.hasOwnProperty.call(source, field)) {
       fail(
         V_CODE_INVALID_OBJECT,
-        `castZkBallot.${field} is required`,
+        `castZkBallot.${field}${TEXT_IS_REQUIRED}`,
         `castZkBallot.${field}`,
       );
     }
@@ -5607,14 +4851,14 @@ export function buildRegisterSmartContractCodeInstruction(options) {
   if (!options || typeof options !== "object") {
     fail(
       V_CODE_INVALID_OBJECT,
-      "buildRegisterSmartContractCodeInstruction options must be an object",
+      ("buildRegisterSmartContractCodeInstruction options" + TEXT_MUST_BE + "an object"),
     );
   }
   const manifest =
     options.manifest ??
     options.RegisterSmartContractCode?.manifest ??
     options.registerSmartContractCode?.manifest;
-  const normalized = normalizeContractManifest(manifest);
+  const normalized = (0, contractManifestNormalizers[0])(manifest);
   return {
     RegisterSmartContractCode: {
       manifest: normalized,
@@ -5631,22 +4875,22 @@ export function buildRegisterSmartContractBytesInstruction(options) {
   if (!options || typeof options !== "object") {
     fail(
       V_CODE_INVALID_OBJECT,
-      "buildRegisterSmartContractBytesInstruction options must be an object",
+      ("buildRegisterSmartContractBytesInstruction options" + TEXT_MUST_BE + "an object"),
     );
   }
-  const code = normalizeBase64(options.code, "registerSmartContractBytes.code");
+  const code = normalizeBase64(options.code, (TEXT_REGISTER_SMART_CONTRACT_BYTES + "code"));
   if (code.length === 0) {
     fail(
       V_CODE_INVALID_STRING,
-      "registerSmartContractBytes.code must be a non-empty base64 string",
-      "registerSmartContractBytes.code",
+      (TEXT_REGISTER_SMART_CONTRACT_BYTES + "code" + TEXT_MUST_BE + "a non-empty base64 string"),
+      (TEXT_REGISTER_SMART_CONTRACT_BYTES + "code"),
     );
   }
   return {
     RegisterSmartContractBytes: {
       code_hash: normalizeHash(
         options.codeHash ?? options.code_hash,
-        "registerSmartContractBytes.codeHash",
+        (TEXT_REGISTER_SMART_CONTRACT_BYTES + "codeHash"),
       ),
       code,
     },
@@ -5664,7 +4908,7 @@ function normalizeCanonicalU64(value, name) {
     if (!Number.isSafeInteger(value)) {
       fail(
         V_CODE_INVALID_NUMERIC,
-        `${name} must be a safe unsigned integer, bigint, or canonical decimal string`,
+        `${name}${TEXT_MUST_BE_A}safe ${TEXT_UNSIGNED_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING}`,
         name,
       );
     }
@@ -5674,14 +4918,14 @@ function normalizeCanonicalU64(value, name) {
   } else {
     fail(
       V_CODE_INVALID_NUMERIC,
-      `${name} must be an unsigned integer, bigint, or canonical decimal string`,
+      `${name}${TEXT_MUST_BE_AN}${TEXT_UNSIGNED_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING}`,
       name,
     );
   }
   if (normalized < 0n || normalized > U64_MAX_VALUE) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must fit in an unsigned 64-bit integer`,
+      `${name} must fit in an${TEXT_UNSIGNED_64_BIT_INTEGER}`,
       name,
     );
   }
@@ -5693,7 +4937,7 @@ function normalizeSmartContractExactString(value, name) {
   if (literal.length === 0 || literal.trim() !== literal || /[\u0000-\u001F\u007F]/u.test(literal)) {
     fail(
       V_CODE_INVALID_STRING,
-      `${name} must be a non-empty exact string without control characters`,
+      `${name}${TEXT_MUST_BE_A}non-empty exact string without control characters`,
       name,
     );
   }
@@ -5711,7 +4955,7 @@ function normalizeSmartContractChunk(value, name) {
   if (buffer.length === 0 || buffer.length > SMART_CONTRACT_CODE_CHUNK_BYTES) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      `${name} must contain 1..=${SMART_CONTRACT_CODE_CHUNK_BYTES} bytes`,
+      `${name}${TEXT_MUST_CONTAIN}1..=${SMART_CONTRACT_CODE_CHUNK_BYTES} bytes`,
       name,
     );
   }
@@ -5726,26 +4970,26 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
   const source = assertPlainObject(options, "uploadSmartContractCodeChunk");
   const totalSize = normalizeCanonicalU64(
     source.totalSize ?? source.total_size,
-    "uploadSmartContractCodeChunk.totalSize",
+    (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "totalSize"),
   );
   const chunkIndex = normalizeU32(
     source.chunkIndex ?? source.chunk_index,
-    "uploadSmartContractCodeChunk.chunkIndex",
+    (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunkIndex"),
   );
   const chunkCount = normalizePositiveU32(
     source.chunkCount ?? source.chunk_count,
-    "uploadSmartContractCodeChunk.chunkCount",
+    (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunkCount"),
   );
   if (chunkIndex >= chunkCount) {
     fail(
       V_CODE_VALUE_OUT_OF_RANGE,
-      "uploadSmartContractCodeChunk.chunkIndex must be less than chunkCount",
-      "uploadSmartContractCodeChunk.chunkIndex",
+      (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunkIndex" + TEXT_MUST_BE + "less than chunkCount"),
+      (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunkIndex"),
     );
   }
   const chunk = normalizeSmartContractChunk(
     source.chunk,
-    "uploadSmartContractCodeChunk.chunk",
+    (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunk"),
   );
   const totalSizeBigInt = BigInt(totalSize);
   const expectedChunkCount =
@@ -5754,8 +4998,8 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
   if (totalSizeBigInt === 0n || expectedChunkCount !== BigInt(chunkCount)) {
     fail(
       V_CODE_INVALID_NUMERIC,
-      "uploadSmartContractCodeChunk.chunkCount must equal ceil(totalSize / 65536)",
-      "uploadSmartContractCodeChunk.chunkCount",
+      (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + TEXT_CHUNK_COUNT_MUST_EQUAL_CEIL_TOTAL_SIZE_65536),
+      (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunkCount"),
     );
   }
   const chunkBytes = Buffer.from(chunk, "base64").length;
@@ -5766,15 +5010,15 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
   if (chunkBytes !== expectedChunkBytes) {
     fail(
       V_CODE_INVALID_NUMERIC,
-      `uploadSmartContractCodeChunk.chunk must contain exactly ${expectedChunkBytes} bytes for this descriptor`,
-      "uploadSmartContractCodeChunk.chunk",
+      `${TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK}chunk${TEXT_MUST_CONTAIN}exactly ${expectedChunkBytes} bytes for this descriptor`,
+      (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "chunk"),
     );
   }
   return {
     UploadSmartContractCodeChunk: {
       code_hash: normalizeHash(
         source.codeHash ?? source.code_hash,
-        "uploadSmartContractCodeChunk.codeHash",
+        (TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK + "codeHash"),
       ),
       total_size: totalSize,
       chunk_index: chunkIndex,
@@ -5789,11 +5033,11 @@ export function buildFinalizeSmartContractCodeUploadInstruction(options) {
   const source = assertPlainObject(options, "finalizeSmartContractCodeUpload");
   const totalSize = normalizeCanonicalU64(
     source.totalSize ?? source.total_size,
-    "finalizeSmartContractCodeUpload.totalSize",
+    (TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD + "totalSize"),
   );
   const chunkCount = normalizePositiveU32(
     source.chunkCount ?? source.chunk_count,
-    "finalizeSmartContractCodeUpload.chunkCount",
+    (TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD + "chunkCount"),
   );
   const expectedChunkCount =
     (BigInt(totalSize) + BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES) - 1n) /
@@ -5801,15 +5045,15 @@ export function buildFinalizeSmartContractCodeUploadInstruction(options) {
   if (BigInt(totalSize) === 0n || expectedChunkCount !== BigInt(chunkCount)) {
     fail(
       V_CODE_INVALID_NUMERIC,
-      "finalizeSmartContractCodeUpload.chunkCount must equal ceil(totalSize / 65536)",
-      "finalizeSmartContractCodeUpload.chunkCount",
+      (TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD + TEXT_CHUNK_COUNT_MUST_EQUAL_CEIL_TOTAL_SIZE_65536),
+      (TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD + "chunkCount"),
     );
   }
   return {
     FinalizeSmartContractCodeUpload: {
       code_hash: normalizeHash(
         source.codeHash ?? source.code_hash,
-        "finalizeSmartContractCodeUpload.codeHash",
+        (TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD + "codeHash"),
       ),
       total_size: totalSize,
       chunk_count: chunkCount,
@@ -5841,33 +5085,33 @@ export function buildCommitContractDeploymentInstruction(options) {
     CommitContractDeployment: {
       expected_deploy_nonce: normalizeCanonicalU64(
         source.expectedDeployNonce ?? source.expected_deploy_nonce,
-        "commitContractDeployment.expectedDeployNonce",
+        (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "expectedDeployNonce"),
       ),
       contract_address: normalizeSmartContractExactString(
         source.contractAddress ?? source.contract_address,
-        "commitContractDeployment.contractAddress",
+        (TEXT_COMMIT_CONTRACT_DEPLOYMENT + TEXT_CONTRACT_ADDRESS),
       ),
       code_hash: normalizeHash(
         source.codeHash ?? source.code_hash,
-        "commitContractDeployment.codeHash",
+        (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "codeHash"),
       ),
       contract_alias: normalizeSmartContractExactString(
         source.contractAlias ?? source.contract_alias,
-        "commitContractDeployment.contractAlias",
+        (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "contractAlias"),
       ),
       lease_expiry_ms:
         leaseExpiry === undefined || leaseExpiry === null
           ? null
           : normalizeCanonicalU64(
               leaseExpiry,
-              "commitContractDeployment.leaseExpiryMs",
+              (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "leaseExpiryMs"),
             ),
       expected_previous_contract_address:
         previousAddress === undefined || previousAddress === null
           ? null
           : normalizeSmartContractExactString(
               previousAddress,
-              "commitContractDeployment.expectedPreviousContractAddress",
+              (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "expectedPreviousContractAddress"),
             ),
     },
   };
@@ -5908,7 +5152,7 @@ export function buildRegisterZkAssetInstruction(options) {
   assertAllowedFields(
     source,
     new Set([
-      "assetDefinitionId",
+      TEXT_ASSET_DEFINITION_ID,
       "asset_definition_id",
       "asset",
       "definitionId",
@@ -5966,25 +5210,25 @@ export function buildScheduleConfidentialPolicyTransitionInstruction(options) {
   const conversionWindow =
     source.conversionWindow ?? source.conversion_window ?? source.window;
   const payload = {
-    asset: assertString(asset, "scheduleConfidentialPolicyTransition.asset"),
+    asset: assertString(asset, (TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "asset")),
     new_mode: normalizeConfidentialPolicyMode(
       source.newMode ?? source.mode ?? source.new_mode,
-      "scheduleConfidentialPolicyTransition.newMode",
+      (TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "newMode"),
     ),
     effective_height: asNonNegativeInteger(
       source.effectiveHeight ?? source.effective_height,
-      "scheduleConfidentialPolicyTransition.effectiveHeight",
+      (TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "effectiveHeight"),
     ),
     transition_id: normalizeHash(
       source.transitionId ?? source.transition_id,
-      "scheduleConfidentialPolicyTransition.transitionId",
+      (TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "transitionId"),
     ),
     conversion_window:
       conversionWindow === undefined || conversionWindow === null
         ? null
         : asNonNegativeInteger(
             conversionWindow,
-            "scheduleConfidentialPolicyTransition.conversionWindow",
+            (TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "conversionWindow"),
           ),
   };
   return {
@@ -6029,15 +5273,15 @@ export function buildCreateElectionInstruction(options) {
   const payload = {
     election_id: normalizeGovernanceSelectorV1(
       source.electionId ?? source.election_id,
-      "createElection.electionId",
+      (TEXT_CREATE_ELECTION + "electionId"),
     ),
-    options: asPositiveInteger(source.options, "createElection.options"),
-    eligible_root: normalizeFixedBytes(source.eligibleRoot ?? source.eligible_root, "createElection.eligibleRoot", 32),
-    start_ts: asNonNegativeInteger(source.startTs ?? source.start_ts ?? source.startTimestampMs, "createElection.startTs"),
-    end_ts: asNonNegativeInteger(source.endTs ?? source.end_ts ?? source.endTimestampMs, "createElection.endTs"),
-    vk_ballot: normalizeVerifyingKeyId(source.vkBallot ?? source.ballotVerifyingKey, "createElection.vkBallot"),
-    vk_tally: normalizeVerifyingKeyId(source.vkTally ?? source.tallyVerifyingKey, "createElection.vkTally"),
-    domain_tag: assertString(source.domainTag ?? source.domain_tag ?? "zk", "createElection.domainTag"),
+    options: asPositiveInteger(source.options, (TEXT_CREATE_ELECTION + "options")),
+    eligible_root: normalizeFixedBytes(source.eligibleRoot ?? source.eligible_root, (TEXT_CREATE_ELECTION + "eligibleRoot"), 32),
+    start_ts: asNonNegativeInteger(source.startTs ?? source.start_ts ?? source.startTimestampMs, (TEXT_CREATE_ELECTION + "startTs")),
+    end_ts: asNonNegativeInteger(source.endTs ?? source.end_ts ?? source.endTimestampMs, (TEXT_CREATE_ELECTION + "endTs")),
+    vk_ballot: normalizeVerifyingKeyId(source.vkBallot ?? source.ballotVerifyingKey, (TEXT_CREATE_ELECTION + "vkBallot")),
+    vk_tally: normalizeVerifyingKeyId(source.vkTally ?? source.tallyVerifyingKey, (TEXT_CREATE_ELECTION + "vkTally")),
+    domain_tag: assertString(source.domainTag ?? source.domain_tag ?? "zk", (TEXT_CREATE_ELECTION + "domainTag")),
   };
   return {
     zk: {
@@ -6086,7 +5330,7 @@ export function buildFinalizeElectionInstruction(options) {
   if (tallyInput.length === 0) {
     fail(
       V_CODE_INVALID_OBJECT,
-      "finalizeElection.tally must contain at least one entry",
+      ("finalizeElection.tally" + TEXT_MUST_CONTAIN + "at least one entry"),
     );
   }
   const payload = {

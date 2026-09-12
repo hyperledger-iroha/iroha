@@ -198,6 +198,8 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{Registrable, prelude::*};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::numeric::Quantity;
     use std::num::NonZeroU64;
 
@@ -292,6 +294,10 @@ mod tests {
         mint(&mut st, &offer, &seller);
         offer.clone().execute(&seller, &mut st).unwrap();
         let retained = sale(&st, &offer);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &retained,
+            "iroha_data_model::nft_market::NftSaleRecordV1",
+        );
         assert_eq!(owner(&st, &offer.nft_id), retained.custody);
         for altered in [
             NftSaleOfferV1 {

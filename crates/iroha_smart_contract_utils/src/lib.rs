@@ -87,6 +87,8 @@ register_getrandom_err_callback!();
 #[cfg(test)]
 mod tests {
     use core::{convert::TryInto, ptr};
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_smart_contract_utils::tests::Dummy")]
     #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
     #[norito(decode_from_slice)]
     struct Dummy {

@@ -20,10 +20,10 @@ use super::schema::{
     MAX_LIFECYCLE_RECORDS_PER_HEIGHT, serve_and_producer_keys_match,
 };
 use super::wal_recovery::{
-    AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
-    AuthenticatedWalVoteLifecycleRepair, DurableAuthenticatedWalVoteLifecycleRepair,
-    RecoveredDecisionFetchStoreProjectionV1, RecoveredDecisionValidateProjectionV1,
-    RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
+    AuthenticatedRecoveredWalDecisionFetchProjection,
+    AuthenticatedRecoveredWalStandaloneSignProjection, AuthenticatedWalVoteLifecycleRepair,
+    DurableAuthenticatedWalVoteLifecycleRepair, RecoveredDecisionFetchStoreProjectionV1,
+    RecoveredDecisionValidateProjectionV1, RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     RecoveredLifecycleSignedBroadcastProjectionV1,
 };
 use super::{
@@ -94,6 +94,10 @@ const NEGATIVE_FAILED: u8 = 2;
 /// key's domain-separated `(block subject, exact signed request hash)` Serve
 /// subject; the remaining fields authenticate the request, certificate
 /// authorization, and optional terminal receipt without opaque bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::CertifiedServePayloadReferenceV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct CertifiedServePayloadReferenceV1 {
@@ -201,6 +205,10 @@ impl CertifiedServePayloadReferenceV1 {
 /// still needs its authenticated proposal provenance and a certified body
 /// still needs its exact QC. Keeping the byte identity in LedgerV1 ensures a
 /// later replay-source join cannot silently substitute another local frame.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::BodyFramePayloadReferenceV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct BodyFramePayloadReferenceV1 {
@@ -236,6 +244,10 @@ impl BodyFramePayloadReferenceV1 {
 ///
 /// Certified-Serve references contain canonical Norito bytes for a small
 /// typed reference envelope. Canonical block bodies remain in the body store.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecyclePayloadReferenceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(super) struct LifecyclePayloadReferenceV1 {
@@ -434,6 +446,10 @@ impl LifecyclePayloadReferenceV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::PersistedLifecycleKeyV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLifecycleKeyV1 {
@@ -476,6 +492,10 @@ impl PersistedLifecycleKeyV1 {
         ))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::PersistedTerminalV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedTerminalV1 {
@@ -525,6 +545,10 @@ impl PersistedTerminalV1 {
     }
 }
 /// Canonical wire representation of one typed durable continuation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::PersistedDurableContinuationV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedDurableContinuationV1 {
@@ -644,6 +668,10 @@ impl PersistedDurableContinuationV1 {
     }
 }
 /// One restart-stable lifecycle record in `LifecycleLedgerV1`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecycleLedgerRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(super) struct LifecycleLedgerRecordV1 {
@@ -1037,13 +1065,85 @@ impl LifecycleLedgerRecordV1 {
         )
     }
 
+    /// Select an exact linked predecessor or an older inert terminal outcome.
+    /// This relation alone never grants execution; cold open also verifies the
+    /// Report's current QC and consumes the matching body-store rejection.
+    fn invalid_body_validate_origin<'ledger>(
+        &self,
+        context: LifecycleContext,
+        parent: &'ledger Self,
+    ) -> Option<super::replay_authority::RecoveredInvalidBodyValidateOriginV1<'ledger>> {
+        use super::replay_authority::RecoveredInvalidBodyValidateOriginV1 as Origin;
+        if self.work_class()? != LifecycleWorkClass::InvalidBodyReport {
+            return None;
+        }
+        let parent_key = parent.key()?;
+        let child_key = self.key()?;
+        let parent_stage = parent.stage()?;
+        let child_stage = self.stage()?;
+        let parent_payload = parent.durable_payload()?;
+        let child_payload = self.durable_payload()?;
+        let exact_edge = parent
+            .continuation()?
+            .successor_parts()
+            .is_some_and(|(edge, ordinal)| {
+                edge == DurableContinuationEdge::ValidateToInvalidBodyReport
+                    && ordinal == self.ordinal()
+                    && parent.ordinal() < self.ordinal()
+                    && parent.owner() == self.owner()
+                    && parent.work_class() == Some(LifecycleWorkClass::Validate)
+                    && parent.terminal() == Some(Some(TerminalOutcome::Advanced))
+                    && durable_continuation_successor_is_exact(
+                        edge,
+                        LifecycleWorkClass::Validate,
+                        parent_key,
+                        parent_stage,
+                        LifecycleWorkClass::InvalidBodyReport,
+                        child_key,
+                        child_stage,
+                    )
+                    && durable_continuation_payload_is_exact(edge, parent_payload, child_payload)
+            });
+        let origin = if exact_edge {
+            Origin::Linked(&parent.replay_authority, parent_payload)
+        } else {
+            if parent.ordinal() >= self.ordinal()
+                || parent.owner().causal_root() == self.owner().causal_root()
+                || self.owner().first_admission_ordinal() != self.ordinal()
+            {
+                return None;
+            }
+            let claim =
+                super::open::terminal_validate_no_successor_claim(context, parent).ok()??;
+            if super::replay_authority::resolved_invalid_body_report_causal_key(
+                claim.causal_root(),
+                claim.ordinal(),
+                &self.replay_authority,
+            )?
+            .as_ref()
+                != self.owner().causal_root().digest().as_bytes()
+            {
+                return None;
+            }
+            Origin::Resolved(claim)
+        };
+        self.replay_authority
+            .matches_invalid_body_validate_origin(context, origin)
+            .then_some(origin)
+    }
+
+    /// Compare the source relation without repeating QC verification during census.
+    pub(super) fn has_exact_invalid_body_validate_origin(
+        &self,
+        context: LifecycleContext,
+        parent: &Self,
+    ) -> bool {
+        self.invalid_body_validate_origin(context, parent).is_some()
+    }
+
     /// Re-authenticate one exact live output row for cold registry recovery.
-    ///
-    /// A signed Broadcast with a durable Sign predecessor is deliberately not
-    /// accepted here; recovered-WAL startup owns that family.  Invalid-body
-    /// reports must supply their unique forward terminal Validate parent, and
-    /// both the public edge and private replay-family relation are checked
-    /// before the cold output seal is minted.
+    /// Signed Broadcasts with durable Sign predecessors remain WAL-owned.
+    /// Reports require their unique linked or inert terminal Validate source.
     pub(super) fn authenticate_recovered_lifecycle_output(
         &self,
         context: LifecycleContext,
@@ -1052,44 +1152,7 @@ impl LifecycleLedgerRecordV1 {
     ) -> Option<super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1> {
         let invalid_parent_parts = match invalid_parent {
             None => None,
-            Some(parent) => {
-                let parent_key = parent.key()?;
-                let child_key = self.key()?;
-                let parent_stage = parent.stage()?;
-                let child_stage = self.stage()?;
-                let parent_payload = parent.durable_payload()?;
-                let child_payload = self.durable_payload()?;
-                let exact_edge =
-                    parent
-                        .continuation()?
-                        .successor_parts()
-                        .is_some_and(|(edge, ordinal)| {
-                            edge == DurableContinuationEdge::ValidateToInvalidBodyReport
-                                && ordinal == self.ordinal()
-                                && parent.ordinal() < self.ordinal()
-                                && parent.owner() == self.owner()
-                                && parent.work_class() == Some(LifecycleWorkClass::Validate)
-                                && parent.terminal() == Some(Some(TerminalOutcome::Advanced))
-                                && durable_continuation_successor_is_exact(
-                                    edge,
-                                    LifecycleWorkClass::Validate,
-                                    parent_key,
-                                    parent_stage,
-                                    LifecycleWorkClass::InvalidBodyReport,
-                                    child_key,
-                                    child_stage,
-                                )
-                                && durable_continuation_payload_is_exact(
-                                    edge,
-                                    parent_payload,
-                                    child_payload,
-                                )
-                        });
-                if !exact_edge {
-                    return None;
-                }
-                Some((&parent.replay_authority, parent_payload))
-            }
+            Some(parent) => Some(self.invalid_body_validate_origin(context, parent)?),
         };
         super::replay_authority::authenticate_durable_lifecycle_output(
             verified,
@@ -1250,6 +1313,16 @@ impl LifecycleLedgerRecordV1 {
         self.work_class_code = work_class_code(work_class);
         self
     }
+    /// Compare an ordinary body's execution generation without exposing its
+    /// stored replay envelope. Authentication remains owned by the body census.
+    pub(super) fn ordinary_body_is_obsolete_for_decision(
+        &self,
+        tag: crate::sumeragi::v2_core::EventTag,
+        is_decided_body: bool,
+    ) -> bool {
+        self.replay_authority
+            .ordinary_body_is_obsolete_for_decision(tag, is_decided_body)
+    }
     /// Decode the stable semantic key.
     pub(super) fn key(&self) -> Option<LifecycleKey> {
         self.key.to_schema()
@@ -1404,6 +1477,10 @@ impl LifecycleLedgerRecordV1 {
     }
 }
 /// Durable adjacent Serve-to-producer obligation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecycleProducerDebtV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(super) struct LifecycleProducerDebtV1 {
@@ -1429,18 +1506,27 @@ impl LifecycleProducerDebtV1 {
 }
 /// Closed original-Sign lineage of one durable Broadcast-plus-next-Sign pair.
 ///
-/// The phase case retains the exact Validate ordinal which introduced the
-/// historical Prepare Sign. The control case has no body-stage predecessor.
+/// A linked phase Sign retains its exact Validate ordinal. Standalone Proposal
+/// and Prepare Signs own their WAL roots independently of any body-stage row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::sumeragi) enum RecoveredLifecycleSignedBroadcastAndSignParentV1 {
     /// A Proposal Sign advanced directly to its signed Proposal Broadcast.
     ControlProposal,
+    /// An independently WAL-owned Prepare Sign advanced to its signed vote.
+    StandalonePrepare,
     /// A Validate advanced to the Prepare Sign which produced the Broadcast.
     PhasePrepare {
         /// Exact durable Validate ordinal in the historical causal owner.
         validate_ordinal: u128,
     },
+}
+impl RecoveredLifecycleSignedBroadcastAndSignParentV1 {
+    /// Classify only independent WAL roots; linked Validate phase work keeps
+    /// its separate four-row recovery authority.
+    pub(super) const fn is_standalone(self) -> bool {
+        matches!(self, Self::ControlProposal | Self::StandalonePrepare)
+    }
 }
 /// Opaque LedgerV1 classification of one committed Broadcast-plus-next-Sign pair.
 ///
@@ -1534,6 +1620,8 @@ impl RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
     }
 }
 /// Complete version-one durable lifecycle ledger.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecycleLedgerV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(in crate::sumeragi) struct LifecycleLedgerV1 {
@@ -1718,7 +1806,7 @@ impl StagedRecoveredTimeoutSupersessionSuccessorV1 {
         opened: &LifecycleLedgerV1,
         reconciled: &LifecycleLedgerV1,
         successor: &LifecycleLedgerV1,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
         control_ordinal: u128,
     ) -> bool {
         let Ok((expected, expected_ordinal, _staged_control)) =
@@ -3058,7 +3146,7 @@ impl ProductionLifecycleOwnerV1 {
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_control_startup(
         verified: VerifiedHeightContext,
-        projection: AuthenticatedRecoveredWalControlProjection,
+        projection: AuthenticatedRecoveredWalStandaloneSignProjection,
         ledger_root: &Path,
         body_store: V2BodyStore,
         config: &SumeragiV2Config,
@@ -3088,7 +3176,7 @@ impl ProductionLifecycleOwnerV1 {
         )]
         fn open_recovered_control_signed_startup(
             verified: VerifiedHeightContext,
-            projection: AuthenticatedRecoveredWalControlProjection,
+            projection: AuthenticatedRecoveredWalStandaloneSignProjection,
             ledger_store: LifecycleLedgerStoreV1,
             opened: LifecycleLedgerV1,
             broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
@@ -3111,8 +3199,7 @@ impl ProductionLifecycleOwnerV1 {
                 })?
                 .into_iter()
                 .filter(|pair| {
-                    pair.parent()
-                        == RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+                    pair.parent().is_standalone()
                         && pair.parent_ordinal() == parent_ordinal
                         && pair.broadcast_ordinal() == child_ordinal
                 });
@@ -3260,6 +3347,78 @@ impl ProductionLifecycleOwnerV1 {
                     timeout_supersession_successor: None,
                 });
             }
+            if projection.has_advanced_vote_continuation(&opened, child_ordinal) {
+                let (adapter_startup, continuation) = projection
+                    .recover_advanced_standalone_vote_continuation(
+                        &verified,
+                        &opened,
+                        parent_ordinal,
+                        child_ordinal,
+                        broadcast,
+                        adapter_startup,
+                        &body_store,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let body_pipeline = opened
+                    .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
+                    .map_err(|_| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "cold Proposal continuation body-pipeline authentication failed",
+                        )
+                    })?;
+                let (body_pipeline, adapter_startup) = body_pipeline
+                    .replay_adapter_startup(adapter_startup)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_control_continuation(
+                    opened.clone(), serve_payloads, &mut body_store, &continuation, body_pipeline,
+                ).map_err(|_| ProductionRecoveredWalControlStartupErrorV1::new(
+                    "cold Proposal continuation storage census assembly failed"))?;
+                let mut registry = LifecycleWorkRegistryHolder::empty();
+                let mut installed = registry
+                    .registry_mut()
+                    .install_recovered_control_continuation(
+                        &verified,
+                        &ledger_store,
+                        &opened,
+                        continuation,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                installed
+                    .install_body_pipeline(body_pipeline)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let authority = authority::production_authority(
+                    &verified,
+                    config,
+                    reply_route_source_capacity,
+                )
+                .ok_or_else(|| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "verified height cannot derive cold Proposal continuation authority",
+                    )
+                })?;
+                let (coordinator, mut recovery) = installed
+                    .open_with_exact_store_authority(
+                        authority,
+                        ledger_store,
+                        &mut payload_store,
+                        recovery,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                return Ok(ProductionLifecycleOwnerV1 {
+                    verified,
+                    coordinator,
+                    registry,
+                    recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
+                    payload_store,
+                    serve_payloads: recovery.into_serve_payloads(),
+                    body_store: Some(body_store),
+                    body_store_identity: None,
+                    kura_binding: None,
+                    apply_service: None,
+                    adapter_startup: Some(adapter_startup),
+                    timeout_supersession_successor: None,
+                });
+            }
             let adapter_authority = projection
                 .project_cold_adapter_authority(&verified, &broadcast)
                 .ok_or_else(|| {
@@ -3383,7 +3542,7 @@ impl ProductionLifecycleOwnerV1 {
         )]
         fn open_recovered_control_sign_startup(
             verified: VerifiedHeightContext,
-            projection: AuthenticatedRecoveredWalControlProjection,
+            projection: AuthenticatedRecoveredWalStandaloneSignProjection,
             ledger_store: LifecycleLedgerStoreV1,
             opened: LifecycleLedgerV1,
             mut body_store: V2BodyStore,
@@ -3534,7 +3693,7 @@ impl ProductionLifecycleOwnerV1 {
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(
         verified: VerifiedHeightContext,
-        projection: AuthenticatedRecoveredWalDecisionFetchProjection,
+        mut projection: AuthenticatedRecoveredWalDecisionFetchProjection,
         ledger_root: &Path,
         mut body_store: V2BodyStore,
         config: &SumeragiV2Config,
@@ -3570,16 +3729,86 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Fetch LedgerV1 open failed",
                 )
             })?;
-        let (repaired, ordinal, changed) = match opened
+        let adapter_startup = adapter_startup
+            .retain_recovered_decision_apply_source(&verified, &mut projection)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (reconciled, retired_body) = opened
+            .reconcile_recovered_decision_body_generation(&verified, &projection, &body_store)
+            .map_err(|_| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision obsolete body generation could not be retired",
+                )
+            })?;
+        let publish_retirement = || {
+            if retired_body {
+                ledger_store
+                    .persist_exact_successor(&opened, &reconciled)
+                    .map_err(|_| {
+                        ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                            "recovered Decision body retirement publication failed",
+                        )
+                    })?;
+                if !ledger_store.load().is_ok_and(|loaded| loaded == reconciled) {
+                    return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                        "recovered Decision body retirement changed after publication",
+                    ));
+                }
+            }
+            Ok(())
+        };
+        let retained = reconciled
+            .records()
+            .iter()
+            .filter(|record| {
+                projection.names_retained_body_record(record)
+                    && (record.replay_authority.is_local_body_origin()
+                        || record.replay_authority.is_remote_proposal_origin()
+                        || record.replay_authority.is_certified_body_origin())
+            })
+            .count();
+        if retained != 0 {
+            if retained != 1 {
+                return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision has multiple retained body stage owners",
+                ));
+            }
+            publish_retirement()?;
+            let storage = reconciled
+                .into_durable_certified_body_pipeline_storage_recovery_cut(
+                    verified,
+                    ledger_store,
+                    body_store,
+                )
+                .map_err(|_| {
+                    ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                        "recovered Decision retained body custody authentication failed",
+                    )
+                })?;
+            return storage
+                .open_production_owner(
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    adapter_startup,
+                )
+                .map_err(|_| {
+                    ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                        "recovered Decision retained body owner startup failed",
+                    )
+                });
+        }
+        let (repaired, ordinal, changed) = match reconciled
             .stage_authenticated_wal_decision_fetch(&projection)
         {
-            Ok(staged) => staged,
-            Err(_) if opened.has_recovered_decision_live_validate_parent(&projection) => {
+            Ok((repaired, ordinal, changed)) => (repaired, ordinal, changed || retired_body),
+            Err(_) if reconciled.has_recovered_decision_live_validate_parent(&projection) => {
+                publish_retirement()?;
                 return Self::open_recovered_decision_validate_startup(
                     verified,
                     projection,
                     ledger_store,
-                    opened,
+                    reconciled,
                     body_store,
                     config,
                     reply_route_source_capacity,
@@ -3588,12 +3817,13 @@ impl ProductionLifecycleOwnerV1 {
                     adapter_startup,
                 );
             }
-            Err(_) if opened.has_exact_recovered_decision_fetch_store_parent(&projection) => {
+            Err(_) if reconciled.has_exact_recovered_decision_fetch_store_parent(&projection) => {
+                publish_retirement()?;
                 return Self::open_recovered_decision_store_startup(
                     verified,
                     projection,
                     ledger_store,
-                    opened,
+                    reconciled,
                     body_store,
                     config,
                     reply_route_source_capacity,
@@ -3938,7 +4168,7 @@ impl ProductionLifecycleOwnerV1 {
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_decision_apply_startup(
         verified: VerifiedHeightContext,
-        projection: Box<crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1>,
+        mut projection: Box<crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1>,
         effects: Vec<crate::sumeragi::v2::AdapterEffect>,
         ledger_root: &Path,
         mut body_store: V2BodyStore,
@@ -3959,6 +4189,9 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Apply LedgerV1 open failed",
                 )
             })?;
+        projection
+            .bind_retained_body_lineage(&verified, &predecessor)
+            .map_err(ProductionRecoveredDecisionApplyStartupErrorV1::new)?;
         let startup_shape = predecessor
             .classify_recovered_decision_apply_startup(projection.as_ref())
             .map_err(|_error| {
@@ -3972,18 +4205,19 @@ impl ProductionLifecycleOwnerV1 {
                     .records
                     .iter()
                     .any(|record| projection.fetch().names_record(record));
-                let staged_predecessor = if fetch_is_present {
-                    predecessor.clone()
-                } else {
-                    predecessor
-                        .stage_authenticated_wal_decision_fetch(projection.fetch())
-                        .map_err(|_error| {
-                            ProductionRecoveredDecisionApplyStartupErrorV1::new(
-                                "recovered Decision Apply Fetch parent is not exact",
-                            )
-                        })?
-                        .0
-                };
+                let staged_predecessor =
+                    if fetch_is_present || projection.retained_body_lineage().is_some() {
+                        predecessor.clone()
+                    } else {
+                        predecessor
+                            .stage_authenticated_wal_decision_fetch(projection.fetch())
+                            .map_err(|_error| {
+                                ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                                    "recovered Decision Apply Fetch parent is not exact",
+                                )
+                            })?
+                            .0
+                    };
                 staged_predecessor
                     .stage_recovered_decision_apply(projection.as_ref())
                     .map_err(|_error| {
@@ -4384,6 +4618,7 @@ pub(super) enum RecoveredDecisionApplyStartupShapeV1 {
 trait RecoveredDecisionReleasedApplyStageProjectionV1 {
     fn belongs_to_context(&self, context: LifecycleContext) -> bool;
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool;
     fn names_terminal_validate_record(
         &self,
         context: LifecycleContext,
@@ -4417,6 +4652,9 @@ impl RecoveredDecisionReleasedApplyStageProjectionV1
         self.fetch.names_record(record)
     }
 
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch.names_replay_source(record)
+    }
     fn names_terminal_validate_record(
         &self,
         context: LifecycleContext,
@@ -4493,6 +4731,9 @@ impl RecoveredDecisionReleasedApplyStageProjectionV1
     }
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
         self.fetch().names_record(record)
+    }
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch().names_replay_source(record)
     }
     fn names_terminal_validate_record(
         &self,
@@ -4724,3 +4965,21 @@ fn record_matches_recovery_candidate(
 }
 include!("v2_lifecycle_ledger_store.rs");
 include!("v2_lifecycle_ledger_tests.rs");
+
+/// Authenticate a possible standalone phase vote using the same opened ledger
+/// and still-sealed, semantically revalidated body store. Ledger internals never
+/// cross into the adapter's startup classifier.
+pub(in crate::sumeragi) fn resolved_phase_vote_outcome_from_storage(
+    verified: &crate::sumeragi::v2::VerifiedHeightContext,
+    root: &std::path::Path,
+    body: &crate::sumeragi::v2_body_store::RevalidatedV2BodyStore,
+    vote: &crate::sumeragi::v2::RecoveredWalVoteSign,
+) -> Result<
+    Option<std::sync::Arc<super::work_registry::ResolvedLifecycleValidateOutcomeV1>>,
+    &'static str,
+> {
+    let context = super::projection::lifecycle_context(verified.context());
+    let (_store, ledger) = LifecycleLedgerStoreV1::open(root, context)
+        .map_err(|_| "terminal vote lifecycle ledger cannot be opened")?;
+    body.resolved_phase_vote_outcome(&ledger, vote)
+}

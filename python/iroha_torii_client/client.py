@@ -2671,12 +2671,15 @@ def _validate_exact_unsigned_transaction_intent(
     fee_payment: Mapping[str, Any],
     executable_b64: str,
     metadata_b64: str,
-    expected_admission_intent: bytes,
     expected_ttl_ms: int = 100_000,
+    expected_admission_intent: str,
     context: str,
 ) -> None:
     if signing_context is None:
         raise ValueError(f"{context} requires an immutable local_signing_context")
+    admission_tags = {"ordinary": 0, "queue_plan_synced": 1}
+    if expected_admission_intent not in admission_tags:
+        raise ValueError(f"{context} requires one explicit supported admission intent")
     expected = {
         "domain": _network_transaction_domain_archive(signing_context, context),
         "authority": _multisig_account_id_archive(authority),
@@ -2688,7 +2691,7 @@ def _validate_exact_unsigned_transaction_intent(
         + _multisig_norito_field(expected_ttl_ms.to_bytes(8, "little")),
         "nonce": b"\x00",
         "fee_payment": _multisig_fee_payment_archive(fee_payment),
-        "admission_intent": expected_admission_intent,
+        "admission_intent": admission_tags[expected_admission_intent].to_bytes(4, "little"),
         "metadata": _trusted_intent_archive(
             metadata_b64,
             f"{context}.intent.metadata_b64",
@@ -10374,6 +10377,7 @@ class ToriiClient(
         authority: str,
         fee_payment: Mapping[str, Any],
         entrypoint: str,
+        canonical_auth: ToriiCanonicalRequestAuth,
         draft_intent: Optional[ContractCallDraftIntent] = None,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
@@ -10382,7 +10386,7 @@ class ToriiClient(
         creation_time_ms: Optional[int] = None,
         transaction_ttl_ms: Optional[int] = None,
     ) -> ContractCallResponse:
-        """Prepare a contract-call scaffold for local detached signing."""
+        """Authenticate preparation of an exact QueuePlanSynced payload for local signing."""
 
         request_payload: Dict[str, Any] = {
             "authority": self._require_non_empty_string(
@@ -10439,14 +10443,19 @@ class ToriiClient(
             request_payload=request_payload,
             requested_payload_digest=requested_payload_digest,
         )
+        canonical_auth = self._require_canonical_auth(canonical_auth, "prepare_contract_call")
+        if canonical_auth.account_id != request_payload["authority"]:
+            raise ValueError("prepare_contract_call.canonical_auth.account_id must equal authority")
+        if self._local_signing_context is None or canonical_auth.network_id != self._local_signing_context.network_id:
+            raise ValueError("prepare_contract_call canonical authentication must match local_signing_context.network_id")
+        body = self._encode_json_body(request_payload)
+        headers = self._canonical_request_headers(
+            "POST", "/v1/contracts/call", body,
+            canonical_auth=canonical_auth, headers=None, has_body=True,
+        )
         response = self._request(
-            "POST",
-            "/v1/contracts/call",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            data=json.dumps(request_payload).encode("utf-8"),
+            "POST", "/v1/contracts/call", headers=headers, data=body,
+            allow_retry=False, allow_redirects=False,
         )
         self._expect_status(response, {200})
         body = self._maybe_json(response)
@@ -10679,8 +10688,8 @@ class ToriiClient(
                 fee_payment=result.fee_payment,
                 executable_b64=draft_intent.executable_b64,
                 metadata_b64=draft_intent.metadata_b64,
-                expected_admission_intent=(0).to_bytes(4, "little"),
                 context="multisig propose response",
+                expected_admission_intent="ordinary",
             )
         return result
 
@@ -16515,9 +16524,9 @@ class ToriiClient(
             executable_b64=draft_intent.executable_b64,
             metadata_b64=draft_intent.metadata_b64,
             # Public contract submissions require this signature-bound intent.
-            expected_admission_intent=(1).to_bytes(4, "little"),
             expected_ttl_ms=transaction_ttl_ms or 100_000,
             context="contract call draft",
+            expected_admission_intent="queue_plan_synced",
         )
         if (
             response.entrypoint != entrypoint

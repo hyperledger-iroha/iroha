@@ -16,6 +16,8 @@ use std::{collections::HashSet, num::NonZeroUsize};
 use tokio::time::Duration;
 // These tests assert process-global cap counters, so their snapshots must not overlap.
 static FRAME_CAP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p_caps::BigMsg")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct BigMsg {
     topic: u8,

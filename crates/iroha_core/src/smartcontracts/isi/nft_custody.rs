@@ -5,12 +5,12 @@ use iroha_crypto::{Hash, derive_non_signing_ed25519_public_key};
 use iroha_data_model::{
     IntoKeyValue, NetworkId,
     account::{Account, AccountId},
-    domain::DomainId,
     events::data::prelude::{NftEvent, NftOwnerChanged},
-    metadata::Metadata,
     nft::NftId,
     nft_market::{NftCustodyPurposeV1, NftCustodyRecordV1, NftSaleStatusV1},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
 use std::collections::BTreeMap;

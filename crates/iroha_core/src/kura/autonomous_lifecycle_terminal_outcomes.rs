@@ -2837,7 +2837,9 @@ impl Kura {
     ) -> Result<()> {
         if let Some(bytes) = plan.pending_bytes.as_deref() {
             let next_len = u64::try_from(bytes.len())?;
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            let accounting_mutation = self
+                .begin_total_disk_usage_mutation()
+                .with_resource_paths(vec![plan.path.clone()]);
             if !self.write_atomic_synced_noclobber(&plan.path, bytes)? {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -2848,7 +2850,6 @@ impl Kura {
                 ));
             }
             self.update_disk_usage_delta(0, next_len);
-            self.update_total_disk_usage_delta(0, next_len);
             accounting_mutation.finish();
         }
         self.reconcile_post_wsv_lane_artifact_budget_for_terminal_outcome_locked(
@@ -3054,10 +3055,11 @@ impl Kura {
             true,
             &plan.path,
         )?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![plan.path.clone()]);
         self.write_atomic_synced_replace(&plan.path, &next_bytes)?;
         self.update_disk_usage_delta(previous_len, next_len);
-        self.update_total_disk_usage_delta(previous_len, next_len);
         accounting_mutation.finish();
         Ok(complete)
     }
@@ -4625,10 +4627,11 @@ impl Kura {
             true,
             &path,
         )?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.clone()]);
         self.write_atomic_synced_replace(&path, &next_bytes)?;
         self.update_disk_usage_delta(previous_len, next_len);
-        self.update_total_disk_usage_delta(previous_len, next_len);
         accounting_mutation.finish();
         if canonical {
             self.reconcile_post_wsv_lane_artifact_budget_for_terminal_outcome_locked(
@@ -5273,7 +5276,9 @@ impl Kura {
                     "autonomous lifecycle bootstrap cursor atomic peak total-disk accounting overflows",
                 )
             })?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![cursor_path.clone()]);
         if replacing_existing {
             self.write_atomic_synced_replace(&cursor_path, &next_bytes)?;
         } else if !self.write_atomic_synced_noclobber(&cursor_path, &next_bytes)? {
@@ -5286,7 +5291,6 @@ impl Kura {
             ));
         }
         self.update_disk_usage_delta(previous_len, next_len);
-        self.update_total_disk_usage_delta(previous_len, next_len);
         accounting_mutation.finish();
         let readback = self
             .read_regular_sidecar_bytes(

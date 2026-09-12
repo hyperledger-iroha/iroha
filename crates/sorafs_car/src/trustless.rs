@@ -440,12 +440,12 @@ mod tests {
     use super::*;
     use iroha_data_model::{
         account::AccountId,
-        metadata::Metadata,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1,
             PinManifestRecord, PinPolicy,
         },
     };
+    use iroha_model_base::metadata::Metadata;
     #[test]
     fn parses_gateway_config() {
         let config = TrustlessVerifierConfig::from_toml_str(

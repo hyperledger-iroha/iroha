@@ -1,8 +1,294 @@
 # First-release architecture redesign
 
+The [September 10 SDK and Musubi checkpoint](../docs/history/2026-09-10/musubi-sdk-and-resolver.md)
+records the iterative resolver repair, canonical compiler adapters, authenticated
+Musubi capability and merged-source development qualification. Release acceptance
+remains open; historical checkpoints below do not attest the current candidate.
+
 This record tracks implementation of the approved SDK and repository redesign.
 It is not a release qualification claim. The implementation retains one canonical
 first-release interface and does not add compatibility adapters.
+
+## Account-owned event and block streams
+
+`AccountClient::events().subscribe(filters).await` and
+`AccountClient::blocks().subscribe(height).await` own the canonical
+`events.stream_websocket` and `blocks.stream_websocket` operations. The old flat
+listeners, public flow handlers and direct socket connector are removed. Full
+block access retains Torii's account and global-reader permission checks.
+
+The context owns injectable HTTP and stream transports, selected explicitly by
+`http_transport(...)` and `stream_transport(...)`. Streams preserve the exact
+signed upgrade and initial Norito subscription. Establishment and initial send
+share one request deadline; redirects, retries and automatic resubscription are
+absent. Subscription encoding is fallible and bounds the complete frame before
+output allocation. Caller-constructed nested rejected-instruction filters return
+a typed invalid-request error instead of panicking on Norito's depth rejection;
+the same context can then encode and send a valid subscription with exact bytes.
+Initial subscriptions are bounded at 256 KiB, received messages at
+64 MiB including fragmentation, and upgrade bodies at 64 KiB. Control-frame work
+is bounded per poll. Protocol, decoding and abnormal close errors terminate the
+stream and retain typed diagnostics; close codes and reasons remain observable.
+
+Owned asynchronous streams outlive the account context. The explicit blocking
+facade drives the same implementation through its reusable runtime and rejects
+entry from an async runtime. Concurrent callers borrow that runtime without
+holding a mutex across pending I/O; an idle stream cannot block a sibling
+subscription, receive or close. A blocking receive deadline limits one wait without
+resubscribing; normal EOF and timeout are distinct. Explicit close has a bounded
+deadline and returns errors. CLI consumers retain both receive and close failures,
+and their four per-command runtime loops are removed. All 27 existing external
+SDK listener calls are migrated, preserving scenario assertions.
+
+The SDK library passes **776 tests and six doctests, with zero failures or ignored
+cases**, on the default stack. All 84 selected source/fixture inputs remain unchanged during the
+run. Its executable SHA-256 is
+`755f21fadab962228822ad952f0f88ed0d6dfd8c5803784fb27b5f2e041e8543`.
+Seventeen capability tests and nine real loopback adapter tests cover exact
+signing, isolation, cancellation, response/message bounds, ping/pong, fragmented
+messages, redirects, revocation and blocking-runtime behavior. Strict SDK library
+Clippy, the codec guard, all 16 dependency boundaries and eight route-inventory
+tests pass. Source budgets retain 239 findings and 172 exceptions.
+All targets of the eight selected SDK/consumer packages compile, retaining
+31 broader warnings and all 421 selected consumer inputs unchanged. The earlier
+773- and 774-test runtimes, notification-fixture type errors and encoder-correction
+syntax failure remain recorded on their preceding source; the final checks above
+include the runtime-lock and bounded-encoding corrections.
+All five CLI stream timeout/EOF/error-preservation helper tests pass on the
+default stack, with all 421 selected inputs unchanged. Their rebuilt executable
+SHA-256 is `2ef012fd7d20d323834b0457750c05fe09440f96a4a51b0e6a3d264a4a28e8e9`.
+All six integration replay/deadline/close helper tests pass on the default stack,
+with the same 421 selected inputs unchanged. Their rebuilt executable SHA-256 is
+`05d2f88204cb9daeaf705b42f7d166792c067102e049b4ae53dd3b4d7b1cabc5`.
+These helpers exercise finite streams without running node scenarios.
+
+The finite Native AMX participant settlement, hash-only schema expansion and
+maximum 4,096-source default-stack regression remain byte-for-byte unchanged.
+Evidence, failed diagnostic attempts and exact dirty beforeimages are retained
+under `target/architecture-redesign/sdk-stream-transport/`.
+
+Mochi now uses these canonical capabilities through a generation-bound
+supervisor reader carrying the exact genesis account, network and peer endpoint.
+Its raw socket API is removed; UI fanout preserves actual received-message sizes,
+typed errors, cancellation and a retained initial receiver. Arbitrary vault
+signers do not inherit the genesis account's global-reader grant. The
+[Mochi checkpoint](../docs/history/2026-09-08/mochi-sdk-streams.md) records the
+subsequent SDK and consumer evidence separately from the preceding results above.
+Remaining synchronous capabilities, real four-validator streams,
+workspace/native/device and pinned-memory release gates remain unqualified.
+
+## CI daemon ownership and affected tiers
+
+The Rust lane manifest now declares the message-control daemon required by
+`iroha_test_network` and `integration_tests`. The artifact builder compiles its
+test feature in a separate target directory and stages it under a distinct name;
+network jobs supply the exact `TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL` path.
+The shipping daemon remains a separate artifact with its own feature graph.
+Izanami still requests only the shipping daemon and CLI.
+
+Foundation-only changes defer the four affected daemon/network packages while
+retaining the library and local CLI reverse dependencies. The `daemon_packages`
+manifest entry prevents a bin-only `irohad` selection from building a daemon
+inside the nominally binary-free matrix. Classification records every deferred
+package and consumer. Direct consumer inputs, mixed source changes, unknown
+inputs and full selection retain their required jobs and artifacts. Package
+README prose no longer seeds Rust jobs; executable Kotodama document changes
+retain their independent source comparison and Koto selection.
+
+The Parliament lifecycle and both Nexus proof corridors now depend on explicit
+classification outputs. Their existing qualified runners, build protocols and
+job bodies remain intact. Required-result aggregation includes all three and
+rejects failures, cancellations, unexpected skips and inconsistent selection.
+The Parliament source contract follows the immutable client builder's exact
+timeout binding and rejects both a disabled timeout and a disconnected rebuild.
+
+All **197 focused router, workflow and corridor source tests pass**, including
+**218 subtests** and actual locked workspace ownership. All 147 selected inputs
+remain unchanged during that run. Actual Cargo graph checks retain 60 of 64
+affected packages for crypto-only changes and 81 of 85 for Norito-only changes,
+with no selected daemon command or external binary consumer. Package prose
+selects none; mixed and full changes restore the complete five-artifact union.
+Configured workflow lint and preserved runner shell syntax checks pass.
+
+Evidence, exact dirty beforeimages and replayable patches are retained under
+`target/architecture-redesign/ci-isolated-daemon-routing/`. These checks validate
+selection, command construction and existing source contracts. They do not
+execute GitHub jobs, compile the new isolated CI bundle or qualify real
+four-validator corridors, memory budgets or native/device release artifacts.
+
+## Operator configuration capability
+
+`OperatorClient::configuration().get().await` is the sole configuration operation
+for `operator.configuration.read`. Public and account contexts cannot access it;
+the old `Client::get_config` and gas-schedule projection getter are removed.
+Consumers obtain the gas schedule from the shared configuration DTO.
+
+The exact empty-body GET is signed with the bound operator key and network,
+excluding account and token authentication. The JSON-only route uses centralized
+asynchronous dispatch, the context deadline and an 8-MiB response ceiling. It
+issues no compatibility probe, representation fallback or automatic retry.
+The direct `blocking::OperatorClient::from_client` constructor owns a reusable
+runtime without binding an account; existing blocking clients can share their
+runtime with the operator. Runtime construction errors now use the common typed
+error family. Async-entry rejection and shutdown behavior remain unchanged.
+
+All eight external reads are migrated: two CLI commands and six integration
+readbacks, preserving operator credentials, restart contexts and every existing
+scenario assertion. Shared test transport ownership removes duplicated async-only
+test dispatch. The SDK passes **751 library tests and five doctests**, with zero
+failures or ignored cases. The two new CLI authority tests pass. Strict SDK library
+Clippy passes with dependencies excluded; all targets of the eight selected
+consumer packages compile, retaining 31 broader warnings.
+
+The final SDK executable SHA-256 is
+`b4a2dd6ce89427b6429b1020b497356b2fb26e4cde201e05c5ecead5e9c5dec8`;
+all 71 SDK/fixture inputs and 416 selected consumer inputs remain unchanged during
+their scoped checks. Eight new SDK regressions cover signatures, operator/network/
+endpoint isolation, bounded decoding, deadlines, structured errors and independent
+blocking authority. Two compile-fail doctests enforce the absent public/account API.
+Independent source review, formatting, codec checks, all 16 forbidden dependency
+boundaries and eight operation-inventory tests pass. Source budgets still report
+239 findings/172 exceptions; the existing manifest discrepancy remains unresolved.
+
+Evidence and exact dirty beforeimages are retained under
+`target/architecture-redesign/sdk-operator-configuration/`. The first 750-test
+candidate is retained separately from the final independent-operator constructor.
+These local checks do not qualify real node restarts, four-validator execution,
+strict workspace linting, pinned-runner memory or native/device release artifacts.
+
+## SDK validation and result ownership
+
+Multisig proposal validation now owns one typed intent containing instructions,
+metadata and their hash. Parsed fee metadata feeds the exact proposal marker and
+metadata projection; unsigned responses still match the complete requested
+payload before signing. A dedicated `QueuePlan` classifier preserves conservative
+submission ambiguity, canonical evidence and locally computed identities.
+Subscription validation separates resource/state binding from exact instruction
+checks. Private-settlement recovery uses an explicit phase context and shared
+borrowed inputs, preserving authenticated prepare/commit evidence and finality.
+
+Onboarding results and subscription payload drafts own their large variants through
+`Box`; the CLI consumes those canonical types directly. Subscription futures are
+`Send`, including injected-transport preparation. These result-storage changes are
+separate from the AMX overflow fix: the finite participant settlement and hash-only
+schema expansion remain unchanged and match the default-stack regression evidence.
+
+All **743 SDK library tests pass, with zero failures or ignored tests**, on the
+default stack. The executable SHA-256 is
+`aa3f6fa819561183a5e538e64324c8204ece25cca0f3ad649742c1fb2e01f909`;
+it and all 66 captured SDK/build inputs remain unchanged during the run. Six new
+tests cover fee binding, independent settlement authority checks, phase/digest
+recovery, subscription future mobility and result storage. Existing payload JSON,
+signing, rejection and ambiguous-submission assertions remain intact.
+
+Strict SDK library Clippy passes with `--no-deps -- -D warnings`, resolving the
+33 findings from the status checkpoint. All targets of the eight selected
+SDK/CLI/storage/Musubi/test-network/Izanami/integration packages compile with all
+411 captured consumer inputs unchanged; that broader check retains 31 warnings.
+Independent source review, formatting, codec checks, all 16 forbidden dependency
+boundaries and eight operation-inventory tests pass. Source budgets still report
+239 findings/172 exceptions; the recorded manifest-budget mismatch remains.
+
+The two initial compile/lint failures and their corrections, exact dirty
+beforeimages, source checks and compiler-artifact records are retained under
+`target/architecture-redesign/sdk-validation-boundaries/`. This scoped development
+result does not establish strict workspace linting, model memory reduction,
+four-validator execution, native/device qualification or release readiness.
+
+## Asynchronous public node diagnostics
+
+`Client::status().get().await` and `Client::status().version().await` own the
+canonical `diagnostic.status` and `core.api_version` routes. Their explicit
+blocking capabilities run the same implementation on the facade's reusable
+runtime. Flat getters and the raw status-request wrapper are removed.
+
+Status preserves negotiated JSON/Norito with an 8-MiB response ceiling; version
+requires UTF-8 text with a 16-KiB ceiling. Shared asynchronous dispatch owns the
+deadline, authoritative Accept header and structured transport errors. Ambiguous
+content types reject. Injected transports obey the same response bounds and
+deadline. These diagnostic reads neither probe compatibility nor replay failed
+requests under another representation. Subscription operations now use this
+same dispatch and media-type boundary; their signed bodies and tests remain.
+
+Transport errors retain standard I/O categories through wrapped causes. Startup
+and integration helpers use those categories for refusal, backpressure and
+permission-denial handling. Async peer polling and startup height checks use
+async contexts directly. One private injected status-source loop preserves the
+minimum applied-height barrier, with no status-only blocking runtime or worker.
+The 34-path caller migration covers 78 former status calls and three version
+calls, preserving existing scenario assertions and synchronous facade users.
+
+The status checkpoint passed **737 tests, zero failures or ignored tests**, on the
+default stack. The executable SHA-256 is
+`58c5f79235df85f566ece53e5a0f9572a8a7f80ffcec66b36f93bcede8a34f28`;
+it and all 62 captured SDK inputs remain unchanged during the run. Eleven new
+status tests cover executor responsiveness, injection, cancellation, bounded
+responses, negotiation, typed errors and blocking-runtime rejection. The final
+helper run passes **27 test-network and 18 integration-helper tests**, with zero
+failures or ignored cases and all 122 selected inputs unchanged. This includes
+the minimum-height barrier, immediate permission-denial termination and account,
+operator and endpoint binding. An earlier factory assertion compared normalized
+and raw URL strings; its failure remains retained, and the corrected assertion
+compares parsed URLs. All targets of the eight selected SDK/CLI/storage/Musubi/
+test-network/Izanami/integration packages compile on the final caller source.
+
+Independent review, formatting, codec checks, all 16 forbidden dependency
+boundaries and all eight operation-inventory tests pass; the inventory retains
+665 routes. At that checkpoint, strict SDK library Clippy retained 33 findings. Source budgets retain
+239 findings and 172 exceptions; manifest budgets retain the previously recorded
+SoraFS filesystem edge and vendor fingerprint discrepancy. These development
+checks do not qualify node binaries, four-validator execution, native/device
+targets, build-memory reduction or a complete release candidate. Beforeimages,
+failed runs and exact compiler-artifact identity records are retained under
+`target/architecture-redesign/sdk-status-capability/`.
+
+## Immutable SDK construction
+
+`Client::builder(config).build()` is the canonical fallible constructor. Endpoint,
+network, authority, headers and policies are private after construction; the old
+constructors and mutation setters are removed. Validation rejects malformed or
+ambiguous headers, embedded URL credentials, non-directory endpoints and invalid
+account/key bindings before transport construction. Diagnostics exclude header
+values. Default asynchronous transport initialization returns a structured error;
+an injected transport avoids default initialization.
+
+Clones share their compatibility decision and probe coordinator. Every builder
+build creates fresh state, including `to_builder()`; changing a transport or
+endpoint cannot inherit an old probe result. A copied builder retains the selected
+transport and explicit configuration, including the address discriminant. Test
+fixtures seed the newly constructed context rather than carrying over old cache
+state. Existing submission, rejection, finality and response assertions remain.
+
+The final SDK library passes **726 tests, zero failures or ignored tests**, on the
+default stack. Its executable SHA-256 is
+`af02c11c938bf3029bd40382240b39f1ed8b6b504430723d74a51bcd152e21fb`;
+it and every captured SDK input remain unchanged during execution. All three
+doctests pass, including the compile-fail guard for direct endpoint mutation.
+The eight selected SDK/CLI/storage/Musubi/test-network/Izanami/integration packages
+pass the combined all-targets check. Both CLI constructor runtime tests pass,
+covering typed construction failure and explicit operator binding. CLI factories
+propagate construction errors; endpoint changes construct new contexts. The native-game transaction helper now
+uses the asynchronous prepare/quote/sign/submit sequence directly.
+
+These are development checks, not a source-sealed release build. Strict SDK
+library Clippy still reports 34 findings; all 34 primary expressions occur in the
+retained pre-construction source. All 16 forbidden dependency boundaries pass;
+source-size checking retains 239 findings and 172 exceptions. Manifest budgets
+still reject the existing `sorafs_car -> rustix` filesystem edge and vendored
+profile fingerprint changes, both of which predate this SDK stage. No manifest,
+lockfile or budget limit changed here. Remaining synchronous reads in asynchronous
+integration scenarios are unqualified. TODO: Complete authority-free public
+clients, authority-owned operations, asynchronous capabilities and streams, and
+the unified error family before complete runtime/network release qualification.
+The retained beforeimages, compiler diagnostics and exact executable evidence
+are under `target/architecture-redesign/sdk-immutable-context/`.
+
+Eight crypto dependency lint findings have also been repaired in a separate
+six-file follow-up. The application/BLS library passes strict scoped Clippy and
+all 32 selected cryptography/parser tests pass on 2,219 unchanged inputs. The V1
+BFV digest length remains 48 bytes with a compile-time dimension assertion;
+truncated multihash prefixes and trailing bytes reject. This does not qualify
+other feature selections or close the six remaining SoraFS package lint sites.
 
 ## Musubi extraction prerequisites
 
@@ -58,7 +344,7 @@ together on exit; witness authentication retains all existing bounds and checks.
 The SDK config suite passes 15 tests, with 13 CLI loader, filesystem, witness,
 authentication and context-restoration tests. The manifest adds only the CLI's
 direct `iroha_config_base` edge; the exact budget and all 15 dependency
-boundaries pass. Complete client immutability and async migration remain open.
+boundaries pass. Remaining authority ownership and asynchronous capability migration remain open.
 
 Integration status helpers and all CLI development binaries now use explicit
 blocking/client/account contexts after removal of the blocking facade's `Deref`.
@@ -581,15 +867,15 @@ and optimization settings are unchanged.
 The exact reviewed integration preserves inherited dirty work and excludes
 three unrelated live edits. Subsequent downstream trait-bound/import corrections
 and eight whitespace-only lines are recorded separately from those test inputs.
-Complete downstream targets, source-size budgets and same-source release
-qualification remain open. The model transcript digest is
+Selected downstream target checks pass; complete workspace, source-size and
+same-source release qualification remain open. The model transcript digest is
 `0d813689de0b81ac9ab75df05310ea92e3203824d142e35fe607f0fe4aced8f4`;
 the codec transcript digest is
 `a57030ead9bc3ae55847ca01a24a81e441495049deb88aae9077257e117bb427`.
 
-Two codec modules retain every nominal declaration and codec body in the same
-semantic owner while reducing the outbox and Governance DAG parent files to
-10,366 and 7,401 lines. Their existing exceptions ratchet downward; both remain
+Codec and authorization-fixture modules retain every production nominal
+declaration and codec body in the same semantic owner. The outbox and Governance
+DAG parent files now contain 10,255 and 7,401 lines. Their existing exceptions ratchet downward; both remain
 above the ultimate 5,000-line production limit. All 77 applied source-budget and
 provider-ingest contract tests pass. The repository still reports 240 findings
 with the same 174 exceptions; no complete module-budget pass is claimed.
@@ -600,9 +886,34 @@ normal source selection includes the original test bytes. The new regression
 uses the actual ignore policy and proves an oversized nested security test is
 still measured and rejected. All 387 Torii Rust files are now present in both
 the working tree and candidate inventories; an independent literal-path audit
-finds no remaining source omission. Complete target and runtime checks continue.
+finds no remaining source omission. All selected SDK, storage client, Core, Torii
+and P2P targets now compile; pre-existing warnings still prevent a strict-lint
+qualification claim.
 
-TODO: Complete remaining model feature selections, full SDK and mandatory consensus qualification,
+The complete default SDK library passes **716 tests**, with zero failures or
+ignored cases, in 270.64 seconds on the default stack. All 19,174 recorded
+candidate inputs remain unchanged, including the formerly stalled exact-release
+Musubi transaction-boundary case. The SDK transcript digest is
+`a14809f71119f49d5f1f538a6512b36cd1378d364626a8a96ffd69f4137da2ac`.
+All 25 transaction-forwarder tests also pass. The new framing regression proves
+valid baselines before rejecting truncated, trailing, wrong-header and
+oversized signed envelopes; every rejection preserves the complete signing
+claim, which subsequently accepts the original valid bytes.
+
+The outbox's 74 tests pass after replacing its truncated CID fixture with a
+canonical CID constructed from the same digest. A separate network-fixture
+review replaces nominally invalid values that `Hash::prehashed` normalized into
+valid identities. Raw payload carriers preserve custom-type field classification
+and prove exact valid bytes before clearing the marker. Journal tests now prove
+the decoder rejects that marker, independently of the retained approval digest.
+Clock and outbox tests cover every supported advertised layout. The coordinator
+fixture uses a canonical test-owned temporary directory so macOS's `/var` alias
+does not prevent secure storage initialization. These test-only followups have
+separate source manifests. All 80 selected outbox/network-fixture tests pass
+with zero failures or ignored cases and all 19,174 final inputs unchanged.
+Full release qualification remains open.
+
+TODO: Complete remaining model feature selections, SDK release and mandatory consensus qualification,
 and migrate remaining historical source assertions to current release contracts.
 Source/artifact hashes and individual logs remain under the ignored
 `target/architecture-redesign/owned-storage-identity/` directory.
@@ -754,6 +1065,246 @@ are untracked. The exact production inventory includes the new files; its Git
 tracking requirement remains enforced.
 These are outstanding qualification work, not passing results.
 
+## Foundation identity follow-up (2026-09-07)
+
+Seven FFI-owned address types and the Hash, BFV Goldilocks digest and SM3
+scalar owners now have explicit nominal declarations. Actual compiler names,
+both codec-direction hashes, complete frames and bare bytes were captured
+before annotation. Address fixtures cover 56 root/container records and 560
+advertised-layout records; crypto fixtures cover all seven forms per scalar
+under default, minimal, JSON-only and SM-only feature selections. Their
+captured files remain immutable. Permanent tests compare declared identity
+against those observations, allowing later physical relocation.
+
+The frozen candidate passes 303 default, 265 minimal and 303 FFI primitive
+library tests, plus the scalar fixture test in all four crypto selections.
+JSON-only address tests now declare their feature requirement. The owned
+inline-string rejection path retains the original allocation; its existing
+regression passes. A dedicated crypto test target avoids pulling unrelated
+PQC/rand/streaming test requirements into minimal-feature qualification.
+
+Cargo formatting and the codec guard pass. Strict Clippy and repository
+source-size qualification remain failing: existing crypto/PQ diagnostics,
+primitive test-helper diagnostics and 240 source-budget findings remain.
+No exceptions or limits were expanded. This is identity coverage evidence,
+not the atomic codec cutover, physical model extraction or release approval.
+
+Seventeen unchanged consensus-key, FX settlement and privacy protocol owners
+also declare their independently captured identities. All three source-adjacent
+owner tests pass on the rebuilt current model artifact. Complete item bodies
+and preceding attributes match the controlled compiler capture; no field,
+variant tag, production method or signing preimage changes in this batch.
+The subsequent private-settlement batch declares another 58 captured owners.
+Its bounded confidential staging and validation errors have private module
+owners, with one canonical public error path. Governance, AXT and private
+settlement retain all 114 existing tests in separate test modules. Their
+production roots now contain 3,511, 2,911 and 4,992 lines respectively; every
+extracted test file remains below 3,000 lines. No wire declaration moved,
+field/tag changed, assertion disappeared or source-size exception expanded.
+
+The fresh AMX-only run passes all 32 tests on the default stack, with all
+19,262 recorded candidate inputs unchanged. It includes the maximum 4,096-source
+schema/encode/decode/hash/drop regression and rejection of the removed recursive
+settlement layout. After the seventeen declarations, those two regressions and
+the three identity tests pass again. The complete refreshed default/HTTP model
+library passes all 3,644 tests with zero failures and six fixture generators
+ignored, on the default stack (591.39 seconds). All 19,265 recorded inputs
+remain unchanged. The tested artifact and its hash are retained in the scoped
+capture directory. Prior full-library results above belong to their stated
+artifacts; other feature graphs, workspace and release gates remain unqualified.
+
+Untracked review/capture/log manifests are retained under
+`target/architecture-redesign/owned-storage-identity/model-identity-closure/`.
+The 2026-09-08 follow-up replaces the model's test-only IVM dependency with
+its owning `ivm_abi` crate. Cargo.lock changes that one edge without changing
+package versions. The feature-resolved model-test graph drops from 359 to
+325 packages and contains no IVM, node configuration or telemetry runtime.
+The new root-dev boundary retains normal/build traversal and all forbidden
+layers; all 16 real selections and 45 guard tests pass, including Cargo
+fixtures for root-dev isolation and transitive leaks. This test graph still
+enables governance and JSON through the ABI owner; it does not qualify a
+governance-disabled build.
+
+The exact manifest ratchet now accounts for five added and three removed
+edges since its reviewed baseline. All 106 historical manifests reproduce
+the original fingerprint and all 60 limits. Direct owning-code uses justify
+the committed Core/FASTPQ/Kaigi/Python additions; removed primitive and FEC
+dependencies reduce external package counts. The refreshed limits equal the
+observations with no spare allowance; ownership denials and source-file
+budgets remain unchanged. This graph review does not qualify the recorded
+non-edge runtime, feature or test-profile changes.
+
+NetworkId, EscrowId and ProposalId also declare their independently observed
+manual identities. Their 21 immutable root/container/hash/signature records
+preserve both codec hashes, complete frames, bare bytes and JSON. Integration
+testing exposed an AXT handle fixture predating the committed ABI-v1
+EXECUTION_SUMMARY signature update. Its old and current hashes match their
+respective IVM ABI goldens exactly. Only the handle's 32-byte ABI hash and
+eight-byte frame checksum change; the other four AXT fixtures remain exact.
+The test now checks ABI binding explicitly before complete byte equality.
+The downstream IVM `core_host_enforces_fixture_snapshot_fields` test also
+passes on the same frozen source and default stack; its executable and source
+hashes are retained separately. No additional consumer expectation changed.
+
+The final default/HTTP selection passes 199 model-library tests, six AXT
+integration tests and six pointer/generated-schema integration tests, with
+one fixture printer ignored. All 19,273 frozen inputs remain unchanged and
+the three executable artifacts are retained. Formatting, the codec guard,
+dependency boundaries and all five manifest-budget scopes pass. All changed
+source files satisfy their production/test limits; the frozen repository
+still has 237 other source-budget findings. Strict Clippy, the atomic codec
+cutover, physical extraction and complete workspace/native/release gates
+remain open. These focused results do not replace the separately scoped
+3,644-test complete-library evidence above.
+
+## Bare decoding ownership (2026-09-08)
+
+Bare `Decode`, canonical field comparison, owned containers, generated fields
+and erased query payloads now depend on `SerializePayload`. Actual framed
+ABI, network, storage and conversion entry points explicitly require
+`NoritoSerialize`. No wire identity, field order or ABI version changes.
+Option decoding uses the shared canonical child decoder, preserving declared
+layout flags and alignment while enforcing child byte/depth limits. Tuple
+and Result slice decoders reject unconsumed child bytes with `LengthMismatch`
+in every profile. Payload-only records, enums, containers and registered
+queries have runtime tests without a frame serializer. The 13 model consumers
+of `ParseError` now use its owning constructor/accessor; strings and validation
+behavior remain unchanged.
+
+The frozen default/HTTP model and ABI run passes 4,110 tests in 11 suites,
+with zero failures and 13 ignored cases. All 32 Native AMX tests pass on the
+default stack. All 19,275 source inputs remain unchanged; eight test binaries
+and the exact log are retained with `bare-decode-model-checkpoint.json` in the
+scoped capture directory above. The preceding complete codec/derive/primitives
+run passes 1,684 tests (three ignored); six refined child-consumption tests and
+267 minimal-feature primitive tests pass separately. Norito/derive library
+Clippy and four retired-codec guards pass; the codec-contract Python suite
+passes nine tests and 31 subtests. Source-file checks still report 237 findings.
+
+The 42-path integration preserves every recorded root preimage, including
+13 already-integrated ParseError consumers. These results do not qualify the
+remaining Core/Torii callers, the atomic identity transition, physical model
+moves, pinned memory reduction or complete workspace/native/release matrices.
+The subsequent validation-owner batch is scoped separately below.
+
+## Validated binary owner decoding (2026-09-08)
+
+`#[norito(validate = "path")]` now invokes a fallible constructor on the actual
+reconstructed owner exactly once. Multisig policy/member binary decoders use
+this contract; their private carriers serve JSON only. Invalid order, duplicate
+members and zero weights retain typed rejection and successful retry coverage.
+The shared schema parser accepts the attribute without invoking its function
+or changing schema identity. Generic slice derives now compose one valid
+parameter list and choose a lifetime absent from nested higher-ranked bounds.
+
+Both Result slice branches enforce nesting limits and restore the guard after
+success or rejection. Regression tests first reproduced acceptance at a zero
+depth limit. Unit payload size calculation now matches the existing packed
+zero-field offset table; a separate failing regression preserved the prior
+zero-versus-eight-byte mismatch. Canonical frame checks still reject corrupt
+unit metadata and trailing bytes. Valid serialized bytes remain unchanged.
+
+The complete Norito/derive/primitive/schema suites pass **1,726 tests**, with
+zero failures and three ignored cases; all nine schema UI fixtures pass. The
+focused model suite passes **52 tests**, including all 32 Native AMX cases and
+the bounded default-stack regression. Those runs have no drift across 19,283
+recorded candidate inputs. One subsequent integration-test import formatting
+correction has a separate source record; library source is identical.
+Strict library Clippy passes for Norito and both changed derive crates, and
+all 18 changed Rust files pass formatting. The 27-path integration preserves
+all root preimages and retains its patch and checkpoints under the scoped
+capture directory's `validated-decode-integration/` record.
+The integrated working tree also passes all four retired-codec guards and
+28 codec/release-contract tests with 31 subtests.
+The candidate's Core/Torii production-library graph subsequently compiles,
+including the required IVM and P2P dependencies, with all 19,283 input hashes
+unchanged. Its first check exposed a production `Encode` trait import gated
+behind tests; the already-correct working-tree import was reconciled into the
+candidate and the failed log retained. Seven Core warnings remain, so this is
+compilation evidence rather than strict workspace Clippy or runtime evidence.
+Kagami also compiles in its own binary feature graph on the same unchanged
+inputs, retaining two CLI warnings. Its codec caller and the production node
+callers now have compiler evidence; runtime/feature matrices remain separate.
+
+## Mandatory aggregate protocol JSON (2026-09-08)
+
+The earlier normal model check with `--no-default-features` exposed mandatory
+JSON consumers behind contradictory model feature gates. Its failed log remains
+retained. JSON is required by `CustomParameter.payload`, account admission,
+consensus roster parameters and retained Kaigi state. The isolated candidate
+now owns that protocol surface unconditionally through six normal dependencies:
+`iroha_crypto`, `iroha_primitives`, `iroha_version`, `norito`, `norito_derive`
+and `mv`. Norito's existing `base-codec` selection includes JSON. The obsolete
+aggregate `json` feature and active manifest, tooling, generator and caller
+selections are removed; lower-crate JSON features remain independently owned.
+Governance and HTTP selections remain independent. Generated model and builder
+JSON implementations resolve their traits from Norito, preserving defaults,
+unknown/duplicate-field rejection and bounded output.
+
+Rustfmt after removing conditional attributes exposed oversized implementation
+owners. Validation/constructor impls and private helpers now live in cohesive
+private modules; named wire records, schema/codec declarations, local hash
+preimage types and serializer bodies stay in their original owner namespaces.
+The moves preserve exact implementation bodies and all existing tests.
+
+| Parent owner | Parent lines | New implementation modules and lines |
+| --- | ---: | --- |
+| `musubi.rs` | 4,663 | `archive_validation.rs` 773; `publication_validation.rs` 448 |
+| `sorafs/moderation.rs` | 4,657 | `trust_validation.rs` 502 |
+| `block/consensus_v2.rs` | 4,860 | `messages.rs` 672 |
+| `nexus/private_settlement.rs` | 4,941 | `settlement_validation.rs` 442 |
+| `privacy/protocol.rs` | 4,651 | `privacy/policy.rs` 377 |
+
+The Musubi generator input inventory now includes both validation modules;
+reviewed consensus source closure includes its compiled `messages.rs` owner.
+Cargo.lock and captured/generated fixture bytes are unchanged. No source-size
+exception expands; that checkpoint retains 237 other source-size findings.
+
+Before decomposition, the candidate's full model library passes **3,648 tests**
+and its existing integration suites pass. The same command exposes two
+derive-test visibility expectations inconsistent with `transparent_api`; those
+failed logs are retained and the expectations now follow the selected policy.
+After decomposition, **419 focused model tests pass**, with three ignored cases.
+The subsequent derive/ABI command passes **217 tests**: 29 derive unit tests,
+22 integration tests and 166 `ivm_abi` unit tests, with zero failures or ignored
+cases. The integration suites include eleven distinct UI fixtures: the positive
+protocol-JSON consumer and ten compile-fail cases; six negative fixtures run
+again in their focused harnesses. These UI checks are included in the 22-test
+integration count. The consumer fixture retains `schema-structural` check-cfg
+warnings, so this is not strict-lint qualification.
+
+Both post-decomposition Rust runs use the default stack and preserve all 19,290
+recorded candidate inputs. The feature-hygiene, Musubi input and dependency-budget
+Python suites pass **89 controls** across two runs: 87 selected cases, then the
+two previously deselected Cargo dependency controls. Separately, all **16
+feature-resolved dependency boundaries** pass. These candidate observations do
+not imply a full post-decomposition model run or whole-workspace qualification.
+
+The dependency-budget refresh is limited to making the existing model→`mv` and
+model→`norito_derive` edges required. Reversing only those classifications
+reproduces every previous metric; all declared metrics remain unchanged.
+Required model/SDK closures each add one local/workspace package (`mv`), one
+external package (`concread`), four edges and one external edge. Model required
+edges become 198; SDK edges become 272. CLI, daemon and workspace required edge
+counts each increase by two, to 650, 671 and 1,542. The refreshed fingerprint
+binds the exact 106 current manifests; denials, layers and source-file limits
+are unchanged. This graph accounting does not qualify runtime or memory use.
+
+The final `iroha_data_model --lib --no-default-features` check passes with the
+unchanged lock; one existing governance `validate_capacity_intent` dead-code
+warning remains. All three final source guards pass, including the corrected
+canonical include-manifest digest and precise corrupted-pin/missing-member
+negatives. These checks retain all 19,290 final candidate inputs unchanged in
+their separate terminal checkpoint. The standalone restricted-visibility selection also passes all 29 derive unit
+tests, and strict Clippy passes for the derive library without default features.
+Both terminal checkpoints preserve the same final source inputs. The 292
+integrated source paths exactly match this qualified candidate; unrelated root
+edits are preserved. Minimal compilation and these focused checks do not qualify
+runtime behavior or the full feature matrix.
+Atomic identity cutover, physical model extraction, remaining feature/target
+qualification, measured memory reduction, native/device execution and complete
+workspace/release qualification remain outstanding.
+
 ## Completion gate
 
 TODO: Complete each pending implementation and acceptance item above. In
@@ -762,3 +1313,402 @@ build/tests, the mandatory consensus harnesses, valid release-feature checks,
 formatting, strict Clippy, the codec guard, and four-validator integration tests.
 Rebuild native artifacts from that candidate; unavailable device qualification
 must remain explicitly unverified.
+
+## Streaming wire identity closure (2026-09-08)
+
+The integrated batch adds explicit captured identities for all 84 current
+production streaming binary owners: 70 root records and 14 records under
+`streaming::codec`. Pre-declaration compiler captures bind every nominal name
+and both codec-direction hashes. Immutable fixtures retain 396 complete/bare
+frame records for 132 populated values, each in root, Option and two-element
+Vec forms, including every root enum variant. The permanent tests compare
+declared identities and frame hashes against those captures and preserve exact
+header flags, required zero alignment padding, payload length and decoded
+re-encoding. No frame or codec implementation is changed by the declarations.
+An initial capture-helper assertion incorrectly omitted alignment padding; its
+failed checkpoint is retained, and the corrected helper checks the codec-owned
+padding calculation before recording the successful pre-declaration bytes.
+
+The existing public `codec` module becomes a canonical file, and its large
+private test module becomes `codec/tests.rs`. Both retain their original Rust
+namespaces, private access and all existing assertions. All 109 direct streaming
+tests remain, including the 69 codec tests and 59 moved `codec::tests` cases.
+
+| Owner | Lines | Unchanged limit |
+| --- | ---: | ---: |
+| `crates/norito/src/streaming.rs` | 3,757 | 5,000 |
+| `crates/norito/src/streaming/codec.rs` | 4,383 | 5,000 |
+| `crates/norito/src/streaming/codec/tests.rs` | 1,722 | 3,000 |
+
+The source-budget change removes only the obsolete 10,218-line streaming
+exception. Existing exceptions decrease from 174 to 173; the corrected report
+retains 236 source-size findings across all measured languages. The global
+production/test limits remain 5,000/3,000; no other exception expands. Earlier
+237-finding checkpoints remain historical scoped measurements, not Rust-only
+counts.
+
+Final default Norito tests pass **1,308 cases**, and the separate
+`--no-default-features --features base-codec --lib` run passes **456 tests**;
+each selection retains one existing ignored case. Strict
+`cargo clippy -p norito --tests --no-deps --locked --offline -- -D warnings`
+also passes after two unnecessary Copy clones are removed from test fixtures.
+All three terminal checkpoints preserve the same **19,297 final candidate
+inputs**, with zero drift and no stack override. The integrated code and budget
+paths match the qualified candidate. These are scoped Norito test and lint
+results; Clippy excludes dependencies and unselected features.
+
+Retained evidence is under
+`target/architecture-redesign/owned-storage-identity/model-identity-closure/streaming-identity/`:
+`final-qualified-node-checkpoint.json`, `final-qualified-base-checkpoint.json`
+and `final-qualified-tests-clippy-checkpoint.json` bind
+`final-candidate-inputs.json`. The separate pre-declaration identity/value
+captures, earlier failed helper checks and corrected source-budget report
+remain retained. The same source seal also passes a fresh **nine-case settlement
+selection**: eight participant cases plus rejection of the removed recursive
+layout, with zero failures/ignored tests and no stack override. The populated
+4,096-source case exercises schema construction, codec, hash and drop.
+`final-qualified-stack-checkpoint.json` records all 19,297 unchanged inputs and
+exact agreement of the three live model/hash owner files with the candidate.
+
+### Integrated structural-feature correction
+
+The subsequent structural check exposes an existing enum-direction defect:
+derived serialization selects the structural schema hash, while default enum
+deserialization retains the nominal hash. The unfixed exact regression
+`schema_hash::derived_enum_schema_agrees_across_all_frame_readers` fails at the
+first directional equality assertion; its retained negative checkpoint records
+exit 101 with no source drift. The integrated fix emits the same existing
+hash-selection body for enum decoding as for encoding. Explicit `schema_name`
+projections and default nominal identities remain unchanged. The regression
+exercises high-level, reader, core archived/slice and ArchiveView decoding, and
+rejects altered frame identities through each checked entry point.
+
+The fixture correction retains the immutable 84-identity and 396-frame files
+byte-for-byte. The streaming tests compare declared nominal identities against
+captures independently of the active hash mode. Default mode retains complete
+frame comparisons; the structural branch compares every case, nominal name,
+bare payload, advertised flag and alignment, alongside active directional/header
+agreement, roundtrips and wrong-schema/truncation/trailing-byte negatives.
+At this integrated checkpoint, these guards executed only under default/base;
+the retained structural compile failure prevented their structural execution.
+The later integrated [reconstruction checkpoint](#payload-reconstruction-checkpoint-2026-09-08)
+executes both guards successfully; its remaining structural failure is recorded below.
+The rANS checksum literal is the exact captured 32-byte field, with the original
+nominal checksum calculation asserted in default mode. These synthetic wire
+records do not qualify signed-table authorization.
+
+Isolated derive lint exposed unused private `FieldAttr`/`ContainerAttr` Debug
+derives relying on an undeclared Syn feature. Removing those derives eliminates
+the incidental requirement without adding dependencies or features. Eleven test
+error-extraction sites use explicit `Err` matching; every original diagnostic
+assertion and the five-case validation loop remain intact. Parsing, codec
+generation and supported attributes are unchanged by this cleanup.
+
+The final combined default run passes **1,380 tests**: **1,309 Norito**, **57
+derive-library** and **14 strict JSON** cases, with one existing ignored case.
+The separate base-codec library run passes **456 tests**, with one ignored.
+Strict Norito `--tests --no-deps` and isolated derive-library `--lib --no-deps`
+Clippy both pass with warnings denied. The final structural `schema_hash::`
+integration selection passes **six tests**, with zero failures or ignored cases
+under `--no-default-features --features base-codec,schema-structural`.
+
+All final results bind **19,297 unchanged inputs** in
+`qualified-correction-inputs.json`, without a stack override. The checkpoints
+are `qualified-correction-default-checkpoint.json`,
+`qualified-correction-base-checkpoint.json`,
+`qualified-correction-tests-clippy-checkpoint.json`,
+`qualified-correction-derive-clippy-checkpoint.json` and
+`qualified-correction-structural-schema-checkpoint.json` in the retained evidence
+directory above. All seven correction paths are integrated with exact afterimage
+verification in `structural-correction/final-integration/root-integration.json`;
+the fourteen total code/budget paths match the qualified candidate. The initial
+1,308-test declaration checkpoint remains separate earlier evidence.
+
+The final Native AMX selection passes **32 tests**, with zero failures or
+ignored cases, in 5.60 seconds on the default stack. It exercises the populated
+maximum 4,096-source settlement through schema, codec, hash and drop, and
+rejects the removed recursive layout. `qualified-correction-native-amx-checkpoint.json`
+binds all 19,297 unchanged final inputs in `qualified-correction-inputs.json`
+and confirms exact live model/hash owner correspondence. This final run is
+distinct from the earlier nine-case selection on `final-candidate-inputs.json`;
+neither uses a stack-size override.
+
+The retained full structural group diagnostic failed: **109 pass and ten fail**,
+comprising eight compression assumptions with compression disabled and two
+pre-existing nominal streaming-ticket golden checks. At that checkpoint the
+broader structural library selection failed compilation: **24 errors across 15
+test owners**. Ordinary framed fixtures need correct schema ownership, while the
+deliberately payload-only generic decoder regressions expose coupling that must
+be closed by the planned identity separation. Their schema-free leaves and
+assertions remain intact; no tests or production bounds are weakened to hide
+the failure. Evidence remains in `structural-before-correction.log`,
+`structural-corrected-schema-checkpoint.json` and
+`structural-enum-negative-runtime-checkpoint.json`. Those six passing structural
+integration cases did not qualify the failed selections or the streaming
+guards that had not executed at that checkpoint.
+
+The final source-budget check still exits 1 with 236 findings and 173 exceptions;
+none of the seven correction paths violates its limit. Atomic identity cutover,
+physical crate extraction, the required measured 25% model-memory reduction and
+unchanged-unit budgets, native/workspace and other feature qualification, and
+the complete first-release goal remain open.
+
+## Payload reconstruction checkpoint (2026-09-08)
+
+All **166 changed source paths (163 Rust and three Python) are integrated**
+from the isolated `abi-candidate` after exact preimage checks; every integrated
+afterimage matches the qualified candidate. `DeserializePayload` is the single
+reconstruction owner. Typed `NoritoDeserialize` inherits it and retains the
+existing frame-hash contract; typed derives emit both contracts,
+while payload-only derives reject frame schema attributes. Bare `Decode`, field
+and container reconstruction use payload bounds, and actual framed consumers
+state their typed contracts explicitly. The final `NoritoSchema` supertrait and
+removal of independent codec hashes remain the pending atomic identity cutover.
+
+The migration preserves reconstruction bodies, checked-owner validation, layout
+and resource enforcement, and all 41 retained manual hash overrides. Deliberately
+schema-free test leaves lose their panicking frame implementations; private
+query-page wire helpers retain payload contracts, while public `QueryPageV1`
+retains its frame contract and checked reconstruction. Opaque authorization
+source guards now also reject payload codec traits. No compatibility aliases,
+stack increases or decoder fallback paths are introduced.
+
+| Qualified selection | Terminal result |
+| --- | --- |
+| Default Norito/derive tests | 1,382 passed, one ignored (1,310 Norito, 58 derive, 14 strict JSON) |
+| Base-codec library | 457 passed, one ignored |
+| Codec documentation tests | 11 passed, one ignored |
+| Strict Clippy | Norito tests and isolated derive library pass, dependencies excluded |
+| Changed Rust formatting | All 163 changed Rust files pass the final scoped formatting check |
+| Primitive library | 305 passed |
+| Complete model library | 3,650 passed, one new registration-fixture failure, six ignored |
+| Corrected registration selection | All three pass in a subsequent run |
+| Native AMX | All 32 pass on the default stack, including maximum 4,096-source schema/codec/hash/drop and removed-layout rejection |
+| ABI/artifact admission libraries | 167 ABI and 15 artifact tests pass |
+| Production compilation | All 15 selected libraries and the shipping CLI/Kagami binaries pass |
+| Consumer library-test compilation | Revised seven-package `--lib --no-run` selection passes; no runtime test count |
+| CLI/Kagami test compilation | `--bins --no-run` passes in 874.132 seconds; no runtime test count |
+| Nexus/streaming integration harness | Entire harness compiles; both selected `global_commit::` tests pass, zero failed or ignored (301 filtered out) |
+| Core payload runtime selection | 28 passed, zero failed or ignored |
+| P2P library runtime | 583 passed, zero failed or ignored |
+| Config library runtime | 632 passed, zero failed or ignored, with explicit workspace context |
+| Config-base library runtime | 34 passed, zero failed or ignored |
+| Telemetry library runtime | 93 passed, zero failed or ignored, with explicit workspace context |
+| Torii-shared library runtime | 267 passed, zero failed or ignored |
+| Standalone status-wire integration | One passed, zero failed or ignored |
+| Torii payload runtime selection | Corrected run: 14 passed, zero failed or ignored; earlier nine-pass/five-failure fixture result retained |
+| Capture/identity and opaque/provider source controls | 87 Python tests and 91 subtests pass, repeated successfully on the integrated root |
+| Structural library | 467 passed, one signed rANS checksum failure, one ignored |
+
+The model failure correctly rejects cache validation on a resultless genesis
+proposal. The fixture now attaches one legitimate successful result through the
+checked owner, validates both Merkle caches, and preserves its original proposal
+bytes, consensus hash, signature and complete frame-family assertions. The
+subsequent three-test pass does not change the retained failed full-run result.
+Both structural streaming guards now execute and pass; their earlier compile
+failures remain retained. The sole current structural failure uses the unchanged
+signed rANS fixture and the feature-selected active schema hash. Its bytes are
+not refreshed to manufacture a pass. The whole Parliament source checker still
+fails at four existing `world.rs` anchors; focused payload-codec controls do not
+qualify that broader gate.
+
+The production check passes for all 15 selected libraries, including SDK, Core,
+Torii, P2P, IVM and storage consumers. The subsequent production/CLI check also
+passes for the shipping `iroha` and `kagami` binaries. Both commands retain
+19,300 unchanged inputs in their separate `production-consumer-check-checkpoint.json`
+and `production-and-cli-check-checkpoint.json` seals. Seven Core dead-code,
+two Kagami and one CLI helper warnings remain. The two additional CLI unused
+payload imports reported by the latter command were removed before the later
+passing CLI/Kagami test build. That test build also retains two existing unused
+`ErrReport` expressions in the CLI's soracloud tests. These compile checks do
+not claim strict all-target lint or test execution.
+
+The revised seven-package Core/P2P/Torii/shared/config/telemetry library-test
+build passes `--lib --no-run` in 309.531 seconds. Its
+`consumer-library-tests-build-revised-checkpoint.json` binds 19,300 unchanged
+source inputs, with no `RUST_MIN_STACK` override. This compiles the test owners;
+it assigns no runtime passing count. The initial failed build remains retained:
+its four errors came from the old `BudgetedField` serializer owner and the
+hybrid-recovery fixture's borrow extending past a consuming-key move. Both
+corrections already existed in live root and were reconciled byte for byte into
+the candidate, preserving the proof assertions without cloning the recovered
+key. Two unused decoder-trait test imports were also removed.
+
+The subsequent `cli-kagami-test-build-checkpoint.json` records a passing
+`--bins --no-run` selection in 874.132 seconds, retaining 19,300 unchanged inputs
+and no stack override. This qualifies compilation of those test binaries only.
+The six earlier consumer runtime selections total 1,637 passing cases; the
+standalone status-wire integration contributes one separate passing case. Every
+listed runtime checkpoint retains 19,300 inputs with no drift or stack override.
+The final config and telemetry results use
+`iroha_config-library-runtime-explicit-workspace-checkpoint.json` and
+`iroha_telemetry-library-runtime-explicit-workspace-checkpoint.json`; their earlier
+launcher-context failures remain retained and are not rewritten as passing runs.
+
+Torii's five failures all stop at the shared test commitment constructor with
+`InvalidChunkProfile(UnknownProfile { profile_id: 171 })`. Its synthetic inline
+profile ID conflicts with the current canonical inline profile; the production
+registry correctly rejects it. A fixture-only correction reuses the actual
+request-profile constructor while preserving chunk geometry and every existing
+assertion. The fixture correction was qualified in C before integration. The
+revised selection passes all 14 actual Torii cases, zero failed or ignored, in
+140.980 seconds. Its six other library
+harnesses select zero tests and contribute no additional runtime passes.
+`torii-payload-runtime-revised-checkpoint.json` retains 19,300 unchanged inputs
+without a stack override. The original nine-pass/five-failure result in
+`torii-payload-runtime-checkpoint.json` is not rewritten.
+
+The first Nexus/streaming `--no-run` build retains exit 101 after 1,122.580
+seconds, with one E0599 in `integration_tests/tests/nexus/global_commit.rs`:
+`LaneBlockCommitment::try_deserialize` still imported the former typed method
+owner. Replacing that import with DeserializePayload restores its existing
+payload reconstruction call. The unrelated unused SerializePayload import in
+`data_model/samples/mint_rose_trigger_data_model/src/lib.rs` is also removed.
+`nexus-commitment-fixture-runtime-revised-checkpoint.json` then records successful
+compilation of the entire integration harness and both actual `global_commit::`
+tests passing in 31.816 seconds, zero failed or ignored, 301 filtered out. Both
+attempts retain their own 19,300 unchanged-input seals without a stack override.
+This qualifies the two commitment fixtures, not runtime execution of the full
+Nexus/streaming integration suite; the initial failed build remains retained.
+
+The scoped runtime and compilation selections above are terminal. The complete
+166-path integration is recorded in `final-source-review-v3-integration.json`,
+with every preimage checked and every afterimage verified. These integrated
+paths match the qualified candidate; independent live changes remain outside
+that runtime qualification.
+
+The separate `unstaged-codec-review/` preserves the 59 unowned live source deltas.
+A bounded review of their 36 Rust files and direct resolution context found no
+additional codec migration. Those independent live changes were not synchronized
+into the candidate; this source review and the candidate's compilation results
+do not qualify the full current live root.
+
+Each terminal run retains its own source seal: the early codec/primitive/AMX
+runs cover 19,299 unchanged inputs; the model, corrected registration and
+ABI/artifact runs cover 19,300. Exact checkpoints and failed logs are under
+`target/architecture-redesign/owned-storage-identity/model-identity-closure/payload-reconstruction/`.
+`final-source-review-v2/` retains the earlier 164-path snapshot, matching live
+preimages, whitespace-strict replay and per-file hashes. Subsequent existing-root
+fixture reconciliations are recorded separately in `reconciled-source-updates/`;
+the revised test-build seal records the two test-import cleanups. With the Nexus
+and sample import corrections, the stage now changes 166 paths (163 Rust and
+three Python). `final-source-review-v3/` now retains the exact 166-path delta,
+matching live preimages and whitespace-strict replay; its patch SHA-256 is
+`79ca3524d977d1c3090a60d5e386da7647b4f3b4087385cac532d5cc960bb69c`.
+The earlier frozen review bundles remain historical snapshots. The restored
+synthetic compiler probe is excluded. Cargo.lock and both streaming fixture
+files remain exact.
+
+The final v3 legacy-codec guard passes. Its authoritative size check still fails
+with
+**236 source-size findings and 173 unchanged exceptions** over 10,763 measured
+files; its findings and exceptions are identical to v2. No file newly fails its
+budget, but five existing violations grow:
+Core gossiper and privacy state by two lines each, crypto FHE by one, model
+KAGEMUSHA by three and genesis by one. No limit or exception expands.
+
+After integration, the merged-root source controls also pass all 87 Python tests
+and 91 subtests, and the legacy-codec guard passes. That root's separate size
+check still fails with 236 findings and 173 exceptions over 10,765 files: the
+two additional files are the previously audited live-only Core modules. Finding
+paths match C, while 11 diagnostic messages have different lengths from the
+retained concurrent work. `live-integration-checks/` records these root results
+separately from the 166-path candidate's source-budget proof and runtime seals.
+Neither those static checks nor C's scoped passes qualify physical model
+extraction, the required 25% measured memory reduction, native/device execution,
+the full workspace or the first release.
+
+
+## Canonical SoraFS validator CLI migration (2026-09-09)
+
+The standalone `sorafs-validate` implementation and binary registration are
+removed. Artifact validation belongs to `iroha app sorafs toolkit validate`;
+signing, release-manifest verification, receipt verification and timed-OVN audit
+belong directly to `iroha app sorafs toolkit`. Typed Clap arguments and local
+dispatch run before node/client configuration or signer loading. The reusable
+manifest library retains validation and codec functions. No compatibility binary,
+alias or subprocess dispatch remains.
+
+All 95 original tests and their artifact/signature assertions are retained; five
+new tests cover namespace selection, configuration-free execution, irrelevant
+global arguments and help. Final isolated CLI build 5 passes 68 toolkit unit,
+42 executable integration and 216 SoraFS capability tests. This includes actual
+JSON incentives-state persistence: unused binary derives were removed, and the
+existing roundtrip test now uses production save/load functions and rejects
+malformed JSON, trailing values and unsupported versions. The ledger export and
+four model records retain explicit source-derived frame identities with canonical
+roundtrips and wrong-owner, truncated and trailing-frame rejection controls.
+These names are not claimed as compiler-captured historical frame evidence.
+
+`Cargo.lock` changes only the CLI's existing resolved `assert_cmd` edge and removal
+of the manifest library's unused `rustix` edge. The CLI owns its Ed25519 dependency.
+The renamed `scripts/package_iroha_cli_release.sh`, release workflow, artifact
+manifest, candidate installer, signing adapters, self-certification and fixtures
+use the canonical CLI. Native verifier calls use a fixed three-argument prefix;
+executable snapshot identity, minimal environment, closed descriptors, privilege
+drop, bounds and publication rollback remain enforced. Independent review traced
+a stale bootstrap pin to earlier committed descriptor and executable-size
+hardening before refreshing it. This source seal does not qualify publication.
+
+The broad delivery run records 1,366 passing tests and two unchanged production
+TODO failures; concurrent edits were limited to two documentation files and are
+recorded separately. Before the final Rust corrections, the release-controlled source rerun passes
+all 743 contract tests with an unchanged seal. Subsequent concurrent broker wire
+identity and fixture edits continue to change that surface. The current root seal
+is therefore pending reconciliation after that work settles; the CLI/model test
+evidence does not qualify the broker changes. The shell signing test passes.
+The cohesive billing-service contract now has a 396-line owner; all 47 assertions
+and 386 parent test IDs are retained, the parent's exception falls to 28,429 lines,
+and all 51 budget guard tests pass. The parent suite passes 384 tests with the same
+two TODO failures. No completion gate or architecture budget was weakened.
+
+Those gates remain red for unfinished capability routing, bounded fanout, provider
+authentication and hardware/state/evidence integration. All 16 resolved dependency
+boundaries pass. Five manifest dependency ratchets still fail, and the global
+source-size check reports 249 findings. The binary inventory pins 104 exact owners
+and keeps its 24-default maximum; all 12 focused tests pass. Historical target
+changes are traced separately from this migration's removed validator target.
+
+Failed build attempts and corrected source revisions are retained. Model build 1
+has no warnings and passes 24 incentives, 18 manifest and 32 Native AMX tests on
+default stacks with four workers. Its source is `7e8c6d2058d0e82c326980f8f7e2fbcdc2c720af5b42e3a75912a6726a9ff00b`;
+the final CLI-only JSON correction yields `3c25c5d9267ab67cd7a88fe13d23c6c393be922ea5061a2b267d5f9e3e2a09df`.
+Both builds and runtime groups preserve their exact source fingerprints. The
+final CLI's eight warnings originate in unchanged code, with attribution retained.
+Four corrected files were applied to the root only after every beforeimage matched.
+
+Formatting and retired-codec checks pass. Exact sources, failed and corrected
+commands, reviewed pins and logs are retained under
+`target/architecture-redesign/sorafs-validator-cli-migration-v1/` and
+`target/architecture-redesign/norito-identity-cutover/`. Full workspace, native,
+release, memory and four-validator qualification remain open.
+
+## Canonical SoraFS instruction CLI migration (2026-09-09)
+
+`iroha app sorafs toolkit instruction` now owns capacity-declaration,
+replication-order, complete-order and expire-order. Four typed Clap argument
+structs replace the old executable's flag parsers. Nonzero canonical integers,
+lowercase digests, canonical account spelling and signer-policy predecessor rules
+remain enforced. Exact instruction framing, base64 and single-array JSON output
+are preserved. Local dispatch needs no client configuration or signing context.
+The standalone builder and its old executable-test hook are removed.
+
+All six unit tests and twelve original executable cases are migrated; three new
+cases cover canonical help, configuration-free dispatch and irrelevant global
+arguments. The completion fixture now supplies the complete authority, assignment
+and finalized anchor required by its instruction. Its original assertions remain.
+The final isolated build passes 74 toolkit, 15 instruction-executable and 42
+validator-executable tests on unchanged source
+`e9c7e7f475ae08b598b42bde9a6a7db1dfe6f75d7d7b7e3a9dbe113e0dcda955`.
+The unused test import found by the first build is removed; eight pre-existing
+warnings remain. These counts overlap the earlier validator-stage selection.
+
+Fresh candidate metadata and all 14 inventory tests pass: 103 exact declared
+binary owners and 23 default binaries, with the maximum unchanged at 24. No
+normal or build dependency edge changes, and `Cargo.lock` remains byte-identical.
+All ten migration paths were applied only after their root beforeimages matched.
+Sources, assertion mappings, failed and corrected format attempts, compiler
+artifacts and runtime evidence are under
+`target/architecture-redesign/sorafs-instruction-cli-preparation-v1/` and the
+shared isolated qualification directory. Full workspace, current release-seal,
+consensus, native/device and memory qualification remain open.

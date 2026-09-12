@@ -23,7 +23,7 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 fn state_path_tlv(path: &str) -> Vec<u8> {
-    let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
+    let path: iroha_model_base::state_path::StatePath = path.parse().expect("canonical state path");
     let payload = norito::to_bytes(&path).expect("encode state path");
     make_tlv(PointerType::NoritoBytes, &payload)
 }

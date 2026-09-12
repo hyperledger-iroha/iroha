@@ -4,11 +4,11 @@
 //! host. Page and quantity invariants are enforced during both construction and Norito decoding so
 //! untrusted contract payloads cannot manufacture values that the host itself would never return.
 use iroha_data_model::prelude::{
-    AccountId, AssetDefinitionId, AssetId, DomainId, Json, NftId, Numeric, NumericOperationError,
-    Quantity,
+    AccountId, AssetDefinitionId, AssetId, Json, NftId, Numeric, NumericOperationError, Quantity,
 };
+use iroha_model_base::domain::DomainId;
 use norito::{
-    Decode, Encode, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    Decode, DeserializePayload, Encode, SerializePayload,
     core::{self as ncore, DecodeFromSlice},
 };
 use std::fmt;
@@ -20,6 +20,8 @@ pub const QUERY_PAGE_CAPACITY_V1: usize = 64;
 /// reordered or reused for a different entity family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u64)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::CoreQueryEntityTagV1")]
 pub enum CoreQueryEntityTagV1 {
     /// Account projection.
     Account = 1,
@@ -68,7 +70,7 @@ impl TryFrom<u64> for CoreQueryEntityTagV1 {
         }
     }
 }
-impl NoritoSerialize for CoreQueryEntityTagV1 {}
+
 impl SerializePayload for CoreQueryEntityTagV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.as_u64().serialize(writer)
@@ -80,7 +82,8 @@ impl SerializePayload for CoreQueryEntityTagV1 {
         self.as_u64().encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for CoreQueryEntityTagV1 {
+
+impl<'de> DeserializePayload<'de> for CoreQueryEntityTagV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 core-query entity tag")
     }
@@ -104,6 +107,8 @@ impl<'de> DecodeFromSlice<'de> for CoreQueryEntityTagV1 {
 /// unique decimal representation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::QuantityV1")]
 pub struct QuantityV1(Quantity);
 impl QuantityV1 {
     /// Construct a quantity from an already-canonical decimal payload.
@@ -164,7 +169,7 @@ impl From<QuantityV1> for Numeric {
         value.into_numeric()
     }
 }
-impl NoritoSerialize for QuantityV1 {}
+
 impl SerializePayload for QuantityV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
@@ -176,7 +181,8 @@ impl SerializePayload for QuantityV1 {
         self.0.encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for QuantityV1 {
+
+impl<'de> DeserializePayload<'de> for QuantityV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 quantity payload")
     }
@@ -196,6 +202,8 @@ impl<'de> DecodeFromSlice<'de> for QuantityV1 {
 /// Typed account projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::AccountView")]
 pub struct AccountView {
     /// Canonical account identifier.
     pub id: AccountId,
@@ -205,6 +213,8 @@ pub struct AccountView {
 /// Typed asset projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::AssetView")]
 pub struct AssetView {
     /// Canonical asset identifier.
     pub id: AssetId,
@@ -214,6 +224,8 @@ pub struct AssetView {
 /// Typed asset-definition projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::AssetDefinitionView")]
 pub struct AssetDefinitionView {
     /// Canonical asset-definition identifier.
     pub id: AssetDefinitionId,
@@ -231,6 +243,8 @@ pub struct AssetDefinitionView {
 /// Typed domain projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::DomainView")]
 pub struct DomainView {
     /// Canonical domain identifier.
     pub id: DomainId,
@@ -242,6 +256,8 @@ pub struct DomainView {
 /// Typed non-fungible-asset projection returned by V1 core queries.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::NftView")]
 pub struct NftView {
     /// Canonical NFT identifier.
     pub id: NftId,
@@ -272,8 +288,7 @@ impl CoreQueryProjectionV1 for NftView {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueryPageItemsV1<T>(Vec<T>);
-impl<T: NoritoSerialize> NoritoSerialize for QueryPageItemsV1<T> {}
-impl<T: NoritoSerialize> SerializePayload for QueryPageItemsV1<T> {
+impl<T: SerializePayload> SerializePayload for QueryPageItemsV1<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
@@ -284,10 +299,10 @@ impl<T: NoritoSerialize> SerializePayload for QueryPageItemsV1<T> {
         self.0.encoded_len_exact()
     }
 }
-impl<'de, T> NoritoDeserialize<'de> for QueryPageItemsV1<T>
+impl<'de, T> DeserializePayload<'de> for QueryPageItemsV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
@@ -302,8 +317,8 @@ where
 }
 impl<'de, T> DecodeFromSlice<'de> for QueryPageItemsV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
@@ -320,9 +335,10 @@ where
         Ok((Self(items), used))
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::NonNegativeOffsetV1")]
 struct NonNegativeOffsetV1(i64);
-impl NoritoSerialize for NonNegativeOffsetV1 {}
+
 impl SerializePayload for NonNegativeOffsetV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
@@ -334,7 +350,8 @@ impl SerializePayload for NonNegativeOffsetV1 {
         self.0.encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for NonNegativeOffsetV1 {
+
+impl<'de> DeserializePayload<'de> for NonNegativeOffsetV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("negative V1 query-page offset")
     }
@@ -437,20 +454,22 @@ fn validate_query_page_components(
 /// Construction and decoding both enforce at most 64 items and a progressing,
 /// nonnegative continuation offset. Fields stay private so these invariants
 /// cannot be bypassed with a struct literal.
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::core_query::QueryPageV1")]
 pub struct QueryPageV1<T> {
     items: QueryPageItemsV1<T>,
     next_offset: Option<NonNegativeOffsetV1>,
 }
-#[derive(Encode, Decode)]
+#[derive(SerializePayload, DeserializePayload)]
 struct QueryPageWireV1<T> {
     items: QueryPageItemsV1<T>,
     next_offset: Option<NonNegativeOffsetV1>,
 }
-impl<'de, T> NoritoDeserialize<'de> for QueryPageV1<T>
+
+impl<'de, T> DeserializePayload<'de> for QueryPageV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
@@ -465,8 +484,8 @@ where
 }
 impl<'de, T> DecodeFromSlice<'de> for QueryPageV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
@@ -552,9 +571,11 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::{
-        AccountId, AssetDefinition, AssetDefinitionId, AssetId, DomainId, Name, Registrable,
+        AccountId, AssetDefinition, AssetDefinitionId, AssetId, Registrable,
     };
-    fn bare<T: NoritoSerialize>(value: &T) -> Vec<u8> {
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
+    fn bare<T: SerializePayload>(value: &T) -> Vec<u8> {
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("encode bare payload");
         bytes
@@ -742,7 +763,7 @@ mod tests {
     }
     #[test]
     fn asset_definition_projection_field_order_is_stable() {
-        #[derive(Encode)]
+        #[derive(SerializePayload)]
         struct FieldOrderOracle {
             id: AssetDefinitionId,
             name: String,
@@ -856,5 +877,74 @@ mod tests {
         assert_roundtrip!(definition_page, AssetDefinitionView);
         assert_roundtrip!(domain_page, DomainView);
         assert_roundtrip!(nft_page, NftView);
+    }
+}
+
+#[cfg(test)]
+mod payload_contract_tests {
+    use super::QueryPageV1;
+    use norito::codec::{Decode, Encode};
+
+    #[derive(Debug, PartialEq, norito::SerializePayload, norito::DeserializePayload)]
+    #[norito(decode_from_slice)]
+    struct LocalValue(u32);
+
+    #[test]
+    fn bounded_query_page_reconstructs_schema_free_fields() {
+        let page = QueryPageV1::try_new(vec![LocalValue(7), LocalValue(11)], Some(2))
+            .expect("valid payload page");
+        let bytes = page.encode();
+        let decoded = QueryPageV1::<LocalValue>::decode(&mut bytes.as_slice())
+            .expect("bare decoding does not need a field frame contract");
+        assert_eq!(decoded, page);
+        let mut trailing = bytes;
+        trailing.push(0xFF);
+        assert!(QueryPageV1::<LocalValue>::decode(&mut trailing.as_slice()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::AccountView>(
+            "ivm_abi::core_query::AccountView",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::AssetView>(
+            "ivm_abi::core_query::AssetView",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::AssetDefinitionView>(
+            "ivm_abi::core_query::AssetDefinitionView",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::DomainView>(
+            "ivm_abi::core_query::DomainView",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::NftView>(
+            "ivm_abi::core_query::NftView",
+        );
+    }
+    #[test]
+    fn observed_manual_frames() {
+        use super::*;
+        crate::captured_identity_tests::assert_manual::<CoreQueryEntityTagV1>(
+            "CoreQueryEntityTagV1",
+            &(CoreQueryEntityTagV1::Account),
+        );
+        crate::captured_identity_tests::assert_manual::<QuantityV1>(
+            "QuantityV1",
+            &(QuantityV1::try_new(Numeric::new(42, 0)).unwrap()),
+        );
+        crate::captured_identity_tests::assert_manual::<NonNegativeOffsetV1>(
+            "NonNegativeOffsetV1",
+            &(NonNegativeOffsetV1(3)),
+        );
+        crate::captured_identity_tests::assert_manual::<QueryPageV1<u32>>(
+            "QueryPageV1<u32>",
+            &(QueryPageV1::try_new(vec![7_u32, 9], Some(2)).unwrap()),
+        );
+        crate::captured_identity_tests::assert_manual::<QueryPageV1<u64>>(
+            "QueryPageV1<u64>",
+            &(QueryPageV1::try_new(vec![7_u64, 9], Some(2)).unwrap()),
+        );
     }
 }

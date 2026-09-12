@@ -12,6 +12,7 @@ This crate hosts cross-component tests for Iroha.
   - `consensus_and_da`
   - `nexus_and_streaming`
 - Target a harness directly with `cargo test -p integration_tests --test <harness>`.
+- The focused `taira_consensus_contracts` target in `iroha_test_network` requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and `iroha` CLI and select them with `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p iroha_test_network --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Exact test filters are now module-qualified inside the grouped harnesses; for example:
   `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture`
@@ -61,12 +62,29 @@ transaction races, exact authority failures, balance conservation and matching
 finalized projections after a validator restart. Orderbook partial fills and
 expiry, elapsed rent collection, and hardware signing remain separate coverage.
 
-- IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
+- `iroha_test_samples/build.rs` copies the canonical `fixtures/ivm/*.to` files listed in `crates/ivm/prebuilt_samples.txt` into that crate's Cargo `OUT_DIR`, together with the build profile. All consumers use `sample_ivm_path` and `ivm_build_profile_path`; sealed source trees remain read-only and no manual prebuild or source-tree output fallback is used. Fixture regeneration remains a separate compiler-owned task.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
+- The five `nexus::atomic_private_settlement_localnet::benchmark_terminal_`
+  regressions in `nexus_and_streaming` exercise the canonical Norito outcome
+  envelope, typed completion deadlines, retained request identity and durable
+  publication across success, failure and panic. With the
+  `atomic-private-settlement-release` feature, run
+  `cargo test --locked -p integration_tests --test nexus_and_streaming --features atomic-private-settlement-release benchmark_terminal_ -- --nocapture --test-threads=1`.
+  These ordinary tests launch no validators. Python transport controls are in
+  `scripts/tests/private_settlement_attempt_accounting_test.py`; their process
+  boundaries are synthetic. Neither suite qualifies a real network or benchmark
+  campaign. The complete accounting gate is specified in
+  [private_settlement.md](../specs/private_settlement.md).
+- `scripts/tests/private_settlement_scope_release_test.py` replays complete
+  synthetic registered campaigns through the canonical accounting archive and
+  release validators. It covers retained predecessor failures, exact requests,
+  full-plan fail-fast closure, manifest coverage and recomputed public counts.
+  Run it with the repository's ABI-23 native wheel installed in the selected
+  Python environment. Missing native ownership is a failure, not a skipped gate.
 - `core_api::config::startup_configuration_is_read_only_on_four_validators` reads the explicit startup configuration through native operator authentication on four validators. It requires a signed POST to `/v1/configuration` to fail with HTTP 405 and `method_not_allowed`, and verifies that the complete effective configuration remains unchanged. Runtime HTTP configuration mutation is not supported.
 - Native BPNG alias bootstrap retained-Kura coverage lives in
   `tests/alias_registry_bootstrap_network.rs` in `network_functional`. It requires

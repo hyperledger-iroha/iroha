@@ -62,6 +62,10 @@ fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart(
             BASE_UNIX_MS + 1,
         )
         .expect("create case-bound session");
+    crate::frame_test_support::assert_current_frame(
+        &issued.session,
+        "sorafs_node::evidence_viewer::EvidenceViewerSessionSecurityRecordV1",
+    );
     assert_eq!(issued.session.case_id, CASE_ID);
     assert_eq!(issued.session.round_id, ROUND_ID);
     assert_eq!(issued.session.role, EvidenceViewerRoleV1::Juror);
@@ -85,6 +89,10 @@ fn case_bound_webauthn_session_rotates_grants_reauthorizes_and_survives_restart(
             BASE_UNIX_MS + 2,
         )
         .expect("read first manifest");
+    crate::frame_test_support::assert_current_frame(
+        &first_manifest.manifest,
+        "sorafs_node::evidence_viewer::EvidenceViewerManifestV1",
+    );
     assert_eq!(first_manifest.manifest.case_id, CASE_ID);
     assert_eq!(first_manifest.manifest.round_id, ROUND_ID);
     assert_eq!(first_manifest.manifest.quarantine_id, fixture.quarantine_id);
@@ -300,8 +308,7 @@ fn signed_transparency_projection_is_authoritative_payload_free_and_restart_stab
         signer_calls_before_reads,
         "audit reads must return the retained signed anchor without invoking the signer"
     );
-    let encoded =
-        norito::to_bytes(&full_projection).expect("encode payload-free transparency page");
+    let encoded = norito::codec::encode_adaptive(&full_projection);
     for secret in [
         std::str::from_utf8(EVIDENCE_PAYLOAD).expect("ASCII evidence fixture"),
         "valid-webauthn-assertion-projection",

@@ -466,7 +466,7 @@ fn store_block_with_merge_entry_conflict_does_not_append_log() {
     assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
 }
 #[test]
-fn durable_block_payload_len_requires_committed_marker() {
+fn durable_block_payload_len_requires_committed_marker_and_finality() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
@@ -506,10 +506,17 @@ fn durable_block_payload_len_requires_committed_marker() {
             .flush_pending_fsync(true)
             .expect("force pending fsync");
     }
+    assert_eq!(
+        kura.durable_block_payload_len_by_hash(block_hash)
+            .expect("read durable but unfinalized payload bound"),
+        None,
+        "a durable append marker does not authenticate replica metadata"
+    );
+    persist_v2_finality_chain_through(&kura, nonzero!(1_usize));
     let (height, payload_len) = kura
         .durable_block_payload_len_by_hash(block_hash)
         .expect("read durable payload bound")
-        .expect("durable payload metadata after marker advances");
+        .expect("durable payload metadata after marker and finality");
     let index_len = {
         let mut store = kura.block_store.lock();
         store.read_block_index(0).expect("block index").length
@@ -1045,8 +1052,10 @@ fn kura_background_eviction_retry_latency_threshold() {
     let case = background_budget_eviction_case();
     let kura = case.kura;
     let block4 = case.retry_block;
-    kura.bind_local_peer_id(checked_peer_id())
-        .expect("bind local peer before Kura start");
+    assert!(
+        kura.local_peer_id.get().is_some(),
+        "replica fixture binds its immutable local peer"
+    );
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let shutdown_signal = ShutdownSignal::new();
     let _handle = {
@@ -1243,14 +1252,17 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
         native_kura.native_amx_evidence_prune_intent_max_bytes(),
         configured_prune_bound
     );
+    assert_eq!(
+        configured_prune_bound,
+        V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
+        "removed settlement preimages use the complete shared sidecar byte bound"
+    );
     assert!(
-        configured_prune_bound
-            < Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
-                LANE_HISTORY_RETENTION,
-                V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
-            )
-            .expect("default Native AMX prune bound"),
-        "the prune-journal hard limit must derive from configured retention"
+        Kura::native_amx_evidence_prune_intent_max_entries(native_cfg.lane_history_retention)
+            .expect("configured prune entry bound")
+            < Kura::native_amx_evidence_prune_intent_max_entries(LANE_HISTORY_RETENTION)
+                .expect("default prune entry bound"),
+        "the prune entry bound must derive from configured retention"
     );
     let native_block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
     assert!(
@@ -1784,7 +1796,7 @@ fn combined_disk_usage_refresh_invalidates_both_caches_on_total_scan_error() {
     assert!(kura.disk_usage_total_initialized.load(Ordering::Relaxed));
 }
 #[test]
-fn retired_geometry_evidence_is_accounted_and_never_legacy_purged() {
+fn retired_geometry_evidence_is_accounted_and_never_purged_as_unowned_segments() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
@@ -1798,15 +1810,12 @@ fn retired_geometry_evidence_is_accounted_and_never_legacy_purged() {
         .expect("create geometry archive");
     std::fs::write(&geometry_file, [0u8; 7]).expect("write geometry evidence");
     let geometry_journal = kura.lane_geometry_journal_path();
-    assert!(
-        !geometry_journal.exists(),
-        "fresh Kura must not already have a geometry journal"
-    );
-    std::fs::write(&geometry_journal, [0u8; 5]).expect("write geometry journal");
+    let authenticated_journal = fs::read(&geometry_journal)
+        .expect("fresh Kura retains its authenticated configured catalog baseline");
     let with_evidence = kura
         .refresh_disk_usage_bytes()
         .expect("usage with geometry evidence");
-    assert_eq!(with_evidence, baseline.saturating_add(12));
+    assert_eq!(with_evidence, baseline.saturating_add(7));
     assert!(
         !kura.purge_retired_segments().unwrap(),
         "geometry evidence alone is not disposable retired storage"
@@ -1815,22 +1824,25 @@ fn retired_geometry_evidence_is_accounted_and_never_legacy_purged() {
         std::fs::read(&geometry_file).expect("geometry evidence retained"),
         [0u8; 7]
     );
-    assert!(geometry_journal.exists(), "geometry journal retained");
+    assert_eq!(
+        fs::read(&geometry_journal).expect("retained journal"),
+        authenticated_journal
+    );
     let retired_root = temp_dir.path().join("retired");
     let retired_blocks = RuntimeLaneConfig::default()
         .primary()
         .blocks_dir(&retired_root);
-    std::fs::create_dir_all(&retired_blocks).expect("create legacy retired blocks");
+    std::fs::create_dir_all(&retired_blocks).expect("create unowned retired blocks");
     std::fs::write(retired_blocks.join(DATA_FILE_NAME), [0u8; 3])
-        .expect("write legacy retired block bytes");
+        .expect("write unowned retired block bytes");
     assert_eq!(
         kura.refresh_disk_usage_bytes()
-            .expect("usage with legacy retired bytes"),
-        baseline.saturating_add(15)
+            .expect("usage with unowned retired bytes"),
+        baseline.saturating_add(10)
     );
     assert!(
         kura.purge_retired_segments().unwrap(),
-        "legacy retired blocks should remain purgeable"
+        "unowned retired blocks should remain purgeable"
     );
     assert!(!retired_root.join("blocks").exists());
     assert!(
@@ -1843,8 +1855,8 @@ fn retired_geometry_evidence_is_accounted_and_never_legacy_purged() {
     );
     assert_eq!(
         kura.refresh_disk_usage_bytes()
-            .expect("usage after legacy purge"),
-        baseline.saturating_add(12)
+            .expect("usage after unowned purge"),
+        baseline.saturating_add(7)
     );
 }
 #[test]
@@ -1863,8 +1875,7 @@ fn store_block_rejects_when_other_lane_storage_exceeds_budget() {
     let block = DummyBlocks::new().next();
     let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
     let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
-        .expect("initialize kura");
+    let (mut kura, _) = test_kura_with_default_lane_markers(&kura_cfg, &lane_config);
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
         .expect("account canonical association stage");
@@ -2549,11 +2560,7 @@ fn pre_marker_association_recovery_failure_remains_exactly_retryable() {
 fn post_marker_rewrite_recovery_failure_poison_gates_until_restart() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let original = DummyBlocks::new().next();
         let original_hash = original.hash();
         kura.store_block(Arc::clone(&original))
@@ -2623,11 +2630,7 @@ fn unreadable_append_marker_state_poison_gates_live_kura_and_restart_rolls_back(
     config.fsync_mode = FsyncMode::Batched;
     config.fsync_interval = Duration::from_secs(60);
     {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         kura.block_store
             .lock()
             .fail_next_commit_marker_write_and_readback
@@ -2834,4 +2837,53 @@ fn finalized_merge_retry_rejects_corrupt_finality_before_republishing_index() {
         files_before,
         "rejected retry must retain the exact occupied corruption and all durable evidence"
     );
+}
+
+#[test]
+fn canonical_association_stage_counts_real_publication_and_removal_once() {
+    let (kura, mut blocks) = blank_kura_with_blocks();
+    let block = blocks.next();
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize both disk caches");
+    let before = kura
+        .disk_usage_accounting_snapshot_for_tests()
+        .expect("raw baseline");
+    assert!(before.enforced_initialized && before.total_initialized);
+    assert_eq!(before.cached_total_bytes, before.exact_total_bytes);
+    let path = kura.canonical_association_stage_path();
+    assert!(!path.exists());
+    kura.write_canonical_association_stage(&block, None)
+        .expect("publish real canonical stage");
+    let length = fs::metadata(&path).expect("canonical stage metadata").len();
+    assert!(length > 0);
+    for _ in 0..2 {
+        let published = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("raw published caches");
+        assert!(published.enforced_initialized && published.total_initialized);
+        assert_eq!(
+            published.cached_enforced_bytes,
+            published.exact_enforced_bytes
+        );
+        assert_eq!(published.cached_total_bytes, published.exact_total_bytes);
+        assert_eq!(
+            published.cached_total_bytes,
+            before.cached_total_bytes + length
+        );
+        // Idempotent retry must not publish the same file delta a second time.
+        kura.write_canonical_association_stage(&block, None)
+            .expect("retry exact stage");
+    }
+    for _ in 0..2 {
+        kura.remove_canonical_association_stage()
+            .expect("remove or retry absent stage");
+        let removed = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("raw removed caches");
+        assert!(!path.exists());
+        assert!(removed.enforced_initialized && removed.total_initialized);
+        assert_eq!(removed.cached_enforced_bytes, removed.exact_enforced_bytes);
+        assert_eq!(removed.cached_total_bytes, removed.exact_total_bytes);
+        assert_eq!(removed.cached_total_bytes, before.cached_total_bytes);
+    }
 }

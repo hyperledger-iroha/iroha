@@ -128,6 +128,8 @@ const BFV_GOLDILOCKS_DIGEST384_MDS_V1: [[u64; 3]; 3] = [
 /// Construction and decoding reject non-canonical field words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1")]
 pub struct BfvGoldilocksDigest384V1([u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]);
 
 impl Default for BfvGoldilocksDigest384V1 {
@@ -195,7 +197,6 @@ impl AsRef<[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]> for BfvGoldilocksDigest384V1
     }
 }
 
-impl norito::core::NoritoSerialize for BfvGoldilocksDigest384V1 {}
 impl norito::core::SerializePayload for BfvGoldilocksDigest384V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
@@ -211,7 +212,7 @@ impl norito::core::SerializePayload for BfvGoldilocksDigest384V1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for BfvGoldilocksDigest384V1 {
+impl<'de> norito::core::DeserializePayload<'de> for BfvGoldilocksDigest384V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical BFV Goldilocks digest decode")
     }
@@ -219,7 +220,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for BfvGoldilocksDigest384V1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let bytes = <[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
         Self::from_le_bytes(bytes).ok_or_else(|| {
             norito::core::Error::Message(
                 "non-canonical BFV GoldilocksDigest384V1 field element".into(),
@@ -1655,8 +1656,8 @@ pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_VERSION_V
 pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_CONSTRAINT_SYSTEM_MATERIAL_FIELD_COUNT_V1: u16 = 37;
 /// Number of six-lane digest bytes reduced into each BFV full-bootstrap arithmetic AIR
 /// composition challenge.
-pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 =
-    BFV_GOLDILOCKS_DIGEST384_BYTES_V1 as u16;
+pub const BFV_FULL_BOOTSTRAP_ARITHMETIC_AIR_COMPOSITION_CHALLENGE_DIGEST_BYTES_V1: u16 = 48;
+const _: () = assert!(BFV_GOLDILOCKS_DIGEST384_BYTES_V1 == 48);
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_VERSION_V1: u16 = 1;
 const BFV_FULL_BOOTSTRAP_NATIVE_PROOF_CIRCUIT_FINGERPRINT_MATERIAL_FIELD_COUNT_V1: u16 = 47;
 /// Canonical native proof system family for BFV full-bootstrap proof keys.
@@ -1680,7 +1681,7 @@ pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_FOLD_ARITY_V1: u8 = 2;
 /// least larger certified count).
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1: u16 = 64;
 const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 >= 64);
-const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1 % 8 == 0);
+const _: () = assert!(BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1.is_multiple_of(8));
 /// Canonical native STARK binary Merkle arity for BFV full-bootstrap proof keys.
 pub const BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_MERKLE_ARITY_V1: u8 = 2;
 /// Native payload kind for transparent BFV full-bootstrap STARK prover parameters.
@@ -6477,7 +6478,7 @@ fn decode_bfv_base_material_bytes_v1<T>(
     validate: impl FnOnce(&T) -> Result<(), BfvError>,
 ) -> Result<T, BfvError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     invalid_guards! {
         bytes.is_empty() => ("{label} must not be empty"),
@@ -8055,7 +8056,7 @@ fn decode_bfv_canonical_material_bytes_v1<T>(
     validate: impl FnOnce(&T) -> Result<(), BfvError>,
 ) -> Result<T, BfvError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     invalid_guards! {
         bytes.is_empty() => ("{label} must not be empty"),
@@ -15154,7 +15155,7 @@ fn decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1<T>(
     validate: impl FnOnce(&T) -> Result<(), BfvError>,
 ) -> Result<T, BfvError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     invalid_guards! {
         bytes.is_empty() => ("{label} must not be empty"),
@@ -23993,6 +23994,72 @@ fn validate_bfv_full_bootstrap_execution_claim_statement_digest_aliases_v1(
         ],
     )
 }
+/// Execute an artifact-bound BFV arithmetic diagnostic and propagate its bounds.
+///
+/// This evaluates the deterministic relation used by witness reconstruction. Its trace and
+/// bounds carry no production qualification or release-audit authority; production execution
+/// still requires [`require_ram_lfe_bfv_production_qualification_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameters, governed artifacts, Galois keys, ciphertext,
+/// or declared input bound are invalid.
+#[allow(clippy::too_many_arguments)]
+pub fn bfv_full_bootstrap_diagnostic_execution_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
+    input_bound: u128,
+) -> Result<
+    (
+        BfvFullBootstrapExecutionPrefixTraceV1,
+        BfvFullBootstrapExecutionPrefixTraceBoundsV1,
+    ),
+    BfvError,
+> {
+    let result = match bound_mode {
+        BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
+            let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+                params,
+                bootstrap_key,
+                artifacts,
+                galois_keys,
+                ciphertext,
+            )?;
+            let trace_bounds =
+                bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+                    params,
+                    bootstrap_key,
+                    artifacts,
+                    galois_keys,
+                    input_bound,
+                )?;
+            (trace, trace_bounds)
+        }
+        BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => {
+            let trace =
+                apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                    params,
+                    bootstrap_key,
+                    artifacts,
+                    galois_keys,
+                    ciphertext,
+                )?;
+            let trace_bounds =
+                bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+                    params,
+                    bootstrap_key,
+                    artifacts,
+                    galois_keys,
+                    input_bound,
+                )?;
+            (trace, trace_bounds)
+        }
+    };
+    Ok(result)
+}
 /// Build typed deterministic witness material for a full-bootstrap claim.
 ///
 /// The material is derived by executing the governed full-bootstrap prefix through the exact or
@@ -24032,45 +24099,15 @@ pub fn bfv_full_bootstrap_execution_witness_digest_material_v1(
         "BFV full-bootstrap execution witness output ciphertext",
         &claim.output_ciphertext,
     )?;
-    let (trace, trace_bounds) = match claim.bound_mode {
-        BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple => {
-            let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
-                params,
-                bootstrap_key,
-                artifacts,
-                galois_keys,
-                &claim.input_ciphertext,
-            )?;
-            let trace_bounds =
-                bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    galois_keys,
-                    claim.input_bound,
-                )?;
-            (trace, trace_bounds)
-        }
-        BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise => {
-            let trace =
-                apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    galois_keys,
-                    &claim.input_ciphertext,
-                )?;
-            let trace_bounds =
-                bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
-                    params,
-                    bootstrap_key,
-                    artifacts,
-                    galois_keys,
-                    claim.input_bound,
-                )?;
-            (trace, trace_bounds)
-        }
-    };
+    let (trace, trace_bounds) = bfv_full_bootstrap_diagnostic_execution_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        &claim.input_ciphertext,
+        claim.bound_mode,
+        claim.input_bound,
+    )?;
     invalid_guards! {
         trace.slot_to_coefficient_output != claim.output_ciphertext => (
             "BFV full-bootstrap execution witness output ciphertext does not match deterministic governed trace"
@@ -38941,7 +38978,8 @@ mod first_release_hard_cut_tests {
     use super::*;
     use sha3::Sha3_256;
 
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "test::iroha_crypto::retired_sha256_verifier_payload")]
     struct RetiredSha256VerifierPayloadV0 {
         version: u16,
         field_count: u16,

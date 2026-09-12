@@ -35,8 +35,8 @@ use iroha_data_model::{
         GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureProofV1,
         GlobalThresholdBeaconPartialSignatureV1, GlobalThresholdBeaconPublicShareV1,
     },
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
@@ -144,6 +144,8 @@ pub struct GlobalThresholdBeaconSessionBindingV1 {
 /// The cursor is not part of any later pulse's signed message or seed. It only
 /// records the latest admitted slot so persistence can reject late insertion
 /// while permitting intentionally skipped optional heights.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::beacon::GlobalThresholdBeaconPulseLinkV1")]
 #[derive(
     Debug,
     Clone,
@@ -191,8 +193,17 @@ impl GlobalThresholdBeaconPulseLinkV1 {
 /// deliveries and threshold-signature partials have no field in this type and
 /// therefore cannot enter authoritative World persistence.
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1")]
 pub struct GlobalThresholdBeaconDkgSnapshotV1 {
     /// Immutable DKG session and consensus-height schedule.
     pub session: GlobalThresholdBeaconDkgSessionV1,
@@ -319,8 +330,17 @@ impl GlobalThresholdBeaconDkgSnapshotV1 {
 
 /// Finalized public beacon-key session with activation and retirement metadata.
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1")]
 pub struct FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
     /// Canonical finalized threshold-beacon session and full public transcript.
     pub session: GlobalThresholdBeaconKeySessionV1,
@@ -2481,7 +2501,6 @@ pub(crate) mod tests {
         threshold_bls::{AdaptiveThresholdBlsSecretShare, TleReleasePurpose},
     };
     use iroha_data_model::{
-        ChainId,
         account::AccountId,
         block::{BlockHeader, consensus_v2 as wire},
         consensus::{
@@ -2496,8 +2515,9 @@ pub(crate) mod tests {
             parliament_candidate_root_v1,
         },
         musubi::MusubiRegistrySnapshotV1,
-        peer::PeerId,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use rand::rngs::StdRng;
     use std::sync::{
         Arc,
@@ -2749,6 +2769,14 @@ pub(crate) mod tests {
         let binary: GlobalThresholdBeaconDkgSnapshotV1 =
             norito::decode_from_bytes(&bytes).expect("decode public DKG snapshot");
         binary.validate().expect("validate decoded DKG snapshot");
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &snapshot,
+            "iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1",
+        );
+        assert!(matches!(
+            norito::decode_canonical::<GlobalThresholdBeaconKeySessionV1>(&bytes),
+            Err(norito::Error::SchemaMismatch),
+        ));
         assert_eq!(binary, snapshot);
         let json = norito::json::to_json(&snapshot).expect("encode public DKG snapshot JSON");
         let decoded_json: GlobalThresholdBeaconDkgSnapshotV1 =
@@ -2789,6 +2817,14 @@ pub(crate) mod tests {
         let decoded: FinalizedGlobalThresholdBeaconKeySessionRecordV1 =
             norito::decode_from_bytes(&encoded).expect("decode key lifecycle");
         decoded.validate().expect("validate decoded lifecycle");
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1",
+        );
+        assert!(matches!(
+            norito::decode_canonical::<GlobalThresholdBeaconKeySessionV1>(&encoded),
+            Err(norito::Error::SchemaMismatch),
+        ));
         assert_eq!(decoded, record);
     }
 
@@ -4877,6 +4913,66 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn shared_beacon_frame_owners_pass_the_production_session_and_pulse_boundaries() {
+        use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1 as check;
+        let (fixture, pulse, _cursor, anchor) = signed_pulse_fixture();
+        let session = &fixture.session;
+        let record = session.record();
+        let expected = GlobalThresholdBeaconSessionBindingV1 {
+            network_id: record.network_id,
+            session_id: record.session_id,
+            roster_hash: record.roster_hash,
+            transcript_hash: record.transcript_hash,
+        };
+        check(
+            record,
+            "iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1",
+        );
+        check(
+            &pulse,
+            "iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1",
+        );
+        let session_frame = norito::encode_canonical(record).expect("shared session frame");
+        let decoded = decode_global_threshold_beacon_session_v1(&session_frame, &expected)
+            .expect("canonical session passes production transcript validation");
+        assert_eq!(decoded.record(), record);
+        let pulse_frame = norito::encode_canonical(&pulse).expect("shared pulse frame");
+        let link = decode_finalized_global_threshold_beacon_pulse_v1(&pulse_frame, session, anchor)
+            .expect("canonical pulse passes production signature validation");
+        assert_eq!(link.height, pulse.height);
+        assert_eq!(link.pulse_id, pulse.pulse_id);
+        assert!(matches!(
+            decode_global_threshold_beacon_session_v1(&pulse_frame, &expected),
+            Err(GlobalThresholdBeaconError::InvalidEncoding)
+        ));
+        assert!(matches!(
+            decode_finalized_global_threshold_beacon_pulse_v1(&session_frame, session, anchor),
+            Err(GlobalThresholdBeaconError::InvalidEncoding)
+        ));
+        assert!(
+            decode_global_threshold_beacon_session_v1(
+                &session_frame[..session_frame.len() - 1],
+                &expected
+            )
+            .is_err()
+        );
+        assert!(
+            decode_finalized_global_threshold_beacon_pulse_v1(
+                &pulse_frame[..pulse_frame.len() - 1],
+                session,
+                anchor
+            )
+            .is_err()
+        );
+        let mut substituted = pulse;
+        substituted.seed[0] ^= 1;
+        let altered =
+            norito::encode_canonical(&substituted).expect("encode altered pulse with valid frame");
+        assert!(
+            decode_finalized_global_threshold_beacon_pulse_v1(&altered, session, anchor).is_err()
+        );
+    }
     #[test]
     fn threshold_beacon_canonical_decoders_reject_trailing_wire_data() {
         let (session, expected) = validated_threshold_session();

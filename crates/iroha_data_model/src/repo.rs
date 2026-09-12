@@ -4,17 +4,18 @@
 //! consent-selected balance scopes and terminal settlement status are retained
 //! so maturity settlement cannot infer or substitute caller-controlled terms.
 use crate::{
-    Identifiable, Name,
+    Identifiable,
     asset::prelude::{AssetDefinitionId, AssetId},
-    metadata::Metadata,
     prelude::AccountId,
 };
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
-#[cfg(feature = "json")]
+
 use mv::json::JsonKeyCodec;
 use norito::{
     codec::{Decode, Encode},
@@ -24,6 +25,8 @@ use norito::{
 mod model {
     use super::*;
     /// Identifier for a repo agreement lifecycle.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::repo::model::RepoAgreementId")]
     #[derive(
         Debug,
         Display,
@@ -44,6 +47,7 @@ mod model {
     #[getset(get = "pub")]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+
     pub struct RepoAgreementId {
         /// Logical name assigned by the initiating desk or workflow.
         pub name: Name,
@@ -52,8 +56,20 @@ mod model {
 pub use self::model::RepoAgreementId;
 string_id!(RepoAgreementId);
 /// Cash leg definition used by repo instructions.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoCashLeg")]
@@ -73,8 +89,20 @@ impl RepoCashLeg {
     }
 }
 /// Collateral leg definition used by repo instructions.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoCollateralLeg")]
@@ -98,9 +126,20 @@ impl RepoCollateralLeg {
 }
 /// Governance knobs captured with each agreement.
 #[derive(
-    Copy, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Decode, Encode, IntoSchema,
+    Copy,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    CopyGetters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[getset(get_copy = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoGovernance")]
@@ -124,8 +163,20 @@ impl RepoGovernance {
     }
 }
 /// End-to-end repo agreement envelope recorded on-chain.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Getters,
+    Decode,
+    Encode,
+    IntoSchema,
+    JsonSerialize,
+    JsonDeserialize,
+)]
 #[getset(get = "pub")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::repo::RepoAgreement")]
@@ -262,7 +313,7 @@ pub mod prelude {
         RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance,
     };
 }
-#[cfg(feature = "json")]
+
 impl JsonKeyCodec for RepoAgreementId {
     fn encode_json_key(&self, out: &mut String) {
         norito::json::write_json_string(&self.to_string(), out);
@@ -276,7 +327,7 @@ impl JsonKeyCodec for RepoAgreementId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     #[derive(Encode)]
@@ -422,3 +473,83 @@ mod tests {
 
 #[cfg(test)]
 mod captured_repo_schema_tests;
+
+#[cfg(test)]
+mod settlement_transcript_frame_tests {
+    use super::*;
+    use crate::isi::settlement::SettlementId;
+    use iroha_crypto::Hash;
+    fn assert_frame<T>(value: &T, owner: &str) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + std::fmt::Debug,
+    {
+        assert_eq!(T::nominal_name(), owner);
+        let frame = norito::encode_canonical(value).expect("canonical owner frame");
+        assert_eq!(&frame[6..22], &norito::schema::identity::frame_hash::<T>());
+        assert_eq!(norito::decode_canonical::<T>(&frame).unwrap(), *value);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<u8>());
+        assert!(matches!(
+            norito::decode_canonical::<T>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn settlement_and_repo_ids_separate_identical_payloads_in_transcripts() {
+        let settlement: SettlementId = "trade_17".parse().unwrap();
+        let agreement: RepoAgreementId = "trade_17".parse().unwrap();
+        let settlement_frame = assert_frame(
+            &settlement,
+            "iroha_data_model::isi::settlement::model::SettlementId",
+        );
+        let agreement_frame =
+            assert_frame(&agreement, "iroha_data_model::repo::model::RepoAgreementId");
+        assert_eq!(settlement.encode(), agreement.encode());
+        assert_ne!(settlement_frame, agreement_frame);
+        assert!(matches!(
+            norito::decode_canonical::<RepoAgreementId>(&settlement_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<SettlementId>(&agreement_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let initiation = (
+            settlement.clone(),
+            Hash::new(b"initiation-consent"),
+            Hash::new(b"maturity-consent"),
+        );
+        let initiation_frame = norito::encode_canonical(&initiation).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<(SettlementId, Hash, Hash)>(&initiation_frame).unwrap(),
+            initiation
+        );
+        assert!(matches!(
+            norito::decode_canonical::<(RepoAgreementId, Hash, Hash)>(&initiation_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let maturity = (agreement, 17_u64);
+        let maturity_frame = norito::encode_canonical(&maturity).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<(RepoAgreementId, u64)>(&maturity_frame).unwrap(),
+            maturity
+        );
+        assert!(matches!(
+            norito::decode_canonical::<(SettlementId, u64)>(&maturity_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert_ne!(
+            maturity_frame,
+            norito::encode_canonical(&(maturity.0, 18_u64)).unwrap()
+        );
+    }
+}

@@ -32,6 +32,10 @@ pub const POR_PROOF_VERSION_V1: u8 = 1;
 pub const AUDIT_VERDICT_VERSION_V1: u8 = 1;
 /// Current challenge status schema version.
 pub const POR_CHALLENGE_STATUS_VERSION_V1: u8 = 1;
+/// Current bounded PoR status-page schema version.
+pub const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
+/// Current bounded PoR status-export-page schema version.
+pub const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
 /// Current weekly report schema version.
 pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
 /// Maximum provider success rate expressed in basis points (100%).
@@ -109,6 +113,8 @@ pub fn provider_vrf_input(
     input
 }
 /// Authenticated provider submission carrying one admission-bound BLS VRF proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::ProviderVrfSubmissionV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderVrfSubmissionV1 {
     /// Schema version (`POR_VRF_SUBMISSION_VERSION_V1`).
@@ -134,6 +140,8 @@ pub struct ProviderVrfSubmissionV1 {
     /// Current admission-approved Ed25519 advert key signature.
     pub signature: AdvertSignature,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::ProviderVrfSubmissionSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct ProviderVrfSubmissionSigningPayloadV1 {
     domain: String,
@@ -403,6 +411,8 @@ pub fn derive_challenge_id(
     hasher.finalize().into()
 }
 /// PoR challenge issued to a storage provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengeV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengeV1 {
     /// Schema version (`POR_CHALLENGE_VERSION_V1`).
@@ -655,6 +665,8 @@ fn preflight_por_challenge_len(
 ///
 /// `duplicate_samples` is encoded as a fixed-width integer and must exactly
 /// match the duplicate count in the validated challenge sample inventory.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengePublicationV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengePublicationV1 {
     /// Schema version (`POR_CHALLENGE_PUBLICATION_VERSION_V1`).
@@ -862,6 +874,8 @@ where
     Ok(value)
 }
 /// Sample proof attached to a PoR response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProofSampleV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProofSampleV1 {
     /// Leaf index sampled by the challenge.
@@ -896,6 +910,8 @@ impl PorProofSampleV1 {
     }
 }
 /// PoR proof submitted by the provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProofV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProofV1 {
     /// Schema version (`POR_PROOF_VERSION_V1`).
@@ -915,6 +931,8 @@ pub struct PorProofV1 {
     /// Unix timestamp (seconds) when the proof was submitted.
     pub submitted_at: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProofSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct PorProofSigningPayloadV1 {
     domain: String,
@@ -927,14 +945,9 @@ struct PorProofSigningPayloadV1 {
     submitted_at: u64,
 }
 mod borrowed_norito {
-    use norito::core::{NoritoSerialize, SerializePayload};
+    use norito::core::SerializePayload;
     /// Borrowed string that preserves the owned `String` wire representation.
     pub(super) struct String<'a>(pub(super) &'a str);
-    impl NoritoSerialize for String<'_> {
-        fn schema_hash() -> [u8; 16] {
-            <std::string::String>::schema_hash()
-        }
-    }
     impl SerializePayload for String<'_> {
         fn serialize(
             &self,
@@ -951,12 +964,7 @@ mod borrowed_norito {
     }
     /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
     pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
-    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::vec::Vec<T>>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -972,12 +980,7 @@ mod borrowed_norito {
     }
     /// Borrowed option that preserves the owned `Option<T>` wire representation.
     pub(super) struct Option<'a, T>(pub(super) &'a std::option::Option<T>);
-    impl<T: NoritoSerialize> NoritoSerialize for Option<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::option::Option<T>>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Option<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Option<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -992,7 +995,7 @@ mod borrowed_norito {
         }
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PorProofSigningPayloadViewWireV1<'a> {
     domain: borrowed_norito::String<'a>,
     version: u8,
@@ -1003,6 +1006,11 @@ struct PorProofSigningPayloadViewWireV1<'a> {
     auth_path: borrowed_norito::Vec<'a, [u8; 32]>,
     submitted_at: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::por::PorProofSigningPayloadViewV1",
+    frame = "sorafs_manifest::por::PorProofSigningPayloadV1"
+)]
 struct PorProofSigningPayloadViewV1<'a>(PorProofSigningPayloadViewWireV1<'a>);
 impl<'a> From<&'a PorProofV1> for PorProofSigningPayloadViewV1<'a> {
     fn from(proof: &'a PorProofV1) -> Self {
@@ -1018,11 +1026,7 @@ impl<'a> From<&'a PorProofV1> for PorProofSigningPayloadViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PorProofSigningPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        PorProofSigningPayloadV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PorProofSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1277,6 +1281,8 @@ pub(crate) fn decode_por_proof_payload_v1(bytes: &[u8]) -> Result<PorProofV1, no
     )
 }
 /// Outcome recorded after challenge verification.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::AuditOutcomeV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AuditOutcomeV1 {
@@ -1288,6 +1294,8 @@ pub enum AuditOutcomeV1 {
     Repaired = 3,
 }
 /// Audit verdict logged into the governance DAG.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::AuditVerdictV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AuditVerdictV1 {
     /// Schema version (`AUDIT_VERDICT_VERSION_V1`).
@@ -1314,6 +1322,8 @@ pub struct AuditVerdictV1 {
     #[norito(default)]
     pub metadata: Vec<CapacityMetadataEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::AuditVerdictSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize)]
 struct AuditVerdictSigningPayloadV1 {
     domain: String,
@@ -1327,7 +1337,7 @@ struct AuditVerdictSigningPayloadV1 {
     decided_at: u64,
     metadata: Vec<CapacityMetadataEntry>,
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct AuditVerdictSigningPayloadViewWireV1<'a> {
     domain: borrowed_norito::String<'a>,
     version: u8,
@@ -1340,6 +1350,11 @@ struct AuditVerdictSigningPayloadViewWireV1<'a> {
     decided_at: u64,
     metadata: borrowed_norito::Vec<'a, CapacityMetadataEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::por::AuditVerdictSigningPayloadViewV1",
+    frame = "sorafs_manifest::por::AuditVerdictSigningPayloadV1"
+)]
 struct AuditVerdictSigningPayloadViewV1<'a>(AuditVerdictSigningPayloadViewWireV1<'a>);
 impl<'a> From<&'a AuditVerdictV1> for AuditVerdictSigningPayloadViewV1<'a> {
     fn from(verdict: &'a AuditVerdictV1) -> Self {
@@ -1357,11 +1372,7 @@ impl<'a> From<&'a AuditVerdictV1> for AuditVerdictSigningPayloadViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for AuditVerdictSigningPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        AuditVerdictSigningPayloadV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for AuditVerdictSigningPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -1811,6 +1822,8 @@ fn verify_ed25519_signature(
 /// and complete `(epoch, issued_at, challenge_id)` boundary. Both servers and
 /// clients use this codec so accepting a syntactically valid but structurally
 /// different base64 payload is impossible.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorStatusCursorV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PorStatusCursorV1 {
     /// Cursor schema version.
@@ -1962,6 +1975,8 @@ pub enum PorStatusCursorCodecError {
     Validation(#[from] PorStatusCursorValidationError),
 }
 /// Lifecycle states emitted by the PoR coordinator.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengeOutcome")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(tag = "outcome")]
 #[repr(u8)]
@@ -2040,6 +2055,8 @@ impl norito::json::JsonSerialize for PorChallengeOutcome {
     }
 }
 /// Status snapshot returned by the PoR coordinator.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorChallengeStatusV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengeStatusV1 {
     /// Schema version (`POR_CHALLENGE_STATUS_VERSION_V1`).
@@ -2203,6 +2220,50 @@ impl PorChallengeStatusV1 {
         Ok(())
     }
 }
+/// Bounded, generation-bound PoR status page.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::PorStatusPageV1")]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusPageV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Immutable coordinator generation against which this page was evaluated.
+    pub snapshot_generation: u64,
+    /// Maximum records requested by the caller.
+    pub record_limit: u32,
+    /// Maximum sum of canonical status-record bytes requested by the caller.
+    pub canonical_byte_limit: u64,
+    /// Exact sum of canonical bytes for all returned status records.
+    pub canonical_bytes: u64,
+    /// Exact number of indexed status candidates evaluated for this page.
+    pub inspected_candidates: u32,
+    /// Whether traversal can continue after the last consumed candidate.
+    ///
+    /// Sparse filter intersections may therefore return no statuses together
+    /// with `has_more = true` and a non-empty continuation cursor.
+    pub has_more: bool,
+    /// Opaque continuation bound to this generation, selection, and last consumed candidate.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+    /// Challenge status records in canonical index order.
+    pub statuses: Vec<PorChallengeStatusV1>,
+}
+/// Bounded PoR status export page for an optional inclusive epoch range.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::PorStatusExportPageV1")]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusExportPageV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Optional inclusive epoch-range lower bound.
+    #[norito(default)]
+    pub start_epoch: Option<u64>,
+    /// Optional inclusive epoch-range upper bound.
+    #[norito(default)]
+    pub end_epoch: Option<u64>,
+    /// Bounded page evaluated against one exact coordinator generation.
+    pub page: PorStatusPageV1,
+}
 /// Validation errors for [`PorChallengeStatusV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorChallengeStatusValidationError {
@@ -2343,6 +2404,8 @@ pub fn decode_por_challenge_status_page_v1(
     Ok(statuses)
 }
 /// ISO-8601 week identifier used by PoR reports.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorReportIsoWeek")]
 #[derive(
     Debug,
     Clone,
@@ -2386,6 +2449,8 @@ pub enum PorReportIsoWeekValidationError {
     InvalidWeek { week: u8 },
 }
 /// Aggregated provider summary used by weekly reports.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorProviderSummaryV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorProviderSummaryV1 {
     /// Provider identifier.
@@ -2498,6 +2563,8 @@ pub enum PorProviderSummaryValidationError {
     InvalidTicketId,
 }
 /// Slashing event recorded during the reporting period.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorSlashingEventV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorSlashingEventV1 {
     /// Provider identifier that was penalised.
@@ -2549,6 +2616,8 @@ pub enum PorSlashingEventValidationError {
     InvalidDecisionTimestamp,
 }
 /// Weekly PoR health report produced by the coordinator.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::por::PorWeeklyReportV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorWeeklyReportV1 {
     /// Schema version (`POR_WEEKLY_REPORT_VERSION_V1`).
@@ -2841,7 +2910,6 @@ pub fn decode_por_weekly_report_v1(bytes: &[u8]) -> Result<PorWeeklyReportV1, no
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
-    use norito::core::NoritoSerialize as _;
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -2865,6 +2933,8 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_manifest::por::tests::LegacyPorChallengeStatusV1")]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyPorChallengeStatusV1 {
         version: u8,
@@ -2883,6 +2953,8 @@ mod tests {
         failure_reason: Option<String>,
         verifier_latency_ms: Option<u32>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_manifest::por::tests::MissingRepairTaskFieldStatusV1")]
     #[derive(norito::derive::NoritoSerialize)]
     struct MissingRepairTaskFieldStatusV1 {
         version: u8,
@@ -2955,7 +3027,7 @@ mod tests {
             },
         }
     }
-    fn proof_fixture() -> PorProofV1 {
+    pub(super) fn proof_fixture() -> PorProofV1 {
         PorProofV1 {
             version: POR_PROOF_VERSION_V1,
             challenge_id: [1; 32],
@@ -2977,14 +3049,14 @@ mod tests {
             submitted_at: 1_700_000_100,
         }
     }
-    fn sign_proof(proof: &mut PorProofV1, signing_key: &SigningKey) {
+    pub(super) fn sign_proof(proof: &mut PorProofV1, signing_key: &SigningKey) {
         proof.signature.public_key = signing_key.verifying_key().to_bytes().to_vec();
         let payload = proof
             .signature_payload_bytes()
             .expect("encode proof signing payload");
         proof.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
     }
-    fn verdict_fixture() -> AuditVerdictV1 {
+    pub(super) fn verdict_fixture() -> AuditVerdictV1 {
         AuditVerdictV1 {
             version: AUDIT_VERDICT_VERSION_V1,
             manifest_digest: [1; 32],
@@ -2998,7 +3070,7 @@ mod tests {
             metadata: Vec::new(),
         }
     }
-    fn add_verdict_signature(verdict: &mut AuditVerdictV1, signing_key: &SigningKey) {
+    pub(super) fn add_verdict_signature(verdict: &mut AuditVerdictV1, signing_key: &SigningKey) {
         let payload = verdict
             .signature_payload_bytes()
             .expect("encode verdict signing payload");
@@ -3377,8 +3449,8 @@ mod tests {
         let owned = PorProofSigningPayloadV1::from(&proof);
         let borrowed = PorProofSigningPayloadViewV1::from(&proof);
         assert_eq!(
-            <PorProofSigningPayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
-            PorProofSigningPayloadV1::schema_hash()
+            norito::schema::identity::frame_hash::<PorProofSigningPayloadViewV1<'_>>(),
+            norito::schema::identity::frame_hash::<PorProofSigningPayloadV1>()
         );
         assert_eq!(
             norito::to_bytes(&borrowed).expect("encode borrowed proof signing payload"),
@@ -3735,8 +3807,8 @@ mod tests {
         let owned = AuditVerdictSigningPayloadV1::from(&verdict);
         let borrowed = AuditVerdictSigningPayloadViewV1::from(&verdict);
         assert_eq!(
-            <AuditVerdictSigningPayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
-            AuditVerdictSigningPayloadV1::schema_hash()
+            norito::schema::identity::frame_hash::<AuditVerdictSigningPayloadViewV1<'_>>(),
+            norito::schema::identity::frame_hash::<AuditVerdictSigningPayloadV1>()
         );
         assert_eq!(
             norito::to_bytes(&borrowed).expect("encode borrowed verdict signing payload"),
@@ -3959,6 +4031,95 @@ mod tests {
             Err(PorStatusCursorValidationError::InvalidEpoch)
         );
     }
+    #[test]
+    fn status_page_roundtrips_its_declared_frame() {
+        let status = PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 99,
+            status: PorChallengeOutcome::AwaitingProof,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: None,
+            proof_digest: None,
+            repair_task_id: None,
+            failure_reason: None,
+            verifier_latency_ms: None,
+        };
+        status.validate().expect("valid status fixture");
+        let canonical_bytes = u64::try_from(norito::encode_canonical(&status).unwrap().len())
+            .expect("fixture size fits u64");
+        let page = PorStatusPageV1 {
+            version: POR_STATUS_PAGE_VERSION_V1,
+            snapshot_generation: 7,
+            record_limit: 1,
+            canonical_byte_limit: canonical_bytes,
+            canonical_bytes,
+            inspected_candidates: 1,
+            has_more: false,
+            next_cursor: None,
+            statuses: vec![status],
+        };
+        let encoded = norito::encode_canonical(&page).expect("encode shared status page");
+        let header = norito::core::Header::read(&encoded[..]).expect("status page header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name("iroha_torii::sorafs::por::PorStatusPageV1"),
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<PorStatusPageV1>(&encoded).unwrap(),
+            page
+        );
+    }
+
+    #[test]
+    fn status_export_page_preserves_sparse_continuation_and_frame_identity() {
+        let cursor = PorStatusCursorV1 {
+            version: POR_STATUS_CURSOR_VERSION_V1,
+            snapshot_generation: 7,
+            selection_digest: [4; 32],
+            last_epoch_id: 3,
+            last_issued_at: 10,
+            last_challenge_id: [5; 32],
+        }
+        .encode_opaque()
+        .expect("valid sparse continuation cursor");
+        let export = PorStatusExportPageV1 {
+            version: POR_STATUS_EXPORT_PAGE_VERSION_V1,
+            start_epoch: Some(3),
+            end_epoch: Some(5),
+            page: PorStatusPageV1 {
+                version: POR_STATUS_PAGE_VERSION_V1,
+                snapshot_generation: 7,
+                record_limit: 10,
+                canonical_byte_limit: 4096,
+                canonical_bytes: 0,
+                inspected_candidates: 5,
+                has_more: true,
+                next_cursor: Some(cursor),
+                statuses: Vec::new(),
+            },
+        };
+        let encoded = norito::encode_canonical(&export).expect("encode shared export page");
+        let header = norito::core::Header::read(&encoded[..]).expect("export page header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name("iroha_torii::sorafs::por::PorStatusExportPageV1"),
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<PorStatusExportPageV1>(&encoded).unwrap(),
+            export
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<PorStatusPageV1>(&encoded),
+            Err(norito::core::Error::SchemaMismatch),
+        ));
+    }
+
     #[test]
     fn challenge_status_requires_failure_reason() {
         let status = PorChallengeStatusV1 {
@@ -4716,4 +4877,17 @@ mod tests {
         let err = report.validate().expect_err("invalid totals rejected");
         assert_eq!(err, PorWeeklyReportValidationError::InvalidChallengeTotals);
     }
+
+    include!("por/captured_fixture_identity_tests.rs");
 }
+
+#[cfg(test)]
+include!("por/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "por/borrowed_payload_tests.rs"]
+mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "por/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

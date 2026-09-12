@@ -2925,9 +2925,14 @@ mod tests {
             let count = group_counts.entry(query % blowup).or_default();
             *count = count.checked_add(1).expect("bounded group query count");
         }
-        assert_eq!(blowup, 8);
-        assert_eq!(group_counts.len(), 8);
-        assert!(group_counts.values().all(|count| *count == 34));
+        assert_eq!(
+            u64::try_from(group_counts.len()).expect("bounded groups"),
+            blowup
+        );
+        assert_eq!(group_counts.values().sum::<u64>(), query_count);
+        assert!(group_counts.values().all(|count| {
+            *count == query_count / blowup || *count == query_count.div_ceil(blowup)
+        }));
         let mut non_repeated = 0_u64;
         let mut repeated_runs = BTreeMap::<u64, (u64, u64)>::new();
         for atom in schedule.atoms_v1().iter().copied() {
@@ -3949,7 +3954,13 @@ mod tests {
     }
     #[test]
     fn ifft_coset_query_openings_match_independent_polynomial_evaluation() {
-        let queries = [0_u64, 1, 63, 64, (1_u64 << 25) - 1];
+        let queries = [
+            0_u64,
+            1,
+            63,
+            64,
+            (1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1) - 1,
+        ];
         let openings = schedule_v1()
             .evaluate_query_indices_v1(&queries)
             .expect("bounded algebraic queries");
@@ -3967,7 +3978,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "release diagnostic materializes one 2^25 scalar coset LDE, never a width-404 matrix"]
+    #[ignore = "release diagnostic materializes one 2^22 scalar coset LDE, never a width-404 matrix"]
     fn independent_coset_fft_matches_every_selected_query() {
         let coefficients = combined_reference_coefficients_v1();
         let lde_size = 1_usize << ZK_X509_MAIN_COMMON_LDE_LOG2_V1;
@@ -3980,7 +3991,14 @@ mod tests {
             F(GOLDILOCKS_GENERATOR_V1),
         )
         .expect("independent generator-coset FFT");
-        let queries = [0_u64, 1, 63, 64, 1_048_573, (1_u64 << 25) - 1];
+        let queries = [
+            0_u64,
+            1,
+            63,
+            64,
+            1_048_573,
+            (1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1) - 1,
+        ];
         let openings = schedule_v1()
             .evaluate_query_indices_v1(&queries)
             .expect("bounded algebraic queries");
@@ -4016,7 +4034,7 @@ mod tests {
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
         assert_eq!(
-            schedule_v1().evaluate_query_indices_v1(&[1_u64 << 25]),
+            schedule_v1().evaluate_query_indices_v1(&[1_u64 << ZK_X509_MAIN_COMMON_LDE_LOG2_V1]),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)
         );
         let mut short_native = [F::ZERO; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 - 1];

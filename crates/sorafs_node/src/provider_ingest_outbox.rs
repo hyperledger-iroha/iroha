@@ -4,8 +4,6 @@
 //! signer material. It retains the immutable ledger binding, source-delivery crash state, and the
 //! exact signed completion transaction required for reconciliation.
 
-mod completion_codec;
-
 use crate::provider_ingest_runtime::{
     ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
@@ -154,7 +152,10 @@ pub enum ProviderIngestCheckpointExternalErrorV1 {
     Ambiguous,
 }
 /// Canonical external authority record for one provider-ingest checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::ProviderIngestSealedCheckpointRecordV1"
+)]
 pub struct ProviderIngestSealedCheckpointRecordV1 {
     /// Fixed provider-ingest checkpoint namespace.
     pub namespace: [u8; 32],
@@ -499,6 +500,10 @@ impl ProviderIngestClaimOwnerV1 {
     }
 }
 /// Exact finalized network and archive identity retained for one Musubi ingest job.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::FinalizedProviderIngestMusubiContextV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestMusubiContextV1 {
     network_id: NetworkId,
@@ -544,6 +549,10 @@ impl FinalizedProviderIngestMusubiContextV1 {
     }
 }
 /// Immutable authorization derived from exact finalized ledger state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::FinalizedProviderIngestAuthorizationV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestAuthorizationV1 {
     job_id: [u8; 32],
@@ -1060,7 +1069,10 @@ struct StoredFinalizedCompletionAuthorityObservationV1 {
     signer_policy: ProviderIngestSignerPolicyObservationV1,
 }
 /// Exact finalized and fee-quoted payload handed to an isolated signer.
-#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::ProviderIngestCompletionSigningContextV1"
+)]
 pub struct ProviderIngestCompletionSigningContextV1 {
     /// Finalized baseline preceding payload construction and signing.
     pub baseline_finalized_cursor: ProviderIngestFinalizedCursorV1,
@@ -1179,6 +1191,8 @@ pub struct ProviderIngestFinalizedCancellationV1 {
     /// Authoritative cancellation class.
     pub reason: ProviderIngestCancellationReasonV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredCompletionDeliveryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletionDeliveryV1 {
     state: StoredDeliveryStateV1,
@@ -1255,34 +1269,6 @@ impl DeliveryRecord for StoredCompletionDeliveryV1 {
         self.signed_transaction = transaction;
     }
 }
-/// Pointer-sized completion storage that preserves the prior canonical codec.
-///
-/// Norito's generic `Box<T>` codec adds owned-value framing, so forwarding the
-/// inner codec explicitly keeps the durable checkpoint bytes unchanged.
-#[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BoxedStoredCompletionDeliveryV1(Box<StoredCompletionDeliveryV1>);
-impl BoxedStoredCompletionDeliveryV1 {
-    fn new(completion: StoredCompletionDeliveryV1) -> Self {
-        Self(Box::new(completion))
-    }
-}
-impl AsRef<StoredCompletionDeliveryV1> for BoxedStoredCompletionDeliveryV1 {
-    fn as_ref(&self) -> &StoredCompletionDeliveryV1 {
-        self.0.as_ref()
-    }
-}
-impl std::ops::Deref for BoxedStoredCompletionDeliveryV1 {
-    type Target = StoredCompletionDeliveryV1;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-impl std::ops::DerefMut for BoxedStoredCompletionDeliveryV1 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut()
-    }
-}
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestStateV1 {
     PendingSource,
@@ -1299,9 +1285,11 @@ enum StoredProviderIngestStateV1 {
     LocalStored {
         manifest_id: String,
         musubi_bundle: Option<Box<StoredProviderIngestVerifiedMusubiBundleReceiptV1>>,
-        completion: BoxedStoredCompletionDeliveryV1,
+        completion: Box<StoredCompletionDeliveryV1>,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredActiveProviderIngestV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredActiveProviderIngestV1 {
     sequence: u64,
@@ -1310,6 +1298,10 @@ struct StoredActiveProviderIngestV1 {
     claim_generation: u64,
     state: StoredProviderIngestStateV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::StoredProviderIngestTerminalOutcomeV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestTerminalOutcomeV1 {
     FinalizedCompleted {
@@ -1331,13 +1323,16 @@ enum StoredProviderIngestTerminalOutcomeV1 {
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredTerminalProviderIngestV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredTerminalProviderIngestV1 {
     sequence: u64,
     authorization: FinalizedProviderIngestAuthorizationV1,
     outcome: StoredProviderIngestTerminalOutcomeV1,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::ProviderIngestOutboxCheckpointV1")]
 struct ProviderIngestOutboxCheckpointV1 {
     magic: [u8; 16],
     version: u8,
@@ -2751,7 +2746,7 @@ impl ProviderIngestOutbox {
         candidate.active[position].state = StoredProviderIngestStateV1::LocalStored {
             manifest_id,
             musubi_bundle,
-            completion: BoxedStoredCompletionDeliveryV1::new(StoredCompletionDeliveryV1::default()),
+            completion: Box::default(),
         };
         self.persist_candidate(&mut state, candidate)
     }
@@ -6323,16 +6318,76 @@ mod tests {
             max_status_page_size: 4,
         }
     }
+    include!("provider_ingest_outbox/tests/canonical_completion.rs");
+
+    fn assert_ingest_frame<T>(value: &T, name: &str) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + fmt::Debug,
+    {
+        assert_eq!(T::nominal_name(), name);
+        assert_eq!(T::frame_name(), name);
+        let bytes = norito::encode_canonical(value).expect("canonical ingest frame");
+        assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&bytes).expect("exact ingest frame roundtrip");
+        assert_eq!(&decoded, value);
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+        let mut wrong_owner = bytes.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<T>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        bytes
+    }
     #[test]
-    fn boxed_completion_codec_preserves_prior_bytes() {
-        let completion = StoredCompletionDeliveryV1::default();
-        let boxed = BoxedStoredCompletionDeliveryV1::new(completion.clone());
-        let expected = norito::to_bytes(&completion).expect("encode prior completion layout");
-        let actual = norito::to_bytes(&boxed).expect("encode boxed completion layout");
-        assert_eq!(actual, expected);
-        let decoded: BoxedStoredCompletionDeliveryV1 =
-            norito::decode_from_bytes(&actual).expect("decode boxed completion layout");
-        assert_eq!(decoded.as_ref(), &completion);
+    fn checkpoint_and_sealed_record_have_distinct_exact_frame_owners() {
+        let checkpoint = ProviderIngestOutboxCheckpointV1::default();
+        let bytes = assert_ingest_frame(
+            &checkpoint,
+            "sorafs_node::provider_ingest_outbox::ProviderIngestOutboxCheckpointV1",
+        );
+        assert_eq!(
+            encode_provider_ingest_checkpoint(&checkpoint, policy()).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            decode_provider_ingest_checkpoint(&bytes, policy()).unwrap(),
+            checkpoint
+        );
+        let record = ProviderIngestSealedCheckpointRecordV1::new(1, None, None, bytes.clone());
+        let sealed = assert_ingest_frame(
+            &record,
+            "sorafs_node::provider_ingest_outbox::ProviderIngestSealedCheckpointRecordV1",
+        );
+        assert_eq!(
+            record
+                .to_canonical_bytes(policy().checkpoint_max_bytes)
+                .unwrap(),
+            sealed
+        );
+        assert_eq!(
+            ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
+                &sealed,
+                policy().checkpoint_max_bytes
+            )
+            .unwrap(),
+            record
+        );
+        assert!(decode_provider_ingest_checkpoint(&sealed, policy()).is_err());
+        assert!(
+            ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
+                &bytes,
+                policy().checkpoint_max_bytes
+            )
+            .is_err()
+        );
     }
     fn checkpoint_path(directory: &TempDir) -> PathBuf {
         fs::canonicalize(directory.path())
@@ -6656,39 +6711,7 @@ mod tests {
     }
     include!("provider_ingest_outbox/tests/sealed_checkpoint_lifecycle.rs");
     include!("provider_ingest_outbox/tests/canonical_authorization.rs");
-    #[test]
-    fn sealed_record_rejects_byte_digest_revision_and_lineage_tamper() {
-        let checkpoint_bytes = encode_provider_ingest_checkpoint(
-            &ProviderIngestOutboxCheckpointV1::default(),
-            policy(),
-        )
-        .expect("checkpoint bytes");
-        let record = ProviderIngestSealedCheckpointRecordV1::new(1, None, None, checkpoint_bytes);
-        let mut tampered_bytes = record.clone();
-        tampered_bytes.checkpoint_bytes[0] ^= 0x80;
-        assert_eq!(
-            tampered_bytes.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-        let mut tampered_digest = record.clone();
-        tampered_digest.checkpoint_digest[0] ^= 0x80;
-        assert_eq!(
-            tampered_digest.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-        let mut tampered_revision = record.clone();
-        tampered_revision.revision[0] ^= 0x80;
-        assert_eq!(
-            tampered_revision.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-        let mut tampered_lineage = record;
-        tampered_lineage.predecessor_revision = Some([0xA5; 32]);
-        assert_eq!(
-            tampered_lineage.validate(policy().checkpoint_max_bytes),
-            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
-        );
-    }
+    include!("provider_ingest_outbox/tests/sealed_record_schema.rs");
     #[test]
     fn provider_drift_substitution_and_test_markers_fail_closed() {
         let directory = tempdir().expect("checkpoint directory");
@@ -7204,14 +7227,14 @@ mod tests {
             .store_completion_transaction(&signing_claim, transaction)
             .expect("store signed completion fixture");
         let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
-        let active_bytes =
-            norito::to_bytes(&checkpoint.active[0]).expect("encode canonical active entry");
+        let active_len =
+            crate::frame_test_support::nested_record_reserve_len(&checkpoint.active[0]);
         let retained_payload_bytes = expected_payload_bytes
             .len()
             .checked_add(signed_transaction_bytes.len())
             .expect("fixture retained payload bytes");
         assert!(
-            active_bytes.len()
+            active_len
                 <= retained_payload_bytes
                     + usize::try_from(
                         provider_ingest_outbox_defaults::ACTIVE_ENTRY_CANONICAL_OVERHEAD_BYTES_V1,
@@ -7263,18 +7286,22 @@ mod tests {
             authorization: authorization.clone(),
             outcome: outcome.clone(),
         };
-        let authorization_bytes =
-            norito::to_bytes(&authorization).expect("encode maximum-field authorization");
+        let authorization_len = u64::try_from(
+            crate::frame_test_support::nested_record_reserve_len(&authorization),
+        )
+        .expect("authorization reserve fits u64");
         let completed_by_bytes =
             norito::to_bytes(&completed_by).expect("encode terminal completion account");
-        let outcome_bytes = norito::to_bytes(&outcome).expect("encode largest terminal outcome");
-        let terminal_bytes = norito::to_bytes(&terminal).expect("encode terminal entry");
-        let authorization_len =
-            u64::try_from(authorization_bytes.len()).expect("authorization length fits u64");
         let completed_by_len =
             u64::try_from(completed_by_bytes.len()).expect("account length fits u64");
-        let outcome_len = u64::try_from(outcome_bytes.len()).expect("outcome length fits u64");
-        let terminal_len = u64::try_from(terminal_bytes.len()).expect("terminal length fits u64");
+        let outcome_len = u64::try_from(crate::frame_test_support::nested_record_reserve_len(
+            &outcome,
+        ))
+        .expect("outcome reserve fits u64");
+        let terminal_len = u64::try_from(crate::frame_test_support::nested_record_reserve_len(
+            &terminal,
+        ))
+        .expect("terminal reserve fits u64");
         assert!(
             authorization_len
                 <= provider_ingest_outbox_defaults::TERMINAL_AUTHORIZATION_CANONICAL_RESERVE_BYTES_V1
@@ -8262,6 +8289,10 @@ mod tests {
     }
     #[test]
     fn malformed_corrupt_noncanonical_and_retired_checkpoints_fail_closed() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "sorafs_node::provider_ingest_outbox::tests::malformed_corrupt_noncanonical_and_retired_checkpoints_fail_closed::RetiredPreReleaseCheckpointV1"
+        )]
         #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
         struct RetiredPreReleaseCheckpointV1 {
             version: u8,
@@ -8273,6 +8304,9 @@ mod tests {
         outbox.enqueue(authorization(0x57, 7)).unwrap();
         drop(outbox);
         let valid = fs::read(&path).unwrap();
+        let current: ProviderIngestOutboxCheckpointV1 =
+            norito::decode_canonical(&valid).expect("populated current checkpoint control");
+        assert_eq!(norito::encode_canonical(&current).unwrap(), valid);
         fs::write(&path, &valid[..valid.len() / 2]).unwrap();
         assert!(matches!(
             ProviderIngestOutbox::open(&path, policy()),
@@ -8292,11 +8326,25 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-        let retired = norito::to_bytes(&RetiredPreReleaseCheckpointV1 {
-            version: 1,
-            entries: Vec::new(),
-        })
-        .unwrap();
+        // This malformed old field shape is not an independent accepted frame owner.
+        // Give its payload the actual current owner so rejection exercises the layout.
+        let retired = {
+            let _flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (payload, flags) =
+                norito::codec::encode_with_header_flags(&RetiredPreReleaseCheckpointV1 {
+                    version: 1,
+                    entries: Vec::new(),
+                });
+            norito::core::frame_bare_with_header_flags::<ProviderIngestOutboxCheckpointV1>(
+                &payload, flags,
+            )
+            .expect("current owner with rejected field shape")
+        };
+        assert!(matches!(
+            norito::decode_canonical::<ProviderIngestOutboxCheckpointV1>(&retired),
+            Err(error) if !matches!(error, norito::Error::SchemaMismatch)
+        ));
         fs::write(&path, retired).unwrap();
         assert!(matches!(
             ProviderIngestOutbox::open(&path, policy()),
@@ -8896,6 +8944,10 @@ mod tests {
         observe_finalized(&outbox, cursor(8));
         let transaction = signed_completion(&authorization, 8, 8);
         let valid = completion_context(&transaction, 8, cursor(8));
+        assert_ingest_frame(
+            &valid,
+            "sorafs_node::provider_ingest_outbox::ProviderIngestCompletionSigningContextV1",
+        );
         let mut wrong_network = valid.clone();
         wrong_network.network_id = network_id(0xF3);
         assert_eq!(

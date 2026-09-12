@@ -1,0 +1,147 @@
+{
+  "json_enabled": true,
+  "records": [
+    {
+      "actual_type_name": "iroha_crypto::hash::Hash",
+      "bare_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+      "case": "hash/root",
+      "deserialize_hash": "efc0459840adeb55780336ab3a915f2f",
+      "frame_hex": "4e5254300000efc0459840adeb55780336ab3a915f2f00200000000000000032c7bcaad6dbf656000707070707070707070707070707070707070707070707070707070707070707",
+      "header_flags": 0,
+      "json": "\"hash:0707070707070707070707070707070707070707070707070707070707070707#C7C7\"",
+      "serialize_hash": "efc0459840adeb55780336ab3a915f2f"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_crypto::hash::Hash>",
+      "bare_hex": "00",
+      "case": "hash/option-none",
+      "deserialize_hash": "ee3d60c41e8668480799ce9d454ca91b",
+      "frame_hex": "4e5254300000ee3d60c41e8668480799ce9d454ca91b000100000000000000593f676473a1ad1f0000",
+      "header_flags": 0,
+      "json": "null",
+      "serialize_hash": "ee3d60c41e8668480799ce9d454ca91b"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_crypto::hash::Hash>",
+      "bare_hex": "01200707070707070707070707070707070707070707070707070707070707070707",
+      "case": "hash/option-some",
+      "deserialize_hash": "ee3d60c41e8668480799ce9d454ca91b",
+      "frame_hex": "4e5254300000ee3d60c41e8668480799ce9d454ca91b002200000000000000cd175389f0deb7600201200707070707070707070707070707070707070707070707070707070707070707",
+      "header_flags": 2,
+      "json": "\"hash:0707070707070707070707070707070707070707070707070707070707070707#C7C7\"",
+      "serialize_hash": "ee3d60c41e8668480799ce9d454ca91b"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_crypto::hash::Hash>",
+      "bare_hex": "0000000000000000",
+      "case": "hash/vec-empty",
+      "deserialize_hash": "ee204f1f0f7b0c29994177a1bb8367eb",
+      "frame_hex": "4e5254300000ee204f1f0f7b0c29994177a1bb8367eb000800000000000000c0ca824265736ab6000000000000000000",
+      "header_flags": 0,
+      "json": "[]",
+      "serialize_hash": "ee204f1f0f7b0c29994177a1bb8367eb"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_crypto::hash::Hash>",
+      "bare_hex": "0200000000000000200707070707070707070707070707070707070707070707070707070707070707200707070707070707070707070707070707070707070707070707070707070707",
+      "case": "hash/vec-two",
+      "deserialize_hash": "ee204f1f0f7b0c29994177a1bb8367eb",
+      "frame_hex": "4e5254300000ee204f1f0f7b0c29994177a1bb8367eb004a00000000000000089a13a33ced1ad2020200000000000000200707070707070707070707070707070707070707070707070707070707070707200707070707070707070707070707070707070707070707070707070707070707",
+      "header_flags": 2,
+      "json": "[\"hash:0707070707070707070707070707070707070707070707070707070707070707#C7C7\",\"hash:0707070707070707070707070707070707070707070707070707070707070707#C7C7\"]",
+      "serialize_hash": "ee204f1f0f7b0c29994177a1bb8367eb"
+    },
+    {
+      "actual_type_name": "iroha_crypto::hash::HashOf<iroha_crypto::hash::Hash>",
+      "bare_hex": "17cdc7bca3f2a0bda60c6de5b96f82a36239b44bde397a3862d529ba8b3d7c63",
+      "case": "hash/hash-of",
+      "deserialize_hash": "3484b1b68d6d009f96d33ccd77d13392",
+      "frame_hex": "4e52543000003484b1b68d6d009f96d33ccd77d13392002000000000000000ffdf8b9ccd37563b0017cdc7bca3f2a0bda60c6de5b96f82a36239b44bde397a3862d529ba8b3d7c63",
+      "header_flags": 0,
+      "json": "\"hash:17CDC7BCA3F2A0BDA60C6DE5B96F82A36239B44BDE397A3862D529BA8B3D7C63#80E9\"",
+      "serialize_hash": "3484b1b68d6d009f96d33ccd77d13392"
+    },
+    {
+      "actual_type_name": "iroha_crypto::signature::SignatureOf<iroha_crypto::hash::Hash>",
+      "bare_hex": "400000000000000001be01ae0114012b013b013a01fa018e01ef015d018e017701330116013501640139018701e20112019f016e01b8011d012d01df01c801f601ab017c01ef01c20160015501cb011101dd011c0153018b014501ac01e601c8016401c501b00143012101120131019a013801bd014001b801d6018001a6010201e5015601bf0109",
+      "case": "hash/signature-of",
+      "deserialize_hash": "f04d340622cb6b66c58a3fab82c650ca",
+      "frame_hex": "4e5254300000f04d340622cb6b66c58a3fab82c650ca0088000000000000006c9a35d01dc0db0102400000000000000001be01ae0114012b013b013a01fa018e01ef015d018e017701330116013501640139018701e20112019f016e01b8011d012d01df01c801f601ab017c01ef01c20160015501cb011101dd011c0153018b014501ac01e601c8016401c501b00143012101120131019a013801bd014001b801d6018001a6010201e5015601bf0109",
+      "header_flags": 2,
+      "json": "\"BEAE142B3B3AFA8EEF5D8E77331635643987E2129F6EB81D2DDFC8F6AB7CEFC26055CB11DD1C538B45ACE6C864C5B0432112319A38BD40B8D680A602E556BF09\"",
+      "serialize_hash": "f04d340622cb6b66c58a3fab82c650ca"
+    },
+    {
+      "actual_type_name": "iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1",
+      "bare_hex": "0b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca",
+      "case": "goldilocks-digest384/root",
+      "deserialize_hash": "e729f8408f6daa157d21f16ddae84e45",
+      "frame_hex": "4e5254300000e729f8408f6daa157d21f16ddae84e450030000000000000004accf6e087c4bde0000b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca",
+      "header_flags": 0,
+      "json": "\"0B99A965274D080A1B9EB6372C609FD518FA097235B39BDEA37BA665BA16AF3F9DB733997DCC8CE6524D3179946BD6CA\"",
+      "serialize_hash": "e729f8408f6daa157d21f16ddae84e45"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1>",
+      "bare_hex": "00",
+      "case": "goldilocks-digest384/option-none",
+      "deserialize_hash": "3397fddd52f377f248980cd7a4e4676d",
+      "frame_hex": "4e52543000003397fddd52f377f248980cd7a4e4676d000100000000000000593f676473a1ad1f0000",
+      "header_flags": 0,
+      "json": "null",
+      "serialize_hash": "3397fddd52f377f248980cd7a4e4676d"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1>",
+      "bare_hex": "01300b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca",
+      "case": "goldilocks-digest384/option-some",
+      "deserialize_hash": "3397fddd52f377f248980cd7a4e4676d",
+      "frame_hex": "4e52543000003397fddd52f377f248980cd7a4e4676d003200000000000000f626e3c205d4e0a20201300b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca",
+      "header_flags": 2,
+      "json": "\"0B99A965274D080A1B9EB6372C609FD518FA097235B39BDEA37BA665BA16AF3F9DB733997DCC8CE6524D3179946BD6CA\"",
+      "serialize_hash": "3397fddd52f377f248980cd7a4e4676d"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1>",
+      "bare_hex": "0000000000000000",
+      "case": "goldilocks-digest384/vec-empty",
+      "deserialize_hash": "4f4da9a504f05b71968a733e2479e18b",
+      "frame_hex": "4e52543000004f4da9a504f05b71968a733e2479e18b000800000000000000c0ca824265736ab6000000000000000000",
+      "header_flags": 0,
+      "json": "[]",
+      "serialize_hash": "4f4da9a504f05b71968a733e2479e18b"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1>",
+      "bare_hex": "0200000000000000300b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca300b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca",
+      "case": "goldilocks-digest384/vec-two",
+      "deserialize_hash": "4f4da9a504f05b71968a733e2479e18b",
+      "frame_hex": "4e52543000004f4da9a504f05b71968a733e2479e18b006a00000000000000471a795960488a78020200000000000000300b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca300b99a965274d080a1b9eb6372c609fd518fa097235b39bdea37ba665ba16af3f9db733997dcc8ce6524d3179946bd6ca",
+      "header_flags": 2,
+      "json": "[\"0B99A965274D080A1B9EB6372C609FD518FA097235B39BDEA37BA665BA16AF3F9DB733997DCC8CE6524D3179946BD6CA\",\"0B99A965274D080A1B9EB6372C609FD518FA097235B39BDEA37BA665BA16AF3F9DB733997DCC8CE6524D3179946BD6CA\"]",
+      "serialize_hash": "4f4da9a504f05b71968a733e2479e18b"
+    },
+    {
+      "actual_type_name": "iroha_crypto::hash::HashOf<iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1>",
+      "bare_hex": "3688640e3cf40f05cd4515c0fed8783ce081bd4864ab8363f2fe8db0b8cf9611",
+      "case": "goldilocks-digest384/hash-of",
+      "deserialize_hash": "d9780529369067b051f839b8ea9a2960",
+      "frame_hex": "4e5254300000d9780529369067b051f839b8ea9a296000200000000000000084b3c1bc57c6c9f5003688640e3cf40f05cd4515c0fed8783ce081bd4864ab8363f2fe8db0b8cf9611",
+      "header_flags": 0,
+      "json": "\"hash:3688640E3CF40F05CD4515C0FED8783CE081BD4864AB8363F2FE8DB0B8CF9611#E47A\"",
+      "serialize_hash": "d9780529369067b051f839b8ea9a2960"
+    },
+    {
+      "actual_type_name": "iroha_crypto::signature::SignatureOf<iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1>",
+      "bare_hex": "400000000000000001750197018c016b0181013f0167010701aa01ee01d101be0150016001370101019c01b70180011a011d01c20162017b0169017c015c019501c70149011101e7012f01f601f7012d014c01dc01320103017601db015e0168011401b301ba01670199019c017d0194019b01f4013701ef011f017301750130016501fa01740107",
+      "case": "goldilocks-digest384/signature-of",
+      "deserialize_hash": "b5c7313ee5d39dc533da50807cae048d",
+      "frame_hex": "4e5254300000b5c7313ee5d39dc533da50807cae048d00880000000000000091ebe6706251b4c202400000000000000001750197018c016b0181013f0167010701aa01ee01d101be0150016001370101019c01b70180011a011d01c20162017b0169017c015c019501c70149011101e7012f01f601f7012d014c01dc01320103017601db015e0168011401b301ba01670199019c017d0194019b01f4013701ef011f017301750130016501fa01740107",
+      "header_flags": 2,
+      "json": "\"75978C6B813F6707AAEED1BE506037019CB7801A1DC2627B697C5C95C74911E72FF6F72D4CDC320376DB5E6814B3BA67999C7D949BF437EF1F73753065FA7407\"",
+      "serialize_hash": "b5c7313ee5d39dc533da50807cae048d"
+    }
+  ],
+  "schema": 1,
+  "sm": false
+}

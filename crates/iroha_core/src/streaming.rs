@@ -22,21 +22,21 @@ use iroha_crypto::{
         StreamingSession, StreamingSessionSnapshot,
     },
 };
+#[cfg(test)]
+use iroha_data_model::soranet::ticket::{TicketBodyV1, TicketEnvelopeV1, TicketScopeV1};
 use iroha_data_model::{
-    domain::DomainId,
     events::{
         EventBox,
         data::{DataEvent, prelude as data_events},
     },
-    peer::{Peer, PeerId},
+    peer::Peer,
     soranet::ticket::TicketCommitmentError,
 };
-#[cfg(test)]
-use iroha_data_model::{
-    metadata::Metadata,
-    soranet::ticket::{TicketBodyV1, TicketEnvelopeV1, TicketScopeV1},
-};
 use iroha_logger::warn;
+use iroha_model_base::domain::DomainId;
+#[cfg(test)]
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 #[cfg(feature = "quic")]
 use iroha_p2p::streaming::{CapabilityNegotiation, StreamingConnection};
 use iroha_p2p::{Post, Priority};
@@ -253,6 +253,8 @@ const BUNDLE_ACCEL_CAPABILITY_MASK: u32 = BUNDLE_ACCEL_CPU_SIMD_BIT | BUNDLE_ACC
 #[cfg(feature = "quic")]
 const FEATURE_PRIVACY_PROVIDER: u32 = 1 << 11;
 /// Persisted snapshot entry for a streaming session keyed by peer and role.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::streaming::StreamingSnapshotEntry")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamingSnapshotEntry {
     /// Role associated with the stored session.
@@ -262,7 +264,8 @@ pub struct StreamingSnapshotEntry {
     /// Snapshot exported from [`StreamingSession::snapshot_state`].
     pub snapshot: StreamingSessionSnapshot,
 }
-#[derive(Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::streaming::StreamingSnapshotFile")]
 struct StreamingSnapshotFile {
     version: u8,
     entries: Vec<StreamingSnapshotEntry>,
@@ -2850,7 +2853,9 @@ mod tests {
             TransportCapabilityResolutionSnapshot,
         },
     };
-    use iroha_data_model::{domain::DomainId, events::SharedDataEvent, peer::PeerId};
+    use iroha_data_model::events::SharedDataEvent;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::addr::SocketAddr;
     use norito::streaming::{
         CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme,
@@ -2980,6 +2985,32 @@ mod tests {
                 kyber_local_fingerprint: None,
             },
         }
+    }
+    #[test]
+    fn streaming_snapshot_frame_uses_its_owner_at_the_plaintext_boundary() {
+        let file = StreamingSnapshotFile {
+            version: SNAPSHOT_VERSION,
+            entries: vec![sample_snapshot_entry(16123)],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &file,
+            "iroha_core::streaming::StreamingSnapshotFile",
+        );
+        let frame = norito::encode_canonical(&file).expect("canonical streaming snapshot frame");
+        assert_eq!(
+            decode_snapshot_plaintext(&frame).expect("bounded production plaintext decoder"),
+            file
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<CryptoHash>());
+        assert!(matches!(
+            decode_snapshot_plaintext(&wrong_owner),
+            Err(StreamingSnapshotError::Codec(NoritoError::SchemaMismatch))
+        ));
+        assert!(decode_snapshot_plaintext(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(decode_snapshot_plaintext(&trailing).is_err());
     }
     fn sample_manifest() -> ManifestV1 {
         ManifestV1 {
@@ -3297,8 +3328,8 @@ mod tests {
         let ticket = data_events::StreamingTicketRecord {
             ticket_id: iroha_crypto::Hash::prehashed(hash_with(ticket_seed)),
             owner,
-            dsid: iroha_data_model::nexus::DataSpaceId::new(7),
-            lane_id: iroha_data_model::nexus::LaneId::new(5),
+            dsid: iroha_model_base::topology::DataSpaceId::new(7),
+            lane_id: iroha_model_base::topology::LaneId::new(5),
             settlement_bucket: 2_048,
             start_slot: 21_000,
             expire_slot: 24_000,

@@ -72,11 +72,11 @@ where
     for row in [historical, current] {
         assert_eq!(
             row.get("serialize_hash").and_then(Value::as_str),
-            Some(hex(&<T as NoritoSerialize>::schema_hash()).as_str())
+            Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
         );
         assert_eq!(
             row.get("deserialize_hash").and_then(Value::as_str),
-            Some(hex(&<T as NoritoDeserialize>::schema_hash()).as_str())
+            Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
         );
     }
     let cases = historical
@@ -118,16 +118,16 @@ where
 
 use crate::{
     account::AccountId,
-    domain::DomainId,
     isi::kaigi::*,
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
         KaigiRelayHop, KaigiRelayManifest, KaigiRoomPolicy, NewKaigi,
         scalar::KaigiAuthorizationScalarV1,
     },
-    name::Name,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 fn account(seed: u8) -> AccountId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
     AccountId::new(key.public_key().clone())

@@ -20,6 +20,28 @@
         "package": "iroha_data_model",
         "target": "all"
       },
+      "aggregate-model-tests": {
+        "default_features": true,
+        "features": [
+          "http"
+        ],
+        "forbidden_features": {
+          "iroha_zkp_halo2": [
+            "full",
+            "parallel",
+            "goldilocks_backend"
+          ]
+        },
+        "forbidden_layers": [
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime"
+        ],
+        "include_root_dev_dependencies": true,
+        "package": "iroha_data_model",
+        "target": "all"
+      },
       "incentives": {
         "default_features": true,
         "features": [],
@@ -37,6 +59,105 @@
           "storage_runtime"
         ],
         "package": "soranet_incentives",
+        "target": "all"
+      },
+      "model-base-default": {
+        "default_features": true,
+        "features": [],
+        "forbidden_features": {},
+        "forbidden_layers": [
+          "protocol",
+          "privacy_model",
+          "service_model",
+          "incentives",
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime",
+          "storage_manifest",
+          "service_runtime",
+          "storage_client",
+          "sdk",
+          "proof_primitives",
+          "http_transport"
+        ],
+        "package": "iroha_model_base",
+        "target": "all"
+      },
+      "model-base-ffi": {
+        "default_features": true,
+        "features": [
+          "ffi_export"
+        ],
+        "forbidden_features": {},
+        "forbidden_layers": [
+          "protocol",
+          "privacy_model",
+          "service_model",
+          "incentives",
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime",
+          "storage_manifest",
+          "service_runtime",
+          "storage_client",
+          "sdk",
+          "proof_primitives",
+          "http_transport"
+        ],
+        "package": "iroha_model_base",
+        "target": "all"
+      },
+      "model-base-ffi-transparent": {
+        "default_features": true,
+        "features": [
+          "ffi_export",
+          "transparent_api"
+        ],
+        "forbidden_features": {},
+        "forbidden_layers": [
+          "protocol",
+          "privacy_model",
+          "service_model",
+          "incentives",
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime",
+          "storage_manifest",
+          "service_runtime",
+          "storage_client",
+          "sdk",
+          "proof_primitives",
+          "http_transport"
+        ],
+        "package": "iroha_model_base",
+        "target": "all"
+      },
+      "model-base-transparent": {
+        "default_features": true,
+        "features": [
+          "transparent_api"
+        ],
+        "forbidden_features": {},
+        "forbidden_layers": [
+          "protocol",
+          "privacy_model",
+          "service_model",
+          "incentives",
+          "node_execution",
+          "node_configuration",
+          "telemetry_runtime",
+          "storage_runtime",
+          "storage_manifest",
+          "service_runtime",
+          "storage_client",
+          "sdk",
+          "proof_primitives",
+          "http_transport"
+        ],
+        "package": "iroha_model_base",
         "target": "all"
       },
       "musubi-service-default": {
@@ -303,6 +424,17 @@
       }
     },
     "layers": {
+      "foundation_model": [
+        "iroha_model_base"
+      ],
+      "http_transport": [
+        "reqwest",
+        "hyper",
+        "hyper-util",
+        "axum",
+        "tungstenite",
+        "tokio-tungstenite"
+      ],
       "incentives": [
         "soranet_incentives"
       ],
@@ -317,12 +449,16 @@
         "fastpq_prover",
         "zk_ace_prover"
       ],
+      "privacy_model": [
+        "iroha_privacy_model"
+      ],
       "proof_primitives": [
         "iroha_zkp_halo2"
       ],
       "protocol": [
         "iroha_data_model",
-        "iroha_torii_shared"
+        "iroha_torii_shared",
+        "ivm_abi"
       ],
       "sdk": [
         "iroha"
@@ -336,6 +472,9 @@
       "storage_client": [
         "iroha_storage_client"
       ],
+      "storage_manifest": [
+        "sorafs_manifest"
+      ],
       "storage_runtime": [
         "sorafs_car",
         "sorafs_orchestrator"
@@ -347,7 +486,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:e7c55381280e4210afa7d42de61b06f01f3fcd3ddb96331000381d54af3b4722",
+    "manifest_fingerprint": "sha256:98ce3b5cddd3219e3a574c3df71898dad207ef4de1e7868101f822d640560737",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -374,18 +513,18 @@
     "iroha-cli-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 783,
-        "declared_external_dependency_edges": 542,
-        "declared_external_packages": 181,
-        "declared_local_packages": 59,
+        "declared_dependency_edges": 814,
+        "declared_external_dependency_edges": 548,
+        "declared_external_packages": 179,
+        "declared_local_packages": 60,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 56,
-        "required_dependency_edges": 648,
-        "required_external_dependency_edges": 437,
-        "required_external_packages": 145,
-        "required_local_packages": 52,
+        "declared_workspace_packages": 57,
+        "required_dependency_edges": 676,
+        "required_external_dependency_edges": 441,
+        "required_external_packages": 143,
+        "required_local_packages": 53,
         "required_path_packages": 3,
-        "required_workspace_packages": 49
+        "required_workspace_packages": 50
       },
       "roots": [
         "iroha_cli"
@@ -394,38 +533,58 @@
     "iroha-data-model-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 285,
-        "declared_external_dependency_edges": 229,
-        "declared_external_packages": 107,
-        "declared_local_packages": 28,
+        "declared_dependency_edges": 293,
+        "declared_external_dependency_edges": 230,
+        "declared_external_packages": 105,
+        "declared_local_packages": 29,
         "declared_path_packages": 2,
-        "declared_workspace_packages": 26,
-        "required_dependency_edges": 195,
-        "required_external_dependency_edges": 156,
-        "required_external_packages": 77,
-        "required_local_packages": 21,
+        "declared_workspace_packages": 27,
+        "required_dependency_edges": 206,
+        "required_external_dependency_edges": 158,
+        "required_external_packages": 76,
+        "required_local_packages": 23,
         "required_path_packages": 2,
-        "required_workspace_packages": 19
+        "required_workspace_packages": 21
       },
       "roots": [
         "iroha_data_model"
       ]
     },
+    "iroha-model-base-shipping": {
+      "include_root_dev_dependencies": false,
+      "limits": {
+        "declared_dependency_edges": 181,
+        "declared_external_dependency_edges": 147,
+        "declared_external_packages": 78,
+        "declared_local_packages": 20,
+        "declared_path_packages": 0,
+        "declared_workspace_packages": 20,
+        "required_dependency_edges": 110,
+        "required_external_dependency_edges": 87,
+        "required_external_packages": 51,
+        "required_local_packages": 14,
+        "required_path_packages": 0,
+        "required_workspace_packages": 14
+      },
+      "roots": [
+        "iroha_model_base"
+      ]
+    },
     "iroha-sdk-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 360,
-        "declared_external_dependency_edges": 278,
-        "declared_external_packages": 116,
-        "declared_local_packages": 35,
+        "declared_dependency_edges": 372,
+        "declared_external_dependency_edges": 279,
+        "declared_external_packages": 115,
+        "declared_local_packages": 36,
         "declared_path_packages": 2,
-        "declared_workspace_packages": 33,
-        "required_dependency_edges": 269,
-        "required_external_dependency_edges": 204,
+        "declared_workspace_packages": 34,
+        "required_dependency_edges": 283,
+        "required_external_dependency_edges": 206,
         "required_external_packages": 87,
-        "required_local_packages": 28,
+        "required_local_packages": 30,
         "required_path_packages": 2,
-        "required_workspace_packages": 26
+        "required_workspace_packages": 28
       },
       "roots": [
         "iroha"
@@ -434,18 +593,18 @@
     "iroha3d-shipping": {
       "include_root_dev_dependencies": false,
       "limits": {
-        "declared_dependency_edges": 819,
-        "declared_external_dependency_edges": 558,
-        "declared_external_packages": 185,
-        "declared_local_packages": 60,
+        "declared_dependency_edges": 850,
+        "declared_external_dependency_edges": 564,
+        "declared_external_packages": 183,
+        "declared_local_packages": 61,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 57,
-        "required_dependency_edges": 669,
-        "required_external_dependency_edges": 450,
-        "required_external_packages": 148,
-        "required_local_packages": 52,
+        "declared_workspace_packages": 58,
+        "required_dependency_edges": 697,
+        "required_external_dependency_edges": 454,
+        "required_external_packages": 146,
+        "required_local_packages": 53,
         "required_path_packages": 3,
-        "required_workspace_packages": 49
+        "required_workspace_packages": 50
       },
       "roots": [
         "irohad"
@@ -454,18 +613,18 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 1670,
-        "declared_external_dependency_edges": 1041,
-        "declared_external_packages": 230,
-        "declared_local_packages": 104,
+        "declared_dependency_edges": 1727,
+        "declared_external_dependency_edges": 1044,
+        "declared_external_packages": 226,
+        "declared_local_packages": 105,
         "declared_path_packages": 3,
-        "declared_workspace_packages": 101,
-        "required_dependency_edges": 1538,
-        "required_external_dependency_edges": 942,
-        "required_external_packages": 194,
-        "required_local_packages": 104,
+        "declared_workspace_packages": 102,
+        "required_dependency_edges": 1594,
+        "required_external_dependency_edges": 945,
+        "required_external_packages": 191,
+        "required_local_packages": 105,
         "required_path_packages": 3,
-        "required_workspace_packages": 101
+        "required_workspace_packages": 102
       },
       "roots": [
         "*"

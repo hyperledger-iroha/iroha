@@ -467,7 +467,7 @@ leader_wire_recovery_authority,
     .map_err(V2RunnerError::Service)?;
 """,
     "lane_durable_predecessor_source": """
-let autonomous_anchor = self.canonical_autonomous_anchor_matches_kura(proposal);
+let autonomous_anchor = self.canonical_autonomous_anchor_matches_kura(proposal)?;
 let private_durable =
     self.consensus_storage_read(self.kura.read_lane_completion_certificate(
         descriptor.lane_id,
@@ -686,7 +686,7 @@ let _ = retry_exact_output_and_apply_sidecar_admissions(
 let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
 lane_work.persist_anchored_sessions()?;
 let _ = service_historical_recovery_tick(&mut lane_work, services)?;
-if lane_work.has_pending_historical_recovery() {
+if lane_work.has_pending_historical_recovery()? {
     return Err(V2RunnerError::Service(
         "finalized lane output still owns predecessor-height recovery".to_owned(),
     ));
@@ -716,7 +716,7 @@ drain_finalized_lane_work_output(
     &durable_lane_authority,
     control_queue_capacity,
 )?;
-if lane_work.has_pending_committed_output_handoff()
+if lane_work.has_pending_committed_output_handoff()?
     || lane_work.effect_count() != 0
     || services
         .has_pending_exact_output()

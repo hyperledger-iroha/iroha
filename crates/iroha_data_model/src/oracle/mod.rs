@@ -4,10 +4,11 @@
 //! oracle layer (see `specs/soracles.md`). The data model covers feed configuration, signed
 //! observations, aggregated reports, and replay protection/gossip keys used to distribute oracle
 //! messages across validators.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
+use crate::{account::AccountId, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf, SignatureOf};
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -31,8 +32,23 @@ pub const DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT: u32 = 3;
 /// `DeFi` oracle domain for cover policy observation payloads.
 pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
 /// Key used to store `DeFi` oracle attestations by contract ABI domain and subject id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestationKey")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -78,8 +94,19 @@ impl DefiOracleAttestationKey {
     }
 }
 /// Reference to a native oracle feed event that supports a `DeFi` attestation field.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -103,8 +130,21 @@ pub struct DefiOracleAttestationSource {
 /// `source_events` can link the attestation back to retained native feed events for full
 /// auditability. Empty `source_events` are also valid for direct provider-signed attestations when
 /// the provider account is itself the submitting authority and signature controller.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestation")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -133,12 +173,26 @@ pub struct DefiOracleAttestation {
     /// Compatibility signature scheme (`1` is Ed25519).
     pub oracle_scheme: u32,
     /// Optional native feed events retained on-chain that justify payload field values.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub source_events: Vec<DefiOracleAttestationSource>,
 }
 /// Identifier for an oracle feed.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::FeedId")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -167,10 +221,24 @@ impl FromStr for FeedId {
     }
 }
 /// Version number for a feed configuration (monotonic per feed).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::FeedConfigVersion")]
 #[derive(
-    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -187,10 +255,21 @@ impl From<u32> for FeedConfigVersion {
 }
 /// Risk classification attached to a feed; drives quorum/dispute policy.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "risk_class", content = "value"))]
+#[norito(tag = "risk_class", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::RiskClass")]
 pub enum RiskClass {
@@ -204,10 +283,21 @@ pub enum RiskClass {
 }
 /// Change classification for oracle governance proposals.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "change_class", content = "value"))]
+#[norito(tag = "change_class", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeClass")]
 pub enum OracleChangeClass {
@@ -236,12 +326,22 @@ impl OracleChangeClass {
     }
 }
 /// Pipeline stage for oracle change governance.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "oracle_change_stage", content = "value")
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "oracle_change_stage", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeStage")]
 pub enum OracleChangeStage {
@@ -285,12 +385,20 @@ impl OracleChangeStage {
     }
 }
 /// Failure modes for a stage.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "oracle_change_failure", content = "value")
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "oracle_change_failure", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeStageFailure")]
 pub enum OracleChangeStageFailure {
@@ -304,9 +412,20 @@ pub enum OracleChangeStageFailure {
     Rollback(String),
 }
 /// Failure details captured when a proposal cannot complete.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeFailure")]
 pub struct OracleChangeFailure {
     /// Stage that triggered the failure.
@@ -317,12 +436,20 @@ pub struct OracleChangeFailure {
     pub at: u64,
 }
 /// Lifecycle status for an oracle change proposal.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "oracle_change_status", content = "value")
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "oracle_change_status", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeStatus")]
 pub enum OracleChangeStatus {
@@ -341,8 +468,23 @@ impl OracleChangeStatus {
     }
 }
 /// Identifier for oracle change proposals (hash).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleChangeId")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -365,9 +507,18 @@ impl From<Hash> for OracleChangeId {
     }
 }
 /// Evidence pointer attached to a pipeline stage (e.g., `SoraFS` bundle hash).
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeEvidence")]
 pub struct OracleChangeEvidence {
     /// Stage the evidence applies to.
@@ -379,9 +530,18 @@ pub struct OracleChangeEvidence {
     pub note: Option<String>,
 }
 /// Per-stage record for oracle change governance.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeStageRecord")]
 pub struct OracleChangeStageRecord {
     /// Stage identifier.
@@ -412,9 +572,18 @@ impl OracleChangeStageRecord {
     }
 }
 /// Governance proposal for an oracle feed change.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleChangeProposal")]
 pub struct OracleChangeProposal {
     /// Unique identifier for the change (hash).
@@ -454,9 +623,21 @@ impl OracleChangeProposal {
     }
 }
 /// Deterministic aggregation rule used to combine observations into a report.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "aggregation_rule", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "aggregation_rule", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::AggregationRule")]
 pub enum AggregationRule {
@@ -471,10 +652,22 @@ impl Default for AggregationRule {
     }
 }
 /// Outlier detection policy applied to observations before aggregation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[allow(variant_size_differences)]
-#[cfg_attr(feature = "json", norito(tag = "outlier_policy", content = "value"))]
+#[norito(tag = "outlier_policy", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OutlierPolicy")]
 pub enum OutlierPolicy {
@@ -484,18 +677,27 @@ pub enum OutlierPolicy {
     Absolute(AbsoluteOutlier),
 }
 /// Absolute delta bound used by outlier detection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::AbsoluteOutlier")]
 pub struct AbsoluteOutlier {
     /// Maximum absolute deviation allowed (mantissa aligned with feed value scale).
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::i128_string",
-            bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::i128_string",
+        bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
     )]
     pub max_delta: i128,
 }
@@ -505,9 +707,20 @@ impl Default for OutlierPolicy {
     }
 }
 /// Feed configuration registered on-chain.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::FeedConfig")]
 pub struct FeedConfig {
     /// Unique feed identifier.
@@ -609,10 +822,21 @@ impl FeedConfig {
 }
 /// HTTP-style method used by connector requests.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "method", content = "value"))]
+#[norito(tag = "method", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::ConnectorRequestMethod")]
 pub enum ConnectorRequestMethod {
@@ -627,9 +851,18 @@ pub enum ConnectorRequestMethod {
     Delete,
 }
 /// Redacted header value; secrets are hashed to keep them off-chain.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::RedactedHeaderValue")]
 pub enum RedactedHeaderValue {
@@ -646,9 +879,18 @@ impl RedactedHeaderValue {
     }
 }
 /// Canonical connector request; hashed to derive `request_hash`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::ConnectorRequest")]
 pub struct ConnectorRequest {
     /// Target feed identifier.
@@ -662,15 +904,15 @@ pub struct ConnectorRequest {
     /// Connector version.
     pub connector_version: u32,
     /// HTTP-like method.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub method: ConnectorRequestMethod,
     /// Endpoint path used by the connector (e.g., `/price`).
     pub endpoint: String,
     /// Sorted query parameters (deterministic hashing).
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub query: BTreeMap<String, String>,
     /// Redacted headers (sensitive values should be hashed).
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub headers: BTreeMap<String, RedactedHeaderValue>,
     /// Hash of the request body (keeps secrets off-chain).
     pub body_hash: Hash,
@@ -719,9 +961,21 @@ fn is_sensitive_header(name: &str) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 /// Connector response envelope with payload hash for audit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::ConnectorResponse")]
 pub struct ConnectorResponse {
     /// HTTP-style status code returned by the connector.
@@ -730,7 +984,7 @@ pub struct ConnectorResponse {
     pub payload_hash: Hash,
     /// Optional connector error classification.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<ObservationErrorCode>,
 }
 impl ConnectorResponse {
@@ -741,8 +995,19 @@ impl ConnectorResponse {
     }
 }
 /// Keyed hash/HMAC used for PII-safe identifiers (e.g., social IDs).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -783,9 +1048,21 @@ impl KeyedHash {
 /// Identifier of the canonical Twitter follow binding feed.
 pub const TWITTER_FOLLOW_FEED_ID: &str = "twitter_follow_binding";
 /// Status recorded for a Twitter follow binding attestation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::TwitterBindingStatus")]
 pub enum TwitterBindingStatus {
@@ -797,9 +1074,20 @@ pub enum TwitterBindingStatus {
     Denied,
 }
 /// Attestation produced by the twitter follow oracle feed.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::TwitterBindingAttestation")]
 pub struct TwitterBindingAttestation {
     /// Pseudonymous keyed hash derived from the `twitter_user_id` and pepper.
@@ -809,10 +1097,10 @@ pub struct TwitterBindingAttestation {
     /// Reported follow status for the attestation.
     pub status: TwitterBindingStatus,
     /// Optional tweet identifier used for the follow challenge.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub tweet_id: Option<String>,
     /// Hash of the challenge payload (optional).
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub challenge_hash: Option<Hash>,
     /// Absolute expiry timestamp in milliseconds since Unix epoch.
     pub expires_at_ms: u64,
@@ -838,9 +1126,20 @@ impl TwitterBindingAttestation {
     }
 }
 /// Persisted record for a twitter follow binding attestation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::TwitterBindingRecord")]
 pub struct TwitterBindingRecord {
     /// Feed identifier that produced the attestation.
@@ -860,9 +1159,21 @@ impl TwitterBindingRecord {
     }
 }
 /// Signed observation outcome.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
 #[allow(variant_size_differences)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::ObservationOutcome")]
@@ -881,19 +1192,27 @@ impl ObservationOutcome {
 }
 /// Fixed-point observation value (mantissa + scale).
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::ObservationValue")]
 pub struct ObservationValue {
     /// Signed mantissa.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::i128_string",
-            bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::i128_string",
+        bounded_with = "crate::json_helpers::i128_string::serialize_bounded"
     )]
     pub mantissa: i128,
     /// Decimal scale (number of fractional digits).
@@ -929,9 +1248,21 @@ impl ObservationValue {
     }
 }
 /// Connector error codes surfaced by observations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "error_code", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "error_code", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::ObservationErrorCode")]
 pub enum ObservationErrorCode {
@@ -947,9 +1278,19 @@ pub enum ObservationErrorCode {
     Other(u16),
 }
 /// Classification of connector errors for slashing/reward semantics.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "fault_class", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "fault_class", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::ObservationErrorClass")]
 pub enum ObservationErrorClass {
@@ -974,9 +1315,20 @@ impl ObservationErrorCode {
     }
 }
 /// Observation payload signed by an oracle.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::ObservationBody")]
 pub struct ObservationBody {
     /// Target feed identifier.
@@ -997,7 +1349,7 @@ pub struct ObservationBody {
     pub outcome: ObservationOutcome,
     /// Optional timestamp (audit-only; not used in aggregation).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub timestamp_ms: Option<u64>,
 }
 impl ObservationBody {
@@ -1008,9 +1360,20 @@ impl ObservationBody {
     }
 }
 /// Signed observation wrapper.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::Observation")]
 pub struct Observation {
     /// Observation payload.
@@ -1045,9 +1408,20 @@ impl Observation {
     }
 }
 /// Aggregated entry inside a report.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::ReportEntry")]
 pub struct ReportEntry {
     /// Oracle identifier (committee member).
@@ -1060,9 +1434,20 @@ pub struct ReportEntry {
     pub outlier: bool,
 }
 /// Report payload signed by the submitter.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::ReportBody")]
 pub struct ReportBody {
     /// Target feed identifier.
@@ -1086,9 +1471,20 @@ impl ReportBody {
     }
 }
 /// Signed oracle report.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::Report")]
 pub struct Report {
     /// Report payload.
@@ -1123,9 +1519,20 @@ impl Report {
     }
 }
 /// Aggregation success payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::FeedSuccess")]
 pub struct FeedSuccess {
     /// Aggregated value.
@@ -1134,18 +1541,41 @@ pub struct FeedSuccess {
     pub entries: Vec<ReportEntry>,
 }
 /// Aggregation error payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::FeedError")]
 pub struct FeedError {
     /// Error code shared by observations.
     pub code: ObservationErrorCode,
 }
 /// Outcome persisted in the ledger after aggregation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "result", content = "detail"))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "result", content = "detail")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::FeedEventOutcome")]
 pub enum FeedEventOutcome {
@@ -1157,9 +1587,20 @@ pub enum FeedEventOutcome {
     Missing,
 }
 /// Event emitted after processing a feed slot.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::FeedEvent")]
 pub struct FeedEvent {
     /// Feed identifier.
@@ -1174,9 +1615,21 @@ pub struct FeedEvent {
     pub outcome: FeedEventOutcome,
 }
 /// Classification for oracle penalties.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "detail"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "kind", content = "detail")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OraclePenaltyKind")]
 pub enum OraclePenaltyKind {
@@ -1192,9 +1645,20 @@ pub enum OraclePenaltyKind {
     Dispute,
 }
 /// Penalty record emitted when a provider is slashed.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OraclePenalty")]
 pub struct OraclePenalty {
     /// Feed identifier.
@@ -1213,9 +1677,20 @@ pub struct OraclePenalty {
     pub amount: Quantity,
 }
 /// Reward record emitted when a provider is paid for an inlier observation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleReward")]
 pub struct OracleReward {
     /// Feed identifier.
@@ -1232,8 +1707,22 @@ pub struct OracleReward {
     pub amount: Quantity,
 }
 /// Key identifying per-provider aggregation statistics for a feed.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleProviderKey")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1259,9 +1748,20 @@ impl OracleProviderKey {
     }
 }
 /// Aggregate counters for a provider across feed slots.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleProviderStats")]
 pub struct OracleProviderStats {
     /// Number of inlier observations.
@@ -1324,9 +1824,18 @@ impl OracleProviderStats {
     }
 }
 /// Query record carrying a provider key together with its aggregate counters.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleProviderStatsRecord")]
 pub struct OracleProviderStatsRecord {
     /// Feed/provider key identifying the counters.
@@ -1335,10 +1844,24 @@ pub struct OracleProviderStatsRecord {
     pub stats: OracleProviderStats,
 }
 /// Identifier for an oracle dispute.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleDisputeId")]
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1349,9 +1872,21 @@ pub struct OracleProviderStatsRecord {
 )]
 pub struct OracleDisputeId(pub u64);
 /// Resolution status for a dispute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "outcome", content = "detail"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "outcome", content = "detail")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleDisputeOutcome")]
 pub enum OracleDisputeOutcome {
@@ -1363,9 +1898,20 @@ pub enum OracleDisputeOutcome {
     Frivolous,
 }
 /// Persisted record for a dispute.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleDispute")]
 pub struct OracleDispute {
     /// Unique dispute identifier.
@@ -1383,7 +1929,7 @@ pub struct OracleDispute {
     /// Bond amount staked by the challenger.
     pub bond: Quantity,
     /// Evidence hashes supplied by the challenger.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub evidence: Vec<Hash>,
     /// Optional human-readable reason.
     pub reason: String,
@@ -1391,9 +1937,21 @@ pub struct OracleDispute {
     pub status: OracleDisputeStatus,
 }
 /// Lifecycle status for an oracle dispute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "detail"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "detail")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleDisputeStatus")]
 pub enum OracleDisputeStatus {
@@ -1405,9 +1963,21 @@ pub enum OracleDisputeStatus {
     Dismissed,
 }
 /// Gossip key identifying observation/report messages for replay protection.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::GossipKey")]
 pub struct GossipKey {
     /// Feed identifier.
@@ -1429,9 +1999,21 @@ impl GossipKey {
     }
 }
 /// Replay key extending [`GossipKey`] with the canonical request hash.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::ReplayKey")]
 pub struct ReplayKey {
     /// Gossip key components.
@@ -1501,9 +2083,18 @@ impl ReplayProtection {
     }
 }
 /// Deterministic committee draw for a feed and epoch.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::CommitteeDraw")]
 pub struct CommitteeDraw {
     /// Seed used to derive ordering and leader selection.
@@ -1575,9 +2166,18 @@ pub fn derive_committee(
     CommitteeDraw { seed, members }
 }
 /// Oracle ABI manifest used to pin the schema for on-chain validation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::oracle::OracleAbiManifest")]
 pub struct OracleAbiManifest {
     /// ABI version identifier.
@@ -2340,10 +2940,8 @@ pub mod kits {
     use super::*;
     use norito::json;
     /// Bundled reference assets for an oracle feed.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Clone, Debug, PartialEq, Eq, crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize,
     )]
     pub struct OracleKit {
         /// Canonical feed configuration.
@@ -2462,8 +3060,8 @@ pub mod kits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_model_base::domain::DomainId;
     use norito::json;
     use std::str::FromStr;
     fn feed_id(name: &str) -> FeedId {
@@ -2495,7 +3093,7 @@ mod tests {
         obs.body.outcome = ObservationOutcome::Error(code);
         obs
     }
-    #[cfg(feature = "json")]
+
     fn pretty_json<T: json::JsonSerialize>(value: &T) -> String {
         let value = json::to_value(value).expect("serialize to JSON value");
         json::to_string_pretty(&value).expect("render JSON")
@@ -3212,7 +3810,6 @@ mod tests {
         assert!(keyed_value.mantissa >= 0);
     }
     #[test]
-    #[cfg(feature = "json")]
     #[allow(clippy::too_many_lines)]
     fn oracle_fixtures_round_trip() {
         let expected_feed_config = sample_feed_config();
@@ -3347,7 +3944,7 @@ mod tests {
         assert_eq!(decoded_social_connector, social_connector_request);
     }
     #[test]
-    #[cfg(feature = "json")]
+
     fn social_oracle_fixtures_preserve_observation_links() {
         let observation = sample_social_observation();
         let report = sample_social_report();
@@ -3514,3 +4111,80 @@ mod tests {
 
 #[cfg(test)]
 mod captured_oracle_schema_tests;
+
+#[cfg(test)]
+mod transcript_and_query_frame_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    fn assert_frame<T>(value: &T, owner: &str) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + std::fmt::Debug,
+    {
+        assert_eq!(T::nominal_name(), owner);
+        let frame = norito::encode_canonical(value).expect("canonical owner frame");
+        assert_eq!(&frame[6..22], &norito::schema::identity::frame_hash::<T>());
+        assert_eq!(norito::decode_canonical::<T>(&frame).unwrap(), *value);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<u8>());
+        assert!(matches!(
+            norito::decode_canonical::<T>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn oracle_movement_identifiers_keep_exact_owners() {
+        assert_frame(
+            &FeedId("price_xor_usd".parse().unwrap()),
+            "iroha_data_model::oracle::FeedId",
+        );
+        assert_frame(
+            &FeedConfigVersion(7),
+            "iroha_data_model::oracle::FeedConfigVersion",
+        );
+        let dispute = OracleDisputeId(7);
+        let frame = assert_frame(&dispute, "iroha_data_model::oracle::OracleDisputeId");
+        // A numeric value is not the dispute frame owner.
+        assert!(matches!(
+            norito::decode_canonical::<u64>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert_ne!(
+            frame,
+            norito::encode_canonical(&OracleDisputeId(8)).unwrap()
+        );
+    }
+
+    #[test]
+    fn defi_query_frame_preserves_signed_payload_and_rejects_wrong_owner() {
+        let keypair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519).unwrap();
+        let payload = br#"{"domain":1,"market_id":42,"mark_price_bps":10000,"index_price_bps":10000,"confidence_bps":5,"oracle_slot":11,"status_flags":0,"attestation_hash":17}"#.to_vec();
+        let signature = Signature::try_new(keypair.private_key(), &payload).unwrap();
+        let value = DefiOracleAttestation {
+            key: DefiOracleAttestationKey::new(DEFI_ORACLE_DOMAIN_PERPS_MARKET, 42),
+            provider: AccountId::new(keypair.public_key().clone()),
+            oracle_slot: 11,
+            status_flags: 0,
+            attestation_hash: 17,
+            oracle_payload: payload,
+            oracle_signature: signature.payload().to_vec(),
+            signer_public_key: keypair.public_key().to_bytes().1.to_vec(),
+            oracle_scheme: 1,
+            source_events: Vec::new(),
+        };
+        let frame = assert_frame(&value, "iroha_data_model::oracle::DefiOracleAttestation");
+        let decoded: DefiOracleAttestation = norito::decode_canonical(&frame).unwrap();
+        Signature::from_bytes(&decoded.oracle_signature)
+            .verify(keypair.public_key(), &decoded.oracle_payload)
+            .expect("query framing preserves the exact signed bytes");
+        assert_eq!(decoded.oracle_payload, value.oracle_payload);
+    }
+}

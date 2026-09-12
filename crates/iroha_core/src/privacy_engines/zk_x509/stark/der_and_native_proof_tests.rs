@@ -104,7 +104,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
     let minimum_masked_degree = minimum_trace_size + MASK_DEGREE;
     let minimum_maximum_degree_quotient =
         usize::from(ZK_X509_MAX_CONSTRAINT_DEGREE_V1) * minimum_masked_degree - minimum_trace_size;
-    let minimum_valid_lde_log2 = 16;
+    let minimum_valid_lde_log2 = 14;
     let minimum_fri_rounds = minimum_valid_lde_log2 - TERMINAL_LOG2;
     let minimum_fri_degree = (TERMINAL_DEGREE_BOUND + 1) * (1_usize << minimum_fri_rounds) - 1;
     assert_eq!(
@@ -116,8 +116,8 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
         .expect("minimum secure maximum-degree domain"),
         (minimum_maximum_degree_quotient, minimum_fri_degree)
     );
-    assert_eq!(minimum_maximum_degree_quotient, 5_703);
-    assert_eq!(minimum_fri_degree, 2_047);
+    assert_eq!(minimum_maximum_degree_quotient, 12_801);
+    assert_eq!(minimum_fri_degree, 2_303);
     assert!(
         checked_segment_degree_capacity_v1(
             MIN_TRACE_LOG2,
@@ -166,7 +166,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
             focused_io.constraint_degree,
         )
         .expect("focused I/O degree capacity"),
-        (6_276, 2_047)
+        (56_412, 18_431)
     );
     focused_io.validate().expect("valid focused I/O layout");
     let mut stale_io = focused_io;
@@ -174,7 +174,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
     stale_io.lde_log2 -= 1;
     assert!(
         stale_io.validate().is_err(),
-        "the former log9/log15 focused-I/O layout cannot carry the release mask"
+        "the smaller focused-I/O layout cannot carry the release mask"
     );
     assert!(
         checked_segment_degree_capacity_v1(
@@ -183,16 +183,16 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
             ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1,
         )
         .is_ok(),
-        "the released log19 SHA registration requires the log25 MAIN domain"
+        "the released log19 SHA registration requires the log22 MAIN domain"
     );
     assert!(
         checked_segment_degree_capacity_v1(
             ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
-            22,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1 - 1,
             ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1,
         )
         .is_err(),
-        "the stale log22 SHA domain must fail closed"
+        "the adjacent smaller SHA domain must fail closed"
     );
     assert!(
         checked_segment_degree_capacity_v1(
@@ -207,7 +207,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
     let expected_quotient = usize::from(ZK_X509_DER_STARK_CONSTRAINT_DEGREE_V1)
         * (trace_size + MASK_DEGREE)
         - trace_size;
-    let expected_chunk_capacity = 2 * trace_size - 1;
+    let expected_chunk_capacity = trace_size * 9 / 8 - 1;
     assert_eq!(
         checked_segment_degree_capacity_v1(
             ZK_X509_DER_STARK_TRACE_LOG2_V1,
@@ -223,7 +223,7 @@ fn registered_degree_and_fri_capacity_boundaries_fail_closed() {
     );
     assert!(
         expected_quotient <= (expected_chunk_capacity + 1) * COMPOSITION_DEGREE_CHUNKS - 1,
-        "all four authenticated chunks must cover the exact DER quotient"
+        "all six authenticated chunks must cover the exact DER quotient"
     );
     let mut invalid = der_layout();
     invalid.constraint_degree = ZK_X509_MAX_CONSTRAINT_DEGREE_V1 + 1;
@@ -241,7 +241,6 @@ fn interpolated_masked_degree_seven_quotient_attains_registered_bound() {
     const TRACE_LOG2: u8 = MIN_TRACE_LOG2;
     const TRACE_SIZE: usize = 1 << TRACE_LOG2;
     const TRACE_DEGREE: usize = TRACE_SIZE + MASK_DEGREE;
-    const INTERPOLATION_LOG2: u8 = 13;
     let mut trace = vec![F::ZERO; TRACE_DEGREE + 1];
     trace[0] = F(7);
     trace[1] = F(11);
@@ -285,9 +284,13 @@ fn interpolated_masked_degree_seven_quotient_attains_registered_bound() {
             .rposition(|coefficient| *coefficient != F::ZERO),
         Some(expected_degree)
     );
-    quotient.resize(1 << INTERPOLATION_LOG2, F::ZERO);
+    let interpolation_size = quotient.len().next_power_of_two();
+    let interpolation_log2 =
+        u8::try_from(interpolation_size.trailing_zeros()).expect("interpolation domain log");
+    assert!(interpolation_size > expected_degree);
+    quotient.resize(interpolation_size, F::ZERO);
     let interpolation_root =
-        goldilocks_primitive_root_v1(INTERPOLATION_LOG2).expect("interpolation root");
+        goldilocks_primitive_root_v1(interpolation_log2).expect("interpolation root");
     let mut evaluations = quotient.clone();
     crate::privacy_engines::transparent_stark::goldilocks_fft_v1(
         &mut evaluations,
@@ -344,7 +347,7 @@ fn every_segment_constructor_binds_the_correct_degree_capacity_profile() {
             segments
                 .iter()
                 .any(|segment| segment.trace_log2 == ZK_X509_MAX_NATIVE_TRACE_LOG2_V1),
-            "each P-256 role must carry the log19 host that justifies log25 capacity"
+            "each P-256 role must carry the log19 host that justifies log22 capacity"
         );
         for segment in segments {
             segment.validate().expect("valid P-256 segment");
@@ -466,6 +469,14 @@ fn verifier_owned_segment_registration_is_exact_and_full_profile_stays_closed() 
             "registration mutation {index} must fail closed"
         );
     }
+}
+#[test]
+fn full_main_proof_budget_rejects_before_witness_or_entropy() {
+    assert_eq!(
+        validate_zk_x509_main_proof_budget_v1(),
+        Err(ZkX509StarkErrorV1::ProofTooLarge)
+    );
+    assert!(136 * 2 * 5623 * 8 > super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 }
 #[test]
 fn main_verifier_profile_is_pinned_and_rejects_substitution() {
@@ -1105,7 +1116,7 @@ fn der_statement_digest_and_x5p1_envelope_are_exact_and_fail_closed() {
     let digest = der_public_digest_v1(&shape).expect("DER public digest");
     assert_eq!(
         hex::encode(digest.to_le_bytes()),
-        "822b3ef0098867d3f3a071b51d462eb028c71bbb4bc6c1f20ac6aa109aeb0040083b2c261a330ce15aef34983dedea37"
+        "5ac7929bc9b9b195eb567627116decf7459916debe2a4288ba3fe3b04123808029552fe943045462caca0e4743546093"
     );
     let claims = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],
@@ -1570,8 +1581,8 @@ fn der_retained_prover_resource_plan_and_production_source_exclude_trace_scratch
     assert_eq!(plan.quotient_coset_log2, 22);
     assert_eq!(plan.quotient_coset_rows, 1 << 22);
     assert_eq!(plan.quotient_next_stride, 8);
-    assert_eq!(plan.maximum_quotient_degree, 3_151_335);
-    assert_eq!(plan.retained_masked_coefficient_bytes, 1_142_595_840);
+    assert_eq!(plan.maximum_quotient_degree, 3_158_433);
+    assert_eq!(plan.retained_masked_coefficient_bytes, 1_144_802_304);
     assert_eq!(plan.quotient_trace_matrix_bytes, 9_596_567_552);
     assert_eq!(plan.encrypted_trace_scratch_bytes, 0);
     assert_eq!(plan.common_domain_trace_matrix_bytes, 0);
@@ -1589,8 +1600,8 @@ fn der_retained_prover_resource_plan_and_production_source_exclude_trace_scratch
         .find("fn build_zk_x509_der_segmented_stark_proof_v1_with_rng")
         .expect("DER builder source");
     let end = source[start..]
-        .find("/// Construct and self-verify the canonical strict-DER aggregate proof.")
-        .map(|offset| start + offset)
+        .find("\n}\n")
+        .map(|offset| start + offset + "\n}\n".len())
         .expect("DER builder end");
     let builder = &source[start..end];
     for forbidden in [

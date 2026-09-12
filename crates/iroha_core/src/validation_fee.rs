@@ -30,7 +30,6 @@ use iroha_data_model::{
             SettleFxCorridor, SettlementInstructionBox,
         },
     },
-    metadata::Metadata,
     prelude::*,
     transaction::{Executable, ExecutableBatchItem, SignedTransaction},
     validation_fee::{
@@ -44,6 +43,8 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use ivm::state_value::{
     MAX_STATE_VALUE_RECORD_BYTES, StateValueAtomV1, StateValueKindV1, StateValueNodeV1,
@@ -4334,6 +4335,7 @@ fn format_entry_index(entry_index: Option<usize>) -> String {
 }
 #[cfg(test)]
 pub(crate) mod tests {
+    use iroha_model_base::metadata::Metadata;
     include!("validation_fee/support_tests.rs");
     include!("validation_fee/admission_tests.rs");
     include!("validation_fee/runtime_tests.rs");

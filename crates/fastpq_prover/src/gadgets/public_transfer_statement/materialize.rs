@@ -84,6 +84,24 @@ impl DerivedTransferSmtWitnesses {
         self.roots
     }
 
+    /// Roots after each complete debit/credit pair except the final pair.
+    ///
+    /// These are the chronological boundaries between segments of this already
+    /// materialized complete batch. The iterator borrows the existing witnesses;
+    /// it builds no tree, prepares no individual delta and allocates no storage.
+    /// Empty and single-pair batches have no intermediate roots. Equal roots
+    /// from distinct occurrences remain distinct iterator entries.
+    ///
+    /// These local touched-tree roots do not authenticate source finality.
+    #[must_use]
+    pub fn intermediate_roots(
+        &self,
+    ) -> impl ExactSizeIterator<Item = [u8; 32]> + DoubleEndedIterator + '_ {
+        self.pairs[..self.pairs.len().saturating_sub(1)]
+            .iter()
+            .map(|pair| pair[1].root_after)
+    }
+
     /// Private update paths, preserving every chronological occurrence.
     #[must_use]
     pub fn pairs(&self) -> &[[TransferSmtWitness; 2]] {

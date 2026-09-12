@@ -181,6 +181,42 @@ final class AccountControllerFinalV1Tests: XCTestCase {
     XCTAssertNotEqual(first.ctap2Cbor, try build(1, 2, [(publicKeys[0], 2), (publicKeys[1], 1)]).ctap2Cbor)
   }
 
+  func testCompactControllerReencodingUsesU16CountAcrossByteBoundary() throws {
+    XCTAssertTrue(NoritoNativeBridge.shared.isAccountAddressCodecAvailable,
+                  "The count regression requires the real ABI-23 address validator.")
+    let publicKeys = try keys(256)
+    for count in [1, 2, 255, 256] {
+      let members = publicKeys.prefix(count).map { ($0, UInt16(1)) }
+      let canonical = try addressBytes(threshold: UInt16(count), members: members)
+      XCTAssertEqual(Array(canonical[5..<7]), [UInt8(count >> 8), UInt8(count & 255)])
+      let address = try AccountAddress.fromCanonicalBytes(canonical)
+      let compact = try address.compactNoritoAccountControllerPayload()
+      // This path constructs a fresh address with no raw-byte cache, then invokes
+      // ControllerPayload.encode and the native canonical validator.
+      XCTAssertTrue(AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(compact),
+                    "member count \(count)")
+      XCTAssertEqual(try address.canonicalBytes(), canonical)
+    }
+  }
+
+  func testCompactControllerRejectsEmptyOversizedAndTruncatedMemberCounts() {
+    XCTAssertTrue(NoritoNativeBridge.shared.isAccountAddressCodecAvailable,
+                  "The final SDK requires the real ABI-23 address validator.")
+    for count: UInt64 in [0, 65_535, 65_536, UInt64.max] {
+      var members = CompactNoritoWriter()
+      members.writeUInt64LE(count)
+      var policy = CompactNoritoWriter()
+      policy.writeField(Data([1]))
+      policy.writeField(Data([1, 0]))
+      policy.writeField(members.data)
+      var controller = CompactNoritoWriter()
+      controller.writeUInt32LE(1)
+      controller.writeField(policy.data)
+      XCTAssertFalse(AccountAddress.isCanonicalCompactNoritoAccountControllerPayload(controller.data),
+                     "advertised member count \(count) without members")
+    }
+  }
+
   private func keys(_ count: Int) throws -> [Data] {
     try (1...count).map { index in
       var seed = Data(repeating: 0, count: 32)

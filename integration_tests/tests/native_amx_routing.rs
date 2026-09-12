@@ -19,7 +19,7 @@ use iroha::{
             },
         },
         da::commitment::DaProofPolicyBundle,
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -36,7 +36,6 @@ use iroha::{
             },
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
-        metadata::Metadata,
         musubi::{
             ArchiveId, MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1, MUSUBI_REGISTRY_VERSION_V1,
             MusubiAbiBindingV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1,
@@ -56,11 +55,10 @@ use iroha::{
             musubi_provider_bundle_attestation_set_digest_v1,
         },
         nexus::{
-            DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneRelayEnvelope,
-            LaneVisibility, compute_settlement_hash,
+            LaneCatalog, LaneConfig as ModelLaneConfig, LaneRelayEnvelope, LaneVisibility,
+            compute_settlement_hash,
         },
         parameter::{Parameter, system::SumeragiNposParameters},
-        peer::PeerId,
         permission::Permission,
         prelude::Quantity,
         query::{
@@ -98,10 +96,14 @@ use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::sorafs::{
     CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
-    domain_setup_instruction_in_dataspace, genesis_factory_with_post_topology,
-    init_instruction_registry,
+    domain_setup_instruction_in_dataspace, init_instruction_registry,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::{self, Value as JsonValue};
@@ -388,7 +390,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_auto_populated_trusted_peers()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            let mut genesis = genesis_factory_with_post_topology(
+            let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
                 genesis_post_topology_transactions(topology.as_ref()),
                 topology,
@@ -664,11 +666,11 @@ fn musubi_fault_provider_attestations(
             let payload = MusubiProviderBundleVerificationPayloadV1 {
                 version: MUSUBI_REGISTRY_VERSION_V1,
                 binding: MusubiProviderBundleVerificationBindingV1 {
-                    network_id: client.client().network_id,
+                    network_id: *client.client().network_id(),
                     provider_id: provider,
-                    completed_by: client.client().account.clone(),
+                    completed_by: client.client().account().clone(),
                     completion_authority: musubi_fault_completion_authority(
-                        &client.client().account,
+                        client.client().account(),
                         provider,
                     ),
                     replication_order: order_id,
@@ -685,9 +687,9 @@ fn musubi_fault_provider_attestations(
             };
             MusubiProviderBundleVerificationAttestationV1 {
                 approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
-                    public_key: client.client().key_pair.public_key().clone(),
+                    public_key: client.client().key_pair().public_key().clone(),
                     signature: SignatureOf::try_from_hash(
-                        client.client().key_pair.private_key(),
+                        client.client().key_pair().private_key(),
                         payload.signing_hash(),
                     )
                     .expect("sign selectable Musubi provider attestation"),
@@ -705,8 +707,9 @@ async fn submit_and_wait_for_approval(
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(tx_hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(tx_hash)]),
     )
     .await
     .map_err(|_| eyre!("timed out opening transaction event stream"))??;
@@ -740,11 +743,11 @@ async fn submit_and_wait_for_approval(
     {
         Ok(result) => result?,
         Err(_) => {
-            events.close().await;
+            events.close().await?;
             return Ok(None);
         }
     };
-    events.close().await;
+    events.close().await?;
     Ok(outcome)
 }
 async fn wait_for_block_with_entrypoint(
@@ -908,7 +911,7 @@ fn musubi_fault_snapshot_and_time(client: &Client) -> Result<(MusubiRegistrySnap
         "Musubi fault package unexpectedly exists before publication"
     );
     ensure!(
-        resolver.network_id == client.client().network_id,
+        resolver.network_id == *client.client().network_id(),
         "Musubi resolver page used a different network identity"
     );
     let blocks = client.client().query(FindBlocks).execute_all()?;
@@ -929,9 +932,9 @@ fn musubi_fault_staging_receipt(
     let payload = MusubiSeedIngressReceiptPayloadV1 {
         version: MUSUBI_REGISTRY_VERSION_V1,
         binding: MusubiSeedIngressReceiptBindingV1 {
-            network_id: client.client().network_id,
-            publisher: client.client().account.clone(),
-            ingress_broker: client.client().account.clone(),
+            network_id: *client.client().network_id(),
+            publisher: client.client().account().clone(),
+            ingress_broker: client.client().account().clone(),
             seed_provider: musubi_fault_provider(),
             semantic_release_manifest_digest: manifest.semantic_digest(),
             archive_id: commitment.archive_id(),
@@ -946,9 +949,9 @@ fn musubi_fault_staging_receipt(
     };
     MusubiSeedIngressReceiptV1 {
         approvals: vec![MusubiSeedIngressReceiptApprovalV1 {
-            public_key: client.client().key_pair.public_key().clone(),
+            public_key: client.client().key_pair().public_key().clone(),
             signature: SignatureOf::try_from_hash(
-                client.client().key_pair.private_key(),
+                client.client().key_pair().private_key(),
                 payload.signing_hash(),
             )
             .expect("sign Musubi fault receipt"),
@@ -978,7 +981,7 @@ async fn prepare_selectable_musubi_publication(
             SetProviderIngestCompletionAuthority::new(
                 provider,
                 None,
-                musubi_fault_completion_authority(&submitter.client().account, provider),
+                musubi_fault_completion_authority(submitter.client().account(), provider),
             ),
         ));
     }
@@ -1011,12 +1014,12 @@ async fn prepare_selectable_musubi_publication(
                     dataspace_setup_instruction(
                         "acme",
                         acme_dataspace,
-                        &submitter.client().account,
+                        submitter.client().account(),
                     )?,
                     domain_setup_instruction_in_dataspace(
                         &domain,
                         acme_dataspace,
-                        &submitter.client().account,
+                        submitter.client().account(),
                     )?,
                 ],
                 FeePaymentIntent::authority(Vec::new(), None),
@@ -1151,7 +1154,7 @@ async fn prepare_selectable_musubi_publication(
                         replication_order,
                         provider,
                         3,
-                        musubi_fault_completion_authority(&submitter.client().account, provider),
+                        musubi_fault_completion_authority(submitter.client().account(), provider),
                         1,
                         anchor,
                     ))
@@ -2310,7 +2313,7 @@ async fn wait_for_all_peers_to_observe_native_amx_evidence(
         .ok_or_else(|| eyre!("{context}: four-peer network returned no native AMX relay"))
 }
 async fn fetch_sumeragi_diagnostics_json(client: &Client) -> Result<JsonValue> {
-    let diagnostics_url = client.client().torii_url.join("v1/sumeragi/diagnostics")?;
+    let diagnostics_url = client.client().endpoint().join("v1/sumeragi/diagnostics")?;
     let response = reqwest::Client::new()
         .get(diagnostics_url)
         .send()
@@ -2522,17 +2525,17 @@ fn native_amx_bootstrap_transaction(submitter: &Client) -> Result<SignedTransact
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
     let instructions = vec![
-        dataspace_setup_instruction("acme", acme_dataspace, &submitter.client().account)?,
-        dataspace_setup_instruction("bank", bank_dataspace, &submitter.client().account)?,
+        dataspace_setup_instruction("acme", acme_dataspace, submitter.client().account())?,
+        dataspace_setup_instruction("bank", bank_dataspace, submitter.client().account())?,
         domain_setup_instruction_in_dataspace(
             &DomainId::try_new("soakbootstrapmerchant", "acme")?,
             acme_dataspace,
-            &submitter.client().account,
+            submitter.client().account(),
         )?,
         domain_setup_instruction_in_dataspace(
             &DomainId::try_new("soakbootstrapvault", "bank")?,
             bank_dataspace,
-            &submitter.client().account,
+            submitter.client().account(),
         )?,
     ];
     Ok({
@@ -2565,12 +2568,12 @@ fn native_amx_soak_transactions(
                 domain_setup_instruction_in_dataspace(
                     &merchant_domain,
                     acme_dataspace,
-                    &submitter.client().account,
+                    submitter.client().account(),
                 )?,
                 domain_setup_instruction_in_dataspace(
                     &treasury_domain,
                     bank_dataspace,
-                    &submitter.client().account,
+                    submitter.client().account(),
                 )?,
             ];
             Ok({
@@ -2670,6 +2673,7 @@ fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }

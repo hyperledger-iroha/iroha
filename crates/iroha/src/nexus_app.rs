@@ -10,9 +10,11 @@ use crate::{
 };
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
-    prelude::{AccountId, AssetId, ChainId, Metadata, NetworkId, Quantity, Transfer},
+    prelude::{AccountId, AssetId, NetworkId, Quantity, Transfer},
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
 use std::{num::NonZeroU32, time::Duration};
 use thiserror::Error;
 use url::Url;
@@ -604,34 +606,30 @@ where
         }
         let mut resolved_input = input;
         resolved_input.authority = Some(authority);
-        let signable = self.build_signable_transfer(&resolved_input, Some(signing_public_key))?;
+        let signable = self.build_signable_transfer(&resolved_input, Some(&signing_public_key))?;
         let signature = self.request_signature(session, &signable)?;
         self.finalize_and_submit(signable, signature, options)
     }
     fn build_signable_transfer(
         &self,
         input: &NexusTransferInput,
-        signing_public_key: Option<PublicKey>,
+        signing_public_key: Option<&PublicKey>,
     ) -> Result<NexusSignableTransaction, NexusAppError> {
         let authority = input
             .authority
             .clone()
             .or_else(|| self.config.authority.clone())
             .ok_or(NexusAppError::MissingAuthority)?;
-        for supplied_signing_public_key in [
-            signing_public_key.as_ref(),
-            self.config.signing_public_key.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
+        for supplied_signing_public_key in
+            [signing_public_key, self.config.signing_public_key.as_ref()]
+                .into_iter()
+                .flatten()
         {
             let _ = resolve_signing_public_key(&authority, Some(supplied_signing_public_key))?;
         }
         let signing_public_key = resolve_signing_public_key(
             &authority,
-            signing_public_key
-                .as_ref()
-                .or(self.config.signing_public_key.as_ref()),
+            signing_public_key.or(self.config.signing_public_key.as_ref()),
         )?;
         let signature_algorithm = NexusSignatureAlgorithm::from_public_key(&signing_public_key)?;
         let mut builder = TransactionBuilder::new(
@@ -716,8 +714,8 @@ mod tests {
     use iroha_data_model::{
         account::address::{self, ChainDiscriminantGuard},
         asset::AssetDefinitionId,
-        prelude::Name,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use norito::json::Value as JsonValue;
     use std::{cell::RefCell, rc::Rc};

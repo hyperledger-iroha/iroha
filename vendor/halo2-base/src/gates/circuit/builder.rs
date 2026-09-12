@@ -338,9 +338,9 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
                     let copy_manager = self.core.copy_manager.lock().unwrap();
                     let cell = copy_manager
                         .assigned_advices
-                        .get(&cell)
+                        .resolve(&cell)
                         .expect("instance not assigned");
-                    layouter.constrain_instance(*cell, *instance_col, i);
+                    layouter.constrain_instance(cell, *instance_col, i);
                 }
             }
         }
@@ -380,7 +380,10 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
                 for advice in cells_to_lookup.iter().flat_map(|(_, advices)| advices) {
                     let cell = advice[0].cell.as_ref().unwrap();
                     let copy_manager = self.core.copy_manager.lock().unwrap();
-                    let acell = copy_manager.assigned_advices[cell];
+                    let acell = copy_manager
+                        .assigned_advices
+                        .resolve(cell)
+                        .expect("virtual lookup cell is assigned");
                     assert!(
                         acell.row_offset < config.gate.max_rows,
                         "range lookup assigned to an unusable row"

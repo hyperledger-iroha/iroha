@@ -5,12 +5,41 @@
 Run the following commands from the workspace root before submitting changes to MOCHI components:
 
 ```sh
-cargo check -p mochi-core -p mochi-ui -p mochi-integration
-cargo test -p mochi-integration
+cargo check -p mochi-core -p mochi-ui -p mochi-integration --all-targets --features mochi-ui/gui,mochi-integration/dev-tools
+cargo test -p mochi-core --lib torii::tests::
+cargo test -p mochi-core --test torii_streams
+cargo test -p mochi-integration --features dev-tools --test supervisor --test readiness_smoke
 bash -n scripts/mochi_local_sandbox.sh
 ```
 
 The `mochi-integration` crate provides lightweight Torii mocks and supervisor smoke tests so we can validate local workflows without compiling the full Iroha binary set.
+
+The desktop shell's `gui/navigation.rs` owns the pure view choices, labels and
+exact persisted identities. Rendering and storage integration remain in the shell.
+
+The desktop shell's `gui/cli_options.rs` owns command selection, validated
+startup overrides and profile parsing. Its `tests.rs` covers argument validation
+and precedence; `gui/cli_tests.rs` covers integration with startup, readiness and
+the supervisor. Both GUI and headless sandbox workflows consume these same
+options. Runtime stream ownership, persistence and rendering stay in their
+respective modules.
+
+## Ledger stream ownership
+
+Mochi uses the Rust SDK's `AccountClient` event and block capabilities. The
+Supervisor creates its reader from the validated generation's genesis account,
+which default Kagami genesis grants `CanReadAllLedgerData`. Reconnects retain
+that immutable endpoint, network and authority. The selected composer/vault
+signer and node operator credentials are separate authorities.
+
+Readiness and lane lifecycle workflows receive the explicit reader and reject
+cross-endpoint or cross-network contexts before network I/O. Mochi owns the UI
+summaries, 128-item fanout and reconnect policy. Binary lengths are the actual
+received bytes; transport errors have no invented length. Cancellation releases
+pending connections, readers and backoff waits. The mock harness verifies
+account signatures and replay nonces; it does not qualify a real node's grants,
+revocation or four-validator execution. `ci/check_mochi.sh` separately builds
+Kagami and verifies its generated genesis grants.
 
 ## Fast Local Loop
 

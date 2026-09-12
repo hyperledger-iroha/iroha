@@ -41,7 +41,7 @@ use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
 };
 use iroha_data_model::{
-    ChainId, Level,
+    Level,
     account::Account,
     asset::AssetDefinitionId,
     block::{
@@ -58,14 +58,10 @@ use iroha_data_model::{
         },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{InstructionBox, Log, Upgrade},
     merge::MergeQuorumCertificate,
-    nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
-        LaneVisibility,
-    },
-    peer::PeerId,
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile, LaneVisibility},
     prelude::{Executor, IvmBytecode},
     transaction::{
         Executable, TransactionBuilder,
@@ -74,6 +70,10 @@ use iroha_data_model::{
     trigger::DataTriggerSequence,
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{
     SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
@@ -1009,6 +1009,16 @@ pub(crate) fn persist_v2_finality_chain_through(
     }
     artifacts
 }
+fn store_finalized_fixture_block(kura: &Kura, block: Arc<SignedBlock>) {
+    let height = NonZeroUsize::new(
+        usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+    )
+    .expect("fixture height is non-zero");
+    kura.store_block(block)
+        .expect("store canonical fixture block");
+    persist_v2_finality_chain_through(kura, height);
+}
+
 fn retained_archive_sccp_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
     iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
         version: 1,
@@ -1822,7 +1832,9 @@ fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
 #[test]
 fn emergency_fast_store_root_lock_does_not_create_a_missing_file() {
     let temp_dir = TempDir::new().expect("create Kura store root");
-    let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+    let lock_path = std::fs::canonicalize(temp_dir.path())
+        .expect("canonical Kura root")
+        .join(STORE_ROOT_LOCK_FILE_NAME);
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
 
@@ -1845,7 +1857,9 @@ fn store_root_lock_rejects_a_symlink_without_touching_its_target() {
     let victim = temp_dir.path().join("lock-victim");
     let victim_bytes = b"must remain untouched";
     std::fs::write(&victim, victim_bytes).expect("create lock victim");
-    let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+    let lock_path = std::fs::canonicalize(temp_dir.path())
+        .expect("canonical Kura root")
+        .join(STORE_ROOT_LOCK_FILE_NAME);
     symlink(&victim, &lock_path).expect("plant lockfile symlink");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     assert!(matches!(
@@ -1960,7 +1974,18 @@ fn v2_finality_summary_maps_to_public_status_without_regression() {
         .store_v2_finality_artifact(&artifacts[1])
         .expect("latest idempotent retry remains valid");
     assert_v2_finality_telemetry(&metrics, &artifacts[1]);
-    let status = metrics.status_snapshot();
+    let status = metrics.status_snapshot(
+        &crate::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            Some("telemetry"),
+            Some("test-target"),
+        )
+        .expect("explicit executable identity")
+        .status(),
+    );
     let sumeragi = status
         .sumeragi
         .expect("public status includes Sumeragi telemetry");
@@ -2015,8 +2040,7 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("open persistent telemetry Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block))
             .expect("store persistent telemetry fixture block");
@@ -2031,7 +2055,18 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
     let metrics = Arc::new(Metrics::default());
     reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     assert_v2_finality_telemetry(&metrics, &artifact);
-    let status = metrics.status_snapshot();
+    let status = metrics.status_snapshot(
+        &crate::release_identity::BuildIdentity::from_compiled_parts(
+            "test-executable",
+            Some("1111111111111111111111111111111111111111"),
+            None,
+            None,
+            Some("telemetry"),
+            Some("test-target"),
+        )
+        .expect("explicit executable identity")
+        .status(),
+    );
     let sumeragi = status
         .sumeragi
         .expect("public status includes hydrated Sumeragi telemetry");
@@ -2044,8 +2079,7 @@ fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() 
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("open persistent telemetry Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
         let mut generator = DummyBlocks::new();
         let blocks = vec![generator.next(), generator.next()];
         for block in &blocks {
@@ -2454,8 +2488,12 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     std::fs::write(&staging_path, b"orphan-stage").expect("write orphan stage");
     assert!(matches!(
         kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaFinalitySidecar(_))
+        Err(Error::NoritoFrame(_))
     ));
+    assert_eq!(
+        fs::read(&staging_path).expect("read rejected stage"),
+        b"orphan-stage"
+    );
     std::fs::remove_file(&staging_path).expect("remove orphan stage");
     let final_dir = kura.kagemusha_finality_sidecar_dir();
     create_dir_all_with_context(&final_dir).expect("create final directory");
@@ -2463,8 +2501,12 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     std::fs::write(&final_path, b"orphan-final").expect("write orphan final sidecar");
     assert!(matches!(
         kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaFinalitySidecar(_))
+        Err(Error::NoritoFrame(_))
     ));
+    assert_eq!(
+        fs::read(&final_path).expect("read rejected final sidecar"),
+        b"orphan-final"
+    );
 }
 #[test]
 fn finality_cache_rejects_a_path_swap_between_decode_and_verification() {
@@ -3103,24 +3145,65 @@ fn startup_replay_auxiliary_capture_rejects_configured_historical_byte_overflow(
     fs::create_dir_all(&historical)
         .expect("publish configured-limit historical recovery namespace");
     let lower_limit = V2_PENDING_CONTROL_SIDECAR_BYTES_MIN;
-    let first_len = lower_limit / 2;
-    let second_len = lower_limit.saturating_sub(first_len).saturating_add(1);
-    for (stem, byte, length) in [("a", b'a', first_len), ("b", b'b', second_len)] {
-        let path = historical.join(format!(
-            "{}.norito",
-            stem.repeat(Hash::LENGTH.saturating_mul(2))
-        ));
-        fs::write(path, vec![byte; length])
-            .expect("write individually bounded historical recovery record");
-    }
-    kura.capture_v2_startup_replay_lane_auxiliary_sidecars()
-        .expect("the default aggregate bound accepts the two-record fixture");
-    drop(kura);
     let mut tightened_limits = initial_limits;
     tightened_limits.pending_control_sidecar_bytes =
         NonZeroUsize::new(lower_limit).expect("configured lower byte limit is non-zero");
-    let error = open_configured_kura_with_pending_limits(&config, &tightened_limits)
+    let tight_temp = TempDir::new().expect("temporary tight-bound startup Kura root");
+    let tight_config = kura_config_for_dir(&tight_temp, BLOCKS_IN_MEMORY);
+    let (tight_kura, _) =
+        open_configured_kura_with_pending_limits(&tight_config, &tightened_limits)
+            .expect("configure capture's aggregate limit before installing its namespace fixture");
+    let tight_lane = tight_kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("tight primary lane");
+    let tight_historical = Kura::historical_autonomous_recovery_directory_for_entry(
+        &tight_lane,
+        &tight_kura.store_root(),
+    );
+    fs::create_dir_all(&tight_historical).expect("create tight-bound capture namespace");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let mut encoded_bytes = 0_usize;
+    let mut index = 0_u64;
+    while encoded_bytes <= lower_limit {
+        index += 1;
+        let tag = format!("bounded-history-{index}-{}", "x".repeat(512 * 1024));
+        let (_, _, payload) = historical_capacity_payload_for_kura(
+            lane.lane_id,
+            lane.dataspace_id,
+            index,
+            &tag,
+            &signer,
+        );
+        let record =
+            historical_autonomous_recovery_record_for_kura(&payload, &signer, tag.as_bytes());
+        let bytes = historical_autonomous_recovery_record_bytes(&record);
+        assert!(bytes.len() <= HISTORICAL_AUTONOMOUS_RECOVERY_RECORD_MAX_BYTES);
+        let path = historical.join(format!("{}.norito", record.recovery_id));
+        kura.validate_historical_autonomous_recovery_record_shape(&record, &path)
+            .expect("each recovery record is independently canonical and valid");
+        encoded_bytes += bytes.len();
+        fs::write(
+            tight_historical.join(format!("{}.norito", record.recovery_id)),
+            &bytes,
+        )
+        .expect("write the same canonical record under the configured tight limit");
+        fs::write(path, bytes)
+            .expect("write individually valid bounded historical recovery record");
+    }
+    assert!(
+        index > 1,
+        "only the aggregate budget may reject the fixture"
+    );
+    kura.capture_v2_startup_replay_lane_auxiliary_sidecars()
+        .expect("the default aggregate bound accepts every canonical fixture record");
+    let before_capture = snapshot_regular_test_tree(tight_temp.path());
+    let error = tight_kura
+        .capture_v2_startup_replay_lane_auxiliary_sidecars()
         .expect_err("startup auxiliary capture must enforce the configured aggregate bound");
+    assert_eq!(
+        snapshot_regular_test_tree(tight_temp.path()),
+        before_capture
+    );
     assert!(
         error
             .to_string()

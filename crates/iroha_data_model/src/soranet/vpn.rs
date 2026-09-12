@@ -6,12 +6,12 @@
 //! envelopes describe DNS/route pushes, guard/exit selection, and metering receipts so exit
 //! gateways can emit deterministic Norito payloads for governance.
 use super::RelayId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{NetworkId, account::AccountId, asset::AssetDefinitionId};
 use blake3;
 use core::fmt;
-#[cfg(feature = "json")]
+
 use core::fmt::Write as FmtWrite;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
 use iroha_primitives::{
@@ -20,7 +20,7 @@ use iroha_primitives::{
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -42,7 +42,7 @@ pub const VPN_HELPER_TICKET_LEN: usize = 788;
 /// Exact lowercase-hex length of a helper-authenticated VPN ticket.
 pub const VPN_HELPER_TICKET_HEX_LEN: usize = VPN_HELPER_TICKET_LEN * 2;
 const VPN_HELPER_TICKET_SIGNATURE_LEN: usize = 64;
-/// Exact byte length of the ML-DSA-65 relay identity authenticated by an SRCv2 certificate.
+/// Exact byte length of the ML-DSA-65 relay identity authenticated by an `SRCv2` certificate.
 pub const VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1: usize = 1_952;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
@@ -60,9 +60,22 @@ pub const VPN_ADDRESS_SLOT_COUNT_V1: u32 = VPN_SESSION_IPV4_SUBNET_COUNT;
 /// The index is signed by the operator and claimed in consensus state. Keeping it separate from
 /// quote and session identifiers makes address uniqueness an explicit protocol invariant instead of
 /// an accidental property of a truncated hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnAddressSlotV1")]
 pub struct VpnAddressSlotV1(u32);
 impl VpnAddressSlotV1 {
@@ -198,7 +211,7 @@ impl VpnCellFlagsV1 {
         (self.bits & Self::COVER) != 0
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonSerialize for VpnCellFlagsV1 {
     fn json_serialize(&self, out: &mut String) {
         let _ = FmtWrite::write_fmt(out, format_args!("{}", self.bits));
@@ -210,7 +223,7 @@ impl json::JsonSerialize for VpnCellFlagsV1 {
         json::JsonSerialize::json_serialize_to(&self.bits, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonDeserialize for VpnCellFlagsV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = u64::json_deserialize(parser)?;
@@ -304,7 +317,7 @@ impl VpnFlowLabelV1 {
         u32::from_be_bytes([0, self.bytes[0], self.bytes[1], self.bytes[2]])
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonSerialize for VpnFlowLabelV1 {
     fn json_serialize(&self, out: &mut String) {
         let _ = FmtWrite::write_fmt(out, format_args!("{}", self.to_u32()));
@@ -316,7 +329,7 @@ impl json::JsonSerialize for VpnFlowLabelV1 {
         json::JsonSerialize::json_serialize_to(&self.to_u32(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonDeserialize for VpnFlowLabelV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = u32::json_deserialize(parser)?;
@@ -336,7 +349,7 @@ pub struct VpnCellHeaderV1 {
     /// Handling flags.
     pub flags: VpnCellFlagsV1,
     /// Circuit identifier derived from the route directory entry.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub circuit_id: [u8; 16],
     /// Flow label (24 bits).
     pub flow_label: VpnFlowLabelV1,
@@ -379,7 +392,7 @@ pub struct VpnCellV1 {
     /// Cell header.
     pub header: VpnCellHeaderV1,
     /// Raw payload carried by the cell.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub payload: Vec<u8>,
 }
 impl fmt::Debug for VpnCellV1 {
@@ -803,8 +816,20 @@ pub struct VpnCoverPlanEntryV1 {
     pub is_cover: bool,
 }
 /// Exit class advertised for billing/telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "exit_class", content = "value", rename_all = "kebab-case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnExitClassV1")]
@@ -957,19 +982,31 @@ pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAdd
     derive_vpn_address_plan_v1(VpnAddressSlotV1::from_session_id(session_id))
 }
 /// Client-signed cumulative prepaid authorization used to release escrowed XOR to an operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1")]
 pub struct VpnUsageVoucherBodyV1 {
     /// Session identifier bound to the tunnel runtime.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed the XOR price and relay policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub quote_id: [u8; 32],
     /// Relay fingerprint that served the session.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Monotonic voucher sequence.
     pub sequence: u64,
@@ -983,9 +1020,20 @@ pub struct VpnUsageVoucherBodyV1 {
     pub issued_at_ms: u64,
 }
 /// Signed client usage voucher used for VPN escrow settlement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnUsageVoucherV1")]
 pub struct VpnUsageVoucherV1 {
     /// Cumulative prepaid authorization body signed by the client.
@@ -1073,9 +1121,20 @@ pub struct VpnUsageVoucherEnvelopeV1 {
     pub fee_ceiling: Quantity,
 }
 /// Deterministic XOR tariff used to settle a VPN lease from a client usage voucher.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnTariffV1")]
 pub struct VpnTariffV1 {
     /// Maximum nominal escrowed lease fee.
@@ -1088,9 +1147,20 @@ pub struct VpnTariffV1 {
     pub egress_fee_per_mib: Quantity,
 }
 /// Durable quote policy needed to reconstruct VPN sessions and receipts from WSV.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnQuotePolicyV1")]
 pub struct VpnQuotePolicyV1 {
     /// Exit class selected by the client and priced by the quote.
@@ -1098,24 +1168,24 @@ pub struct VpnQuotePolicyV1 {
     /// Relay endpoint advertised to the client.
     pub relay_endpoint: String,
     /// Exact Ed25519 relay identity authenticated by the guard directory.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Exact ML-DSA-65 relay identity authenticated by the same guard-directory certificate.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
     /// Relay descriptor commitment authenticated by the certificate.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub descriptor_commit: [u8; 32],
     /// Exact DNS name authenticated by TLS and the relay handshake.
     pub tls_server_name: String,
     /// Exact SHA-256 SPKI pin for the relay TLS leaf certificate.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_tls_spki_sha256: [u8; 32],
     /// SHA-256 digest of the canonical signed relay certificate bundle.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_certificate_sha256: [u8; 32],
     /// Externally provisioned digest authenticating the exact directory snapshot.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub directory_snapshot_digest: [u8; 32],
     /// Exclusive upper bound on relay trust validity, in milliseconds since the Unix epoch.
     pub relay_trust_valid_until_ms: u64,
@@ -1147,21 +1217,32 @@ pub struct VpnQuotePolicyV1 {
 /// Every economic, identity, trust, lifetime, and address-allocation field is
 /// inside this body. The client submits the signed body as one opaque policy
 /// decision instead of reconstructing security-sensitive fields locally.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnQuoteBodyV1")]
 pub struct VpnQuoteBodyV1 {
     /// Exact genesis-derived network on which this quote may open a lease.
     pub network_id: NetworkId,
     /// Operator-issued quote identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub quote_id: [u8; 32],
     /// Canonical chain/client/quote-derived lease identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub lease_id: [u8; 32],
     /// Canonical chain/client/quote/slot-derived session identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub session_id: [u8; 16],
     /// Consensus-claimed point-to-point address allocation.
     pub address_slot: VpnAddressSlotV1,
@@ -1186,9 +1267,20 @@ pub struct VpnQuoteBodyV1 {
     pub settlement_grace_ms: u64,
 }
 /// Ed25519 operator signature over a canonical, domain-separated VPN quote body.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnSignedQuoteV1")]
 pub struct VpnSignedQuoteV1 {
     /// Complete quote body covered by the operator signature.
@@ -1374,9 +1466,21 @@ pub fn vpn_account_hash_v1(account_id: &AccountId) -> [u8; 32] {
     vpn_domain_hash_v1("iroha.soranet.vpn.account-hash.v1", &account_id.encode())
 }
 /// Lifecycle status for an on-chain VPN lease escrow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnLeaseStatusV1")]
 pub enum VpnLeaseStatusV1 {
@@ -1388,19 +1492,28 @@ pub enum VpnLeaseStatusV1 {
     Refunded,
 }
 /// On-chain VPN lease escrow record.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnLeaseRecordV1")]
 pub struct VpnLeaseRecordV1 {
     /// Canonical chain/client/quote-derived lease identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub lease_id: [u8; 32],
     /// Session identifier bound to the tunnel runtime.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub quote_id: [u8; 32],
     /// Client account that funded the escrow.
     pub client_account_id: AccountId,
@@ -1415,7 +1528,7 @@ pub struct VpnLeaseRecordV1 {
     /// Deterministic protocol custody account holding the lease fee.
     pub custody_account_id: AccountId,
     /// Relay fingerprint authorized by the quote.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Deterministic usage tariff fixed at lease opening.
     pub tariff: VpnTariffV1,
@@ -1426,7 +1539,7 @@ pub struct VpnLeaseRecordV1 {
     /// Exact operator-signed quote admitted when the lease opened.
     pub signed_quote: VpnSignedQuoteV1,
     /// Hash of the transaction that opened and funded this lease.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub open_tx_hash: [u8; 32],
     /// Current lease lifecycle status.
     pub status: VpnLeaseStatusV1,
@@ -1437,30 +1550,24 @@ pub struct VpnLeaseRecordV1 {
     /// Extra time after expiry when the relay may still submit settlement.
     pub settlement_grace_ms: u64,
     /// Block timestamp when settlement completed.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub settled_at_ms: Option<u64>,
     /// Block timestamp when timeout refund completed.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub refunded_at_ms: Option<u64>,
     /// Highest client voucher sequence accepted during settlement.
     pub highest_voucher_sequence: u64,
     /// Hash of the settled client voucher.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub client_voucher_hash: Option<[u8; 32]>,
     /// Full client voucher accepted during settlement.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub settled_client_voucher: Option<VpnUsageVoucherV1>,
     /// Hash of the relay receipt used for settlement.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub relay_receipt_hash: Option<[u8; 32]>,
     /// Full relay receipt accepted during settlement.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub settled_relay_receipt: Option<VpnSignedSessionReceiptV1>,
     /// Nominal fee released to the relay.
     pub earned_fee: Quantity,
@@ -1489,110 +1596,137 @@ impl VpnLeaseRecordV1 {
         signed_receipt: &VpnSignedSessionReceiptV1,
         voucher: &VpnUsageVoucherV1,
     ) -> Result<Quantity, VpnSettlementEvidenceError> {
-        fn invalid(message: impl Into<String>) -> VpnSettlementEvidenceError {
-            VpnSettlementEvidenceError {
-                message: message.into(),
-            }
-        }
-
         signed_receipt.verify().map_err(|error| {
-            invalid(format!(
+            VpnSettlementEvidenceError::invalid(format!(
                 "vpn relay receipt signature verification failed: {error}"
             ))
         })?;
         let receipt = &signed_receipt.receipt;
         if receipt.session_id != self.session_id || voucher.body.session_id != self.session_id {
-            return Err(invalid("vpn settlement session id mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement session id mismatch",
+            ));
         }
         if receipt.quote_id != self.quote_id || voucher.body.quote_id != self.quote_id {
-            return Err(invalid("vpn settlement quote id mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement quote id mismatch",
+            ));
         }
         if receipt.relay_id != self.relay_id || voucher.body.relay_id != self.relay_id {
-            return Err(invalid("vpn settlement relay id mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement relay id mismatch",
+            ));
         }
         if receipt.payment_tx_hash != self.open_tx_hash {
-            return Err(invalid("vpn settlement payment transaction mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement payment transaction mismatch",
+            ));
         }
         if receipt.account_hash != vpn_account_hash_v1(&self.client_account_id) {
-            return Err(invalid("vpn settlement client account mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn settlement client account mismatch",
+            ));
         }
         if voucher.client_public_key != self.metering_public_key {
-            return Err(invalid("vpn voucher public key mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn voucher public key mismatch",
+            ));
         }
         voucher.verify().map_err(|error| {
-            invalid(format!(
+            VpnSettlementEvidenceError::invalid(format!(
                 "vpn voucher signature verification failed: {error}"
             ))
         })?;
         if receipt.client_voucher_hash != voucher.hash() {
-            return Err(invalid("vpn receipt voucher hash mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt voucher hash mismatch",
+            ));
         }
         if receipt.highest_voucher_sequence != voucher.body.sequence {
-            return Err(invalid("vpn receipt voucher sequence mismatch"));
-        }
-        let active_ms = receipt
-            .ended_at_ms
-            .checked_sub(receipt.started_at_ms)
-            .ok_or_else(|| invalid("vpn receipt service interval is inverted"))?;
-        if !voucher
-            .body
-            .authorizes(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
-        {
-            return Err(invalid(
-                "vpn receipt usage exceeds the signed prepaid voucher ceilings",
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt voucher sequence mismatch",
             ));
         }
-        let expected_uptime_secs = u32::try_from(active_ms.div_ceil(1_000))
-            .map_err(|_| invalid("vpn receipt active time exceeds receipt range"))?;
-        if receipt.uptime_secs != expected_uptime_secs {
-            return Err(invalid(
-                "vpn receipt uptime must equal its observed service interval rounded up",
-            ));
-        }
-        if voucher.body.issued_at_ms > receipt.ended_at_ms {
-            return Err(invalid(
-                "vpn receipt ends before the highest prepaid voucher was issued",
-            ));
-        }
+        let active_ms = verify_vpn_receipt_usage(receipt, &voucher.body)?;
         if receipt.exit_class != self.quote_policy.exit_class {
-            return Err(invalid("vpn receipt exit class mismatch"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt exit class mismatch",
+            ));
         }
         if receipt.cover_bytes != 0 {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn settlement receipt must not carry unauthenticated cover telemetry",
             ));
         }
         if receipt.meter_hash != vpn_tariff_meter_hash_v1(&self.tariff) {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn receipt meter hash does not match the signed tariff",
             ));
         }
         if receipt.earned_fee > self.lease_fee {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn receipt earned fee exceeds the escrowed lease fee",
             ));
         }
         if receipt.started_at_ms < self.opened_at_ms || receipt.ended_at_ms > self.expires_at_ms {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn receipt service interval falls outside the signed lease",
             ));
         }
         if voucher.body.issued_at_ms < self.opened_at_ms
             || voucher.body.issued_at_ms >= self.expires_at_ms
         {
-            return Err(invalid(
+            return Err(VpnSettlementEvidenceError::invalid(
                 "vpn voucher issuance timestamp falls outside the signed lease",
             ));
         }
         let earned_fee = self
             .tariff
             .fee_for_usage(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
-            .map_err(|error| invalid(format!("vpn tariff arithmetic failed: {error}")))?;
+            .map_err(|error| {
+                VpnSettlementEvidenceError::invalid(format!(
+                    "vpn tariff arithmetic failed: {error}"
+                ))
+            })?;
         if receipt.earned_fee != earned_fee {
-            return Err(invalid("vpn receipt earned fee does not match tariff"));
+            return Err(VpnSettlementEvidenceError::invalid(
+                "vpn receipt earned fee does not match tariff",
+            ));
         }
         Ok(earned_fee)
     }
+}
+
+// Usage projection follows both signatures and the exact receipt/voucher binding.
+fn verify_vpn_receipt_usage(
+    receipt: &VpnSessionReceiptV1,
+    voucher: &VpnUsageVoucherBodyV1,
+) -> Result<u64, VpnSettlementEvidenceError> {
+    let active_ms = receipt
+        .ended_at_ms
+        .checked_sub(receipt.started_at_ms)
+        .ok_or_else(|| {
+            VpnSettlementEvidenceError::invalid("vpn receipt service interval is inverted")
+        })?;
+    if !voucher.authorizes(receipt.ingress_bytes, receipt.egress_bytes, active_ms) {
+        return Err(VpnSettlementEvidenceError::invalid(
+            "vpn receipt usage exceeds the signed prepaid voucher ceilings",
+        ));
+    }
+    let expected_uptime_secs = u32::try_from(active_ms.div_ceil(1_000)).map_err(|_| {
+        VpnSettlementEvidenceError::invalid("vpn receipt active time exceeds receipt range")
+    })?;
+    if receipt.uptime_secs != expected_uptime_secs {
+        return Err(VpnSettlementEvidenceError::invalid(
+            "vpn receipt uptime must equal its observed service interval rounded up",
+        ));
+    }
+    if voucher.issued_at_ms > receipt.ended_at_ms {
+        return Err(VpnSettlementEvidenceError::invalid(
+            "vpn receipt ends before the highest prepaid voucher was issued",
+        ));
+    }
+    Ok(active_ms)
 }
 
 /// Failure while verifying the complete client-and-relay VPN settlement evidence.
@@ -1601,26 +1735,44 @@ impl VpnLeaseRecordV1 {
 pub struct VpnSettlementEvidenceError {
     message: String,
 }
+impl VpnSettlementEvidenceError {
+    fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
 /// Billing and telemetry receipt emitted by an exit gateway.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnSessionReceiptV1")]
 pub struct VpnSessionReceiptV1 {
     /// Session identifier (client-assigned, 16 bytes).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub quote_id: [u8; 32],
     /// Hash of the committed XOR escrow payment transaction.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub payment_tx_hash: [u8; 32],
     /// Hash of the paying canonical account id.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub account_hash: [u8; 32],
     /// Relay fingerprint that emitted the receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Relay-observed ingress bytes actually forwarded (user payloads only).
     pub ingress_bytes: u64,
@@ -1637,20 +1789,31 @@ pub struct VpnSessionReceiptV1 {
     /// Exit class applied for billing.
     pub exit_class: VpnExitClassV1,
     /// Hash of the meter manifest applied to this session.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub meter_hash: [u8; 32],
     /// Nominal fee earned from actual usage within the signed prepaid ceilings.
     pub earned_fee: Quantity,
     /// Highest client usage voucher sequence accepted by the relay.
     pub highest_voucher_sequence: u64,
     /// Hash of the highest accepted client voucher.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub client_voucher_hash: [u8; 32],
 }
 /// Relay-authenticated settlement envelope for a VPN session receipt.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnSignedSessionReceiptV1")]
 pub struct VpnSignedSessionReceiptV1 {
     /// Complete relay-observed receipt body covered by the signature.
@@ -2085,7 +2248,7 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
 /// routes are applied in order. Every variable-length value is length-delimited, each sequence has
 /// an explicit element count, and integers are big-endian, so no two policy tuples share a
 /// serialization. The V1 QUIC ALPN is protocol-fixed rather than caller-controlled and is also
-/// authenticated by the SoraNet handshake. Callers must separately enforce canonical endpoint,
+/// authenticated by the `SoraNet` handshake. Callers must separately enforce canonical endpoint,
 /// server-name, CIDR, and IP-address syntax.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -2527,6 +2690,7 @@ impl fmt::Display for VpnCellError {
 impl std::error::Error for VpnCellError {}
 #[cfg(test)]
 mod tests {
+    mod settlement_usage;
     use super::*;
     use hex::FromHex;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -2613,7 +2777,7 @@ mod tests {
             .parse()
             .expect("signed 512-bit maximum quantity")
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: json::JsonSerialize>(value: &T) {
         let legacy = json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -2625,7 +2789,7 @@ mod tests {
             Err(json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn vpn_numeric_scalar_json_has_exact_checked_bounds() {
         assert_exact_json(&VpnCellFlagsV1::from_bits(5));
@@ -2640,7 +2804,7 @@ mod tests {
         metering_public_key: PublicKey,
     ) -> VpnQuoteBodyV1 {
         let asset_definition = AssetDefinitionId::derive_from_components(
-            crate::domain::DomainId::parse_fully_qualified("universal.universal")
+            iroha_model_base::domain::DomainId::parse_fully_qualified("universal.universal")
                 .expect("static universal domain"),
             "xor".parse().expect("static XOR name"),
         );
@@ -2747,7 +2911,7 @@ mod tests {
             VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
         (key_pair, voucher)
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn usage_voucher_json_roundtrip_preserves_settlement_evidence() {
         let (_, voucher) = sample_usage_voucher();
@@ -3898,11 +4062,11 @@ mod tests {
                 class: VpnCellClassV1::Data,
                 flags: VpnCellFlagsV1::new(false, false, false, false),
                 circuit_id: [0xA5; 16],
-                flow_label: VpnFlowLabelV1::from_u32(0x00AB_CD).expect("flow label"),
+                flow_label: VpnFlowLabelV1::from_u32(0x0000_ABCD).expect("flow label"),
                 sequence: 7,
                 ack: 6,
                 padding_budget_ms: 9,
-                payload_len: payload.len() as u16,
+                payload_len: u16::try_from(payload.len()).expect("fixture value fits u16"),
             },
             payload,
         };
@@ -3961,7 +4125,7 @@ mod tests {
                 sequence: 1,
                 ack: 0,
                 padding_budget_ms: 5,
-                payload_len: expected.len() as u16,
+                payload_len: u16::try_from(expected.len()).expect("fixture value fits u16"),
             },
             payload: expected.clone(),
         };

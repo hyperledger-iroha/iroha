@@ -13,19 +13,18 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetBalanceScope, AssetDefinitionId, AssetId},
     compute::ComputePriceRiskClass,
-    domain::DomainId,
     isi::settlement::SettlementId,
-    name::Name,
-    nexus::{DataSpaceId, LaneId},
     nft::NftId,
     oracle::FeedId,
     parameter::custom::CustomParameterId,
-    peer::PeerId,
     proof::ProofId,
     role::RoleId,
-    state_path::StatePath,
     trigger::TriggerId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{name::Name, state_path::StatePath};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::json::{self, JsonDeserialize, JsonObjectKey, JsonObjectKeyOwned};
 
 const KEY: &str = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";

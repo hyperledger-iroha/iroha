@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Leaf<'a>(&'a AtomicUsize);
 
-impl NoritoSerialize for Leaf<'_> {}
 impl SerializePayload for Leaf<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.fetch_add(1, Ordering::Relaxed);
@@ -14,7 +13,7 @@ impl SerializePayload for Leaf<'_> {
     }
 }
 
-#[derive(crate::Encode)]
+#[derive(crate::SerializePayload)]
 struct Layer<T> {
     value: T,
 }
@@ -90,7 +89,7 @@ fn counting_preserves_box_rc_arc_and_array_layouts() {
 #[test]
 fn counting_never_trusts_public_exact_writer_lengths() {
     struct FalseLength;
-    impl NoritoSerialize for FalseLength {}
+
     impl SerializePayload for FalseLength {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             serialize_to_writer_exact(&0x1234_u16, writer, 1)
@@ -105,7 +104,7 @@ fn counting_never_trusts_public_exact_writer_lengths() {
 #[test]
 fn nested_buffer_and_checksum_writers_still_receive_real_bytes() {
     struct InnerDigest;
-    impl NoritoSerialize for InnerDigest {}
+
     impl SerializePayload for InnerDigest {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let mut inner = Vec::new();
@@ -129,11 +128,14 @@ fn nested_buffer_and_checksum_writers_still_receive_real_bytes() {
 #[test]
 fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
     #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.counting_tests.Inner")]
     struct Inner {
         values: Vec<Vec<u16>>,
     }
     struct NestedFrame(Inner);
-    impl NoritoSerialize for NestedFrame {}
+
     impl SerializePayload for NestedFrame {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             // The inner frame's first pass computes its CRC through a writer
@@ -169,7 +171,7 @@ fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
 #[test]
 fn counting_propagates_child_errors_and_restores_context() {
     struct Fails;
-    impl NoritoSerialize for Fails {}
+
     impl SerializePayload for Fails {
         fn serialize(&self, _: &mut Encoder<'_>) -> Result<(), Error> {
             Err(Error::NonCanonicalEncoding)

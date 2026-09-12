@@ -1,6 +1,7 @@
 use super::*;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
-#[cfg(feature = "json")]
+
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::{fmt::Display, format, string::String};
 isi! {
@@ -275,12 +276,10 @@ impl TransferAssetBatchEntry {
     norito::codec::Decode,
     norito::codec::Encode,
     iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[norito(tag = "mode", content = "value")]
 #[repr(u8)]
 pub enum BatchMode {
     /// Any rejected leg rejects the transaction and rolls back every leg.
@@ -402,7 +401,7 @@ impl From<TransferAssetBatch> for InstructionBox {
         InstructionBox(Box::new(instruction))
     }
 }
-#[cfg(feature = "json")]
+
 impl<S, O, D> FastJsonWrite for Transfer<S, O, D>
 where
     S: Identifiable,
@@ -437,7 +436,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for TransferAssetBatchEntry {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -474,7 +473,7 @@ impl FastJsonWrite for TransferAssetBatchEntry {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for TransferAssetBatch {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -516,7 +515,7 @@ mod tests {
             "rose".parse().expect("asset name"),
         )
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -528,7 +527,7 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn transfer_json_families_match_legacy_bytes_at_exact_bounds() {
         let from = account(0x0a);

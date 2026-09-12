@@ -1,3 +1,123 @@
+// Broker fixtures may carry signing material: assertions never print values,
+// and every temporary encoding remains guarded by the broker's scrub-on-drop buffer.
+fn assert_broker_frame_owner<T>(value: &T, owner: &str, limit: usize)
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    assert!(T::nominal_name() == owner);
+    assert!(T::frame_name() == owner);
+    let encoded = encode_sensitive_canonical(value, limit).expect("encode current broker owner");
+    let view = norito::core::from_bytes_view(&encoded).expect("valid broker frame header");
+    assert!(view.schema() == norito::schema::identity::frame_hash::<T>());
+    let decoded: T = decode_canonical(&encoded, limit).expect("decode current broker owner");
+    let roundtrip = encode_sensitive_canonical(&decoded, limit).expect("re-encode broker owner");
+    assert!(encoded.as_slice() == roundtrip.as_slice());
+    let mut substituted = ScrubbedBytes::new(encoded.to_vec());
+    substituted[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<T>(&substituted),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(matches!(
+        decode_canonical::<T>(&substituted, limit),
+        Err(BrokerError::Protocol)
+    ));
+    assert!(matches!(
+        decode_canonical::<T>(&encoded[..encoded.len() - 1], limit),
+        Err(BrokerError::Protocol)
+    ));
+    let mut trailing = ScrubbedBytes::new(encoded.to_vec());
+    trailing.push(0);
+    assert!(matches!(
+        decode_canonical::<T>(&trailing, limit + 1),
+        Err(BrokerError::Protocol)
+    ));
+}
+
+#[test]
+fn broker_same_payload_request_and_result_owners_reject_substitution() {
+    let sign = BillingSignDigestRequestWireV1 { digest: [0x31; 32] };
+    let lookup = BillingLookupRequestWireV1 {
+        record_id: [0x31; 32],
+    };
+    let signature = SignResultWireV1 {
+        signature: [0x42; 64],
+    };
+    let issuer = PopIssuerSignResultWireV1 {
+        signature: [0x42; 64],
+    };
+    assert_broker_frame_owner(
+        &sign,
+        "irohad::runtime_provider_broker::protocol::BillingSignDigestRequestWireV1",
+        MAX_BILLING_CONTROL_FRAME_BYTES_V1,
+    );
+    assert_broker_frame_owner(
+        &lookup,
+        "irohad::runtime_provider_broker::protocol::BillingLookupRequestWireV1",
+        MAX_BILLING_CONTROL_FRAME_BYTES_V1,
+    );
+    assert_broker_frame_owner(
+        &signature,
+        "irohad::runtime_provider_broker::protocol::primitives::SignResultWireV1",
+        MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+    );
+    assert_broker_frame_owner(
+        &issuer,
+        "irohad::runtime_provider_broker::protocol::primitives::PopIssuerSignResultWireV1",
+        MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+    );
+    let sign_bytes = encode_sensitive_canonical(&sign, MAX_BILLING_CONTROL_FRAME_BYTES_V1)
+        .expect("encode sign request");
+    let lookup_bytes = encode_sensitive_canonical(&lookup, MAX_BILLING_CONTROL_FRAME_BYTES_V1)
+        .expect("encode lookup request");
+    let signature_bytes =
+        encode_sensitive_canonical(&signature, MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1)
+            .expect("encode sign result");
+    let issuer_bytes = encode_sensitive_canonical(&issuer, MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1)
+        .expect("encode issuer result");
+    assert!(
+        norito::core::from_bytes_view(&sign_bytes)
+            .expect("sign payload")
+            .as_bytes()
+            == norito::core::from_bytes_view(&lookup_bytes)
+                .expect("lookup payload")
+                .as_bytes()
+    );
+    assert!(
+        norito::core::from_bytes_view(&signature_bytes)
+            .expect("signature payload")
+            .as_bytes()
+            == norito::core::from_bytes_view(&issuer_bytes)
+                .expect("issuer payload")
+                .as_bytes()
+    );
+    assert!(matches!(
+        decode_canonical::<BillingSignDigestRequestWireV1>(
+            &lookup_bytes,
+            MAX_BILLING_CONTROL_FRAME_BYTES_V1
+        ),
+        Err(BrokerError::Protocol)
+    ));
+    assert!(matches!(
+        decode_canonical::<BillingLookupRequestWireV1>(
+            &sign_bytes,
+            MAX_BILLING_CONTROL_FRAME_BYTES_V1
+        ),
+        Err(BrokerError::Protocol)
+    ));
+    assert!(matches!(
+        decode_canonical::<SignResultWireV1>(&issuer_bytes, MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1),
+        Err(BrokerError::Protocol)
+    ));
+    assert!(matches!(
+        decode_canonical::<PopIssuerSignResultWireV1>(
+            &signature_bytes,
+            MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1
+        ),
+        Err(BrokerError::Protocol)
+    ));
+}
+
 #[derive(Encode)]
 struct HandshakeRequestWithoutNetworkV1 {
     chain_id: String,
@@ -8,6 +128,15 @@ struct HandshakeRequestWithoutNetworkV1 {
 }
 #[test]
 fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
+    fn frame_payload<T: norito::SerializePayload>(value: &T) -> ScrubbedBytes {
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        let payload = ScrubbedBytes::new(payload);
+        ScrubbedBytes::new(
+            norito::core::frame_bare_with_header_flags::<HandshakeRequestV1>(&payload, flags)
+                .expect("frame handshake payload under current owner"),
+        )
+    }
     let request = make_handshake_request(
         "test-chain",
         server_test_network_id(),
@@ -21,6 +150,25 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         MAX_HANDSHAKE_FRAME_BYTES_V1,
     )
     .expect("encode handshake frame");
+    let envelope_header = norito::core::Header::read(&frame[..]).expect("read broker header");
+    assert_eq!(
+        envelope_header.schema,
+        norito::core::schema_hash_for_name(
+            "irohad::runtime_provider_broker::protocol::primitives::BrokerFrameV1",
+        ),
+        "broker envelopes advertise their declared protocol identity",
+    );
+    let envelope = decode_canonical::<BrokerFrameV1>(&frame, MAX_HANDSHAKE_FRAME_BYTES_V1)
+        .expect("decode canonical envelope");
+    let request_header =
+        norito::core::Header::read(&envelope.body[..]).expect("read handshake header");
+    assert_eq!(
+        request_header.schema,
+        norito::core::schema_hash_for_name(
+            "irohad::runtime_provider_broker::protocol::HandshakeRequestV1",
+        ),
+        "nested requests advertise their own declared protocol identity",
+    );
     assert_eq!(
         decode_frame::<HandshakeRequestV1>(
             &frame,
@@ -37,12 +185,34 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         catalog_digest: request.catalog_digest,
         client_transcript_digest: request.client_transcript_digest,
     };
-    let retired_frame = encode_frame(
-        FRAME_KIND_HANDSHAKE_REQUEST_V1,
-        &retired,
+    assert_broker_frame_owner(
+        &request,
+        "irohad::runtime_provider_broker::protocol::HandshakeRequestV1",
         MAX_HANDSHAKE_FRAME_BYTES_V1,
-    )
-    .expect("encode retired networkless handshake");
+    );
+    // The unsupported shape stays payload-only and is placed under the real
+    // request owner, so rejection must inspect its missing network field.
+    let current_body = frame_payload(&request);
+    assert!(
+        decode_canonical::<HandshakeRequestV1>(&current_body, MAX_HANDSHAKE_FRAME_BYTES_V1).is_ok()
+    );
+    let retired_body = frame_payload(&retired);
+    let error = norito::decode_canonical::<HandshakeRequestV1>(&retired_body)
+        .expect_err("networkless shape must fail under the current owner");
+    assert!(!matches!(error, norito::Error::SchemaMismatch));
+    let retired_envelope = BrokerFrameV1 {
+        magic: BROKER_MAGIC_V1,
+        version: BROKER_VERSION_V1,
+        kind: FRAME_KIND_HANDSHAKE_REQUEST_V1,
+        body: retired_body.to_vec(),
+    };
+    assert_broker_frame_owner(
+        &retired_envelope,
+        "irohad::runtime_provider_broker::protocol::primitives::BrokerFrameV1",
+        MAX_HANDSHAKE_FRAME_BYTES_V1,
+    );
+    let retired_frame = encode_sensitive_canonical(&retired_envelope, MAX_HANDSHAKE_FRAME_BYTES_V1)
+        .expect("encode current envelope containing unsupported handshake payload");
     assert_eq!(
         decode_frame::<HandshakeRequestV1>(
             &retired_frame,
@@ -161,15 +331,22 @@ fn operation_request_prelude_enforces_role_limit_and_global_inbound_budget() {
     budget_exhaustion.extend_from_slice(&operation.to_be_bytes());
     budget_exhaustion.extend_from_slice(&9_u32.to_be_bytes());
     budget_exhaustion.extend_from_slice(&[0xAA; 9]);
+    let decode_pool = new_test_process_pool();
     assert!(
         matches!(
             read_operation_request_frame_with_budget(
                 &mut Cursor::new(budget_exhaustion),
                 Arc::new(tokio::sync::Semaphore::new(8)),
+                Arc::clone(&decode_pool),
             ),
             Err(BrokerError::Unavailable)
         ),
         "declared inbound bytes must fit the single shared operation budget"
+    );
+    assert_eq!(
+        decode_pool.used_bytes.load(Ordering::Acquire),
+        0,
+        "raw ingress rejection happens before composed process admission"
     );
 }
 #[test]
@@ -281,8 +458,13 @@ fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
             .expect("project configured binding");
         assert_eq!(wire.runtime_slot(), Ok(slot));
     }
+    let configured_ids = IrohaRuntimeProviderSlotV1::ALL
+        .into_iter()
+        .map(IrohaRuntimeProviderSlotV1::wire_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(configured_ids.len(), IrohaRuntimeProviderSlotV1::ALL.len());
     let mut unknown = signer_binding();
-    for wire_id in [0, 60, u16::MAX] {
+    for wire_id in (0..=u16::MAX).filter(|wire_id| !configured_ids.contains(wire_id)) {
         unknown.slot = wire_id;
         assert_eq!(unknown.runtime_slot(), Err(BrokerError::BindingMismatch));
     }
@@ -470,11 +652,11 @@ fn server_governance_signer_must_match_the_configured_publisher_identity() {
 fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
     let catalog = request_auth_server_test_catalog();
     assert!(matches!(
-        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &catalog,
             RuntimeProviderBrokerBackendsV1::new().with_governance_dag_ipfs_authenticator(
                 Arc::new(ServerTestGovernanceRequestAuthenticator::with_public_key(
@@ -485,7 +667,7 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &catalog,
             request_auth_server_test_backends().with_governance_dag_head_authenticator(Arc::new(
                 ServerTestGovernanceRequestAuthenticator::exact()
@@ -618,7 +800,7 @@ fn governance_request_auth_binds_scope_key_signature_and_body_bound() {
 #[test]
 fn governance_request_auth_round_trips_over_the_stock_broker() {
     let (_directory, policy, shutdown, server) = start_request_auth_test_server();
-    let dependencies = resolve(&request_auth_server_test_catalog(), &policy)
+    let dependencies = resolve_test_process(&request_auth_server_test_catalog(), &policy)
         .expect("resolve request-auth broker dependency");
     let authenticator = dependencies
         .sorafs_governance_dag_ipfs_authenticator
@@ -688,18 +870,18 @@ fn native_signer_catalog_backend_set_and_identity_are_exact() {
         Err(BrokerError::BindingMismatch)
     );
     assert!(matches!(
-        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &proof_native_signer_test_catalog(),
             native_signer_test_backends(),
         ),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &proof_native_signer_test_catalog(),
             RuntimeProviderBrokerBackendsV1::new().with_proof_outcome_transaction_signer(Arc::new(
                 ServerTestNativeSigner::exact(Role::ProofOutcome).with_seed(0xE1),
@@ -708,7 +890,7 @@ fn native_signer_catalog_backend_set_and_identity_are_exact() {
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
     assert!(matches!(
-        prepare_server_state(
+        prepare_test_server_state(
             &proof_native_signer_test_catalog(),
             RuntimeProviderBrokerBackendsV1::new().with_proof_outcome_transaction_signer(Arc::new(
                 ServerTestNativeSigner::exact(Role::ProofOutcome).with_role(Role::Repair),
@@ -716,7 +898,7 @@ fn native_signer_catalog_backend_set_and_identity_are_exact() {
         ),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     ));
-    prepare_server_state(&catalog, native_signer_test_backends())
+    prepare_test_server_state(&catalog, native_signer_test_backends())
         .expect("accept all four independently injected native signer roles");
 }
 #[test]
@@ -728,7 +910,7 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
     )
     .expect("project proof signer binding");
     assert!(
-        BrokerSession::connect(
+        connect_test_process(
             &policy,
             proof_catalog.chain_id(),
             test_network_id(0x16),
@@ -737,7 +919,7 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
         .is_err(),
         "the same display chain on another genesis lineage must not authenticate",
     );
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = connect_test_process(
         &policy,
         proof_catalog.chain_id(),
         *proof_catalog.network_id(),
@@ -747,7 +929,7 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].binding, proof_binding);
     let full_state =
-        prepare_server_state(&native_signer_test_catalog(), native_signer_test_backends())
+        prepare_test_server_state(&native_signer_test_catalog(), native_signer_test_backends())
             .expect("prepare full native signer state");
     let repair_slot = IrohaRuntimeProviderSlotV1::RepairTransactionSigner.wire_id();
     let repair_index = full_state
@@ -781,15 +963,23 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
 }
 #[test]
 fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
+    use norito::SerializePayload as _;
+
     let value = SoracloudProvenanceSignRequestWireV1 {
         purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
             .wire_id(),
         preimage: vec![0xA5; 257],
     };
+    assert_broker_frame_owner(
+        &value,
+        "irohad::runtime_provider_broker::protocol::SoracloudProvenanceSignRequestWireV1",
+        MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+    );
     let bare_payload_len = value
         .encoded_len_exact()
         .expect("variable request has an exact bare payload length");
-    let framed_len = norito::core::encoded_frame_len(&value).expect("compute exact framed length");
+    let framed_len =
+        norito::canonical_frame_len(&value).expect("compute exact canonical framed length");
     assert!(
         framed_len > bare_payload_len,
         "the outer Norito frame must be included in broker limits"
@@ -1106,7 +1296,8 @@ fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
             catalog.clone(),
             RuntimeProviderBrokerBackendsV1::new().with_proof_outcome_transaction_signer(backend),
         );
-        let dependencies = resolve(&catalog, &policy).expect("resolve proof-outcome signer proxy");
+        let dependencies =
+            resolve_test_process(&catalog, &policy).expect("resolve proof-outcome signer proxy");
         let binding = catalog
             .iter()
             .next()
@@ -1139,7 +1330,8 @@ fn native_signer_proxy_poisons_the_session_after_tamper_or_drift() {
 fn all_native_signer_roles_round_trip_over_the_stock_broker() {
     let catalog = native_signer_test_catalog();
     let (_directory, policy, shutdown, server) = start_native_signer_test_server();
-    let dependencies = resolve(&catalog, &policy).expect("resolve all native signer broker roles");
+    let dependencies =
+        resolve_test_process(&catalog, &policy).expect("resolve all native signer broker roles");
     macro_rules! assert_role_round_trip {
         ($field:ident, $slot:ident, $qualifier:ident) => {{
             let binding = catalog
@@ -1220,7 +1412,7 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
         "slot 18 must reject the authority-pinned native-role discriminator"
     );
     assert!(matches!(
-        prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
+        prepare_test_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
     ));
     assert_eq!(
@@ -1240,7 +1432,7 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
             .with_mode(ServerTestModerationTransactionSignerMode::DriftOnSecondQualification),
     ] {
         assert!(matches!(
-            prepare_server_state(
+            prepare_test_server_state(
                 &catalog,
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_moderation_transaction_signer(Arc::new(signer)),
@@ -1248,7 +1440,7 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         ));
     }
-    prepare_server_state(
+    prepare_test_server_state(
         &catalog,
         RuntimeProviderBrokerBackendsV1::new().with_moderation_transaction_signer(Arc::new(
             ServerTestModerationTransactionSigner::exact(),
@@ -1390,7 +1582,8 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
             ServerTestModerationTransactionSigner::exact(),
         )),
     );
-    let dependencies = resolve(&catalog, &policy).expect("resolve moderation transaction signer");
+    let dependencies =
+        resolve_test_process(&catalog, &policy).expect("resolve moderation transaction signer");
     let signer = dependencies
         .sorafs_moderation_transaction_signer
         .as_ref()
@@ -1423,14 +1616,14 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
         ServerTestModerationTransactionSignerMode::InvalidSignature,
         ServerTestModerationTransactionSignerMode::DriftAfterSign,
     ] {
+        let backend = Arc::new(ServerTestModerationTransactionSigner::exact().with_mode(mode));
         let (_directory, policy, shutdown, server) = start_native_signer_server(
             catalog.clone(),
-            RuntimeProviderBrokerBackendsV1::new().with_moderation_transaction_signer(Arc::new(
-                ServerTestModerationTransactionSigner::exact().with_mode(mode),
-            )),
+            RuntimeProviderBrokerBackendsV1::new()
+                .with_moderation_transaction_signer(backend.clone()),
         );
-        let dependencies =
-            resolve(&catalog, &policy).expect("resolve adversarial moderation transaction signer");
+        let dependencies = resolve_test_process(&catalog, &policy)
+            .expect("resolve adversarial moderation transaction signer");
         let signer = dependencies
             .sorafs_moderation_transaction_signer
             .as_ref()
@@ -1442,15 +1635,30 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
             ),
             Err(iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Refused,)
         );
+        let qualification_calls = backend.qualification_calls.load(Ordering::Relaxed);
+        assert_eq!(backend.sign_calls.load(Ordering::Relaxed), 1);
         assert_eq!(
-                        sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1::
-                            qualification(signer.as_ref()),
-                        Err(
-                            sorafs_node::moderation_orchestrator::
-                                ModerationRuntimeProviderReadinessErrorV1::Unavailable,
-                        ),
-                        "a substituted or drifting signer poisons its broker session"
-                    );
+            sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1::qualification(
+                signer.as_ref()
+            ),
+            Err(
+                sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1::Rejected
+            ),
+            "a substituted or drifting signer poisons its broker session"
+        );
+        assert_eq!(
+            iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1::sign(
+                signer.as_ref(),
+                moderation_transaction_signer_test_payload(),
+            ),
+            Err(iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1::Refused)
+        );
+        assert_eq!(backend.sign_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            backend.qualification_calls.load(Ordering::Relaxed),
+            qualification_calls,
+            "the rejected session never requalifies or signs through the provider"
+        );
         drop(dependencies);
         shutdown.request_shutdown();
         server
@@ -1583,6 +1791,145 @@ fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confu
         assert!(
             validate_handshake_response(&request, &confused).is_err(),
             "mutation {mutation} must fail"
+        );
+    }
+}
+
+#[test]
+fn canonical_broker_encoding_counts_exact_output_and_limit_under_all_ten_layouts() {
+    let value = SoracloudProvenanceSignRequestWireV1 {
+        purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
+            .wire_id(),
+        preimage: vec![0xc1; 257],
+    };
+    let canonical = norito::encode_canonical(&value).unwrap();
+    let layouts: Vec<_> = (0..=u8::MAX)
+        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        .collect();
+    assert_eq!(layouts.len(), 10, "exercise every supported V1 layout");
+    let mut different_ambient_length = false;
+    for flags in layouts {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+        let ambient_before = norito::core::to_bytes(&value).unwrap();
+        different_ambient_length |= ambient_before.len() != canonical.len();
+        assert_eq!(
+            norito::canonical_frame_len(&value).unwrap(),
+            canonical.len()
+        );
+        let pool = Arc::new(DecodeResourcePoolV1::new(
+            CONTROL_DECODE_POLICY_V1.max_composed_bytes,
+        ));
+        let admission =
+            DecodeResourceAdmissionV1::acquire_from(pool, None, CONTROL_DECODE_POLICY_V1).unwrap();
+        let scope = admission.enter();
+        assert_eq!(
+            encode_canonical(&value, canonical.len()).unwrap(),
+            canonical,
+            "layout {flags:#04x}"
+        );
+        let charged = admission.usage.lock().unwrap().consumed_bytes;
+        assert_eq!(
+            charged,
+            canonical.len(),
+            "only the complete canonical frame is charged"
+        );
+        assert_eq!(
+            encode_canonical(&value, canonical.len() - 1),
+            Err(BrokerError::Rejected)
+        );
+        assert_eq!(
+            admission.usage.lock().unwrap().consumed_bytes,
+            charged,
+            "over-limit counting rejects before allocation/admission"
+        );
+        assert_eq!(
+            decode_canonical::<SoracloudProvenanceSignRequestWireV1>(&canonical, canonical.len())
+                .unwrap(),
+            value
+        );
+        drop(scope);
+        assert_eq!(
+            norito::core::to_bytes(&value).unwrap(),
+            ambient_before,
+            "canonical broker encoding/decoding restores ambient layout"
+        );
+    }
+    assert!(
+        different_ambient_length,
+        "the fixture exposes the former ambient count mismatch"
+    );
+}
+
+#[test]
+fn stream_token_discriminator_rejects_foreign_bulk_operations_before_reading_length() {
+    let slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id();
+    let allowed = [
+        OPERATION_QUALIFY_V1,
+        OPERATION_STREAM_TOKEN_SIGN_V1,
+        OPERATION_STREAM_TOKEN_RECOVER_V1,
+        OPERATION_STREAM_TOKEN_OBSERVE_V1,
+    ];
+    let mut rejected = 0;
+    for operation in 0..=u16::MAX {
+        if !operation_is_known(operation) || allowed.contains(&operation) {
+            continue;
+        }
+        let mut wire = slot.to_be_bytes().to_vec();
+        wire.extend_from_slice(&operation.to_be_bytes());
+        wire.extend_from_slice(&u32::MAX.to_be_bytes());
+        let mut reader = Cursor::new(wire);
+        let inbound = Arc::new(tokio::sync::Semaphore::new(1));
+        let pool = Arc::new(DecodeResourcePoolV1::new(1));
+        assert_eq!(
+            read_operation_request_frame_inner(&mut reader, Some(inbound.clone()), Some(pool))
+                .err(),
+            Some(BrokerError::Protocol)
+        );
+        assert_eq!(
+            reader.position(),
+            4,
+            "known foreign operation {operation} must not read even its length"
+        );
+        assert_eq!(
+            inbound.available_permits(),
+            1,
+            "foreign bulk reservation cannot consume raw capacity"
+        );
+        rejected += 1;
+    }
+    assert!(
+        rejected > 100,
+        "cover every known unrelated operation, including all bulk paths"
+    );
+    for (slot, operation) in allowed
+        .into_iter()
+        .map(|operation| (slot, operation))
+        .chain([
+            (
+                IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
+                OPERATION_SIGN_V1,
+            ),
+            (
+                IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id(),
+                OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+            ),
+        ])
+    {
+        // This layer reads only discriminator and bounded raw frame; typed canonical validation follows.
+        let body = [0xc2; 32];
+        let mut wire = slot.to_be_bytes().to_vec();
+        wire.extend_from_slice(&operation.to_be_bytes());
+        wire.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        wire.extend_from_slice(&body);
+        let mut reader = Cursor::new(wire);
+        let (actual_slot, actual_operation, frame, _) =
+            read_operation_request_frame_inner(&mut reader, None, None).unwrap();
+        assert_eq!((actual_slot, actual_operation), (slot, operation));
+        assert_eq!(&frame[..], &body);
+        assert_eq!(
+            reader.position(),
+            40,
+            "valid slot-11 and unrelated role admission remains intact"
         );
     }
 }

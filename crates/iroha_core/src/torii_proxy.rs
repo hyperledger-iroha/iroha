@@ -2,10 +2,10 @@
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     NetworkId,
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use std::fmt;
 /// Schema version for deadline-bound Torii proxy requests.
@@ -105,6 +105,8 @@ pub fn queue_plan_synced_request_id_from_network_digest(
 }
 
 /// Globally unique registry key for one transaction-entrypoint admission.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionRegistryKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct QueuePlanAdmissionRegistryKeyV1 {
     /// Registry-key layout version.
@@ -115,7 +117,10 @@ pub struct QueuePlanAdmissionRegistryKeyV1 {
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 /// Immutable value claimed by a QueuePlan global-admission registry key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionRegistryValueV1")]
 pub struct QueuePlanAdmissionRegistryValueV1 {
     /// Registry-value layout version.
     pub version: u16,
@@ -128,7 +133,8 @@ pub struct QueuePlanAdmissionRegistryValueV1 {
 /// journal digest covers the exact transaction wire, routing plan, context, canonical ingress
 /// timestamp, network digest, and deterministic request identity. Authorities never substitute a
 /// locally sampled timestamp or independently reconstructed claim.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionBindingV1")]
 pub struct QueuePlanAdmissionBindingV1 {
     /// Binding layout version.
     pub version: u16,
@@ -426,6 +432,8 @@ impl QueuePlanAdmissionBindingV1 {
     }
 }
 /// One compact signature over a shared QueuePlan admission binding.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionAttestationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionAttestationV1 {
     /// Attestation layout version.
@@ -436,7 +444,8 @@ pub struct QueuePlanAdmissionAttestationV1 {
     pub signature: Signature,
 }
 /// Coordinator-authority evidence that one exact QueuePlan journal claim is durably replicated.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionCertificateV1")]
 pub struct QueuePlanAdmissionCertificateV1 {
     /// Certificate layout version.
     pub version: u16,
@@ -449,6 +458,8 @@ pub struct QueuePlanAdmissionCertificateV1 {
 ///
 /// The certificate stays as exact Norito bytes so every receiving validator can enforce the
 /// same bounded canonical-decoding boundary before publishing those bytes durably in Kura.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionPublicationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionPublicationV1 {
     /// Publication envelope schema version.
@@ -480,7 +491,8 @@ pub struct ValidatedQueuePlanAdmissionCertificateV1 {
     /// Number of distinct attestations required for durable availability.
     pub durability_threshold: usize,
 }
-#[derive(Encode)]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionAttestationPayloadV1")]
 struct QueuePlanAdmissionAttestationPayloadV1 {
     version: u16,
     binding_hash: Hash,
@@ -613,6 +625,13 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
     network_id: &NetworkId,
     bytes: &[u8],
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV1, String> {
+    #[cfg(test)]
+    QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
+        let callback = observer.borrow().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
     let max_bytes = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
     if bytes.is_empty() || bytes.len() > max_bytes {
         return Err("QueuePlan admission certificate is empty or oversized".to_owned());
@@ -636,7 +655,36 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    static QUEUE_PLAN_AUTHENTICATION_OBSERVER:
+        std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Observe real certificate authentication calls on this test thread.
+#[cfg(test)]
+pub(crate) fn observe_queue_plan_authentication_for_test<T>(
+    observer: impl Fn() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<std::rc::Rc<dyn Fn()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
+                observer.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(
+        QUEUE_PLAN_AUTHENTICATION_OBSERVER
+            .with(|current| current.replace(Some(std::rc::Rc::new(observer)))),
+    );
+    action()
+}
+
 /// Stable lane/dataspace assignment determined at ingress.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRouteHintV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiRouteHintV1 {
     /// Nexus lane selected for the request.
@@ -658,6 +706,8 @@ impl From<ToriiRouteHintV1> for crate::queue::RoutingDecision {
     }
 }
 /// Role of one route in a Torii transaction routing plan hint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRouteLegRoleV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiRouteLegRoleV1 {
     /// Coordinator route for final admission and commit ordering.
@@ -682,6 +732,8 @@ impl From<ToriiRouteLegRoleV1> for crate::queue::RouteLegRole {
     }
 }
 /// One lane/dataspace leg in a Torii transaction routing plan hint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRouteLegHintV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiRouteLegHintV1 {
     /// Lane/dataspace route selected for this leg.
@@ -940,6 +992,8 @@ impl fmt::Display for ToriiRoutingPlanHintError {
 }
 impl std::error::Error for ToriiRoutingPlanHintError {}
 /// Stable full routing plan determined at ingress.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRoutingPlanHintV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiRoutingPlanHintV1 {
     /// Single coordinator route.
@@ -1065,6 +1119,8 @@ impl TryFrom<ToriiRoutingPlanHintV1> for crate::queue::RoutingPlan {
     }
 }
 /// Encoded response format requested by the ingress node.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyResponseFormatV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyResponseFormatV1 {
     /// Serialize the response body as Norito.
@@ -1073,6 +1129,8 @@ pub enum ToriiProxyResponseFormatV1 {
     Json,
 }
 /// Supported read endpoints forwarded over the Torii control plane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadEndpointV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiReadEndpointV1 {
     /// `GET /v1/accounts/{account_id}`
@@ -1169,6 +1227,8 @@ pub enum ToriiReadEndpointV1 {
     AccountOnboardingCurrentState,
 }
 /// Canonical routed read executed on an authoritative Torii peer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadProxyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiReadProxyRequestV1 {
     /// Supported read endpoint identifier.
@@ -1187,6 +1247,8 @@ pub struct ToriiReadProxyRequestV1 {
     pub response_format: ToriiProxyResponseFormatV1,
 }
 /// Route set Nexus should recompute for a coordinated fanout request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiFanoutRouteScopeV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiFanoutRouteScopeV1 {
     /// Fan out across all configured dataspace routes.
@@ -1205,6 +1267,8 @@ pub enum ToriiFanoutRouteScopeV1 {
     },
 }
 /// Merge behavior requested for an App API read fanout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadFanoutMergeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiReadFanoutMergeV1 {
     /// Merge JSON list-style responses.
@@ -1230,6 +1294,8 @@ pub enum ToriiReadFanoutMergeV1 {
     },
 }
 /// App API read fanout coordinated by the Nexus/default route.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadFanoutProxyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiReadFanoutProxyRequestV1 {
     /// Supported read endpoint identifier.
@@ -1248,6 +1314,8 @@ pub struct ToriiReadFanoutProxyRequestV1 {
     pub response_format: ToriiProxyResponseFormatV1,
 }
 /// Hosted HTTP request forwarded to a peer that may own a healthy Inrou target.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiHostedHttpProxyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiHostedHttpProxyRequestV1 {
     /// Soracloud service name already resolved from the public route.
@@ -1271,6 +1339,8 @@ pub struct ToriiHostedHttpProxyRequestV1 {
     pub remote_ip: Option<String>,
 }
 /// First-release queue admission contract for a proxied transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyTransactionAdmissionV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyTransactionAdmissionV1 {
     /// Acknowledge after the exact `f + 1` QueuePlan certificate is durable.
@@ -1281,7 +1351,8 @@ pub enum ToriiProxyTransactionAdmissionV1 {
     QueuePlanSynced,
 }
 /// Canonical first-release Torii request body forwarded over the P2P control plane.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::derive::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyRequestKindV1")]
 pub enum ToriiProxyRequestKindV1 {
     /// Submit a signed transaction to the authoritative lane validator.
     #[codec(index = 0)]
@@ -1337,7 +1408,8 @@ pub enum ToriiProxyRequestKindV1 {
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
 /// First-release P2P Torii proxy request sent from ingress to an authoritative peer.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyRequestV1")]
 pub struct ToriiProxyRequestV1 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
@@ -1359,6 +1431,8 @@ pub struct ToriiProxyRequestV1 {
     pub request: ToriiProxyRequestKindV1,
 }
 /// One HTTP header preserved across the Torii proxy response snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyHeaderV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyHeaderV1 {
     /// Lower- or mixed-case header name as received from the responder.
@@ -1367,6 +1441,8 @@ pub struct ToriiProxyHeaderV1 {
     pub value: Vec<u8>,
 }
 /// Serialized HTTP response sent back to the ingress node.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyHttpResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyHttpResponseV1 {
     /// HTTP status code returned by the authoritative responder.
@@ -1377,6 +1453,8 @@ pub struct ToriiProxyHttpResponseV1 {
     pub body: Vec<u8>,
 }
 /// P2P Torii proxy response sent from the authoritative peer back to ingress.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyResponseV1 {
     /// Version of the proxy response envelope.
@@ -1414,10 +1492,10 @@ mod tests {
     #[test]
     fn queue_plan_synced_request_identity_is_semantic_and_exact_network_bound() {
         let shared_chain_label = "queue-plan-request-chain";
-        let chain_a: iroha_data_model::ChainId = shared_chain_label
+        let chain_a: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
-        let chain_b: iroha_data_model::ChainId = shared_chain_label
+        let chain_b: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
         assert_eq!(chain_a, chain_b);
@@ -1642,10 +1720,10 @@ mod tests {
     #[test]
     fn queue_plan_certificate_rejects_same_label_different_genesis() {
         let shared_chain_label = "queue-plan-shared-label";
-        let chain_a: iroha_data_model::ChainId = shared_chain_label
+        let chain_a: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
-        let chain_b: iroha_data_model::ChainId = shared_chain_label
+        let chain_b: iroha_model_base::chain::ChainId = shared_chain_label
             .parse()
             .expect("parse shared chain label");
         assert_eq!(chain_a, chain_b);
@@ -1703,6 +1781,29 @@ mod tests {
             decode_and_validate_queue_plan_admission_certificate_v1(&network_id, &canonical)
                 .expect("canonical admission certificate validates");
         assert_eq!(validated.certificate, certificate);
+        let registry_bytes = norito::encode_canonical(&validated.registry_value)
+            .expect("encode admission registry value");
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanAdmissionRegistryValueV1>(&registry_bytes)
+                .expect("decode admission registry value"),
+            validated.registry_value
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<QueuePlanAdmissionBindingV1>(&canonical),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut substituted_owner = canonical.clone();
+        substituted_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<
+            QueuePlanAdmissionBindingV1,
+        >());
+        assert!(
+            decode_and_validate_queue_plan_admission_certificate_v1(
+                &network_id,
+                &substituted_owner,
+            )
+            .is_err(),
+            "a valid signed payload cannot authorize a different framed owner"
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {

@@ -21,12 +21,15 @@ use iroha_data_model::{
     alias::AliasIndex,
     asset::AssetDefinitionAlias,
     prelude::{
-        AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, InstructionBox, Metadata, Name,
-        TransactionBuilder, Transfer,
+        AccountId, AssetDefinitionId, AssetId, InstructionBox, TransactionBuilder, Transfer,
     },
     transaction::error::TransactionRejectionReason,
     transaction::{SignedTransaction, TransactionPayload},
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage};
 #[cfg(test)]
@@ -12371,6 +12374,7 @@ fn dedup_codes(codes: &mut Vec<String>) {
 }
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::domain::DomainId;
     include!("iso20022_bridge_tests.rs");
     /// Cross-rail MDR/XSD and checked-in securities lifecycle fixture coverage.
     mod live_profile_fixture_tests;

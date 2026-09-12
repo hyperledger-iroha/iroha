@@ -727,8 +727,10 @@ fn native_amx_latest_index_temporary_rejects_recovery_journal_overlap_before_mut
             let namespace = kura
                 .native_amx_evidence_namespace_for_entry(&entry)
                 .expect("open overlap-test Native namespace");
-            kura.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)
-                .expect_err("direct prune completion must reject an unresolved latest temp");
+            with_native_resource_batch_for_test(&kura, |resources| {
+                kura.complete_native_amx_evidence_prune_intent_locked(resources, &entry, &namespace)
+            })
+            .expect_err("direct prune completion must reject an unresolved latest temp");
         } else {
             let manifest_path =
                 Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2);
@@ -989,8 +991,10 @@ fn native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps() {
             let namespace = kura
                 .native_amx_evidence_namespace_for_entry(&entry)
                 .expect("open Native prune path-swap namespace");
-            kura.prune_native_amx_evidence_pairs_locked(&entry, &namespace)
-                .expect_err("same-byte Native prune path swap must fail before unlink")
+            with_native_resource_batch_for_test(&kura, |resources| {
+                kura.prune_native_amx_evidence_pairs_locked(resources, &entry, &namespace)
+            })
+            .expect_err("same-byte Native prune path swap must fail before unlink")
         };
         assert!(
             error.to_string().contains("changed")
@@ -1756,11 +1760,14 @@ fn native_amx_publication_temp_recovery_is_phase_aware_and_manifest_bound() {
     let namespace = kura
         .native_amx_evidence_namespace_for_entry(&entry)
         .expect("bind phase-aware Native evidence namespace");
-    kura.recover_native_amx_evidence_publication_temp_locked(
-        &entry,
-        &namespace,
-        NativeAmxEvidenceRecoveryPhase::ManifestPublication,
-    )
+    with_native_resource_batch_for_test(&kura, |resources| {
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            resources,
+            &entry,
+            &namespace,
+            NativeAmxEvidenceRecoveryPhase::ManifestPublication,
+        )
+    })
     .expect("manifest phase recovers only the manifest temporary");
     assert_eq!(
         fs::read(&manifest_path).expect("read recovered Native manifest"),
@@ -1771,11 +1778,14 @@ fn native_amx_publication_temp_recovery_is_phase_aware_and_manifest_bound() {
         receipt_temp.exists() && !receipt_path.exists(),
         "manifest phase must leave the receipt temporary unpublished"
     );
-    kura.recover_native_amx_evidence_publication_temp_locked(
-        &entry,
-        &namespace,
-        NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
-    )
+    with_native_resource_batch_for_test(&kura, |resources| {
+        kura.recover_native_amx_evidence_publication_temp_locked(
+            resources,
+            &entry,
+            &namespace,
+            NativeAmxEvidenceRecoveryPhase::ReceiptPublication,
+        )
+    })
     .expect("receipt phase recovers the manifest-bound receipt temporary");
     assert_eq!(
         fs::read(&receipt_path).expect("read recovered Native receipt"),
@@ -1838,13 +1848,15 @@ fn native_amx_publication_temp_recovery_is_phase_aware_and_manifest_bound() {
         .expect("bind missing-manifest Native evidence namespace");
     let before = fs::read(&missing_receipt_temp)
         .expect("snapshot residual receipt temporary before startup recovery");
-    let error = missing_manifest_kura
-        .recover_native_amx_evidence_publication_temp_locked(
+    let error = with_native_resource_batch_for_test(&missing_manifest_kura, |resources| {
+        missing_manifest_kura.recover_native_amx_evidence_publication_temp_locked(
+            resources,
             &missing_manifest_entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::Startup,
         )
-        .expect_err("startup must not promote a receipt temporary without its manifest");
+    })
+    .expect_err("startup must not promote a receipt temporary without its manifest");
     assert!(
         error.to_string().contains("stable manifest"),
         "unexpected missing-manifest receipt recovery error: {error}"

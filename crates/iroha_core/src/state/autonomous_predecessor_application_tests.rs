@@ -1,4 +1,148 @@
 #[test]
+fn autonomous_application_or_predecessor_read_waits_for_one_state_publication() {
+    use std::sync::mpsc;
+    let lane_id = LaneId::SINGLE;
+    let dataspace_id = DataSpaceId::UNIVERSAL;
+    let incarnation = Hash::new(b"atomic-autonomous-application-read");
+    let (session, _) = sample_committed_lane_block_session_for_state_test(
+        lane_id,
+        dataspace_id,
+        incarnation,
+        2,
+        2,
+    );
+    let descriptor = &session.proposal.descriptor;
+    let (key, predecessor) =
+        State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
+            version: 1,
+            lane_id,
+            dataspace_id,
+            lane_incarnation: incarnation,
+            lane_block_height: 1,
+            lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash.unwrap(),
+        })
+        .unwrap();
+    let (_, applied) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
+        version: 1,
+        lane_id,
+        dataspace_id,
+        lane_incarnation: incarnation,
+        lane_block_height: 2,
+        lane_block_descriptor_hash: descriptor.descriptor_hash,
+    })
+    .unwrap();
+    let mut world = World::default();
+    world.smart_contract_state.insert(key.clone(), predecessor);
+    let state = Arc::new(State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    assert!(
+        state
+            .certified_autonomous_lane_block_or_predecessor_is_globally_applied(&session.proposal)
+            .unwrap()
+    );
+    let earlier_exact = state
+        .certified_autonomous_lane_block_is_globally_applied(&session.proposal)
+        .unwrap();
+    assert!(
+        !earlier_exact,
+        "before publication only the predecessor is applied"
+    );
+    let guard = state.state_commit_lock.lock();
+    let (started_tx, started_rx) = mpsc::sync_channel(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let reader_state = Arc::clone(&state);
+    let proposal = session.proposal.clone();
+    let reader = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        result_tx
+            .send(
+                reader_state
+                    .certified_autonomous_lane_block_or_predecessor_is_globally_applied(&proposal),
+            )
+            .unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        matches!(
+            result_rx.recv_timeout(Duration::from_millis(20)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "application evidence cannot be sampled through a publication owned by another thread"
+    );
+    {
+        let mut world = state.world.block();
+        world.smart_contract_state.insert(key, applied);
+        world.commit();
+    }
+    let later_predecessor = state
+        .certified_autonomous_lane_block_predecessor_is_globally_applied(&session.proposal)
+        .unwrap();
+    assert!(
+        !later_predecessor,
+        "the frontier has advanced past the predecessor"
+    );
+    assert!(
+        !(earlier_exact || later_predecessor),
+        "the former split read falsely reports no application authority"
+    );
+    drop(guard);
+    assert!(
+        result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap(),
+        "the fenced reader observes the completely applied proposal"
+    );
+    reader.join().unwrap();
+}
+
+#[test]
+fn autonomous_application_or_predecessor_read_preserves_absent_conflicting_and_corrupt_rejection() {
+    let lane_id = LaneId::SINGLE;
+    let dataspace_id = DataSpaceId::UNIVERSAL;
+    let incarnation = Hash::new(b"atomic-autonomous-application-negatives");
+    let (session, _) = sample_committed_lane_block_session_for_state_test(
+        lane_id,
+        dataspace_id,
+        incarnation,
+        2,
+        2,
+    );
+    let (key, conflicting) =
+        State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
+            version: 1,
+            lane_id,
+            dataspace_id,
+            lane_incarnation: incarnation,
+            lane_block_height: 1,
+            lane_block_descriptor_hash: Hash::new(b"different predecessor"),
+        })
+        .unwrap();
+    for payload in [None, Some(conflicting), Some(b"corrupt marker".to_vec())] {
+        let corrupt = payload.as_deref() == Some(b"corrupt marker".as_slice());
+        let mut world = World::default();
+        if let Some(payload) = payload {
+            world.smart_contract_state.insert(key.clone(), payload);
+        }
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let result = state
+            .certified_autonomous_lane_block_or_predecessor_is_globally_applied(&session.proposal);
+        if corrupt {
+            assert!(result.is_err());
+        } else {
+            assert!(!result.unwrap());
+        }
+    }
+}
+
+#[test]
 fn certified_lane_predecessor_rejects_nonzero_height_without_descriptor_hash() {
     let state = State::new_for_testing(
         World::default(),
@@ -90,7 +234,8 @@ fn autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corr
         merge_carrier_finality_artifact_with_network(&block, None, *state.network_id_ref());
     kura.store_block(Arc::new(block))
         .expect("store canonical predecessor block");
-    let _ = kura.store_v2_finality_artifact(&finality)
+    let _ = kura
+        .store_v2_finality_artifact(&finality)
         .expect("publish exact signed complete-wire predecessor finality");
     kura.persist_committed_lane_block_session(&predecessor, &signer_pops)
         .expect("persist canonical predecessor certificate");

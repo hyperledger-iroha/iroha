@@ -2,7 +2,7 @@
 
 use super::{
     CapacityClass, CausalRoot, LifecycleContext, LifecycleCoordinator, LifecycleDigest,
-    LifecycleKey, LifecyclePhase, LifecycleStage, LifecycleStageKind, LifecycleState,
+    LifecycleKey, LifecycleStage, LifecycleStageKind, LifecycleState,
     LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope,
     ReadyEvent, ReadyValidateSuccessorV1, TerminalOutcome, WaitSource, WaitToken,
     concrete_admission::LifecycleWorkRegistryHolder,
@@ -94,7 +94,7 @@ impl LifecycleValidateSidecarRegistrationIdentityV1 {
         key.matches_consensus_round(&self.round)
             && self.lifecycle_key.context().as_bytes() == self.round.context_id.0.as_ref()
             && self.lifecycle_key.round().height() == self.round.height
-            && self.lifecycle_key.phase() == LifecyclePhase::Validate
+            && self.lifecycle_key.phase().is_validate()
             && self.lifecycle_stage.kind() == LifecycleStageKind::ValidateBody
             && self.lifecycle_stage.predecessor_scope() == PredecessorScope::Independent
             && key.lifecycle_ordinal() != 0
@@ -634,6 +634,10 @@ fn sidecar_wake_transition_is_exact(
         && next.fault.is_none()
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct DurableValidateSidecarRegistrationV1 {
@@ -653,7 +657,10 @@ struct DurableValidateSidecarRegistrationV1 {
     reference: CertifiedMergeLedgerReference,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationFrameV1"
+)]
 #[norito(deny_unknown_fields)]
 struct DurableValidateSidecarRegistrationFrameV1 {
     registration: DurableValidateSidecarRegistrationV1,
@@ -896,7 +903,7 @@ pub(super) fn cancel_registration_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sumeragi::v2_lifecycle_coordinator::LifecycleRound;
+    use crate::sumeragi::v2_lifecycle_coordinator::{LifecyclePhase, LifecycleRound};
     use iroha_crypto::Hash;
     use iroha_data_model::{
         block::{
@@ -904,8 +911,8 @@ mod tests {
             consensus_v2::{HeightContext, HeightContextId},
         },
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
     use tempfile::TempDir;
 
     fn identity_fixture() -> LifecycleValidateSidecarRegistrationIdentityV1 {
@@ -1022,6 +1029,36 @@ mod tests {
 
         persist_registration(&store, &identity).expect("persist exact registration");
         persist_registration(&store, &identity).expect("repeat registration is idempotent");
+
+        let frame = DurableValidateSidecarRegistrationFrameV1::new(&identity);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &frame,
+            "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationFrameV1",
+        );
+        let persisted = store
+            .load_validate_sidecar_registration_bytes(MAX_REGISTRATION_BYTES)
+            .expect("read durable registration")
+            .expect("registration exists");
+        assert_eq!(
+            persisted,
+            encode_registration_frame(&frame).expect("exact frame")
+        );
+        assert_eq!(
+            decode_registration_frame(&persisted).expect("decode persisted frame"),
+            frame
+        );
+        assert_eq!(frame.registration_hash, HashOf::new(&frame.registration));
+        let mut wrong_owner = persisted.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<Hash>());
+        assert!(matches!(
+            norito::decode_from_bytes::<DurableValidateSidecarRegistrationFrameV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(decode_registration_frame(&wrong_owner).is_err());
+        assert!(decode_registration_frame(&persisted[..persisted.len() - 1]).is_err());
+        let mut trailing = persisted;
+        trailing.push(0);
+        assert!(decode_registration_frame(&trailing).is_err());
 
         let mut foreign = identity.clone();
         let foreign_owner = OwnerId::new(

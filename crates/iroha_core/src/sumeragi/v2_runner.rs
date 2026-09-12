@@ -112,8 +112,8 @@ use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock, consensus_v2 as wire},
     events::{EventBox, pipeline::PipelineEventBox},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use thiserror::Error;
 
 #[path = "v2_runner/lifecycle_height_driver.rs"]
@@ -947,6 +947,7 @@ include!("v2_runner/lifecycle_terminal_recovery.rs");
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
+        build_identity,
         config,
         common_config,
         events_sender,
@@ -1132,6 +1133,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     );
     match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(
+            build_identity,
             config,
             common_config,
             events_sender,
@@ -1175,6 +1177,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             block_sync_server,
         ),
         Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(
+            build_identity,
             config,
             common_config,
             events_sender,
@@ -2089,7 +2092,7 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     SettledReleasedValidateApply,
     PendingReleasedValidateApply,
     SettledLifecycleOutput,
-    DelayedLifecycleOutputAdmitted,
+    PendingDelayedLifecycleApplySuccessor,
     PendingLifecycleOutput,
     SettledDurableValidate,
     PendingDurableValidate,
@@ -2117,7 +2120,7 @@ impl AdvanceExecutorYieldV1 {
             AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
                 | AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped
                 | AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
-                | AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                | AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor
         )
     }
 }
@@ -2214,19 +2217,26 @@ pub(in crate::sumeragi) fn advance_executor(
                 })?;
             match attestation {
                 Some(attestation)
-                    if matches!(
-                        attestation.mode(),
-                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-                    ) =>
-                {
-                    (None, true)
-                }
-                Some(attestation)
                     if executor.lifecycle_decision_apply_runtime_predecessor_drain_available(
                         &attestation,
                     )? =>
                 {
                     (Some(attestation), false)
+                }
+                Some(attestation)
+                    if matches!(
+                        attestation.mode(),
+                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+                    ) || matches!(
+                        attestation.mode(),
+                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }
+                    ) =>
+                {
+                    // This output belongs to the protected Ready Apply even
+                    // while its dispatch gate is closed. Preserve Completion
+                    // priority; only the exact predecessor proof above may
+                    // drain runtime work ahead of that Apply.
+                    (None, true)
                 }
                 Some(_) | None => (None, false),
             }
@@ -2240,7 +2250,7 @@ pub(in crate::sumeragi) fn advance_executor(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
                     if delayed_apply_successor {
-                        AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                        AdvanceExecutorYieldCauseV1::PendingDelayedLifecycleApplySuccessor
                     } else {
                         AdvanceExecutorYieldCauseV1::PendingLifecycleOutput
                     },
@@ -2834,11 +2844,15 @@ const fn certified_merge_selection_for_npos(
         PendingCertifiedMergeSelection::Any
     }
 }
-fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
+fn adapter_fingerprints(
+    build_identity: crate::release_identity::BuildIdentity,
+    local_peer: &PeerId,
+    config: &SumeragiV2Config,
+) -> AdapterFingerprints {
     let node = Hash::new(local_peer.encode());
     AdapterFingerprints {
         node,
-        build: crate::release_identity::build_fingerprint(),
+        build: build_identity.build_fingerprint(),
         config: config.fingerprint(),
     }
 }
@@ -3033,13 +3047,11 @@ fn dispatch_lane_work_effects_with_progress(
     services: &ProductionV2Services,
     limit: usize,
 ) -> Result<usize, V2RunnerError> {
-    let _ = apply_native_amx_output_retention(lane_work, services)?;
-    let _ = apply_retired_historical_recovery_requests(lane_work, services)?;
-    let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
-    let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
-    let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
-    apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
-    apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    // The adapter may be empty while a previously transferred Request/Close
+    // still owns a backpressured worker fanout. Retire stale transport first,
+    // then retry that exact output within its existing admission budget; a new
+    // lane effect must not be required to service an already-owned occurrence.
+    let _ = retry_exact_output_and_apply_sidecar_admissions(lane_work, services, limit)?;
     let mut queue_plan_sources = None;
     let scan_limit = lane_work.effect_count();
     let mut dispatched = 0usize;

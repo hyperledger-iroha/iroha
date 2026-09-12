@@ -1,7 +1,7 @@
 //! Module with [`IpfsPath`] and related impls.
 pub use self::model::*;
-use crate::error::ParseError;
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use iroha_primitives::conststr::ConstString;
 use norito::{Decode, codec::Encode};
 use std::{format, str::FromStr, string::String, vec::Vec};
@@ -12,12 +12,14 @@ mod model {
     use iroha_schema::IntoSchema;
     /// Represents path in IPFS. Performs checks to ensure path validity.
     /// Construct using [`FromStr::from_str`] method.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::ipfs::model::IpfsPath")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct IpfsPath(pub(super) ConstString);
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for IpfsPath {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -29,7 +31,7 @@ impl norito::json::FastJsonWrite for IpfsPath {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for IpfsPath {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -37,7 +39,7 @@ impl norito::json::JsonDeserialize for IpfsPath {
         let value = parser.parse_string()?;
         value
             .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
+            .map_err(|err: ParseError| norito::json::Error::Message(err.reason().into()))
     }
 }
 impl IpfsPath {
@@ -45,9 +47,7 @@ impl IpfsPath {
     #[inline]
     const fn check_cid(cid: &str) -> Result<(), ParseError> {
         if cid.len() < 2 {
-            return Err(ParseError {
-                reason: "IPFS cid is too short",
-            });
+            return Err(ParseError::new("IPFS cid is too short"));
         }
         Ok(())
     }
@@ -60,19 +60,19 @@ impl FromStr for IpfsPath {
             .next()
             .expect("First value of str::split() always has value");
         if path_segment.is_empty() {
-            let root_type = subpath.next().ok_or(ParseError {
-                reason: "Expected root type, but nothing found",
-            })?;
-            let key = subpath.next().ok_or(ParseError {
-                reason: "Expected at least one content id",
-            })?;
+            let root_type = subpath
+                .next()
+                .ok_or(ParseError::new("Expected root type, but nothing found"))?;
+            let key = subpath
+                .next()
+                .ok_or(ParseError::new("Expected at least one content id"))?;
             match root_type {
                 "ipfs" | "ipld" => Self::check_cid(key)?,
                 "ipns" => (),
                 _ => {
-                    return Err(ParseError {
-                        reason: "Unexpected root type, expected `ipfs`, `ipld` or `ipns`",
-                    });
+                    return Err(ParseError::new(
+                        "Unexpected root type, expected `ipfs`, `ipld` or `ipns`",
+                    ));
                 }
             }
         } else {
@@ -142,7 +142,7 @@ mod tests {
             .parse::<IpfsPath>()
             .expect("Path with folders should be valid");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn ipfs_json_roundtrip() {
         let valid = "/ipfs/QmQqzMTavQgT4f4T5v6PWBp7XNKtoPmC9jvn12WPT3gkSE";
@@ -152,7 +152,7 @@ mod tests {
         let decoded: IpfsPath = norito::json::from_json(&json).expect("deserialize ipfs path");
         assert_eq!(decoded.as_ref(), path.as_ref());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn ipfs_json_rejects_invalid_strings() {
         for invalid_ipfs in INVALID_IPFS {
@@ -177,7 +177,7 @@ mod tests {
             // Use stable header-framed Norito over String, then parse back to IpfsPath
             let bytes = norito::to_bytes(&s.to_string()).expect("encode str");
             let archived = norito::from_bytes::<String>(&bytes).expect("archived str");
-            let decoded_s = norito::core::NoritoDeserialize::deserialize(archived);
+            let decoded_s = norito::core::DeserializePayload::deserialize(archived);
             assert_eq!(decoded_s, s);
             let reparsed = decoded_s.parse::<IpfsPath>().expect("parse back");
             assert_eq!(reparsed.as_ref(), path.as_ref());

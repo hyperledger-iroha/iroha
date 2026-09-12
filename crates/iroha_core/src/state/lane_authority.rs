@@ -6,9 +6,9 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     block::{BlockExecutionContextBundle, consensus::LaneBlockDescriptorV1},
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use thiserror::Error;

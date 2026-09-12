@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_core = { path = "../iroha_core", features = ["node"], default-features = false }
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }

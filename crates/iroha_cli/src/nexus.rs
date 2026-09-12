@@ -5,7 +5,7 @@ use crate::{Run, RunContext};
 use eyre::{Result, eyre};
 use iroha::client::BorrowedKeyPairIdentityRequestSignerV1;
 use iroha::data_model::nexus::{
-    AtomicPrivateSettlementV1, LaneId, PrivateSettlementCommitteeAuthorityV1,
+    AtomicPrivateSettlementV1, PrivateSettlementCommitteeAuthorityV1,
     PrivateSettlementPhaseCertificateV1, PrivateSettlementPrepareBarrierV1,
     PrivateSettlementProvisionalLegMaterialV1,
 };
@@ -14,6 +14,7 @@ use iroha_core::private_settlement::{
     SoftwarePrivateSettlementAuditorKeyringCredentialsV1,
 };
 use iroha_crypto::{Hash, KeyPair};
+use iroha_model_base::topology::LaneId;
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditorCapsuleRequestV1,
     PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,
@@ -324,7 +325,7 @@ fn private_settlement<C: RunContext>(
     context: &mut C,
     command: PrivateSettlementCommand,
 ) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     match command {
         PrivateSettlementCommand::AvailabilityShare(args) => {
             let material: PrivateSettlementProvisionalLegMaterialV1 =
@@ -488,7 +489,7 @@ fn private_settlement<C: RunContext>(
     }
 }
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let status = norito::json::to_value(&client.get_sumeragi_diagnostics()?)?;
     let lanes = status
         .get("lane_governance")
@@ -542,7 +543,7 @@ fn public_lane_validators<C: RunContext>(
     context: &mut C,
     args: &PublicLaneValidatorsArgs,
 ) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let payload = client.get_public_lane_validators(LaneId::new(args.lane))?;
     if args.summary {
         context.println(format_validator_summary(&payload)?)?;
@@ -552,7 +553,7 @@ fn public_lane_validators<C: RunContext>(
     Ok(())
 }
 fn public_lane_stake<C: RunContext>(context: &mut C, args: &PublicLaneStakeArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let validator = args
         .validator
         .as_deref()

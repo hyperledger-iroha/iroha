@@ -673,9 +673,9 @@ impl<F: KagemushaPoseidonFieldV1> PastaNativePoseidonJobsV1<F> {
                                         let bridge =
                                             if output { job.output[i] } else { job.input[i] };
                                         let virtual_cell = bridge.cell.ok_or(Error::Synthesis)?;
-                                        let target = *physical
+                                        let target = physical
                                             .assigned_advices
-                                            .get(&virtual_cell)
+                                            .resolve(&virtual_cell)
                                             .ok_or(Error::Synthesis)?;
                                         // Only BUS participates in equality. Its fixed bridge gate
                                         // binds the original Base cell to the local state column.

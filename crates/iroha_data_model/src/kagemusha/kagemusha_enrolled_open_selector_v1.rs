@@ -2,10 +2,10 @@
 //!
 //! This sole canonical selector replaces host storage paths at the native open boundary.
 //! Its identity is deterministic correlation data. Decoding or matching it proves neither
-//! MiBank approval, enrollment, hardware custody, current selection nor monetary authority.
+//! `MiBank` approval, enrollment, hardware custody, current selection nor monetary authority.
 
 use super::{KAGEMUSHA_WIRE_VERSION_V1, KagemushaRetailEnrollmentOwnerV1};
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::Algorithm;
 use iroha_schema::IntoSchema;
@@ -18,9 +18,22 @@ pub const KAGEMUSHA_ENROLLED_OPEN_SELECTOR_MAX_BYTES_V1: usize = 16 * 1024;
 ///
 /// A qualified native backend must independently derive its owner and compare every field.
 /// Neither a caller-provided matching digest nor these bytes can create that native owner.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.enrolled-open-selector")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_enrolled_open_selector_v1::KagemushaEnrolledOpenSelectorV1",
+    frame = "iroha.kagemusha.v1.enrolled-open-selector"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaEnrolledOpenSelectorV1 {
     /// Sole first-release format, 1.
@@ -132,9 +145,10 @@ mod tests {
         account::AccountId,
         asset::AssetDefinitionId,
         kagemusha::{KAGEMUSHA_ASSET_SCALE_MAX_V1, KagemushaRetailEnrollmentRuntimeV1},
-        nexus::{AxtAssetIncarnationV1, DataSpaceId},
+        nexus::AxtAssetIncarnationV1,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_model_base::topology::DataSpaceId;
 
     fn owner() -> KagemushaRetailEnrollmentOwnerV1 {
         KagemushaRetailEnrollmentOwnerV1 {
@@ -179,7 +193,7 @@ mod tests {
             selector
         );
         assert_eq!(selector.canonical_bytes().expect("second encode"), bytes);
-        #[cfg(feature = "json")]
+
         {
             let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -338,5 +352,29 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(KagemushaEnrolledOpenSelectorV1::decode_canonical_exact(&trailing).is_err());
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaEnrolledOpenSelectorV1>(
+            "iroha_data_model::kagemusha::kagemusha_enrolled_open_selector_v1::KagemushaEnrolledOpenSelectorV1",
+            "iroha.kagemusha.v1.enrolled-open-selector",
+            "97a4a47428d0082e3269f373a191e7ee",
+        );
     }
 }

@@ -25,10 +25,16 @@ fn verify_signature_for_signer(
 /// Domain tag for transaction submission receipt signatures.
 pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
 /// Canonical payload signed by a Torii node when accepting a transaction submission.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -63,10 +69,16 @@ impl TransactionSubmissionReceiptPayload {
     }
 }
 /// Signed receipt acknowledging transaction submission.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -111,7 +123,11 @@ impl TransactionSubmissionReceipt {
 mod tests {
     use super::*;
 
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::transaction::receipt::PreReleaseTransactionSubmissionReceiptPayload",
+        frame = "iroha_data_model::transaction::receipt::TransactionSubmissionReceiptPayload"
+    )]
     struct PreReleaseTransactionSubmissionReceiptPayload {
         tx_hash: HashOf<SignedTransaction>,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -121,7 +137,11 @@ mod tests {
         signer: PublicKey,
     }
 
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::transaction::receipt::PreReleaseReceiptPayloadWithoutSignedTransactionHash",
+        frame = "iroha_data_model::transaction::receipt::TransactionSubmissionReceiptPayload"
+    )]
     struct PreReleaseReceiptPayloadWithoutSignedTransactionHash {
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         submitted_at_ms: u64,
@@ -185,7 +205,6 @@ mod tests {
         assert_eq!(decoded, payload);
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn submission_receipt_json_requires_nullable_hash_and_closed_signed_objects() {
         let key_pair = checked_random_keypair();
@@ -270,6 +289,20 @@ mod tests {
         };
         let encoded = norito::encode_canonical(&pre_release)
             .expect("encode pre-release receipt payload without the inner hash slot");
+        assert_eq!(
+            norito::schema::identity::frame_hash::<
+                PreReleaseReceiptPayloadWithoutSignedTransactionHash,
+            >(),
+            norito::schema::identity::frame_hash::<TransactionSubmissionReceiptPayload>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(encoded.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<TransactionSubmissionReceiptPayload>(),
+            "malformed fixture header must reach the production decoder"
+        );
         assert!(
             norito::decode_canonical::<TransactionSubmissionReceiptPayload>(&encoded).is_err(),
             "the first-release receipt payload must reject the shortened layout without signed_transaction_hash"
@@ -290,6 +323,18 @@ mod tests {
         };
         let encoded =
             norito::encode_canonical(&pre_release).expect("encode pre-release receipt payload");
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PreReleaseTransactionSubmissionReceiptPayload>(),
+            norito::schema::identity::frame_hash::<TransactionSubmissionReceiptPayload>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(encoded.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<TransactionSubmissionReceiptPayload>(),
+            "malformed fixture header must reach the production decoder"
+        );
         assert!(
             norito::decode_canonical::<TransactionSubmissionReceiptPayload>(&encoded).is_err(),
             "the retired duplicate tx_hash layout must not decode as the first-release payload"

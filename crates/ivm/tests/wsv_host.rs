@@ -1,12 +1,12 @@
 use iroha_crypto::{Hash, PublicKey};
-use iroha_data_model::nexus::DataSpaceId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, PointerType, VMError,
-    mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, Name, PermissionToken, WsvHost,
-    },
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use std::str::FromStr;
@@ -54,7 +54,8 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
 }
 #[test]
 fn test_balance_syscall_permission() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -65,7 +66,7 @@ fn test_balance_syscall_permission() {
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[(
@@ -120,7 +121,8 @@ fn test_balance_syscall_permission() {
 }
 #[test]
 fn test_transfer_syscall_permission() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -131,7 +133,7 @@ fn test_transfer_syscall_permission() {
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let wsv = MockWorldStateView::with_balances(&[
@@ -177,7 +179,8 @@ fn test_transfer_syscall_permission() {
 }
 #[test]
 fn test_mint_syscall_permission() {
-    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId =
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -188,7 +191,7 @@ fn test_mint_syscall_permission() {
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap(),
             "asset".parse().unwrap(),
         );
     let wsv =
@@ -222,7 +225,7 @@ fn test_mint_syscall_permission() {
 #[test]
 fn test_json_get_quantity_reads_canonical_decimal_strings() {
     let domain: DomainId =
-        iroha_data_model::DomainId::try_new("domain", "universal").expect("domain");
+        iroha_model_base::domain::DomainId::try_new("domain", "universal").expect("domain");
     let public_key: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

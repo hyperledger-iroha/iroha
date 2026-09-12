@@ -1,0 +1,62 @@
+//! Source-bound compiler identities for this event capability's existing owners.
+
+use crate::events::captured_event_boundary_identity_tests::check;
+
+#[test]
+fn captured_event_codec_schema_identities() {
+    check::<super::SmartContractEvent>(
+        "iroha_data_model::events::data::smart_contract::model::SmartContractEvent",
+        "59c148dd1516f7b9c44451206ebc05c9",
+        "59c148dd1516f7b9c44451206ebc05c9",
+    );
+    check::<super::ContractCodeRegistered>(
+        "iroha_data_model::events::data::smart_contract::model::ContractCodeRegistered",
+        "e1ae1554ead0ca6ca45123fbcf6628bd",
+        "e1ae1554ead0ca6ca45123fbcf6628bd",
+    );
+    check::<super::ContractCodeRemoved>(
+        "iroha_data_model::events::data::smart_contract::model::ContractCodeRemoved",
+        "686cd9c885ff1aec9d225a8a961c8f2e",
+        "686cd9c885ff1aec9d225a8a961c8f2e",
+    );
+    check::<super::ContractInstanceActivated>(
+        "iroha_data_model::events::data::smart_contract::model::ContractInstanceActivated",
+        "86d7086f6499193ddb202c4cc9429a99",
+        "86d7086f6499193ddb202c4cc9429a99",
+    );
+    check::<super::ContractInstanceDeactivated>(
+        "iroha_data_model::events::data::smart_contract::model::ContractInstanceDeactivated",
+        "80091d6e26c335083e25661e25342aa4",
+        "80091d6e26c335083e25661e25342aa4",
+    );
+    check::<super::ContractParliamentDelegationChanged>(
+        "iroha_data_model::events::data::smart_contract::model::ContractParliamentDelegationChanged",
+        "674c7eb55121844912f6d76dcc1f7642",
+        "674c7eb55121844912f6d76dcc1f7642",
+    );
+    check::<super::ContractOwnershipTransferOffered>(
+        "iroha_data_model::events::data::smart_contract::model::ContractOwnershipTransferOffered",
+        "c1860441b5a778b6468470f74a1f1875",
+        "c1860441b5a778b6468470f74a1f1875",
+    );
+    check::<super::ContractOwnershipTransferCancelled>(
+        "iroha_data_model::events::data::smart_contract::model::ContractOwnershipTransferCancelled",
+        "ce31098f8dbd740a5faa2b18994b907c",
+        "ce31098f8dbd740a5faa2b18994b907c",
+    );
+    check::<super::ContractOwnershipTransferred>(
+        "iroha_data_model::events::data::smart_contract::model::ContractOwnershipTransferred",
+        "965aa94fec08d44d80ac5b0fd681074c",
+        "965aa94fec08d44d80ac5b0fd681074c",
+    );
+    check::<super::ContractEmergencyHoldPlaced>(
+        "iroha_data_model::events::data::smart_contract::model::ContractEmergencyHoldPlaced",
+        "b7f87577f576a7d9870d3e74dd4be0fd",
+        "b7f87577f576a7d9870d3e74dd4be0fd",
+    );
+    check::<super::ContractEmergencyHoldRetrospectiveCompleted>(
+        "iroha_data_model::events::data::smart_contract::model::ContractEmergencyHoldRetrospectiveCompleted",
+        "632f3a9023883ef111d75fcebde76aaa",
+        "632f3a9023883ef111d75fcebde76aaa",
+    );
+}

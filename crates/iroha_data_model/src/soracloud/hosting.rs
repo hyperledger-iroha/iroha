@@ -1,6 +1,15 @@
 /// Active opt-in validator host capability advert for authoritative Inrou placement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1")]
@@ -117,9 +126,19 @@ impl SoraInrouHostCapabilityRecordV1 {
 /// Inrou V1 never reassigns a stateful replica during its economic lease. An unavailable
 /// assignment therefore retains its validator, peer, guest ISA, and placement incarnation so the
 /// exact original host can reactivate it after recovering eligibility.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "availability", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "availability", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1")]
@@ -137,8 +156,17 @@ impl SoraInrouReplicaHostAvailabilityV1 {
     }
 }
 /// Authoritative host assignment for one placed Inrou replica slot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraInrouReplicaPlacementV1")]
@@ -194,8 +222,17 @@ impl SoraInrouReplicaPlacementV1 {
     }
 }
 /// Authoritative per-revision placement record for hosted Inrou replicas.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1")]
@@ -308,8 +345,17 @@ impl SoraInrouServicePlacementRecordV1 {
     }
 }
 /// Authoritative canonical Hugging Face registry metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSourceRecordV1")]
@@ -380,9 +426,19 @@ impl SoraHfSourceRecordV1 {
     }
 }
 /// Shared-lease pool lifecycle state for a canonical HF source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseStatusV1")]
@@ -397,9 +453,19 @@ pub enum SoraHfSharedLeaseStatusV1 {
     Retired,
 }
 /// Shared-lease membership lifecycle state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseMemberStatusV1")]
@@ -410,9 +476,19 @@ pub enum SoraHfSharedLeaseMemberStatusV1 {
     Left,
 }
 /// Audit action recorded for shared Hugging Face lease windows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "action", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseActionV1")]
@@ -433,8 +509,17 @@ pub enum SoraHfSharedLeaseActionV1 {
     Retire,
 }
 /// Queued next-window sponsorship metadata for a shared Hugging Face lease pool.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseQueuedWindowV1")]
@@ -498,8 +583,17 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
     }
 }
 /// Shared-lease pool metadata keyed by canonical source and pricing dimensions.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeasePoolV1")]
@@ -611,8 +705,17 @@ impl SoraHfSharedLeasePoolV1 {
     }
 }
 /// Account-scoped shared-lease membership plus free service/apartment bindings.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseMemberV1")]
@@ -702,8 +805,17 @@ impl SoraHfSharedLeaseMemberV1 {
     }
 }
 /// Audit record for shared Hugging Face lease lifecycle changes.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraHfSharedLeaseAuditEventV1")]
@@ -817,8 +929,17 @@ impl SoraHfSharedLeaseAuditEventV1 {
     }
 }
 /// Audit record for model-artifact lifecycle changes.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraModelArtifactAuditEventV1")]
@@ -880,9 +1001,19 @@ impl SoraModelArtifactAuditEventV1 {
     }
 }
 /// Audit action recorded for authoritative Soracloud agent-apartment state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "action", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentApartmentActionV1")]
@@ -911,9 +1042,19 @@ pub enum SoraAgentApartmentActionV1 {
     AutonomyRunExecuted,
 }
 /// Runtime status of an authoritative Soracloud agent apartment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentRuntimeStatusV1")]
@@ -924,8 +1065,17 @@ pub enum SoraAgentRuntimeStatusV1 {
     LeaseExpired,
 }
 /// Pending wallet spend request tracked inside an authoritative apartment record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentWalletSpendRequestV1")]
@@ -940,8 +1090,17 @@ pub struct SoraAgentWalletSpendRequestV1 {
     pub created_sequence: u64,
 }
 /// Daily wallet-spend aggregate for an asset/day bucket pair.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentWalletDailySpendEntryV1")]
@@ -954,8 +1113,17 @@ pub struct SoraAgentWalletDailySpendEntryV1 {
     pub spent: Quantity,
 }
 /// Mailbox message queued for deterministic apartment-to-apartment delivery.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentMailboxMessageV1")]
@@ -974,8 +1142,17 @@ pub struct SoraAgentMailboxMessageV1 {
     pub enqueued_sequence: u64,
 }
 /// Allowlist entry authorizing an autonomy artifact for an apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentArtifactAllowRuleV1")]
@@ -989,8 +1166,17 @@ pub struct SoraAgentArtifactAllowRuleV1 {
     pub added_sequence: u64,
 }
 /// Historical autonomy-run approval recorded for an apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1")]
@@ -1017,8 +1203,17 @@ pub struct SoraAgentAutonomyRunRecordV1 {
     pub approved_sequence: u64,
 }
 /// Authoritative persistent-state accounting attached to an apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentPersistentStateV1")]
@@ -1029,8 +1224,17 @@ pub struct SoraAgentPersistentStateV1 {
     pub key_sizes: BTreeMap<String, u64>,
 }
 /// Authoritative runtime record for a Soracloud agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentApartmentRecordV1")]
@@ -1415,8 +1619,17 @@ impl SoraAgentApartmentRecordV1 {
     }
 }
 /// Audit record for authoritative agent-apartment state transitions.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAgentApartmentAuditEventV1")]
@@ -1589,6 +1802,12 @@ impl SoraAgentApartmentAuditEventV1 {
                 "must be greater than zero when provided",
             ));
         }
+        self.validate_wallet_spend_attribution()?;
+        self.validate_autonomy_execution_attribution()?;
+        Ok(())
+    }
+
+    fn validate_wallet_spend_attribution(&self) -> Result<(), SoracloudManifestError> {
         if matches!(
             self.action,
             SoraAgentApartmentActionV1::WalletSpendRequested
@@ -1627,6 +1846,10 @@ impl SoraAgentApartmentAuditEventV1 {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn validate_autonomy_execution_attribution(&self) -> Result<(), SoracloudManifestError> {
         if self.action == SoraAgentApartmentActionV1::AutonomyRunExecuted {
             if self.run_id.is_none()
                 || self.request_id.as_deref() != self.run_id.as_deref()
@@ -1882,10 +2105,47 @@ fn validate_public_url(
             "must start with exact lowercase http:// or https://",
         ));
     };
-    let authority_end = remainder
-        .find(|character| matches!(character, '/' | '?' | '#'))
-        .unwrap_or(remainder.len());
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
     let authority = &remainder[..authority_end];
+    validate_public_url_authority(manifest, field, authority, default_port)?;
+    let suffix = &remainder[authority_end..];
+    if suffix.contains('#') || suffix.contains('\\') || suffix.contains('%') || !suffix.is_ascii() {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "URL path and query must be exact ASCII without fragments, escapes, or backslashes",
+        ));
+    }
+    let (path, query) = suffix
+        .split_once('?')
+        .map_or((suffix, None), |(path, query)| (path, Some(query)));
+    if let Some(query) = query {
+        if query.is_empty() || path.is_empty() {
+            return Err(invalid_field(
+                manifest,
+                field,
+                "URL queries require a nonempty query and explicit canonical path",
+            ));
+        }
+    } else if path == "/" {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "root URLs must omit the trailing slash",
+        ));
+    }
+    if !path.is_empty() {
+        validate_absolute_path(manifest, field, path)?;
+    }
+    Ok(())
+}
+// Validate the exact DNS/IP host and nondefault TCP port before any path/query checks.
+fn validate_public_url_authority(
+    manifest: &'static str,
+    field: &'static str,
+    authority: &str,
+    default_port: u16,
+) -> Result<(), SoracloudManifestError> {
     if authority.is_empty() || authority.contains('@') {
         return Err(invalid_field(
             manifest,
@@ -1961,37 +2221,9 @@ fn validate_public_url(
             ));
         }
     }
-    let suffix = &remainder[authority_end..];
-    if suffix.contains('#') || suffix.contains('\\') || suffix.contains('%') || !suffix.is_ascii() {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "URL path and query must be exact ASCII without fragments, escapes, or backslashes",
-        ));
-    }
-    let (path, query) = suffix
-        .split_once('?')
-        .map_or((suffix, None), |(path, query)| (path, Some(query)));
-    if let Some(query) = query {
-        if query.is_empty() || path.is_empty() {
-            return Err(invalid_field(
-                manifest,
-                field,
-                "URL queries require a nonempty query and explicit canonical path",
-            ));
-        }
-    } else if path == "/" {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "root URLs must omit the trailing slash",
-        ));
-    }
-    if !path.is_empty() {
-        validate_absolute_path(manifest, field, path)?;
-    }
     Ok(())
 }
+
 fn validate_absolute_path(
     manifest: &'static str,
     field: &'static str,
@@ -2010,25 +2242,34 @@ fn validate_absolute_path(
             "must be an exact absolute URL path without whitespace, query, fragment, or backslash",
         ));
     }
-    if value != "/" {
-        if value.ends_with('/')
+    if value != "/"
+        && (value.ends_with('/')
             || value[1..]
                 .split('/')
-                .any(|component| component.is_empty() || matches!(component, "." | ".."))
-        {
-            return Err(invalid_field(
-                manifest,
-                field,
-                "must not contain empty, `.` or `..` components or a trailing slash",
-            ));
-        }
+                .any(|component| component.is_empty() || matches!(component, "." | "..")))
+    {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must not contain empty, `.` or `..` components or a trailing slash",
+        ));
     }
     Ok(())
 }
 /// Lifecycle action recorded for an app-level Soracloud topology transition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "action", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraActionV1")]
@@ -2039,8 +2280,17 @@ pub enum SoraAppInfraActionV1 {
     Upgrade,
 }
 /// Static-site binding attached to a Soracloud app.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppStaticSiteBindingV1")]
@@ -2116,8 +2366,17 @@ impl SoraAppStaticSiteBindingV1 {
     }
 }
 /// Route projection exposed by a service inside an app topology.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppRouteProjectionV1")]
@@ -2163,8 +2422,17 @@ impl SoraAppRouteProjectionV1 {
     }
 }
 /// Reference to an admitted Soracloud service revision in an app topology.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraServiceRefV1")]
@@ -2246,8 +2514,17 @@ impl SoraAppInfraServiceRefV1 {
     }
 }
 /// Canonical app-level Soracloud infrastructure manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraManifestV1")]
@@ -2307,10 +2584,21 @@ impl SoraAppInfraManifestV1 {
     }
 }
 /// Exact authoritative app topology observed before a signed upgrade.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraExactCurrentRevisionPreconditionV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::soracloud::SoraAppInfraExactCurrentRevisionPreconditionV1"
+)]
 pub struct SoraAppInfraExactCurrentRevisionPreconditionV1 {
     /// Active app version observed by the signer.
     pub app_version: String,
@@ -2320,9 +2608,18 @@ pub struct SoraAppInfraExactCurrentRevisionPreconditionV1 {
     pub revision_count: u32,
 }
 /// Signed compare-and-set condition for an app topology deploy or upgrade.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "condition", content = "value"))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "condition", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraMutationPreconditionV1")]
 pub enum SoraAppInfraMutationPreconditionV1 {
@@ -2332,8 +2629,17 @@ pub enum SoraAppInfraMutationPreconditionV1 {
     ExactCurrentRevision(SoraAppInfraExactCurrentRevisionPreconditionV1),
 }
 /// Authoritative app-level Soracloud infrastructure state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraStateV1")]
@@ -2399,8 +2705,17 @@ impl SoraAppInfraStateV1 {
     }
 }
 /// Audit record for an authoritative Soracloud app topology event.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraAppInfraAuditEventV1")]
@@ -2463,8 +2778,17 @@ impl SoraAppInfraAuditEventV1 {
     }
 }
 /// Audit record for an authoritative Soracloud lifecycle event.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraServiceAuditEventV1")]
@@ -2547,6 +2871,12 @@ pub struct SoraServiceAuditEventV1 {
     /// Provenance signer that authorized the lifecycle action.
     pub signer: PublicKey,
 }
+// Closed attribution inventory for one persisted lifecycle capability.
+struct ServiceAuditActionFields {
+    required: &'static [&'static str],
+    allowed: &'static [&'static str],
+}
+
 impl SoraServiceAuditEventV1 {
     /// Validate Soracloud lifecycle audit records.
     ///
@@ -2679,6 +3009,16 @@ impl SoraServiceAuditEventV1 {
         Ok(())
     }
     fn validate_action_fields(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_action_field_presence()?;
+        self.validate_action_material_deltas()?;
+        self.validate_action_version_transition()?;
+        self.validate_rollback_attribution()?;
+        self.validate_rollout_attribution()?;
+        Ok(())
+    }
+
+    // Required and permitted persisted attribution for this lifecycle capability.
+    fn action_field_policy(&self) -> Result<ServiceAuditActionFields, SoracloudManifestError> {
         use SoraServiceLifecycleActionV1 as Action;
 
         let (required, allowed): (&[&str], &[&str]) = match self.action {
@@ -2758,6 +3098,11 @@ impl SoraServiceAuditEventV1 {
                 ));
             }
         };
+        Ok(ServiceAuditActionFields { required, allowed })
+    }
+
+    fn validate_action_field_presence(&self) -> Result<(), SoracloudManifestError> {
+        let ServiceAuditActionFields { required, allowed } = self.action_field_policy()?;
         let presence = [
             ("governance_tx_hash", self.governance_tx_hash.is_some()),
             ("binding_name", self.binding_name.is_some()),
@@ -2795,6 +3140,12 @@ impl SoraServiceAuditEventV1 {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_action_material_deltas(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
         let material_shape_valid = match self.action {
             Action::Deploy | Action::Upgrade => {
                 self.config_mutations
@@ -2820,6 +3171,12 @@ impl SoraServiceAuditEventV1 {
                 "material deltas must be exact for the lifecycle action and admissions may only upsert",
             ));
         }
+
+        Ok(())
+    }
+
+    fn validate_action_version_transition(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
 
         match self.action {
             Action::Deploy
@@ -2875,6 +3232,12 @@ impl SoraServiceAuditEventV1 {
             }
             Action::CiphertextQuery => {}
         }
+        Ok(())
+    }
+
+    fn validate_rollback_attribution(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
         if self.action == Action::Rollback
             && (self.governance_tx_hash.is_some() != self.rollout_state.is_some())
         {
@@ -2894,6 +3257,12 @@ impl SoraServiceAuditEventV1 {
                 "automatic rollout rollback must preserve rather than replace lease state",
             ));
         }
+        Ok(())
+    }
+
+    fn validate_rollout_attribution(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
         if let Some(rollout) = self.rollout_state.as_ref() {
             let handle = rollout.rollout_handle.as_str();
             let expected_prefix = format!("{}:rollout:", self.service_name);
@@ -2962,6 +3331,7 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
+
     fn validate_break_glass_fields(&self) -> Result<(), SoracloudManifestError> {
         if self
             .break_glass_reason
@@ -3053,9 +3423,20 @@ impl SoraServiceAuditEventV1 {
     }
 }
 /// Runtime health status observed for a materialized service revision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "health_status", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "health_status", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraServiceHealthStatusV1")]
@@ -3071,8 +3452,17 @@ pub enum SoraServiceHealthStatusV1 {
     Unavailable,
 }
 /// Authoritative runtime state for the active revision of a service.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraServiceRuntimeStateV1")]
@@ -3123,8 +3513,17 @@ impl SoraServiceRuntimeStateV1 {
     }
 }
 /// Authoritative runtime state for one placed Inrou replica slot.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1")]
@@ -3236,8 +3635,17 @@ impl SoraInrouReplicaRuntimeStateV1 {
     }
 }
 /// Ordered asynchronous mailbox message used for replicated cross-service calls.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraServiceMailboxMessageV1")]
@@ -3322,6 +3730,13 @@ impl SoraServiceMailboxMessageV1 {
     /// Validate a mailbox message prepared for ledger submission.
     ///
     /// Submission messages carry zero sentinels for all ledger-owned schedule fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, a message identifier differing
+    /// from the zero prehash sentinel, nonzero schedule fields, nonempty ledger-owned
+    /// service versions, or a payload commitment that is the zero prehash sentinel or does
+    /// not match the payload bytes.
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         self.validate_with_sequence_state(false)
     }
@@ -3428,8 +3843,17 @@ impl SoraServiceMailboxMessageV1 {
     }
 }
 /// Exact active validator selected to execute one deterministic mailbox message.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraRuntimeDeterministicValidatorHostV1")]
@@ -3445,6 +3869,12 @@ impl SoraRuntimeDeterministicValidatorHostV1 {
     /// Validate structural deterministic-validator attribution.
     ///
     /// Active membership and selection eligibility are validated by ledger execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the peer text is blank, contains surrounding whitespace/control
+    /// characters, or is not the exact canonical peer public-key spelling, or if the
+    /// validator account has no single signatory.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_validator_account_peer_id(
             "sora runtime deterministic validator host",
@@ -3454,8 +3884,17 @@ impl SoraRuntimeDeterministicValidatorHostV1 {
     }
 }
 /// One state effect emitted by deterministic ordered-mailbox execution.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraOrderedMailboxStateMutationV1")]
@@ -3476,6 +3915,11 @@ pub struct SoraOrderedMailboxStateMutationV1 {
 }
 impl SoraOrderedMailboxStateMutationV1 {
     /// Validate the structural mutation envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, a blank/non-absolute state key,
+    /// an upsert without a nonempty payload, or a delete carrying any payload.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora ordered mailbox state mutation",
@@ -3506,8 +3950,17 @@ impl SoraOrderedMailboxStateMutationV1 {
     }
 }
 /// Atomic effects and receipt produced by one deterministic mailbox execution.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraOrderedMailboxResultV1")]
@@ -3543,6 +3996,13 @@ pub struct SoraOrderedMailboxResultV1 {
 }
 impl SoraOrderedMailboxResultV1 {
     /// Validate the submission envelope before ledger-specific authorization and OCC checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema version, zero observed height/sequence,
+    /// or blank content type. Propagates invalid state mutations, outbound submission
+    /// messages, optional runtime states or submission receipt, and rejects a receipt
+    /// without a consumed mailbox identity or deterministic-validator attribution.
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora ordered mailbox result",
@@ -3605,8 +4065,17 @@ impl SoraOrderedMailboxResultV1 {
     }
 }
 /// Authoritative execution receipt emitted by the generic Soracloud runtime.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoraRuntimeReceiptV1")]

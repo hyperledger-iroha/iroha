@@ -213,19 +213,38 @@ function canonicalSm2Payload(keyBytes) {
 }
 
 function callNativeAddress(method, ...args) {
-  const native = resolveNativeRuntimeBinding(defaultNativeRuntime);
+  return callNativeAddressWithRuntime(defaultNativeRuntime, method, ...args);
+}
+
+function callNativeAddressWithRuntime(runtime, method, ...args) {
+  const native = resolveNativeRuntimeBinding(runtime);
   if (typeof native[method] !== "function") {
     throw new Error(`Native binding required; ${method} is unavailable`);
   }
   try {
     return native[method](...args);
   } catch (cause) {
-    const code = /^([A-Z_]+): /u.exec(cause?.message ?? "")?.[1];
+    const code = /^([A-Z_][A-Z0-9_]*): /u.exec(cause?.message ?? "")?.[1];
     if (Object.values(AccountAddressErrorCode).includes(code)) {
       throw new AccountAddressError(code, cause.message, { cause });
     }
     throw cause;
   }
+}
+
+/** @internal Canonical owner facade; the runtime parameter is absent from package exports. */
+export function _renderCanonicalAccountAddress(canonical, prefix, runtime) {
+  const rendered = callNativeAddressWithRuntime(runtime, "accountAddressRender", canonical, prefix);
+  if (
+    rendered?.canonicalHex !== `0x${bytesToHex(canonical).toLowerCase()}` ||
+    typeof rendered.i105 !== "string"
+  ) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "native address rendering did not preserve the exact canonical identity",
+    );
+  }
+  return rendered.i105;
 }
 
 function assertNativeCanonicalAddress(canonical) {
@@ -894,6 +913,15 @@ export class AccountAddress {
     return out;
   }
 
+  /**
+   * Return an independent canonical controller snapshot. Mutating it cannot
+   * change this address or any later signature/transaction encoding.
+   * @returns {object} Canonical single-key or multisig controller fields.
+   */
+  controllerInfo() {
+    return decodeController(this.canonicalBytes(), 1)[0];
+  }
+
   canonicalHex() {
     const canonical = this.canonicalBytes();
     return `0x${bytesToHex(canonical).toLowerCase()}`;
@@ -905,7 +933,7 @@ export class AccountAddress {
       "AccountAddress.toI105 chainDiscriminant",
 	);
     const canonical = this.canonicalBytes();
-    return encodeI105String(normalizedDiscriminant, canonical);
+    return _renderCanonicalAccountAddress(canonical, normalizedDiscriminant, defaultNativeRuntime);
   }
 
   toString() {
@@ -1260,18 +1288,7 @@ function normalizeI105DiscriminantInput(value, context = "i105 chain discriminan
   return numeric;
 }
 
-function i105SentinelForDiscriminant(discriminant) {
-  switch (discriminant) {
-    case DEFAULT_I105_DISCRIMINANT:
-      return I105_SENTINEL_SORA;
-    case 0x0171:
-      return I105_SENTINEL_TEST;
-    case 0x0000:
-      return I105_SENTINEL_DEV;
-    default:
-      return `${I105_SENTINEL_NUMERIC_PREFIX}${discriminant}`;
-  }
-}
+
 
 function parseI105SentinelAndPayload(encoded) {
   if (typeof encoded !== JS_TYPE_STRING) {
@@ -1330,13 +1347,7 @@ function encodeI105String(discriminant, canonical) {
     "i105 chain discriminant",
   );
   const canonicalBytes = normalizeBytes(canonical);
-  const digits = encodeBaseN(canonicalBytes, I105_BASE);
-  const checksum = i105ChecksumDigits(canonicalBytes);
-  const sentinel = i105SentinelForDiscriminant(normalizedDiscriminant);
-  const parts = [sentinel];
-  parts.push(...digits.map((digit) => I105_ALPHABET[digit]));
-  parts.push(...checksum.map((digit) => I105_ALPHABET[digit]));
-  return parts.join("");
+  return _renderCanonicalAccountAddress(canonicalBytes, normalizedDiscriminant, defaultNativeRuntime);
 }
 
 function decodeSupportedI105String(encoded, expectedDiscriminant) {
@@ -1426,41 +1437,7 @@ function decodeI105String(encoded, expectedDiscriminant) {
   return [discriminant, canonicalBytes];
 }
 
-function encodeBaseN(bytes, base) {
-  if (base < 2) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_I105_BASE,
-      "invalid base for encoding",
-    );
-  }
-  const value = Array.from(bytes);
-  let leading = 0;
-  while (leading < value.length && value[leading] === 0) {
-    leading += 1;
-  }
-  const digits = [];
-  let start = leading;
-  while (start < value.length) {
-    let remainder = 0;
-    for (let i = start; i < value.length; i += 1) {
-      const acc = (remainder << 8) | value[i];
-      value[i] = Math.floor(acc / base);
-      remainder = acc % base;
-    }
-    digits.push(remainder);
-    while (start < value.length && value[start] === 0) {
-      start += 1;
-    }
-  }
-  for (let i = 0; i < leading; i += 1) {
-    digits.push(0);
-  }
-  if (digits.length === 0) {
-    digits.push(0);
-  }
-  digits.reverse();
-  return digits;
-}
+
 
 function decodeBaseN(digits, base) {
   if (base < 2) {

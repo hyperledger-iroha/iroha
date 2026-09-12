@@ -1325,6 +1325,7 @@ mod tests {
             ivm::syscalls::SYSCALL_STATE_HAS,
             ivm::syscalls::SYSCALL_STATE_LEN,
             ivm::syscalls::SYSCALL_STATE_COUNT,
+            ivm::syscalls::SYSCALL_STATE_SCAN,
             ivm::syscalls::SYSCALL_CALL_CONTRACT,
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
             ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,

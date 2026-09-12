@@ -32,6 +32,10 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::{
     GenesisBuilder, ManifestCrypto, RawGenesisTransaction, validate_genesis_manifest_json,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 #[cfg(test)]
 use iroha_test_samples::ALICE_ID;

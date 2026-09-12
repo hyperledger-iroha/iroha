@@ -59,6 +59,7 @@ object ContractJsonParser {
             signingMessageB64 = response.signingMessageB64,
             expectedAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             context = "contract call response",
+            expectedAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
         )
         check(
             response.submitted ||
@@ -144,6 +145,7 @@ object ContractJsonParser {
             signingMessageB64 = response.signingMessageB64,
             expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
             context = "multisig response",
+            expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
         )
         return response
     }
@@ -472,6 +474,7 @@ object ContractJsonParser {
         signingMessageB64: String?,
         expectedAdmissionIntent: TransactionAdmissionIntent,
         context: String,
+        expectedAdmissionIntent: TransactionAdmissionIntent,
     ) {
         if (submitted) {
             check(txHashHex != null && transactionPayloadB64 == null && signingMessageB64 == null) {

@@ -1,6 +1,6 @@
 use super::*;
 use crate::runtime::RuntimeUpgradeId;
-#[cfg(feature = "json")]
+
 use norito::json::{FastJsonWrite, JsonSerialize};
 isi! {
     /// Propose a runtime upgrade by submitting a manifest.
@@ -100,7 +100,7 @@ impl CancelRuntimeUpgrade {
     /// Norito wire identifier for canceling a runtime upgrade.
     pub const WIRE_ID: &'static str = "iroha.runtime_upgrade.cancel";
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for ProposeRuntimeUpgrade {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -120,7 +120,7 @@ impl FastJsonWrite for ProposeRuntimeUpgrade {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for ActivateRuntimeUpgrade {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -140,7 +140,7 @@ impl FastJsonWrite for ActivateRuntimeUpgrade {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for CancelRuntimeUpgrade {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -164,7 +164,7 @@ impl FastJsonWrite for CancelRuntimeUpgrade {
 mod tests {
     use super::*;
     use norito::core::DecodeFromSlice;
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -176,7 +176,7 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn runtime_upgrade_json_families_have_exact_checked_bounds() {
         let id = RuntimeUpgradeId([0x99; 32]);

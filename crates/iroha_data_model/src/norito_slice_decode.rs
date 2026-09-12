@@ -1,18 +1,17 @@
-//! Implement Norito slice-based decoding for data model types used inside
-//! packed sequences and option fields.
+//! Canonical slice decoders for data-model fields in packed sequences and options.
 //!
-//! These impls simply reinterpret the provided slice as an archived payload of the target type and
-//! delegate to `NoritoDeserialize`. The encoded lengths are tracked by container decoders (e.g.,
-//! Vec/Option) so we can return the full slice length as bytes consumed.
+//! The shared decoder reconstructs a bounded payload, verifies its canonical
+//! representation and reports consumed bytes. Fields need no frame identity.
 use norito::core::{DecodeFromSlice, Error, decode_field_canonical};
 fn decode_via_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
-    T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
+    T: for<'de> norito::DeserializePayload<'de> + norito::SerializePayload,
 {
     decode_field_canonical::<T>(bytes)
 }
+
 // Helper macro to implement `DecodeFromSlice` for many local types.
-macro_rules! impl_decode_from_slice_via_archived {
+macro_rules! impl_canonical_slice_decode {
     ($($ty:path),+ $(,)?) => {
         $(
             impl<'a> DecodeFromSlice<'a> for $ty {
@@ -24,11 +23,9 @@ macro_rules! impl_decode_from_slice_via_archived {
     };
 }
 // Core ID and value types
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::ipfs::IpfsPath,
     crate::sorafs_uri::SorafsUri,
-    crate::peer::PeerId,
-    crate::domain::DomainId,
     crate::asset::id::AssetId,
     crate::asset::id::AssetDefinitionId,
     crate::asset::alias::AssetDefinitionAlias,
@@ -39,15 +36,15 @@ impl_decode_from_slice_via_archived! {
     crate::parameter::CustomParameterId,
     crate::sorafs::capacity::ProviderId,
 }
-// State / canonical keys (DecodeFromSlice derived on the type; no shim needed)
+// State and canonical keys derive DecodeFromSlice on their own types.
 // Transaction-related
 // Transaction-related (derive already supplies DecodeFromSlice for these)
 // Trigger entrypoints and related types
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::trigger::time::TimeTriggerEntrypoint,
 }
 // Block-related
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::block::header::BlockHeader,
     crate::block::header::BlockSignature,
     crate::block::payload::BlockResult,
@@ -55,7 +52,7 @@ impl_decode_from_slice_via_archived! {
     crate::smart_contract::manifest::AccessSetHints,
 }
 // Proof-related
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::proof::ProofId,
     crate::proof::ProofRecord,
     crate::nexus::LanePrivacyProof,
@@ -67,7 +64,7 @@ impl_decode_from_slice_via_archived! {
     crate::runtime::RuntimeUpgradeId,
 }
 // Kaigi components referenced by query/data-model responses
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::kaigi::KaigiParticipantCommitment,
     crate::kaigi::KaigiParticipantNullifier,
     crate::kaigi::KaigiRelayHop,
@@ -75,7 +72,7 @@ impl_decode_from_slice_via_archived! {
     crate::kaigi::KaigiRelayRegistration,
 }
 // Query parameter and DSL types; keep only those not covered by derives
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::query::parameters::ForwardCursor,
     crate::query::parameters::Pagination,
     crate::query::parameters::Sorting,
@@ -87,18 +84,18 @@ impl_decode_from_slice_via_archived! {
     crate::query::QueryResponse,
 }
 // Events and statuses
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::events::pipeline::BlockStatus,
     crate::events::pipeline::TransactionStatus,
     crate::events::trigger_completed::TriggerCompletedOutcomeType,
 }
-// Transaction-related shims required by versioned types and proofs
-impl_decode_from_slice_via_archived! {
+// Transaction-related decoders required by versioned types and proofs
+impl_canonical_slice_decode! {
     crate::transaction::error::TransactionRejectionReason,
     crate::ValidationFail,
 }
 // Additional model and crypto types referenced by query responses and versioned wrappers
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     // Core model objects (use public re-exports)
     crate::domain::Domain,
     crate::account::Account,
@@ -164,12 +161,43 @@ impl_decode_from_slice_via_archived! {
 }
 // Governance types (feature-gated, but default-enabled)
 #[cfg(feature = "governance")]
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::governance::types::ProposalId,
     crate::governance::types::AtWindow,
 }
 // ISI Governance enums used in instruction params
 #[cfg(feature = "governance")]
-impl_decode_from_slice_via_archived! {
+impl_canonical_slice_decode! {
     crate::isi::governance::VotingMode,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq, norito::SerializePayload, norito::DeserializePayload)]
+    struct PayloadOnlyField(Vec<u16>);
+
+    impl_canonical_slice_decode! { PayloadOnlyField }
+
+    #[test]
+    fn slice_decoder_checks_payload_only_fields_in_every_advertised_layout() {
+        let value = PayloadOnlyField(vec![7, 11, 13]);
+        for flags in (0..=norito::core::supported_header_flags())
+            .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        {
+            let _requested = norito::core::DecodeFlagsGuard::enter(flags);
+            let (payload, actual) = norito::codec::encode_with_header_flags(&value);
+            let _actual = norito::core::DecodeFlagsGuard::enter(actual);
+            let (decoded, used) = PayloadOnlyField::decode_from_slice(&payload).unwrap();
+            assert_eq!(decoded, value);
+            assert_eq!(used, payload.len());
+            for len in 0..payload.len() {
+                assert!(PayloadOnlyField::decode_from_slice(&payload[..len]).is_err());
+            }
+            let mut trailing = payload;
+            trailing.push(0);
+            assert!(PayloadOnlyField::decode_from_slice(&trailing).is_err());
+        }
+    }
 }

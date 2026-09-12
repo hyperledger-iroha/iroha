@@ -1,7 +1,7 @@
 #[test]
 fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
     use crate::axt::{RemoteSpendIntent, SpendOp};
-    use iroha_data_model::nexus::DataSpaceId;
+    use iroha_model_base::topology::DataSpaceId;
     let invalid = RemoteSpendIntent {
         asset_dsid: DataSpaceId::new(7),
         op: SpendOp {
@@ -60,7 +60,7 @@ fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
 #[test]
 fn asset_handle_access_hints_read_the_issuer_signed_asset_definition() {
     use crate::axt::{RemoteSpendIntent, SpendOp};
-    use iroha_data_model::nexus::DataSpaceId;
+    use iroha_model_base::topology::DataSpaceId;
 
     let handle = sample_asset_handle();
     let intent = RemoteSpendIntent {

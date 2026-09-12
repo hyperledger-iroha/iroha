@@ -108,15 +108,14 @@ impl DiagnosticCheckpointRegister {
         let enrollment = diagnostic_enrollment_binding(material, initial_state)?;
         let identity = digest_bytes(
             b"diagnostic-simulated-checkpoint-identity",
-            &norito::encode_canonical(&(
+            &diagnostic_payload(&(
                 initial_state.context(),
                 initial_state.lane.clone(),
                 initial_state.hardware_epoch,
                 initial_state.device_policy_binding,
                 credential,
                 enrollment.clone(),
-            ))
-            .map_err(|error| error.to_string())?,
+            ))?,
         );
         // Both actual byte buffers contain one canonical initialization frame. This diagnostic
         // accepts no speculative suffix and does not impersonate the production WAL formats.

@@ -5,17 +5,18 @@
 //! amounts, and memos never cross this instruction boundary.
 
 use super::*;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     nexus::{
-        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId,
+        ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PrivateSettlementAbortReasonV1, PrivateSettlementCommitBundleV1,
         PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementPoolGovernanceV1,
         PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1,
     },
     privacy::{PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1, PrivacyCommitmentV1, PrivacyPoolIdV1},
 };
+use iroha_model_base::topology::DataSpaceId;
 
 /// Structural failure for a public private-settlement pool activation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -100,7 +101,7 @@ isi! {
     /// The literal asset identifier and asset-binding salt remain in restricted
     /// governance storage. Consensus persists this redacted projection and the
     /// canonical origin commitment set only.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1")]
     pub struct ActivatePrivateSettlementPoolV1 {
         /// Wire version; must be [`ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1`].
@@ -278,7 +279,7 @@ isi! {
     /// Consensus preserves the pool frontier and replay sets. The exact prior
     /// governance digest prevents stale or concurrent replacements, while the
     /// restricted asset identifier and opening salt remain off the public wire.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1")]
     pub struct RotatePrivateSettlementPoolPolicyV1 {
         /// Wire version; must be [`ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1`].
@@ -434,7 +435,7 @@ isi! {
     /// compact authority catalog, and Prepare QCs. Execution reserves every
     /// referenced pool head, nullifier, output commitment, and one-time
     /// recipient until exact finalization, abort, or expiry reconciliation.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1")]
     pub struct RegisterAtomicPrivateSettlementPrepareV1 {
         /// Complete cryptographically certified all-Prepare barrier.
@@ -461,7 +462,7 @@ isi! {
     /// The complete public manifest binds the sponsor, network, expiry, and
     /// bundle identity. Execution derives the compact terminal receipt at the
     /// current global height; no restricted leg material enters this carrier.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1")]
     pub struct AbortAtomicPrivateSettlementV1 {
         /// Exact immutable public manifest for the aborted bundle.
@@ -494,7 +495,7 @@ isi! {
     /// of a transaction signed by the manifest sponsor with the identical fee
     /// intent. Core then validates every participant certificate and applies all
     /// opaque state deltas in one ledger state transaction.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1")]
     pub struct FinalizeAtomicPrivateSettlementV1 {
         /// Complete compact certified bundle for every canonical participant leg.
@@ -502,7 +503,20 @@ isi! {
     }
 }
 
-#[cfg(all(test, feature = "json"))]
+impl crate::seal::Instruction for FinalizeAtomicPrivateSettlementV1 {}
+
+impl FinalizeAtomicPrivateSettlementV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.private_settlement.finalize_atomic_bundle.v1";
+
+    /// Construct a global finalization carrier.
+    #[must_use]
+    pub const fn new(commit_bundle: PrivateSettlementCommitBundleV1) -> Self {
+        Self { commit_bundle }
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod generated_identity_values;
 #[cfg(test)]
 mod tests {
@@ -513,7 +527,7 @@ mod tests {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             route: PrivateSettlementRouteV1 {
                 dataspace_id: DataSpaceId::new(7),
-                lane_id: crate::nexus::LaneId::new(9),
+                lane_id: iroha_model_base::topology::LaneId::new(9),
                 lane_incarnation: iroha_crypto::Hash::new([0x11]),
             },
             pool_id: PrivacyPoolIdV1::new([0x22; 32]),
@@ -653,18 +667,5 @@ mod tests {
             registry.wire_id(core::any::type_name::<AbortAtomicPrivateSettlementV1>()),
             Some(AbortAtomicPrivateSettlementV1::WIRE_ID)
         );
-    }
-}
-
-impl crate::seal::Instruction for FinalizeAtomicPrivateSettlementV1 {}
-
-impl FinalizeAtomicPrivateSettlementV1 {
-    /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str = "iroha.private_settlement.finalize_atomic_bundle.v1";
-
-    /// Construct a global finalization carrier.
-    #[must_use]
-    pub const fn new(commit_bundle: PrivateSettlementCommitBundleV1) -> Self {
-        Self { commit_bundle }
     }
 }

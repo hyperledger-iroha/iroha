@@ -75,9 +75,6 @@ if [[ ! -d "${KOTLIN_MAIN_CLASSES}" ]]; then
   exit 1
 fi
 javac -cp "${KOTLIN_MAIN_CLASSES}" -d "${JAVA_OUT}" \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyEngineIdV1.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyProofSystemIdV1.java \
-  java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyProtocolIdV1.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionKind.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/InstructionTemplate.java \

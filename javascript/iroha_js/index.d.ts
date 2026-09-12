@@ -309,6 +309,9 @@ export class AccountAddress {
   /** Return a fresh controller snapshot; mutable key-byte copies never alias the account. */
   controllerInfo(): AccountAddressControllerInfo;
   canonicalBytes(): Uint8Array;
+  controllerInfo():
+    | { tag: 0 | 2; curve: number; publicKey: Uint8Array }
+    | { tag: 1; version: number; threshold: number; members: Array<{ curve: number; publicKey: Uint8Array; weight: number }> };
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
   toString(): string;
@@ -5466,7 +5469,8 @@ export type ParliamentPublicTransitionTagV1 =
   | "RecordInvitationResponse"
   | "RegisterBallotParticipant"
   | "RecordBallotDropout"
-  | "FailPublicFindingNoResult";
+  | "FailPublicFindingNoResult"
+  | "RegisterInitialSortition";
 
 export interface ParliamentTransitionLayoutV1 {
   readonly noritoIndex: number;
@@ -5652,8 +5656,12 @@ export type ParliamentProposalV1 =
 
 export type ParliamentLifecycleTransitionV1 =
   | { transition: "CompleteQualification" }
+  | { transition: "RegisterInitialSortition" }
   | {
-      transition: Exclude<ParliamentPublicTransitionTagV1, "CompleteQualification">;
+      transition: Exclude<
+        ParliamentPublicTransitionTagV1,
+        "CompleteQualification" | "RegisterInitialSortition"
+      >;
       payload: Record<string, unknown>;
     };
 
@@ -12109,7 +12117,7 @@ export declare class ToriiClient {
   ): Promise<SetContractAliasResponse>;
   prepareContractCall(
     request: ContractCallRequest,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; canonicalAuth?: CanonicalRequestAuth },
   ): Promise<ContractCallResponse>;
   simulateContractCall(
     request: ContractCallSimulateRequest,

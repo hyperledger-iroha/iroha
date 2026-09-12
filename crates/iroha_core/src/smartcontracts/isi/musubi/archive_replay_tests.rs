@@ -631,7 +631,7 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
         world,
         kura,
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("archive-replay-test"),
+        iroha_model_base::chain::ChainId::from("archive-replay-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
     {
@@ -731,7 +731,7 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
 }
 fn package(name: &str) -> MusubiPackageIdV1 {
     MusubiPackageIdV1::new(
-        iroha_data_model::nexus::DataSpaceId::new(7),
+        iroha_model_base::topology::DataSpaceId::new(7),
         MusubiPackageScopeV1::DataspaceRoot,
         name.parse().expect("package name"),
     )
@@ -1040,7 +1040,7 @@ fn exact_release_query_fixture(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("exact-release-query-test"),
+        iroha_model_base::chain::ChainId::from("exact-release-query-test"),
         iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
     {
@@ -1271,7 +1271,7 @@ fn archive_location_replay_fixture(
         1,
         None,
         None,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     pin_record.approve(1, None);
     world.pin_manifests.insert(pin, pin_record);
@@ -1520,7 +1520,7 @@ fn archive_location_replay_state(world: World) -> State {
         world,
         kura,
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("retention-test"),
+        iroha_model_base::chain::ChainId::from("retention-test"),
         iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
     {
@@ -2498,7 +2498,7 @@ fn archive_retention_uses_cached_finalized_time_for_the_exact_snapshot() {
         World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
-        iroha_data_model::ChainId::from("retention-finalized-time-test"),
+        iroha_model_base::chain::ChainId::from("retention-finalized-time-test"),
         iroha_data_model::NetworkId::from_genesis_hash(header_hash),
     );
     {
@@ -2985,6 +2985,35 @@ fn pagination_preserves_exact_cursor_failure_reasons() {
 include!("archive_replay_hash_tests.rs");
 #[test]
 fn owned_borrowed_musubi_page_sources_preserve_exact_wire_bytes() {
+    fn assert_owned_projection<S, T>(source: &S, owned: &T)
+    where
+        S: norito::SerializePayload,
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + std::fmt::Debug,
+    {
+        assert_eq!(source.encode(), owned.encode());
+        let bytes = crate::smartcontracts::isi::query::encode_singular_query_source_for_test::<_, T>(
+            source,
+        );
+        assert_eq!(
+            bytes,
+            norito::encode_canonical(owned).expect("owned page frame")
+        );
+        let decoded: T = norito::decode_canonical(&bytes).expect("decode projected page frame");
+        assert_eq!(&decoded, owned);
+        let mut substituted = bytes.clone();
+        substituted[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<T>(&substituted),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+    }
     let snapshot = snapshot(19);
     let archive = retention_archive(0x41);
     let network_id = archive.staging_receipt.payload.binding.network_id;
@@ -2996,23 +3025,21 @@ fn owned_borrowed_musubi_page_sources_preserve_exact_wire_bytes() {
             cursor: None,
         },
     };
-    assert_eq!(
-        MusubiResolverIndexPageSource {
+    assert_owned_projection(
+        &MusubiResolverIndexPageSource {
             query: &resolver_query,
             network_id,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode(),
-        MusubiResolverIndexPageV1 {
-            query: resolver_query,
+        },
+        &MusubiResolverIndexPageV1 {
+            query: resolver_query.clone(),
             network_id,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode()
+        },
     );
     let package_query = MusubiPackagePageQueryV1 {
         package: package("bounded-package-page"),
@@ -3021,55 +3048,49 @@ fn owned_borrowed_musubi_page_sources_preserve_exact_wire_bytes() {
             cursor: None,
         },
     };
-    assert_eq!(
-        MusubiVersionPageSource {
+    assert_owned_projection(
+        &MusubiVersionPageSource {
             query: &package_query,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode(),
-        MusubiVersionPageV1 {
+        },
+        &MusubiVersionPageV1 {
             query: package_query.clone(),
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode()
+        },
     );
-    assert_eq!(
-        MusubiMaintainerPageSource {
+    assert_owned_projection(
+        &MusubiMaintainerPageSource {
             query: &package_query,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode(),
-        MusubiMaintainerPageV1 {
-            query: package_query,
+        },
+        &MusubiMaintainerPageV1 {
+            query: package_query.clone(),
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode()
+        },
     );
-    assert_eq!(
-        MusubiArchiveLocationPageSource {
+    assert_owned_projection(
+        &MusubiArchiveLocationPageSource {
             network_id,
             archive: &archive,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode(),
-        MusubiArchiveLocationPageV1 {
+        },
+        &MusubiArchiveLocationPageV1 {
             network_id,
             archive: archive.clone(),
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode()
+        },
     );
     let alias_query = MusubiAliasQueryV1 {
         alias: "bounded-page".parse().expect("alias"),
@@ -3078,21 +3099,19 @@ fn owned_borrowed_musubi_page_sources_preserve_exact_wire_bytes() {
             cursor: None,
         },
     };
-    assert_eq!(
-        MusubiAliasHistoryPageSource {
+    assert_owned_projection(
+        &MusubiAliasHistoryPageSource {
             query: &alias_query,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode(),
-        MusubiAliasHistoryPageV1 {
-            query: alias_query,
+        },
+        &MusubiAliasHistoryPageV1 {
+            query: alias_query.clone(),
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode()
+        },
     );
     let ordered_query = MusubiOrderedPrefixQueryV1 {
         prefix: MusubiOrderedPrefixV1::new("sora/bounded-").expect("ordered prefix"),
@@ -3107,24 +3126,22 @@ fn owned_borrowed_musubi_page_sources_preserve_exact_wire_bytes() {
         scope: MusubiPackageScopeV1::DataspaceRoot,
         generation: 1,
     };
-    assert_eq!(
-        MusubiOrderedPackagePageSource {
+    assert_owned_projection(
+        &MusubiOrderedPackagePageSource {
             query: &ordered_query,
             network_id,
             namespace_binding: &namespace_binding,
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode(),
-        MusubiOrderedPackagePageV1 {
-            query: ordered_query,
+        },
+        &MusubiOrderedPackagePageV1 {
+            query: ordered_query.clone(),
             network_id,
-            namespace_binding,
+            namespace_binding: namespace_binding.clone(),
             items: Vec::new(),
             next_cursor: None,
             snapshot,
-        }
-        .encode()
+        },
     );
 }

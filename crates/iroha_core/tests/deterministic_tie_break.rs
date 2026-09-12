@@ -1,13 +1,14 @@
 //! Deterministic scheduler tie-break test.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
-//! Build several independent transactions (no conflicts) and assert that the execution order is a
-//! stable sort by (`call_hash`, index) regardless of the input order.
+//! Independent account metadata events expose scheduler execution order; block entrypoint hashes
+//! and results retain payload order so their indices identify the serialized transactions.
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::LaneManifestRegistry,
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
 use std::{borrow::Cow, sync::Arc};
 fn build_world() -> (
     iroha_core::state::State,
@@ -15,45 +16,16 @@ fn build_world() -> (
     Vec<(AccountId, iroha_crypto::KeyPair)>,
 ) {
     let chain_id: ChainId = "chain".parse().unwrap();
-    // Create 4 accounts in one domain and seed their assets
+    // Each universal account owns a separate metadata key, so the transactions do not conflict.
     let (a1, k1) = iroha_test_samples::gen_account_in("wonderland");
     let (a2, k2) = iroha_test_samples::gen_account_in("wonderland");
     let (a3, k3) = iroha_test_samples::gen_account_in("wonderland");
     let (a4, k4) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain: Domain = Domain::new(domain_id.clone()).build(&a1);
-    let ad: AssetDefinition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "coin".parse().unwrap(),
-        ),
-        "coin".to_owned(),
-        NumericSpec::default(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
-    )
-    .build(&a1);
     let acc1 = Account::new(a1.clone()).build(&a1);
     let acc2 = Account::new(a2.clone()).build(&a1);
     let acc3 = Account::new(a3.clone()).build(&a1);
     let acc4 = Account::new(a4.clone()).build(&a1);
-    // Initialize zero balances for determinism
-    let a1_coin = AssetId::of(ad.id().clone(), a1.clone());
-    let a2_coin = AssetId::of(ad.id().clone(), a2.clone());
-    let a3_coin = AssetId::of(ad.id().clone(), a3.clone());
-    let a4_coin = AssetId::of(ad.id().clone(), a4.clone());
-    let z = Quantity::zero();
-    let a0 = Asset::new(a1_coin, z.clone());
-    let b0 = Asset::new(a2_coin, z.clone());
-    let c0 = Asset::new(a3_coin, z.clone());
-    let d0 = Asset::new(a4_coin, z);
-    let world = iroha_core::state::World::with_assets(
-        [domain],
-        [acc1, acc2, acc3, acc4],
-        [ad],
-        [a0, b0, c0, d0],
-        [],
-    );
+    let world = iroha_core::state::World::with([], [acc1, acc2, acc3, acc4], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let state =
@@ -69,7 +41,14 @@ fn build_world() -> (
         vec![(a1, k1), (a2, k2), (a3, k3), (a4, k4)],
     )
 }
-fn run_block(state: &mut iroha_core::state::State, txs: Vec<SignedTransaction>) -> ValidBlock {
+fn run_block(
+    state: &iroha_core::state::State,
+    txs: Vec<SignedTransaction>,
+) -> (ValidBlock, Vec<AccountId>) {
+    let payload_hashes: Vec<_> = txs
+        .iter()
+        .map(SignedTransaction::hash_as_entrypoint)
+        .collect();
     // Build block
     let acc: Vec<_> = txs
         .into_iter()
@@ -83,34 +62,64 @@ fn run_block(state: &mut iroha_core::state::State, txs: Vec<SignedTransaction>) 
     let vb = new_block
         .validate_and_record_transactions(&mut sb)
         .unpack(|_| {});
-    let _ = sb.commit();
-    vb
+    let execution_order = sb
+        .world
+        .take_external_events()
+        .into_iter()
+        .filter_map(|event| {
+            let EventBox::Data(event) = event else {
+                return None;
+            };
+            match event.as_ref() {
+                DataEvent::Account(AccountEvent::MetadataInserted(change)) => {
+                    Some(change.target().clone())
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    assert_eq!(
+        vb.as_ref().entrypoint_hashes().collect::<Vec<_>>(),
+        payload_hashes,
+        "entrypoint hashes must preserve payload order independently of execution order"
+    );
+    // Drop the overlay so every permutation starts from identical account state.
+    (vb, execution_order)
 }
-#[test]
-fn scheduler_tie_break_stable_by_call_hash_then_index() {
-    let (mut state, network_id, accs) = build_world();
-    // Build 4 independent log transactions
-    let txs: Vec<SignedTransaction> = accs
-        .iter()
+fn independent_transactions(
+    network_id: NetworkId,
+    accs: &[(AccountId, iroha_crypto::KeyPair)],
+) -> Vec<SignedTransaction> {
+    accs.iter()
         .enumerate()
         .map(|(i, (aid, kp))| {
-            let msg = format!("log-{i}");
             TransactionBuilder::new(
                 network_id,
                 aid.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions([Log::new(Level::INFO, msg)])
+            .with_instructions([SetKeyValue::account(
+                aid.clone(),
+                "scheduler_marker".parse().unwrap(),
+                iroha_primitives::json::Json::new(format!("transaction-{i}")),
+            )])
             .sign(kp.private_key())
         })
-        .collect();
-    // Canonical execution order captured by running the identity ordering once.
-    let expected_block = run_block(&mut state, txs.clone());
-    let expected: Vec<_> = expected_block
-        .as_ref()
-        .entrypoint_hashes()
-        .take(4)
-        .collect();
+        .collect()
+}
+fn expected_execution_order(txs: &[SignedTransaction]) -> Vec<AccountId> {
+    let mut order: Vec<_> = txs.iter().enumerate().collect();
+    order.sort_by_key(|(index, tx)| (tx.hash_as_entrypoint(), *index));
+    order
+        .into_iter()
+        .map(|(_, tx)| tx.authority().clone())
+        .collect()
+}
+#[test]
+fn scheduler_tie_break_stable_by_call_hash_then_index() {
+    let (state, network_id, accs) = build_world();
+    let txs = independent_transactions(network_id, &accs);
+    let expected = expected_execution_order(&txs);
     // Define a few deterministic permutations
     let perms: Vec<Vec<usize>> = vec![
         vec![0, 1, 2, 3], // identity
@@ -121,13 +130,7 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
     ];
     for p in perms {
         let permuted_txs: Vec<_> = p.iter().map(|&i| txs[i].clone()).collect();
-        let vb = run_block(&mut state, permuted_txs);
-        // Extract execution order hashes (entrypoints)
-        let got: Vec<_> = vb
-            .as_ref()
-            .entrypoint_hashes()
-            .take(4) // external txs only
-            .collect();
+        let (vb, got) = run_block(&state, permuted_txs);
         assert_eq!(got, expected, "execution order must be stable");
         // All must be approved
         assert!(vb.as_ref().results().take(4).all(|r| r.as_ref().is_ok()));
@@ -136,29 +139,9 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
 #[test]
 fn scheduler_tie_break_randomized_input_orders() {
     // Same setup as the basic test, but exercise many randomized permutations
-    let (mut state, network_id, accs) = build_world();
-    // Build 4 independent log transactions
-    let txs: Vec<SignedTransaction> = accs
-        .iter()
-        .enumerate()
-        .map(|(i, (aid, kp))| {
-            let msg = format!("log-{i}");
-            TransactionBuilder::new(
-                network_id,
-                aid.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, msg)])
-            .sign(kp.private_key())
-        })
-        .collect();
-    // Canonical execution order from the initial run (identity permutation).
-    let expected_block = run_block(&mut state, txs.clone());
-    let expected: Vec<_> = expected_block
-        .as_ref()
-        .entrypoint_hashes()
-        .take(4)
-        .collect();
+    let (state, network_id, accs) = build_world();
+    let txs = independent_transactions(network_id, &accs);
+    let expected = expected_execution_order(&txs);
     // Deterministic LCG for shuffling
     #[derive(Clone)]
     struct Lcg(u64);
@@ -186,12 +169,50 @@ fn scheduler_tie_break_randomized_input_orders() {
     let mut rng = Lcg::new(0x00C0_FFEE);
     for _ in 0..64 {
         let permuted = shuffle(&mut rng, &txs);
-        let vb = run_block(&mut state, permuted);
-        let got: Vec<_> = vb.as_ref().entrypoint_hashes().take(4).collect();
+        let (vb, got) = run_block(&state, permuted);
         assert_eq!(
             got, expected,
             "execution order must be stable across permutations"
         );
         assert!(vb.as_ref().results().take(4).all(|r| r.as_ref().is_ok()));
+    }
+}
+
+#[test]
+fn scheduler_results_preserve_payload_indices_after_reordering() {
+    let (state, network_id, accs) = build_world();
+    let mut txs = independent_transactions(network_id, &accs);
+    let (authority, keypair) = &accs[0];
+    txs[0] = TransactionBuilder::new(
+        network_id,
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([RemoveKeyValue::account(
+        authority.clone(),
+        "missing".parse().unwrap(),
+    )])
+    .sign(keypair.private_key());
+    let rejected_hash = txs[0].hash_as_entrypoint();
+    let expected: Vec<_> = expected_execution_order(&txs)
+        .into_iter()
+        .filter(|account| account != authority)
+        .collect();
+
+    // Descending payload hashes guarantee a different order from the scheduler.
+    txs.sort_by_key(|tx| std::cmp::Reverse(tx.hash_as_entrypoint()));
+    for _ in 0..txs.len() {
+        let (block, execution_order) = run_block(&state, txs.clone());
+        assert_eq!(execution_order, expected);
+        let results: Vec<_> = block.as_ref().results().collect();
+        assert_eq!(results.len(), txs.len());
+        for (tx, result) in txs.iter().zip(results) {
+            assert_eq!(
+                result.as_ref().is_err(),
+                tx.hash_as_entrypoint() == rejected_hash,
+                "a transaction result must remain attached to its payload index"
+            );
+        }
+        txs.rotate_left(1);
     }
 }

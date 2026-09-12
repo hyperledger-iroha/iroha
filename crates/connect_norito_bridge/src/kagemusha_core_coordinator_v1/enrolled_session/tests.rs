@@ -1,6 +1,6 @@
 //! Adapter lifecycle tests using real account/device signatures and private structural owners.
 //! These fixtures do not qualify hardware, authenticate an issuer release or manufacture a Core
-//! machine. The production sealed-owner implementation uses the actual Core selection instead.
+//! machine. A qualified backend must supply its original Core owner and authenticated selection.
 
 use super::*;
 use crate::kagemusha_core_coordinator_v1::{

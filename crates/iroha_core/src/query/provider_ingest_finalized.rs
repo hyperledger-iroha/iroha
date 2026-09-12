@@ -257,6 +257,10 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
 }
 include!("provider_ingest_finalized/archive_key.rs");
 /// One exact provider-scoped replication order at a finalized anchor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchivedOrderV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchivedOrderV1 {
     /// Chain-authoritative pin manifest used by the ingest operation.
@@ -272,7 +276,10 @@ impl ProviderIngestFinalizedArchivedOrderV1 {
     }
 }
 /// Complete provider-scoped state at one exact finalized anchor.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedProviderProjectionV1"
+)]
 pub struct ProviderIngestFinalizedProviderProjectionV1 {
     /// Governed provider identity.
     pub provider_id: ProviderId,
@@ -284,6 +291,10 @@ pub struct ProviderIngestFinalizedProviderProjectionV1 {
     pub orders: Vec<ProviderIngestFinalizedArchivedOrderV1>,
 }
 /// Complete provider-indexed projection at one exact finalized anchor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedProjectionV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedProjectionV1 {
     /// Exact finalized identity of this projection.
@@ -430,6 +441,10 @@ impl ProviderIngestFinalizedProjectionV1 {
     }
 }
 /// One page row carrying every completion execution compare-and-set binding.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveAssignmentV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     /// Provider whose index was queried.
@@ -456,6 +471,8 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
 /// Context-bound exclusive cursor for provider-indexed archive pages.
 #[rustfmt::skip]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCursorV1")]
 pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Exact finalized key whose immutable snapshot is being paged.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -467,7 +484,10 @@ pub struct ProviderIngestFinalizedArchiveCursorV1 {
     pub after_order_id: ReplicationOrderId,
 }
 /// Bounded stable page from one exact provider-indexed committed projection.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchivePageV1"
+)]
 pub struct ProviderIngestFinalizedArchivePageV1 {
     /// Exact finalized key shared by every returned row.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -492,6 +512,10 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
 ///
 /// The finality-artifact hash is supplied by the commit-owned caller and is
 /// reauthenticated against Kura before any prefix is removed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionFenceV1"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
@@ -541,6 +565,10 @@ impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
     }
 }
 /// Public qualification of a deployment-owned sealed retention authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
     version: u16,
@@ -618,7 +646,10 @@ impl ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
         self.qualification
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCompactionProposalMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveCompactionProposalMaterialV1 {
     version: u16,
     fence: ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -626,6 +657,10 @@ struct ProviderIngestFinalizedArchiveCompactionProposalMaterialV1 {
     checkpoint_canonical_digest: [u8; 32],
 }
 /// Exact canonical checkpoint and fence submitted for external approval.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCompactionProposalV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveCompactionProposalV1 {
     material: ProviderIngestFinalizedArchiveCompactionProposalMaterialV1,
@@ -690,7 +725,10 @@ impl ProviderIngestFinalizedArchiveCompactionProposalV1 {
         self.proposal_digest
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1 {
     namespace: [u8; 32],
     version: u16,
@@ -701,7 +739,10 @@ struct ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1 {
     predecessor_checkpoint_digest: Option<[u8; 32]>,
 }
 /// Canonical monotonic CAS record approving one exact compaction proposal.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionApprovalRecordV1"
+)]
 pub struct ProviderIngestFinalizedArchiveRetentionApprovalRecordV1 {
     material: ProviderIngestFinalizedArchiveRetentionApprovalMaterialV1,
     revision: [u8; 32],
@@ -998,17 +1039,26 @@ impl ProviderIngestFinalizedArchiveReconcileOutcomeV1 {
         self.activation_floor_created
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::provider_ingest_finalized::ProviderProjectionDeltaV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderProjectionDeltaV1 {
     provider_id: ProviderId,
     next: Option<ProviderIngestFinalizedProviderProjectionV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchivePredecessorV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchivePredecessorV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     record_digest: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRecordMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveRecordMaterialV1 {
     version: u16,
     key: ProviderIngestFinalizedArchiveKeyV1,
@@ -1016,7 +1066,10 @@ struct ProviderIngestFinalizedArchiveRecordMaterialV1 {
     deltas: Vec<ProviderProjectionDeltaV1>,
     provider_state_root: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRecordV1"
+)]
 struct ProviderIngestFinalizedArchiveRecordV1 {
     material: ProviderIngestFinalizedArchiveRecordMaterialV1,
     record_digest: [u8; 32],
@@ -1176,11 +1229,19 @@ impl ProviderIngestFinalizedArchiveCheckpointV1 {
         Ok(())
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderPolicyDigestHistoryCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyDigestHistoryCheckpointV1 {
     policy_id: [u8; 32],
     policy_digests: Vec<[u8; 32]>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderPolicyHistoryCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyHistoryCheckpointV1 {
     provider_id: ProviderId,
@@ -1188,13 +1249,19 @@ struct ProviderPolicyHistoryCheckpointV1 {
     active: bool,
     seen_policy_digests: Vec<ProviderPolicyDigestHistoryCheckpointV1>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedPrefixLinkV1"
+)]
 struct ProviderIngestFinalizedPrefixLinkV1 {
     previous_cumulative_digest: Option<[u8; 32]>,
     key: ProviderIngestFinalizedArchiveKeyV1,
     record_digest: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCheckpointMaterialV1"
+)]
 struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     version: u16,
     original_activation_floor: ProviderIngestFinalizedArchiveKeyV1,
@@ -1212,7 +1279,10 @@ struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     seen_order_ids: Vec<ReplicationOrderId>,
     kura_finality_artifact_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCheckpointV1"
+)]
 struct ProviderIngestFinalizedArchiveCheckpointV1 {
     material: ProviderIngestFinalizedArchiveCheckpointMaterialV1,
     checkpoint_digest: [u8; 32],
@@ -6978,16 +7048,17 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
 }
 #[cfg(test)]
 mod tests {
+    mod frame_identity_tests;
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
-        metadata::Metadata,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinPolicy,
             ProviderIngestCompletionAuthorityV1, ReplicationOrderCompletionRecord,
         },
     };
+    use iroha_model_base::metadata::Metadata;
     use sorafs_manifest::capacity::{
         CapacityMetadataEntry, REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1,
         ReplicationOrderSlaV1,
@@ -7068,7 +7139,7 @@ mod tests {
             [order_seed.wrapping_add(0x60); 32],
             [order_seed.wrapping_add(0x70); 32],
             4_096,
-            PinPolicy::default(),
+            archived_pin_policy(),
             account(1),
             1,
             None,
@@ -7119,6 +7190,25 @@ mod tests {
             },
             musubi_archive: None,
         }
+    }
+    fn set_order_window(
+        archived: &mut ProviderIngestFinalizedArchivedOrderV1,
+        issued_epoch: u64,
+        deadline_epoch: u64,
+        ingest_deadline_secs: u32,
+    ) {
+        let record = &mut archived.replication_order;
+        let mut canonical = validated_replication_order_from_record(&record.order_id, record)
+            .expect("valid source order before changing the fixture window");
+        canonical.issued_at = issued_epoch;
+        canonical.deadline_at = deadline_epoch;
+        canonical.sla.ingest_deadline_secs = ingest_deadline_secs;
+        canonical
+            .validate()
+            .expect("valid replacement order window");
+        record.canonical_order = norito::to_bytes(&canonical).expect("canonical order bytes");
+        record.issued_epoch = issued_epoch;
+        record.deadline_epoch = deadline_epoch;
     }
     fn projection(height: u64) -> ProviderIngestFinalizedProjectionV1 {
         let key = key(height);
@@ -7392,452 +7482,7 @@ mod tests {
     }
     #[cfg(unix)]
     include!("provider_ingest_finalized/retention_inventory_tests.rs");
-    #[cfg(unix)]
-    #[test]
-    fn retention_restart_rejects_extra_crash_candidate_without_cleanup() {
-        let directory = physical_tempdir().expect("archive tempdir");
-        let root = archive_root(&directory);
-        let archive =
-            ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).expect("open archive");
-        let first = projection(7);
-        let second = advance_projection(&first, 8);
-        let third = advance_projection(&second, 9);
-        let fourth = advance_projection(&third, 10);
-        archive.insert(first).expect("insert first");
-        archive.insert(second.clone()).expect("insert second");
-        archive.insert(third.clone()).expect("insert third");
-        let (_prior_fence, _prior_prepared, prior_proposal) =
-            prepared_compaction_for_test(&archive, second.key.clone());
-        let authority = TestRetentionAuthority::new();
-        let binding = authority.binding();
-        let prior_approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            binding.qualification(),
-            prior_proposal,
-            None,
-            None,
-        )
-        .expect("construct predecessor approval");
-        let prior_outcome = compact_for_test(&archive, second.key);
-        archive.insert(fourth.clone()).expect("insert fourth");
-        let (_approved_fence, approved_prepared, approved_proposal) =
-            prepared_compaction_for_test(&archive, third.key.clone());
-        let (_extra_fence, extra_prepared, _extra_proposal) =
-            prepared_compaction_for_test(&archive, fourth.key);
-        let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            2,
-            binding.qualification(),
-            approved_proposal,
-            Some(prior_approval.revision()),
-            Some(prior_outcome.checkpoint_digest()),
-        )
-        .expect("construct successor approval");
-        *authority.latest.lock().expect("lock latest approval") = Some(approval);
-        publish_prepared_checkpoint_for_test(&archive, &approved_prepared);
-        publish_prepared_checkpoint_for_test(&archive, &extra_prepared);
-        let records_before = archive_namespace_snapshot(&archive.records);
-        let checkpoints_before = archive_namespace_snapshot(&archive.checkpoints);
-        assert_eq!(
-            checkpoints_before.len(),
-            3,
-            "predecessor, approved, and extra checkpoints model the interrupted namespace"
-        );
-        let network_id = third.key.network_id;
-        drop(archive);
-        let kura = Kura::blank_kura_for_testing();
-        assert!(matches!(
-            ProviderIngestFinalizedArchiveV1::try_open_with_retention_authority(
-                &root,
-                bounds(),
-                &network_id,
-                kura.as_ref(),
-                &binding,
-                &authority,
-            ),
-            Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint)
-        ));
-        assert_eq!(
-            archive_namespace_snapshot(&root.join(RECORDS_DIRECTORY)),
-            records_before,
-            "rejected restart must not continue prefix cleanup"
-        );
-        assert_eq!(
-            archive_namespace_snapshot(&root.join(CHECKPOINTS_DIRECTORY)),
-            checkpoints_before,
-            "rejected restart must preserve every checkpoint for operator recovery"
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn retention_prepare_ambiguous_cas_and_exact_readback_gate_publication() {
-        let directory = physical_tempdir().expect("archive tempdir");
-        let archive =
-            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
-                .expect("open archive");
-        let first = projection(7);
-        let second = advance_projection(&first, 8);
-        let third = advance_projection(&second, 9);
-        archive.insert(first).expect("insert first");
-        archive.insert(second.clone()).expect("insert second");
-        archive.insert(third).expect("insert suffix");
-        let (_fence, prepared, proposal) =
-            prepared_compaction_for_test(&archive, second.key.clone());
-        assert_eq!(
-            fs::read_dir(archive_root(&directory).join(CHECKPOINTS_DIRECTORY))
-                .expect("read checkpoint namespace")
-                .count(),
-            0,
-            "preparation must not publish a checkpoint"
-        );
-        let authority = TestRetentionAuthority::new();
-        authority.set_behavior(TestRetentionCasBehavior::ApplyAmbiguous);
-        let binding = authority.binding();
-        let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            binding.qualification(),
-            proposal,
-            None,
-            None,
-        )
-        .expect("construct approval");
-        compare_and_read_back_retention_approval(
-            &binding,
-            &authority,
-            &second.key.network_id,
-            None,
-            &approval,
-        )
-        .expect("ambiguous CAS is resolved only by exact authoritative readback");
-        assert_eq!(
-            fs::read_dir(archive_root(&directory).join(CHECKPOINTS_DIRECTORY))
-                .expect("read checkpoint namespace")
-                .count(),
-            0,
-            "authority approval alone must not mutate local archive storage"
-        );
-        require_exact_retention_readback(&binding, &authority, &second.key.network_id, &approval)
-            .expect("approval remains authoritative");
-        let mut index = archive.write_index().expect("lock approved compaction");
-        let outcome = archive
-            .publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})
-            .expect("publish only after exact approval");
-        assert_eq!(outcome.retention_floor(), &second.key);
-        drop(index);
-        assert_eq!(
-            archive
-                .retention_floor(&second.key.network_id)
-                .expect("retention floor"),
-            Some(second.key)
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn unchanged_equivocating_and_rollback_authorities_never_publish() {
-        let directory = physical_tempdir().expect("archive tempdir");
-        let archive =
-            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
-                .expect("open archive");
-        let first = projection(7);
-        let second = advance_projection(&first, 8);
-        archive.insert(first).expect("insert first");
-        archive.insert(second.clone()).expect("insert second");
-        let (fence, _prepared, proposal) =
-            prepared_compaction_for_test(&archive, second.key.clone());
-        let authority = TestRetentionAuthority::new();
-        let binding = authority.binding();
-        let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            binding.qualification(),
-            proposal.clone(),
-            None,
-            None,
-        )
-        .expect("construct approval");
-        authority.set_behavior(TestRetentionCasBehavior::LeaveUnchanged);
-        assert!(matches!(
-            compare_and_read_back_retention_approval(
-                &binding,
-                &authority,
-                &second.key.network_id,
-                None,
-                &approval,
-            ),
-            Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityCasUnchanged)
-        ));
-        let competing_proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
-            fence.clone(),
-            [0xE1; 32],
-            [0xE2; 32],
-        )
-        .expect("construct competing proposal");
-        let competing = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            binding.qualification(),
-            competing_proposal,
-            None,
-            None,
-        )
-        .expect("construct competing approval");
-        authority.set_competing(competing);
-        authority.set_behavior(TestRetentionCasBehavior::Equivocate);
-        assert!(matches!(
-            compare_and_read_back_retention_approval(
-                &binding,
-                &authority,
-                &second.key.network_id,
-                None,
-                &approval,
-            ),
-            Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation)
-        ));
-        assert!(matches!(
-            validate_retention_authority_predecessor(Some(&approval), None, &fence),
-            Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRollback)
-        ));
-        assert_eq!(
-            fs::read_dir(archive_root(&directory).join(CHECKPOINTS_DIRECTORY))
-                .expect("read checkpoint namespace")
-                .count(),
-            0,
-            "failed authority decisions must not publish local checkpoint bytes"
-        );
-    }
-    #[test]
-    fn retention_approval_canonical_decode_is_strict_and_bounded() {
-        let proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
-            retention_fence(key(7), 1),
-            [0xC1; 32],
-            [0xC2; 32],
-        )
-        .expect("construct proposal");
-        let authority = TestRetentionAuthority::new();
-        let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            authority.qualification,
-            proposal,
-            None,
-            None,
-        )
-        .expect("construct approval");
-        let bytes = approval.to_canonical_bytes().expect("encode approval");
-        assert_eq!(
-            ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(&bytes)
-                .expect("decode approval"),
-            approval
-        );
-        let mut trailing = bytes;
-        trailing.push(0);
-        assert!(
-            ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(
-                &trailing
-            )
-            .is_err()
-        );
-        assert!(
-            ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::from_canonical_bytes(
-                &vec![0; RETENTION_APPROVAL_MAX_CANONICAL_BYTES_V1 + 1]
-            )
-            .is_err()
-        );
-    }
-    #[test]
-    fn retention_approval_rejects_same_label_foreign_genesis_network() {
-        let authority = TestRetentionAuthority::new();
-        let binding = authority.binding();
-        let proposal = ProviderIngestFinalizedArchiveCompactionProposalV1::try_new(
-            retention_fence(key(7), 1),
-            [0xC3; 32],
-            [0xC4; 32],
-        )
-        .expect("construct exact-network proposal");
-        let approval = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-            1,
-            binding.qualification(),
-            proposal,
-            None,
-            None,
-        )
-        .expect("construct exact-network approval");
-        // Both deployments may carry the same human-facing ChainName. Only the
-        // genesis-derived NetworkId enters this durable approval namespace.
-        assert!(
-            validate_retention_approval_record(&approval, &binding, &test_network_id(0x33),)
-                .is_err()
-        );
-    }
-    #[test]
-    fn retention_authority_binding_rejects_test_marked_substituted_and_stale_providers() {
-        assert!(matches!(
-            ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1::try_new(
-                "sealed://sorafs/provider-ingest/test".to_owned(),
-                1,
-                [1; 32],
-            ),
-            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionAuthorityBinding)
-        ));
-        let expected = TestRetentionAuthority::new();
-        let binding = expected.binding();
-        let mut substituted = TestRetentionAuthority::new();
-        substituted.handle =
-            "sealed://sorafs/provider-ingest/archive-retention-secondary".to_owned();
-        assert!(matches!(
-            assert_retention_authority_identity(&binding, &substituted),
-            Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthoritySubstitution)
-        ));
-        let mut stale = TestRetentionAuthority::new();
-        stale.qualification = ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1::new(
-            binding.qualification().revision() - 1,
-            binding.qualification().policy_digest(),
-        );
-        assert!(matches!(
-            assert_retention_authority_identity(&binding, &stale),
-            Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthoritySubstitution)
-        ));
-    }
-    #[test]
-    fn bounds_reject_zero_and_inconsistent_page_limits() {
-        assert!(matches!(
-            ProviderIngestFinalizedArchiveBoundsV1::try_new(0, 1, 1, 1, 1, 1, 1),
-            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidBounds { .. })
-        ));
-        assert!(matches!(
-            ProviderIngestFinalizedArchiveBoundsV1::try_new(1024, 1, 1024, 1, 1, 1, 2),
-            Err(ProviderIngestFinalizedArchiveErrorV1::InvalidBounds { .. })
-        ));
-    }
-    #[test]
-    fn exact_replay_pagination_and_provider_index_isolation_are_deterministic() {
-        let directory = physical_tempdir().expect("archive tempdir");
-        let root = archive_root(&directory);
-        let archive =
-            ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).expect("open archive");
-        let first = projection(7);
-        assert_eq!(
-            archive.insert(first.clone()).expect("insert first"),
-            ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
-        );
-        assert_eq!(
-            archive.insert(first.clone()).expect("exact replay"),
-            ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
-        );
-        assert_eq!(
-            archive
-                .activation_floor(&first.key.network_id)
-                .expect("activation floor"),
-            Some(first.key.clone())
-        );
-        assert_eq!(
-            archive
-                .resolve_exact_key(
-                    &first.key.network_id,
-                    first.key.height,
-                    first.key.block_hash
-                )
-                .expect("resolve height/hash cursor"),
-            first.key
-        );
-        let page_one = archive
-            .read_provider_page(&first.key, PROVIDER_A, None, 1)
-            .expect("first provider A page");
-        assert_eq!(page_one.rows.len(), 1);
-        assert!(
-            page_one
-                .rows
-                .iter()
-                .all(|row| row.provider_id == PROVIDER_A)
-        );
-        let expected_provider_a = first
-            .providers
-            .iter()
-            .find(|provider| provider.provider_id == PROVIDER_A)
-            .expect("provider A projection");
-        assert_eq!(
-            page_one.rows[0].expected_owner,
-            expected_provider_a.expected_owner
-        );
-        assert_eq!(
-            page_one.rows[0].expected_signer_policy,
-            expected_provider_a.expected_signer_policy
-        );
-        assert_eq!(
-            page_one.rows[0].expected_assignment_revision,
-            page_one.rows[0].replication_order.assignment_revision
-        );
-        assert_eq!(
-            page_one.rows[0].finalized_anchor,
-            first.key.finalized_anchor()
-        );
-        let cursor = page_one.next_cursor.clone().expect("second page cursor");
-        let page_two = archive
-            .read_provider_page(&first.key, PROVIDER_A, Some(&cursor), 1)
-            .expect("second provider A page");
-        assert_eq!(page_two.rows.len(), 1);
-        assert!(page_two.next_cursor.is_none());
-        assert_ne!(
-            page_one.rows[0].replication_order.order_id,
-            page_two.rows[0].replication_order.order_id
-        );
-        let provider_b = archive
-            .read_provider_page(&first.key, PROVIDER_B, None, 1)
-            .expect("provider B page");
-        assert_eq!(provider_b.rows.len(), 1);
-        assert_eq!(provider_b.rows[0].provider_id, PROVIDER_B);
-        assert_eq!(
-            provider_b.rows[0].replication_order.order_id,
-            page_one.rows[0].replication_order.order_id
-        );
-        let empty = archive
-            .read_provider_page(&first.key, PROVIDER_EMPTY, None, 1)
-            .expect("empty provider page");
-        assert!(empty.rows.is_empty());
-        assert!(empty.next_cursor.is_none());
-        let second_directory = physical_tempdir().expect("second archive tempdir");
-        let second_root = archive_root(&second_directory);
-        let second_archive = ProviderIngestFinalizedArchiveV1::try_open(&second_root, bounds())
-            .expect("open second archive");
-        second_archive
-            .insert(first.clone())
-            .expect("insert same projection");
-        let bytes_a = fs::read(archive.record_path(&first.key).expect("first path"))
-            .expect("read first bytes");
-        let bytes_b = fs::read(second_archive.record_path(&first.key).expect("second path"))
-            .expect("read second bytes");
-        assert_eq!(bytes_a, bytes_b);
-    }
-    #[test]
-    fn unchanged_successor_uses_empty_delta_but_serves_its_exact_anchor() {
-        let directory = physical_tempdir().expect("archive tempdir");
-        let archive =
-            ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds())
-                .expect("open archive");
-        let first = projection(7);
-        let mut second = advance_projection(&first, 8);
-        second.key.finalized_at_unix_ms = 42_999;
-        archive.insert(first).expect("insert activation floor");
-        archive
-            .insert(second.clone())
-            .expect("insert unchanged exact successor");
-        let record = load_record_at(
-            &archive.record_path(&second.key).expect("successor path"),
-            bounds(),
-            Some(&second.key),
-        )
-        .expect("load successor record");
-        assert!(
-            record.material.deltas.is_empty(),
-            "unchanged provider state must not be copied into every anchor"
-        );
-        let page = archive
-            .read_provider_page(&second.key, PROVIDER_A, None, 1)
-            .expect("exact successor page");
-        assert_eq!(page.rows[0].finalized_anchor, second.key.finalized_anchor());
-        assert_eq!(
-            page.rows[0].finalized_at_unix_ms,
-            second.key.finalized_at_unix_ms
-        );
-        assert_eq!(page.rows[0].completion_epoch, Some(42));
-        assert_ne!(page.rows[0].completion_epoch, Some(second.key.height));
-    }
+    include!("provider_ingest_finalized/archive_codec_tests.rs");
     #[cfg(unix)]
     #[test]
     fn virtual_base_preserves_floor_pages_cursors_and_successor_bytes() {
@@ -8197,7 +7842,7 @@ mod tests {
         for provider in &mut order_floor.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() == target {
-                    archived.replication_order.deadline_epoch = 7;
+                    set_order_window(archived, 1, 7, 6);
                 }
             }
         }
@@ -8559,7 +8204,7 @@ mod tests {
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() == target {
-                    archived.replication_order.deadline_epoch = 7;
+                    set_order_window(archived, 1, 7, 6);
                 }
             }
         }
@@ -8606,7 +8251,7 @@ mod tests {
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
                 if archived.order_id() == target {
-                    archived.replication_order.deadline_epoch = 7;
+                    set_order_window(archived, 1, 7, 6);
                 }
             }
         }
@@ -8670,6 +8315,30 @@ mod tests {
     }
     #[test]
     fn canonical_order_timestamps_must_match_archived_record_epochs() {
+        let mut shortened = archived_order(0x23, &[PROVIDER_A]);
+        set_order_window(&mut shortened, 1, 7, 6);
+        let canonical = validated_replication_order_from_record(
+            &shortened.replication_order.order_id,
+            &shortened.replication_order,
+        )
+        .expect("fixture deadline and canonical payload agree");
+        assert_eq!(canonical.deadline_at, 7);
+        assert_eq!(shortened.replication_order.deadline_epoch, 7);
+        assert_eq!(canonical.issued_at, 1);
+        assert_eq!(canonical.sla.ingest_deadline_secs, 6);
+        assert_eq!(
+            u64::from(canonical.sla.ingest_deadline_secs),
+            canonical.deadline_at - canonical.issued_at
+        );
+        let mut excessive_sla = canonical.clone();
+        excessive_sla.sla.ingest_deadline_secs = 7;
+        assert!(matches!(
+            excessive_sla.validate(),
+            Err(sorafs_manifest::capacity::ReplicationOrderValidationError::SlaExceedsOrderWindow)
+        ));
+        validate_archived_order(&key(7), PROVIDER_A, &shortened)
+            .expect("the shortened pending fixture remains valid at its deadline");
+
         let mut issued_mismatch = archived_order(0x23, &[PROVIDER_A]).replication_order;
         issued_mismatch.issued_epoch = issued_mismatch.issued_epoch.saturating_add(1);
         assert!(matches!(
@@ -8791,7 +8460,7 @@ mod tests {
         let mut first = projection(7);
         for provider in &mut first.providers {
             for archived in &mut provider.orders {
-                archived.replication_order.deadline_epoch = 7;
+                set_order_window(archived, 2, 7, 5);
             }
         }
         archive.insert(first.clone()).expect("insert first");
@@ -8811,6 +8480,9 @@ mod tests {
                 archived.pin_manifest.approved_epoch = Some(2);
             }
         }
+        substituted_approval
+            .validate(bounds())
+            .expect("substituted approval is locally valid before checking history");
         assert!(matches!(
             archive.insert(substituted_approval),
             Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })
@@ -8821,6 +8493,9 @@ mod tests {
                 archived.pin_manifest.approve(1, None);
             }
         }
+        rollback
+            .validate(bounds())
+            .expect("approval rollback is locally valid before checking history");
         assert!(matches!(
             archive.insert(rollback),
             Err(ProviderIngestFinalizedArchiveErrorV1::OrderSubstitution { .. })

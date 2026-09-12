@@ -18,7 +18,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    domain::{Domain, DomainId},
+    domain::Domain,
     game::{
         GAME_ADMISSION_MAX_ACCOUNT_ENCODED_BYTES_V1, GAME_ADMISSION_MAX_NFT_ENCODED_BYTES_V1,
         GameAdmissionBodyV1, GameManifestV1, GameParticipantV1, GamePhaseV1, GameSessionRecordV1,
@@ -31,6 +31,7 @@ use iroha_data_model::{
     nft::{NftData, NftId},
     nft_market::{NftCustodyPurposeV1, NftCustodyRecordV1},
 };
+use iroha_model_base::domain::DomainId;
 use norito::codec::{Decode, Encode};
 
 /// Count limit before any catalog encoding or ledger membership traversal.
@@ -39,6 +40,10 @@ pub(crate) const GAME_EQUIPMENT_CATALOG_MAX_MEMBERS_V1: usize = 4096;
 pub(crate) const GAME_EQUIPMENT_CATALOG_MAX_BYTES_V1: usize = 1024 * 1024;
 
 /// One reviewed NFT identity and its complete native metadata commitment.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::game_equipment::GameEquipmentCatalogMemberV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct GameEquipmentCatalogMemberV1 {
     /// Exact, losslessly printable native identifier.
@@ -48,6 +53,8 @@ pub(crate) struct GameEquipmentCatalogMemberV1 {
 }
 
 /// Immutable publication terms, independent of any particular game's class enum.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::game_equipment::GameEquipmentCatalogV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct GameEquipmentCatalogV1 {
     /// Exactly one for this first-release format.
@@ -71,6 +78,10 @@ pub(crate) struct GameEquipmentCatalogV1 {
 }
 
 /// Immutable native record created only by authenticated publication preflight.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::game_equipment::GameEquipmentCatalogRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct GameEquipmentCatalogRecordV1 {
     /// Exact terms whose canonical encoding determines the catalog identity.

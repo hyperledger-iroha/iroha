@@ -8,8 +8,7 @@ use iroha::{
         AccountOnboardingCurrentStateV1, AccountOnboardingPlanReceiptV1,
         AccountOnboardingPlanRequestV1, AccountOnboardingPrepareResponseV1,
         AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
-        Client as IrohaClient, PreparedTransactionOutcomeV1, TairaPublicResetMutationBindingV1,
-        TransactionWaitOptions,
+        Client as IrohaClient, PreparedOperationBindingV1, PreparedTransactionOutcomeV1,
     },
     config::Config,
     data_model::{
@@ -19,18 +18,13 @@ use iroha::{
         asset::AssetDefinitionId,
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
-        metadata::Metadata,
-        name::Name,
-        prelude::{FindTransactions, QueryBuilderExt, SignedTransaction, TransactionEntrypoint},
-        query::{
-            CommittedTxFilters,
-            dsl::CompoundPredicate,
-            parameters::{FetchSize, Pagination},
-        },
+        prelude::{SignedTransaction, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse, mcp as mcp_wire};
@@ -81,11 +75,16 @@ const MCP_CLIENT_NAME: &str = "iroha-taira-doctor";
 const MCP_CLIENT_VERSION: &str = "1";
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
+    "iroha.accounts.get",
+    "iroha.accounts.assets",
+    "iroha.assets.definitions.get",
+    "iroha.transactions.submit",
+    "iroha.transactions.submit_and_wait",
+];
+const FULL_MCP_TOOLS: &[&str] = &[
     "iroha.musubi.queries.exact_package",
     "iroha.musubi.queries.exact_release",
     "iroha.musubi.instructions.release_yank_set",
-    "iroha.transactions.submit",
-    "iroha.transactions.submit_and_wait",
 ];
 #[derive(Clone, Copy)]
 enum RouteCheckMethod {
@@ -190,11 +189,45 @@ impl Run for Command {
     }
 }
 /// Read-only Taira public endpoint diagnostics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(super) enum DoctorScope {
+    /// Basic account, asset, transaction and consensus connectivity.
+    #[default]
+    Basic,
+    /// Include advanced service readiness and strict network-time health.
+    Full,
+}
+impl DoctorScope {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Full => "full",
+        }
+    }
+
+    fn includes_route(self, name: &str) -> bool {
+        self == Self::Full
+            || matches!(
+                name,
+                "status"
+                    | "time_now"
+                    | "sumeragi_status"
+                    | "pipeline_transaction_status"
+                    | "public_lane_validators"
+                    | "contracts_state"
+            )
+    }
+}
+
+/// Read-only Taira public endpoint diagnostics.
 #[derive(clap::Args, Debug)]
 pub struct Doctor {
     /// Public Torii root URL.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
+    /// Release surface whose availability is required.
+    #[arg(long, value_enum, default_value = "basic")]
+    pub(super) scope: DoctorScope,
     /// Emit a stable JSON report.
     #[arg(long)]
     pub json: bool,
@@ -207,7 +240,7 @@ impl Run for Doctor {
 }
 impl Doctor {
     fn run_with_output<O: ReportOutput>(&self, output: &mut O) -> Result<()> {
-        let report = run_doctor(&self.public_root)?;
+        let report = run_doctor(&self.public_root, self.scope)?;
         render_report_to(output, self.json, &report)?;
         if report_status(&report) == Some("fail") {
             eyre::bail!("Taira doctor found hard failures");
@@ -229,7 +262,62 @@ impl Doctor {
         self.run_with_output(&mut output)
     }
 }
-type PreparedMutationBindingV1 = TairaPublicResetMutationBindingV1;
+/// Native operator custody binding; never sent as public customer authorization.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(super) struct PreparedMutationBindingV1 {
+    /// Exact immutable binding schema.
+    pub schema: String,
+    /// SHA-256 of the admitted reset authorization.
+    pub authorization_sha256: String,
+    /// Exact authorization nonce.
+    pub authorization_nonce: String,
+    /// Exact operation kind: `onboarding` or `faucet`.
+    pub kind: String,
+    /// Canonical reset phase label.
+    pub phase: String,
+    /// Exact mutation idempotency digest.
+    pub idempotency_key: String,
+    /// Absolute execution deadline from the admitted authorization.
+    pub execution_expires_at_unix_ms: u64,
+}
+impl PreparedMutationBindingV1 {
+    /// Current immutable binding schema.
+    pub const SCHEMA: &'static str = "iroha.taira.public-reset.mutation-binding.v1";
+
+    /// Project admitted native custody onto the exact signed public onboarding operation.
+    pub(super) fn onboarding_binding(
+        &self,
+        receipt: &AccountOnboardingPlanReceiptV1,
+    ) -> Result<PreparedOperationBindingV1> {
+        validate_prepared_binding(self)?;
+        if self.kind != "onboarding" {
+            eyre::bail!("native reset binding does not authorize onboarding");
+        }
+        PreparedOperationBindingV1::onboarding(
+            receipt,
+            self.idempotency_key.clone(),
+            self.execution_expires_at_unix_ms
+                .min(receipt.body.valid_until_ms),
+        )
+    }
+
+    /// Project admitted native custody onto the exact solved public faucet claim.
+    pub(super) fn faucet_binding(
+        &self,
+        claim: &AccountFaucetClaimV1,
+    ) -> Result<PreparedOperationBindingV1> {
+        validate_prepared_binding(self)?;
+        if self.kind != "faucet" {
+            eyre::bail!("native reset binding does not authorize a faucet claim");
+        }
+        PreparedOperationBindingV1::faucet(
+            claim,
+            self.idempotency_key.clone(),
+            self.execution_expires_at_unix_ms,
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -268,13 +356,41 @@ enum PreparedTransactionOperationV1 {
 }
 
 impl PreparedTransactionOperationV1 {
-    fn binding(&self) -> &PreparedMutationBindingV1 {
-        match self {
-            Self::OnboardingPrepared(operation) => &operation.binding,
-            Self::OnboardingProofRequired(operation) => &operation.result.binding,
-            Self::FaucetPrepared(operation) => &operation.binding,
-            Self::FinalCanary(operation) => &operation.binding,
-        }
+    fn matches_binding(&self, binding: &PreparedMutationBindingV1) -> Result<bool> {
+        Ok(match self {
+            Self::OnboardingPrepared(operation) => {
+                operation.binding == binding.onboarding_binding(&operation.receipt)?
+            }
+            Self::OnboardingProofRequired(operation) => {
+                operation.result.binding == binding.onboarding_binding(&operation.receipt)?
+            }
+            Self::FaucetPrepared(operation) => {
+                operation.binding == binding.faucet_binding(&operation.claim)?
+            }
+            Self::FinalCanary(operation) => &operation.binding == binding,
+        })
+    }
+
+    fn binding_metadata(&self) -> Result<(&'static str, String)> {
+        let (name, binding) = match self {
+            Self::OnboardingPrepared(operation) => (
+                "prepared_operation_binding",
+                json::to_value(&operation.binding)?,
+            ),
+            Self::OnboardingProofRequired(operation) => (
+                "prepared_operation_binding",
+                json::to_value(&operation.result.binding)?,
+            ),
+            Self::FaucetPrepared(operation) => (
+                "prepared_operation_binding",
+                json::to_value(&operation.binding)?,
+            ),
+            Self::FinalCanary(operation) => (
+                PREPARED_BINDING_METADATA,
+                json::to_value(&operation.binding)?,
+            ),
+        };
+        Ok((name, json::to_json(&binding)?))
     }
 
     const fn label(&self) -> &'static str {
@@ -419,6 +535,15 @@ pub struct WriteCanary {
     /// Independently trusted exact faucet transfer amount; required for the faucet child.
     #[arg(long, required_if_eq("operation", "faucet"))]
     pub faucet_amount: Option<String>,
+    /// Independently trusted faucet authority for the final canary's predecessor proof.
+    #[arg(long)]
+    pub predecessor_faucet_authority: Option<String>,
+    /// Exact faucet asset definition for the final canary's predecessor proof.
+    #[arg(long)]
+    pub predecessor_faucet_asset_id: Option<String>,
+    /// Exact faucet transfer amount for the final canary's predecessor proof.
+    #[arg(long)]
+    pub predecessor_faucet_amount: Option<String>,
     /// Owner-only onboarding token; required only while preparing or submitting the envelope.
     #[arg(long, value_name = "PATH", conflicts_with = "onboarding_token_fd")]
     pub onboarding_token_file: Option<PathBuf>,
@@ -458,6 +583,9 @@ pub struct WriteCanary {
     /// Inherited descriptor for the exact Applied predecessor envelope during preparation.
     #[arg(long, value_name = "FD")]
     pub prerequisite_envelope_fd: Option<u32>,
+    /// Read-only confirmation budget in seconds; the caller owns the outer child deadline.
+    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout_secs: u64,
     /// Emit a stable JSON receipt.
     #[arg(long)]
     pub json: bool,
@@ -475,35 +603,53 @@ impl WriteCanary {
         if self.operation != WriteCanaryOperation::Faucet {
             eyre::bail!("faucet policy is valid only for the exact faucet child");
         }
-        let authority_raw = self
-            .faucet_authority
-            .as_deref()
-            .ok_or_else(|| eyre!("the faucet child requires --faucet-authority"))?;
-        let authority = AccountId::parse_encoded(authority_raw)
-            .wrap_err("--faucet-authority is not a canonical AccountId")?;
-        if authority.to_string() != authority_raw {
-            eyre::bail!("--faucet-authority must use its exact canonical representation");
+        parse_write_canary_faucet_policy(
+            self.faucet_authority.as_deref(),
+            self.faucet_asset_id.as_deref(),
+            self.faucet_amount.as_deref(),
+            "faucet",
+        )
+    }
+
+    fn predecessor_faucet_policy(&self) -> Result<AccountFaucetPolicyV1> {
+        if self.operation != WriteCanaryOperation::FinalCanary
+            || !matches!(self.prepared_action()?, PreparedEnvelopeAction::Prepare(_))
+        {
+            eyre::bail!("predecessor faucet policy is valid only for final-canary preparation");
         }
-        let asset_raw = self
-            .faucet_asset_id
-            .as_deref()
-            .ok_or_else(|| eyre!("the faucet child requires --faucet-asset-id"))?;
-        let asset_definition_id = AssetDefinitionId::from_str(asset_raw)
-            .wrap_err("--faucet-asset-id is not a canonical asset definition")?;
-        if asset_definition_id.to_string() != asset_raw {
-            eyre::bail!("--faucet-asset-id must use its exact canonical representation");
+        parse_write_canary_faucet_policy(
+            self.predecessor_faucet_authority.as_deref(),
+            self.predecessor_faucet_asset_id.as_deref(),
+            self.predecessor_faucet_amount.as_deref(),
+            "predecessor-faucet",
+        )
+    }
+
+    fn validated_action(&self) -> Result<PreparedEnvelopeAction> {
+        let action = self.prepared_action()?;
+        self.validate_prerequisite_action(action)?;
+        self.validate_onboarding_token_action(action)?;
+        if self.operation == WriteCanaryOperation::Faucet {
+            PreparedOperationPolicyContext::Current(self).faucet_policy()?;
+        } else if self.faucet_authority.is_some()
+            || self.faucet_asset_id.is_some()
+            || self.faucet_amount.is_some()
+        {
+            eyre::bail!("faucet policy inputs are valid only for the exact faucet child");
         }
-        let amount_raw = self
-            .faucet_amount
-            .as_deref()
-            .ok_or_else(|| eyre!("the faucet child requires --faucet-amount"))?;
-        let amount = Quantity::from_str(amount_raw)
-            .wrap_err("--faucet-amount is not an exact positive quantity")?;
-        if amount.to_string() != amount_raw {
-            eyre::bail!("--faucet-amount must use its exact canonical representation");
+        if self.operation == WriteCanaryOperation::FinalCanary
+            && matches!(action, PreparedEnvelopeAction::Prepare(_))
+        {
+            PreparedOperationPolicyContext::Predecessor(self).faucet_policy()?;
+        } else if self.predecessor_faucet_authority.is_some()
+            || self.predecessor_faucet_asset_id.is_some()
+            || self.predecessor_faucet_amount.is_some()
+        {
+            eyre::bail!(
+                "predecessor faucet policy inputs are valid only for final-canary preparation"
+            );
         }
-        AccountFaucetPolicyV1::try_new(authority, asset_definition_id, amount)
-            .wrap_err("invalid independently trusted faucet policy")
+        Ok(action)
     }
 
     fn prepared_action(&self) -> Result<PreparedEnvelopeAction> {
@@ -634,6 +780,95 @@ impl WriteCanary {
     }
 }
 
+fn parse_write_canary_faucet_policy(
+    authority_raw: Option<&str>,
+    asset_raw: Option<&str>,
+    amount_raw: Option<&str>,
+    flag_prefix: &str,
+) -> Result<AccountFaucetPolicyV1> {
+    let authority_raw = authority_raw.ok_or_else(|| eyre!("missing --{flag_prefix}-authority"))?;
+    let authority = AccountId::parse_encoded(authority_raw)
+        .wrap_err_with(|| format!("--{flag_prefix}-authority is not a canonical AccountId"))?;
+    if authority.to_string() != authority_raw {
+        eyre::bail!("--{flag_prefix}-authority must use its exact canonical representation");
+    }
+    let asset_raw = asset_raw.ok_or_else(|| eyre!("missing --{flag_prefix}-asset-id"))?;
+    let asset_definition_id = AssetDefinitionId::from_str(asset_raw).wrap_err_with(|| {
+        format!("--{flag_prefix}-asset-id is not a canonical asset definition")
+    })?;
+    if asset_definition_id.to_string() != asset_raw {
+        eyre::bail!("--{flag_prefix}-asset-id must use its exact canonical representation");
+    }
+    let amount_raw = amount_raw.ok_or_else(|| eyre!("missing --{flag_prefix}-amount"))?;
+    let amount = Quantity::from_str(amount_raw)
+        .wrap_err_with(|| format!("--{flag_prefix}-amount is not an exact positive quantity"))?;
+    if amount.to_string() != amount_raw {
+        eyre::bail!("--{flag_prefix}-amount must use its exact canonical representation");
+    }
+    AccountFaucetPolicyV1::try_new(authority, asset_definition_id, amount)
+        .wrap_err("invalid independently trusted faucet policy")
+}
+
+/// Distinguish the operation being executed from the predecessor being authenticated.
+#[derive(Clone, Copy)]
+enum PreparedOperationPolicyContext<'a> {
+    Current(&'a WriteCanary),
+    Predecessor(&'a WriteCanary),
+}
+
+impl PreparedOperationPolicyContext<'_> {
+    fn operation(self) -> Result<WriteCanaryOperation> {
+        match self {
+            Self::Current(args) => Ok(args.operation),
+            Self::Predecessor(args) => {
+                if !matches!(args.prepared_action()?, PreparedEnvelopeAction::Prepare(_)) {
+                    eyre::bail!(
+                        "predecessor policy is valid only while preparing the next operation"
+                    );
+                }
+                match args.operation {
+                    WriteCanaryOperation::Onboarding => {
+                        eyre::bail!("onboarding has no predecessor")
+                    }
+                    WriteCanaryOperation::Faucet => Ok(WriteCanaryOperation::Onboarding),
+                    WriteCanaryOperation::FinalCanary => Ok(WriteCanaryOperation::Faucet),
+                }
+            }
+        }
+    }
+
+    fn faucet_policy(self) -> Result<AccountFaucetPolicyV1> {
+        if self.operation()? != WriteCanaryOperation::Faucet {
+            eyre::bail!("the authenticated operation is not the faucet");
+        }
+        match self {
+            Self::Current(args) => args.faucet_policy(),
+            Self::Predecessor(args) => args.predecessor_faucet_policy(),
+        }
+    }
+}
+
+#[cfg(test)]
+/// Exercise the production action and policy validation with actual parent-produced arguments.
+pub(crate) fn validate_parent_write_canary_for_test(
+    args: &WriteCanary,
+) -> Result<(Option<AccountFaucetPolicyV1>, Option<AccountFaucetPolicyV1>)> {
+    args.binding()?;
+    let action = args.validated_action()?;
+    let current = PreparedOperationPolicyContext::Current(args);
+    let current_policy = (current.operation()? == WriteCanaryOperation::Faucet)
+        .then(|| current.faucet_policy())
+        .transpose()?;
+    let predecessor_policy = if matches!(action, PreparedEnvelopeAction::Prepare(_))
+        && args.operation == WriteCanaryOperation::FinalCanary
+    {
+        Some(PreparedOperationPolicyContext::Predecessor(args).faucet_policy()?)
+    } else {
+        None
+    };
+    Ok((current_policy, predecessor_policy))
+}
+
 fn validate_sha256_argument(value: &str) -> Result<String, String> {
     validate_lower_hex_argument(value, "SHA-256", 64)
 }
@@ -751,6 +986,35 @@ pub enum InrouCanaryMode {
     Deploy,
     /// Replace an already-deployed canary revision.
     Upgrade,
+}
+/// Select runtime qualification before cutover or full public qualification after cutover.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InrouProbeScope {
+    /// Probe the admitted local candidate without public discovery.
+    Candidate,
+    /// Require runtime, routed service, and public discovery evidence.
+    Public,
+}
+impl InrouProbeScope {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::Public => "public",
+        }
+    }
+
+    fn validate_root(self, root: &str) -> Result<()> {
+        if self == Self::Candidate {
+            let root = Url::parse(&normalize_root_url(root)?)?;
+            if root.scheme() != "http"
+                || root.host_str() != Some("127.0.0.1")
+                || root.port().is_none()
+            {
+                eyre::bail!("candidate Inrou probes require an explicit HTTP loopback port");
+            }
+        }
+        Ok(())
+    }
 }
 /// Canonical offline Taira Inrou artifact staging.
 #[derive(clap::Args, Debug)]
@@ -1007,6 +1271,7 @@ impl From<&crate::soracloud::TairaInrouStageIdentity> for PreparedInrouStageIden
 #[norito(deny_unknown_fields)]
 struct PreparedInrouEnvelopeV1 {
     schema: String,
+    probe_scope: String,
     binding: crate::soracloud::TairaMutationBindingV1,
     public_root: String,
     chain_id: String,
@@ -1036,7 +1301,10 @@ struct ValidatedPreparedInrouV1 {
         ])
 ))]
 pub struct InrouCanary {
-    /// Public Torii root URL used for mutation, status, and route probes.
+    /// Candidate runtime qualification or complete public qualification.
+    #[arg(long, value_enum, default_value = "public")]
+    pub probe_scope: InrouProbeScope,
+    /// Public or admitted loopback Torii root used for mutation, status, and route probes.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
     /// Owner-only stage created by `iroha taira inrou-stage` and preseeded into all validators.
@@ -1175,6 +1443,7 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
     ensure_canonical_taira_client_identity(context.config())?;
     let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let public_root = normalize_root_url(&args.public_root)?;
+    args.probe_scope.validate_root(&public_root)?;
     let binding = args.binding()?;
     let action = args.prepared_action()?;
     args.validate_prerequisite_action(action)?;
@@ -1182,6 +1451,10 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
     match action {
         PreparedEnvelopeAction::Prepare(output_fd) => {
             require_inrou_binding_current(&binding)?;
+            let deadline = prepared_observation_deadline(
+                args.timeout_secs,
+                Some(binding.execution_expires_at_unix_ms),
+            )?;
             preflight_taira_network_identity(&public_root, context.config())?;
             prove_inrou_predecessor_applied(
                 context.config(),
@@ -1189,7 +1462,9 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
                 &public_root,
                 &binding,
                 &expected_fee_payment,
+                deadline,
             )?;
+            require_inrou_binding_current(&binding)?;
             let stage = crate::soracloud::load_taira_inrou_stage_identity(
                 context.config(),
                 &args.stage_dir,
@@ -1210,6 +1485,7 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
             let envelope = make_prepared_inrou_envelope(
                 context.config(),
                 &public_root,
+                args.probe_scope,
                 args.operation,
                 &stage,
                 &expected_fee_payment,
@@ -1228,9 +1504,14 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
                 None,
                 None,
                 None,
+                deadline,
             )
         }
         PreparedEnvelopeAction::Submit(fd) => {
+            let deadline = prepared_observation_deadline(
+                args.timeout_secs,
+                Some(binding.execution_expires_at_unix_ms),
+            )?;
             let validated = load_and_validate_prepared_inrou(
                 context.config(),
                 args,
@@ -1240,16 +1521,39 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
                 &expected_fee_payment,
                 PreparedLifetimeCheck::LiveForward,
             )?;
+            let transaction = validated.prepared.decode_and_validate()?;
+            let ttl = transaction
+                .time_to_live()
+                .ok_or_else(|| eyre!("prepared Inrou transaction omits its required TTL"))?;
+            let expires_at_ms = u64::try_from(
+                transaction
+                    .creation_time()
+                    .checked_add(ttl)
+                    .ok_or_else(|| eyre!("prepared Inrou transaction expiry overflow"))?
+                    .as_millis(),
+            )?;
+            let deadline = deadline.min(prepared_observation_deadline(
+                args.timeout_secs,
+                Some(expires_at_ms),
+            )?);
             let outcome = submit_prepared_inrou_until(
                 context.config(),
                 &public_root,
-                args.timeout_secs,
+                deadline,
                 &validated.prepared,
                 &binding,
-            );
-            report_prepared_inrou_outcome(context.config(), &public_root, args, &validated, outcome)
+            )?;
+            report_prepared_inrou_outcome(
+                context.config(),
+                &public_root,
+                args,
+                &validated,
+                outcome,
+                deadline,
+            )
         }
         PreparedEnvelopeAction::Recover(fd) => {
+            let deadline = prepared_observation_deadline(args.timeout_secs, None)?;
             let validated = load_and_validate_prepared_inrou(
                 context.config(),
                 args,
@@ -1262,10 +1566,17 @@ fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) ->
             let outcome = recover_prepared_inrou(
                 context.config(),
                 &public_root,
-                args.timeout_secs,
+                deadline,
                 &validated.prepared,
-            );
-            report_prepared_inrou_outcome(context.config(), &public_root, args, &validated, outcome)
+            )?;
+            report_prepared_inrou_outcome(
+                context.config(),
+                &public_root,
+                args,
+                &validated,
+                outcome,
+                deadline,
+            )
         }
     }
 }
@@ -1280,6 +1591,7 @@ fn require_inrou_binding_current(binding: &crate::soracloud::TairaMutationBindin
 fn make_prepared_inrou_envelope(
     config: &Config,
     public_root: &str,
+    probe_scope: InrouProbeScope,
     operation: InrouCanaryOperation,
     stage: &crate::soracloud::TairaInrouStageIdentity,
     expected_fee_payment: &FeePaymentIntent,
@@ -1332,6 +1644,7 @@ fn make_prepared_inrou_envelope(
     };
     Ok(PreparedInrouEnvelopeV1 {
         schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+        probe_scope: probe_scope.label().to_owned(),
         binding: prepared.binding,
         public_root: public_root.to_owned(),
         chain_id: config.chain.to_string(),
@@ -1343,7 +1656,8 @@ fn make_prepared_inrou_envelope(
 }
 
 fn canonical_prepared_inrou_envelope_bytes(envelope: &PreparedInrouEnvelopeV1) -> Result<Vec<u8>> {
-    let mut bytes = json::to_json(envelope)
+    let value = json::to_value(envelope).wrap_err("project canonical prepared Inrou envelope")?;
+    let mut bytes = json::to_json(&value)
         .wrap_err("encode canonical prepared Inrou envelope")?
         .into_bytes();
     bytes.push(b'\n');
@@ -1388,6 +1702,7 @@ fn load_and_validate_prepared_inrou(
         crate::soracloud::load_taira_inrou_stage_identity(config, &args.stage_dir, args.mode)?;
     let operation = envelope.operation.transaction();
     if envelope.schema != PREPARED_ENVELOPE_SCHEMA_V1
+        || envelope.probe_scope != args.probe_scope.label()
         || &envelope.binding != expected_binding
         || envelope.public_root != public_root
         || envelope.chain_id != config.chain.to_string()
@@ -1475,68 +1790,105 @@ fn validate_inrou_transaction_lifetime(
 fn submit_prepared_inrou_until(
     config: &Config,
     public_root: &str,
-    timeout_secs: u64,
+    deadline: Instant,
     prepared: &crate::soracloud::PreparedSoracloudTransactionV1,
     binding: &crate::soracloud::TairaMutationBindingV1,
-) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
-    let first = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
-    if !matches!(first, crate::soracloud::PreparedSoracloudRecoveryV1::Absent) {
-        return first;
-    }
-    if require_inrou_binding_current(binding).is_err() {
-        return crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
-            terminal_kind: "ExecutionExpiredBeforeSubmit".to_owned(),
+) -> Result<crate::soracloud::PreparedSoracloudRecoveryV1> {
+    let mut outcome = recover_prepared_inrou(config, public_root, deadline, prepared)?;
+    if matches!(
+        outcome,
+        crate::soracloud::PreparedSoracloudRecoveryV1::Absent
+    ) {
+        require_inrou_binding_current(binding)?;
+        if Instant::now() >= deadline {
+            return Ok(crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: "ObservationBudgetExhausted".to_owned(),
+            });
+        }
+        match crate::soracloud::submit_prepared_soracloud_transaction(
+            config,
+            public_root,
+            deadline,
+            prepared,
+        ) {
+            Ok(hash) if hex::encode(hash.as_ref()) == prepared.tx_hash_hex => {}
+            Ok(_) => {
+                eyre::bail!("submitted Soracloud hash differs from the exact prepared transaction")
+            }
+            Err(error)
+                if observation_transport_unavailable(&error)
+                    || error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<iroha::client::QueuePlanOutcomeUnknownError>()
+                            .is_some()
+                    }) => {}
+            Err(error) => return Err(error),
+        }
+        // The one submitted envelope is now reconciled read-only, even if dispatch
+        // returned an uncertain transport outcome. Never submit a second time.
+        outcome = crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+            terminal_kind: "AcceptedNotVisible".to_owned(),
         };
     }
-    let expected_hash = prepared.tx_hash_hex.clone();
-    match crate::soracloud::submit_prepared_soracloud_transaction(
-        config,
-        public_root,
-        timeout_secs,
-        prepared,
-    ) {
-        Ok(hash) if hex::encode(hash.as_ref()) == expected_hash => {}
-        Ok(_) => {
-            return crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
-                terminal_kind: "SubmittedHashMismatch".to_owned(),
-            };
-        }
-        Err(_) => return recover_prepared_inrou(config, public_root, timeout_secs, prepared),
-    }
-    let deadline = Instant::now()
-        .checked_add(Duration::from_secs(timeout_secs))
-        .unwrap_or_else(Instant::now);
     loop {
-        let outcome = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
         if !matches!(
             &outcome,
             crate::soracloud::PreparedSoracloudRecoveryV1::Absent
                 | crate::soracloud::PreparedSoracloudRecoveryV1::Pending { .. }
         ) || Instant::now() >= deadline
         {
-            return outcome;
+            return Ok(outcome);
         }
         std::thread::sleep(
             Duration::from_millis(200).min(deadline.saturating_duration_since(Instant::now())),
         );
+        if Instant::now() >= deadline {
+            return Ok(outcome);
+        }
+        outcome = recover_prepared_inrou(config, public_root, deadline, prepared)?;
     }
+}
+
+/// Only transport unavailability may retain a pending observation. Authorization,
+/// compatibility, decoding, and proof errors are immediately returned to the caller.
+fn observation_transport_unavailable(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|error| error.is_timeout() || error.is_connect() || error.is_body())
+            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::BrokenPipe
+                )
+            })
+    })
 }
 
 fn recover_prepared_inrou(
     config: &Config,
     public_root: &str,
-    timeout_secs: u64,
+    deadline: Instant,
     prepared: &crate::soracloud::PreparedSoracloudTransactionV1,
-) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
-    crate::soracloud::recover_prepared_soracloud_transaction(
+) -> Result<crate::soracloud::PreparedSoracloudRecoveryV1> {
+    match crate::soracloud::recover_prepared_soracloud_transaction(
         config,
         public_root,
-        timeout_secs,
+        deadline,
         prepared,
-    )
-    .unwrap_or_else(|_| crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-        terminal_kind: "ObservationUnavailable".to_owned(),
-    })
+    ) {
+        Err(error) if observation_transport_unavailable(&error) => {
+            Ok(crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: "ObservationUnavailable".to_owned(),
+            })
+        }
+        result => result,
+    }
 }
 
 fn report_prepared_inrou_outcome(
@@ -1545,8 +1897,9 @@ fn report_prepared_inrou_outcome(
     args: &InrouCanary,
     validated: &ValidatedPreparedInrouV1,
     outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
+    deadline: Instant,
 ) -> Result<Value> {
-    let outcome = qualify_applied_inrou_pin_outcome(config, public_root, args, outcome);
+    let outcome = qualify_applied_inrou_pin_outcome(config, public_root, args, outcome, deadline)?;
     match outcome {
         crate::soracloud::PreparedSoracloudRecoveryV1::Absent => prepared_inrou_report(
             config,
@@ -1559,6 +1912,7 @@ fn report_prepared_inrou_outcome(
             None,
             Some("Absent".to_owned()),
             None,
+            deadline,
         ),
         crate::soracloud::PreparedSoracloudRecoveryV1::Applied {
             block_height,
@@ -1574,6 +1928,7 @@ fn report_prepared_inrou_outcome(
             Some(block_height),
             Some(evidence_sha256),
             Some(validated),
+            deadline,
         ),
         crate::soracloud::PreparedSoracloudRecoveryV1::Pending { terminal_kind } => {
             prepared_inrou_report(
@@ -1587,6 +1942,7 @@ fn report_prepared_inrou_outcome(
                 None,
                 Some(terminal_kind),
                 None,
+                deadline,
             )
         }
         crate::soracloud::PreparedSoracloudRecoveryV1::Rejected { terminal_kind } => {
@@ -1601,6 +1957,7 @@ fn report_prepared_inrou_outcome(
                 None,
                 Some(terminal_kind),
                 None,
+                deadline,
             )
         }
     }
@@ -1611,45 +1968,57 @@ fn qualify_applied_inrou_pin_outcome(
     public_root: &str,
     args: &InrouCanary,
     outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
-) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
+    deadline: Instant,
+) -> Result<crate::soracloud::PreparedSoracloudRecoveryV1> {
     if args.operation == InrouCanaryOperation::ServiceMutation
         || !matches!(
             &outcome,
             crate::soracloud::PreparedSoracloudRecoveryV1::Applied { .. }
         )
     {
-        return outcome;
+        return Ok(outcome);
     }
-    match crate::soracloud::taira_inrou_canary_pin_readiness_v1(
-        config,
-        &args.stage_dir,
-        public_root,
-        args.timeout_secs,
-        args.mode,
-        args.operation.prepared_operation(),
-    ) {
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch)) if epoch > 0 => {
-            outcome
-        }
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_)) => {
-            crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
-                terminal_kind: "InvalidApprovalEpoch".to_owned(),
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Ok(crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+            terminal_kind: "PinObservationBudgetExhausted".to_owned(),
+        });
+    }
+    Ok(
+        match crate::soracloud::taira_inrou_canary_pin_readiness_v1(
+            config,
+            &args.stage_dir,
+            public_root,
+            remaining,
+            args.mode,
+            args.operation.prepared_operation(),
+        ) {
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch)) if epoch > 0 => {
+                outcome
             }
-        }
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending) => {
-            crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-                terminal_kind: "PinApprovalPending".to_owned(),
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_)) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
+                    terminal_kind: "InvalidApprovalEpoch".to_owned(),
+                }
             }
-        }
-        Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing) => {
-            crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-                terminal_kind: "PinObservationMissing".to_owned(),
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "PinApprovalPending".to_owned(),
+                }
             }
-        }
-        Err(_) => crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
-            terminal_kind: "ObservationUnavailable".to_owned(),
+            Ok(crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "PinObservationMissing".to_owned(),
+                }
+            }
+            Err(error) if observation_transport_unavailable(&error) => {
+                crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+                    terminal_kind: "ObservationUnavailable".to_owned(),
+                }
+            }
+            Err(error) => return Err(error),
         },
-    }
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1664,6 +2033,7 @@ fn prepared_inrou_report(
     applied_block_height: Option<u64>,
     evidence: Option<String>,
     applied: Option<&ValidatedPreparedInrouV1>,
+    deadline: Instant,
 ) -> Result<Value> {
     let mut report = if args.operation == InrouCanaryOperation::ServiceMutation
         && outcome == "Applied"
@@ -1672,9 +2042,15 @@ fn prepared_inrou_report(
         let mut status_config = config.clone();
         status_config.torii_api_url = Url::parse(&format!("{public_root}/"))
             .wrap_err("failed to bind prepared Inrou status client")?;
-        status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
-        let status_client = IrohaClient::new(status_config);
-        verify_inrou_check(public_root, &status_client, stage, args.timeout_secs)?
+        status_config.torii_request_timeout = deadline.saturating_duration_since(Instant::now());
+        let status_client = IrohaClient::builder(status_config).build()?;
+        verify_inrou_check_until(
+            public_root,
+            &status_client,
+            stage,
+            deadline,
+            args.probe_scope,
+        )?
     } else {
         report_value(
             "taira_inrou_canary",
@@ -1689,6 +2065,10 @@ fn prepared_inrou_report(
     let object = report
         .as_object_mut()
         .ok_or_else(|| eyre!("prepared Inrou report root is not an object"))?;
+    object.insert(
+        "probe_scope".to_owned(),
+        Value::String(args.probe_scope.label().to_owned()),
+    );
     object.insert(
         "command".to_owned(),
         Value::String("taira_inrou_canary".to_owned()),
@@ -1772,6 +2152,7 @@ fn prove_inrou_predecessor_applied(
     public_root: &str,
     binding: &crate::soracloud::TairaMutationBindingV1,
     expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<()> {
     let fd = args
         .prerequisite_envelope_fd
@@ -1817,6 +2198,8 @@ fn prove_inrou_predecessor_applied(
             .and_then(Value::as_u64)
             != Some(binding.execution_expires_at_unix_ms)
         || root.get("public_root").and_then(Value::as_str) != Some(public_root)
+        || (expected_kind != "write_canary"
+            && root.get("probe_scope").and_then(Value::as_str) != Some(args.probe_scope.label()))
         || root.get("chain_id").and_then(Value::as_str) != Some(DEFAULT_CHAIN_ID)
         || root.get("network_id").and_then(Value::as_str)
             != Some(config.network_id.to_string().as_str())
@@ -1974,20 +2357,40 @@ fn prove_inrou_predecessor_applied(
     }
     let mut status_config = config.clone();
     status_config.torii_api_url = Url::parse(&format!("{public_root}/"))?;
-    status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
-    let client = IrohaClient::new(status_config);
-    let status = client
-        .get_transaction_status_response_global(transaction.hash())?
-        .ok_or_else(|| eyre!("Inrou predecessor transaction is absent"))?;
-    if status.hash != transaction_hash
-        || status.scope != "global"
-        || status.status.kind != "Applied"
-        || !status.status.block_height.is_some_and(|height| height > 0)
-    {
-        eyre::bail!("Inrou predecessor has not reached exact global Applied state");
-    }
-    verify_exact_committed_transaction(&client, &transaction, &wire)?;
-    if expected_kind != "write_canary" {
+    await_predecessor_applied(deadline, Duration::from_millis(200), |request_budget| {
+        let client = IrohaClient::builder(status_config.clone())
+            .build()?
+            .with_request_deadline(deadline);
+        let Some(status) = client.get_transaction_status_response_global(transaction.hash())?
+        else {
+            return Ok(false);
+        };
+        if status.hash != transaction_hash || status.scope != "global" {
+            eyre::bail!("Inrou predecessor status differs from its exact identity or scope");
+        }
+        if prepared_recovery_status_is_final_failure(&status) {
+            eyre::bail!("Inrou predecessor is terminally {}", status.status.kind);
+        }
+        if !matches!(
+            status.status.kind.as_str(),
+            "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
+        ) {
+            eyre::bail!("Inrou predecessor has unsupported status kind");
+        }
+        if !prepared_recovery_status_is_final_applied(&status) {
+            return Ok(false);
+        }
+        if !status.status.block_height.is_some_and(|height| height > 0) {
+            eyre::bail!("Applied Inrou predecessor omits its positive block height");
+        }
+        match verify_exact_committed_transaction(&client, &transaction, &wire) {
+            Ok(()) => {}
+            Err(error) if exact_transaction_details_not_found(&error) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        if expected_kind == "write_canary" {
+            return Ok(true);
+        }
         let operation = match expected_kind {
             "inrou_bundle_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
             "inrou_guest_pin" => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
@@ -2000,27 +2403,24 @@ fn prove_inrou_predecessor_applied(
             config,
             &args.stage_dir,
             public_root,
-            args.timeout_secs,
+            request_budget.min(deadline.saturating_duration_since(Instant::now())),
             args.mode,
             operation,
         )? {
-            crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch) if epoch > 0 => {}
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(epoch) if epoch > 0 => {
+                Ok(true)
+            }
             crate::soracloud::TairaInrouCanaryPinReadinessV1::Approved(_) => {
                 eyre::bail!("Inrou predecessor pin has an invalid zero approval epoch")
             }
-            crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending => {
-                eyre::bail!("Inrou predecessor pin governance is still Pending")
-            }
-            crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing => {
-                eyre::bail!("Inrou predecessor pin approval is missing")
-            }
+            crate::soracloud::TairaInrouCanaryPinReadinessV1::Pending
+            | crate::soracloud::TairaInrouCanaryPinReadinessV1::Missing => Ok(false),
         }
-    }
-    Ok(())
+    })
 }
 
 fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Result<Value> {
-    let (value, mut canonical) = match expected_kind {
+    let (value, canonical) = match expected_kind {
         "write_canary" => {
             let envelope: PreparedMutationEnvelopeV1 = json::from_slice(bytes)
                 .wrap_err("Inrou predecessor is not an exact prepared-mutation V1 envelope")?;
@@ -2032,7 +2432,7 @@ fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Resul
             }
             (
                 json::to_value(&envelope)?,
-                json::to_json(&envelope)?.into_bytes(),
+                canonical_prepared_envelope_bytes(&envelope)?,
             )
         }
         "inrou_bundle_pin" | "inrou_guest_pin" | "inrou_discovery_pin" => {
@@ -2056,12 +2456,11 @@ fn decode_exact_inrou_predecessor_v1(bytes: &[u8], expected_kind: &str) -> Resul
             }
             (
                 json::to_value(&envelope)?,
-                json::to_json(&envelope)?.into_bytes(),
+                canonical_prepared_inrou_envelope_bytes(&envelope)?,
             )
         }
         _ => return Err(eyre!("unsupported Inrou predecessor kind")),
     };
-    canonical.push(b'\n');
     if canonical != bytes {
         eyre::bail!("Inrou predecessor envelope is not canonical newline JSON");
     }
@@ -2074,19 +2473,8 @@ fn verify_exact_committed_transaction(
     expected_wire: &[u8],
 ) -> Result<()> {
     let entrypoint_hash = expected.hash_as_entrypoint();
-    let one = NonZeroU64::new(1).expect("nonzero exact transaction bound");
-    let committed = client
-        .query(FindTransactions::new())
-        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
-            entry_eq: Some(entrypoint_hash),
-            ..CommittedTxFilters::default()
-        }))
-        .with_pagination(Pagination::new(Some(one), 0))
-        .with_fetch_size(FetchSize::new(Some(one)))
-        .execute_all()?;
-    let [committed] = committed.as_slice() else {
-        eyre::bail!("Applied predecessor lacks one exact committed transaction proof");
-    };
+    let details = client.get_transaction_details(entrypoint_hash)?;
+    let committed = &details.transaction;
     let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
         eyre::bail!("Applied predecessor resolves to a non-external entrypoint");
     };
@@ -2102,7 +2490,10 @@ fn verify_exact_committed_transaction(
 /// Read-only verification of one retained canonical Taira Inrou stage.
 #[derive(clap::Args, Debug)]
 pub struct InrouCheck {
-    /// Public Torii root URL used for network preflight and public route reads.
+    /// Candidate runtime qualification or complete public qualification.
+    #[arg(long, value_enum, default_value = "public")]
+    pub probe_scope: InrouProbeScope,
+    /// Public or admitted loopback Torii root used for network preflight and route reads.
     ///
     /// Signed Soracloud status reads continue to use the Torii URL from the selected client
     /// configuration so validator-specific restart checks cannot collapse onto the public edge.
@@ -2132,12 +2523,14 @@ impl Run for InrouCheck {
             self.mode,
         )?;
         let public_root = normalize_root_url(&self.public_root)?;
+        self.probe_scope.validate_root(&public_root)?;
         preflight_taira_network_identity(&public_root, context.config())?;
         let receipt = verify_inrou_check_from_selected_status_origin(
             &public_root,
             context.config(),
             &stage,
             self.timeout_secs,
+            self.probe_scope,
         )?;
         render_report(context, self.json, &receipt)?;
         if report_status(&receipt) != Some("ok") {
@@ -2152,9 +2545,16 @@ fn verify_inrou_check_from_selected_status_origin(
     status_config: &Config,
     stage: &crate::soracloud::TairaInrouStageIdentity,
     timeout_secs: u64,
+    probe_scope: InrouProbeScope,
 ) -> Result<Value> {
-    let status_client = IrohaClient::new(status_config.clone());
-    verify_inrou_check(public_root, &status_client, stage, timeout_secs)
+    let status_client = IrohaClient::builder(status_config.clone()).build()?;
+    verify_inrou_check(
+        public_root,
+        &status_client,
+        stage,
+        timeout_secs,
+        probe_scope,
+    )
 }
 fn ensure_canonical_taira_client_identity(config: &Config) -> Result<()> {
     if config.chain.to_string() != DEFAULT_CHAIN_ID {
@@ -2198,7 +2598,7 @@ struct CanarySigner {
     key_pair: KeyPair,
     account_id: AccountId,
 }
-fn run_doctor(public_root: &str) -> Result<Value> {
+fn run_doctor(public_root: &str, scope: DoctorScope) -> Result<Value> {
     let public_root = normalize_root_url(public_root)?;
     let http = http_client()?;
     let mut checks = Vec::new();
@@ -2206,6 +2606,9 @@ fn run_doctor(public_root: &str) -> Result<Value> {
     let mut failures = Vec::new();
     let empty_object = norito::json!({});
     for (name, method, path, expected_statuses) in ROUTE_CHECKS {
+        if !scope.includes_route(name) {
+            continue;
+        }
         let url = join_url(&public_root, path)?;
         let (method, body) = match method {
             RouteCheckMethod::Get => (reqwest::Method::GET, None),
@@ -2216,7 +2619,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         let semantic_error = if status_ok {
             match *name {
                 "status" => validate_public_status(result.body.as_ref()).err(),
-                "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
+                "time_now" => validate_time_snapshot(result.body.as_ref(), scope).err(),
                 "kagemusha_readiness" => validate_kagemusha_readiness(result.body.as_ref()).err(),
                 _ => None,
             }
@@ -2248,6 +2651,9 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         }
         if *name == "status" && ok {
             collect_status_warnings(result.body.as_ref(), &mut warnings);
+        }
+        if *name == "time_now" && ok && scope == DoctorScope::Basic {
+            collect_time_warnings(result.body.as_ref(), &mut warnings);
         }
     }
     let mcp_url = join_url(&public_root, "/v1/mcp")?;
@@ -2287,29 +2693,25 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             }),
         );
     }
-    let tools = http_mcp_json(&http, mcp_url.as_str(), 2, "tools/list", norito::json!({}))?;
-    let parsed_tool_names = (tools.status == 200)
-        .then(|| mcp_tool_names(tools.body.as_ref()))
-        .transpose();
+    let (tools_status, parsed_tool_names) = read_mcp_tool_catalog(&http, mcp_url.as_str())?;
     let tools_error = parsed_tool_names.as_ref().err().cloned();
-    let tools_ok = tools.status == 200 && tools_error.is_none();
+    let tools_ok = tools_status == 200 && tools_error.is_none();
     push_check(
         &mut checks,
         "mcp_tools_list",
-        tools.status,
+        tools_status,
         tools_ok,
         tools_error.clone(),
     );
     if !tools_ok {
         failures.push(
-            tools_error.unwrap_or_else(|| format!("mcp_tools_list returned HTTP {}", tools.status)),
+            tools_error.unwrap_or_else(|| format!("mcp_tools_list returned HTTP {tools_status}")),
         );
     } else {
-        let tool_names = parsed_tool_names
-            .expect("successful MCP tool parsing has one result")
-            .expect("HTTP 200 MCP tools/list was parsed above");
+        let tool_names = parsed_tool_names.expect("successful MCP tool parsing has one result");
         let missing: Vec<String> = REQUIRED_MCP_TOOLS
             .iter()
+            .chain(FULL_MCP_TOOLS.iter().filter(|_| scope == DoctorScope::Full))
             .copied()
             .filter(|name| !tool_names.iter().any(|present| present == name))
             .map(str::to_owned)
@@ -2336,6 +2738,8 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         }
     }
     let status = if failures.is_empty() { "ok" } else { "fail" };
+    let mut extra = Map::new();
+    extra.insert("scope".into(), Value::from(scope.as_str()));
     report_value(
         "taira_doctor",
         status,
@@ -2343,8 +2747,30 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         checks,
         warnings,
         failures,
-        Map::new(),
+        extra,
     )
+}
+
+/// The public-reset verifier consumes the producer's scoped check contract.
+pub(super) fn doctor_expected_checks(
+    scope: DoctorScope,
+) -> Vec<(&'static str, u64, Option<String>)> {
+    let mut checks = ROUTE_CHECKS
+        .iter()
+        .filter(|(name, _, _, _)| scope.includes_route(name))
+        .map(|(name, _, _, statuses)| (*name, u64::from(statuses[0]), route_check_detail(statuses)))
+        .collect::<Vec<_>>();
+    checks.extend([
+        ("mcp_get", 405, None),
+        ("mcp_initialize", 200, None),
+        ("mcp_tools_list", 200, None),
+        (
+            "mcp_required_tools",
+            200,
+            Some("all required curated tools are present".to_owned()),
+        ),
+    ]);
+    checks
 }
 #[derive(Clone, Debug)]
 struct InrouProbeIdentity {
@@ -2576,7 +3002,7 @@ fn exact_inrou_local_placement(
         .as_deref()
         .ok_or_else(|| "runtime manager snapshot is missing local_peer_id".to_owned())?;
     let canonical_peer_id = local_peer_id
-        .parse::<iroha::data_model::peer::PeerId>()
+        .parse::<iroha_model_base::peer::PeerId>()
         .map_err(|error| format!("runtime manager local_peer_id is invalid: {error}"))?;
     if canonical_peer_id.to_string() != local_peer_id {
         return Err("runtime manager local_peer_id is not canonical".to_owned());
@@ -2646,7 +3072,7 @@ fn exact_inrou_local_placement(
     }
     let replica_peer = replica
         .peer_id
-        .parse::<iroha::data_model::peer::PeerId>()
+        .parse::<iroha_model_base::peer::PeerId>()
         .map_err(|error| format!("local placement peer ID is invalid: {error}"))?;
     if replica_peer.to_string() != replica.peer_id {
         return Err("local placement peer ID is not canonical".to_owned());
@@ -3208,19 +3634,13 @@ fn probe_inrou_service(
     public_root: &str,
     status_client: &IrohaClient,
     deployment: &InrouProbeIdentity,
-    timeout_secs: u64,
+    deadline: Instant,
+    probe_scope: InrouProbeScope,
 ) -> Result<InrouProbeObservation> {
-    validate_inrou_canary_timeout(timeout_secs)?;
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(timeout_secs.min(5)))
-        .user_agent("iroha-taira-inrou-probe/1")
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .wrap_err("failed to build Taira Inrou verification HTTP client")?;
+    probe_scope.validate_root(public_root)?;
     let health_path =
         inrou_canary_health_path(&deployment.route_path_prefix, &deployment.healthcheck_path);
     let health_base = join_url(public_root, &health_path)?;
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut nonce = 0_u64;
     let mut status_ready = false;
     let mut active_adverts = 0_u64;
@@ -3231,7 +3651,7 @@ fn probe_inrou_service(
     let mut last_route_code = 0_u16;
     let mut last_route_error = "route not observed".to_owned();
     let mut current_route_ready = false;
-    let mut discovery_ready = false;
+    let mut discovery_ready = probe_scope == InrouProbeScope::Candidate;
     let mut last_discovery_code = 0_u16;
     let mut last_discovery_error = "public discovery not observed".to_owned();
     let mut health_identity_conflict = false;
@@ -3239,12 +3659,28 @@ fn probe_inrou_service(
     while Instant::now() < deadline
         && (!status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready)
     {
+        // At most one signed status, one health, and four exact discovery reads.
+        let request_budget =
+            (deadline.saturating_duration_since(Instant::now()) / 6).min(Duration::from_secs(5));
+        if request_budget.is_zero() {
+            break;
+        }
+        let mut bounded_status = status_client.to_builder();
+        bounded_status.torii_request_timeout = request_budget;
+        let bounded_status = bounded_status.build()?;
+        let http = HttpClient::builder()
+            .no_proxy()
+            .timeout(request_budget)
+            .user_agent("iroha-taira-inrou-probe/1")
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .wrap_err("failed to build Taira Inrou verification HTTP client")?;
         status_ready = false;
         current_route_ready = false;
         active_adverts = 0;
         hosted_replicas = 0;
         local_placement = None;
-        match account_signed_soracloud_status(status_client) {
+        match account_signed_soracloud_status(&bounded_status) {
             Ok(response) => {
                 last_status_code = response.status;
                 match response
@@ -3284,7 +3720,10 @@ fn probe_inrou_service(
                     Err(error) => {
                         last_route_error = format!("{error:#}");
                         if !status_ready || !current_route_ready || identities.len() < 4 {
-                            std::thread::sleep(Duration::from_millis(200));
+                            std::thread::sleep(
+                                Duration::from_millis(200)
+                                    .min(deadline.saturating_duration_since(Instant::now())),
+                            );
                         }
                         continue;
                     }
@@ -3292,7 +3731,10 @@ fn probe_inrou_service(
                 if response.status != 200 {
                     last_route_error = format!("HTTP {}", response.status);
                     if !status_ready || !current_route_ready || identities.len() < 4 {
-                        std::thread::sleep(Duration::from_millis(200));
+                        std::thread::sleep(
+                            Duration::from_millis(200)
+                                .min(deadline.saturating_duration_since(Instant::now())),
+                        );
                     }
                     continue;
                 }
@@ -3319,7 +3761,11 @@ fn probe_inrou_service(
             }
             Err(error) => last_route_error = format!("{error:#}"),
         }
-        if status_ready && current_route_ready && identities.len() == 4 && !health_identity_conflict
+        if probe_scope == InrouProbeScope::Public
+            && status_ready
+            && current_route_ready
+            && identities.len() == 4
+            && !health_identity_conflict
         {
             match verify_inrou_public_discovery(&http, public_root, deployment) {
                 Ok(status) => {
@@ -3334,7 +3780,9 @@ fn probe_inrou_service(
             }
         }
         if !status_ready || !current_route_ready || identities.len() < 4 || !discovery_ready {
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(
+                Duration::from_millis(200).min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
     }
     let mut checks = Vec::new();
@@ -3347,18 +3795,6 @@ fn probe_inrou_service(
             format!("active_adverts={active_adverts}, hosted_replicas={hosted_replicas}")
         } else {
             last_status_error.clone()
-        }),
-    );
-    push_check(
-        &mut checks,
-        "inrou_public_discovery",
-        last_discovery_code,
-        discovery_ready,
-        Some(if discovery_ready {
-            "current and revision authority plus public path and CID-host bytes, headers, and hash are exact"
-                .to_owned()
-        } else {
-            last_discovery_error.clone()
         }),
     );
     let marker_count = identities
@@ -3392,6 +3828,20 @@ fn probe_inrou_service(
             )
         }),
     );
+    if probe_scope == InrouProbeScope::Public {
+        push_check(
+            &mut checks,
+            "inrou_public_discovery",
+            last_discovery_code,
+            discovery_ready,
+            Some(if discovery_ready {
+                "current and revision authority plus public path and CID-host bytes, headers, and hash are exact"
+                .to_owned()
+            } else {
+                last_discovery_error.clone()
+            }),
+        );
+    }
     let mut failures = Vec::new();
     if !status_ready {
         failures.push(format!(
@@ -3438,9 +3888,28 @@ fn verify_inrou_check(
     status_client: &IrohaClient,
     stage: &crate::soracloud::TairaInrouStageIdentity,
     timeout_secs: u64,
+    probe_scope: InrouProbeScope,
+) -> Result<Value> {
+    validate_inrou_canary_timeout(timeout_secs)?;
+    verify_inrou_check_until(
+        public_root,
+        status_client,
+        stage,
+        prepared_observation_deadline(timeout_secs, None)?,
+        probe_scope,
+    )
+}
+
+fn verify_inrou_check_until(
+    public_root: &str,
+    status_client: &IrohaClient,
+    stage: &crate::soracloud::TairaInrouStageIdentity,
+    deadline: Instant,
+    probe_scope: InrouProbeScope,
 ) -> Result<Value> {
     let expected = InrouProbeIdentity::from(stage);
-    let observation = probe_inrou_service(public_root, status_client, &expected, timeout_secs)?;
+    let observation =
+        probe_inrou_service(public_root, status_client, &expected, deadline, probe_scope)?;
     let observed_at_unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock predates the Unix epoch; refusing stale-looking Inrou evidence")?
@@ -3448,6 +3917,10 @@ fn verify_inrou_check(
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms)
         .wrap_err("Inrou evidence timestamp exceeds the V1 u64 range")?;
     let mut extra = Map::new();
+    extra.insert(
+        "probe_scope".to_owned(),
+        Value::String(probe_scope.label().to_owned()),
+    );
     extra.insert(
         "service_name".to_owned(),
         Value::from(stage.service_name.clone()),
@@ -3565,8 +4038,8 @@ fn validate_inrou_canary_timeout(timeout_secs: u64) -> Result<()> {
 }
 
 const PREPARED_BINDING_METADATA: &str = "taira_public_reset_binding";
-const PREPARED_OPERATION_METADATA: &str = "taira_prepared_operation";
-const PREPARED_SEMANTIC_METADATA: &str = "taira_prepared_semantic_hash";
+const PREPARED_OPERATION_METADATA: &str = "prepared_operation";
+const PREPARED_SEMANTIC_METADATA: &str = "prepared_semantic_hash";
 
 struct ValidatedPreparedOperation {
     envelope: PreparedMutationEnvelopeV1,
@@ -3589,7 +4062,66 @@ impl ValidatedPreparedOperation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+macro_rules! prepared_write_pending_reasons {
+    ($($reason:ident),+ $(,)?) => {
+        /// Closed nonterminal reasons shared by the core write producer and host consumer.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(super) enum PreparedWritePendingReason {
+            $($reason),+
+        }
+
+        impl PreparedWritePendingReason {
+            pub(super) const ALL: &'static [Self] = &[$(Self::$reason),+];
+
+            pub(super) const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$reason => stringify!($reason)),+
+                }
+            }
+
+            pub(super) fn parse(value: &str) -> Result<Self> {
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|reason| reason.as_str() == value)
+                    .ok_or_else(|| eyre!("unsupported core write Pending evidence"))
+            }
+        }
+    };
+}
+
+prepared_write_pending_reasons! {
+    Absent,
+    AcceptedNotVisible,
+    AppliedEvidencePending,
+    ObservationUnavailable,
+    OnboardingAliasConflict,
+    OnboardingStateAbsent,
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+#[cfg(test)]
+pub(crate) fn core_pending_report_cases_for_test(
+    reason: PreparedWritePendingReason,
+) -> Result<Vec<(String, Vec<u8>, Value)>> {
+    tests::core_report_cases(PreparedRecoveryClassification::Pending { reason })
+}
+
+#[cfg(test)]
+pub(crate) fn core_rejected_report_cases_for_test(
+    evidence: &str,
+) -> Result<Vec<(String, Vec<u8>, Value)>> {
+    tests::core_report_cases(PreparedRecoveryClassification::Rejected {
+        terminal_kind: evidence.to_owned(),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum PreparedRecoveryClassification {
     Absent,
     Applied {
@@ -3597,7 +4129,7 @@ enum PreparedRecoveryClassification {
         evidence: String,
     },
     Pending {
-        terminal_kind: String,
+        reason: PreparedWritePendingReason,
     },
     Rejected {
         terminal_kind: String,
@@ -3609,10 +4141,13 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
     let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let public_root = normalize_root_url(&args.public_root)?;
     let binding = args.binding()?;
-    let action = args.prepared_action()?;
-    args.validate_prerequisite_action(action)?;
-    args.validate_onboarding_token_action(action)?;
+    let action = args.validated_action()?;
     let expected_fee_payment = context.transaction_fee_payment()?;
+    let deadline = prepared_observation_deadline(
+        args.timeout_secs,
+        (!matches!(action, PreparedEnvelopeAction::Recover(_)))
+            .then_some(binding.execution_expires_at_unix_ms),
+    )?;
     match action {
         PreparedEnvelopeAction::Prepare(output) => {
             require_forward_binding_current(&binding)?;
@@ -3622,14 +4157,18 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 &public_root,
                 &binding,
                 &expected_fee_payment,
+                deadline,
             )?;
+            require_forward_binding_current(&binding)?;
             let envelope = prepare_one_write_canary_operation(
                 context.config(),
                 args,
                 &public_root,
                 &binding,
                 expected_fee_payment.clone(),
+                deadline,
             )?;
+            remaining_prepared_budget(deadline)?;
             let envelope_bytes = canonical_prepared_envelope_bytes(&envelope)?;
             write_prepared_envelope(output, &envelope_bytes)?;
             let (outcome, evidence) = initial_prepared_report_state(&envelope.operation);
@@ -3658,6 +4197,7 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 &public_root,
                 &validated,
                 &expected_fee_payment,
+                deadline,
             )?;
             report_prepared_classification(&public_root, args, &validated, classification)
         }
@@ -3670,15 +4210,25 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 &expected_fee_payment,
                 PreparedLifetimeCheck::Structural,
             )?;
-            let client = IrohaClient::new(write_canary_config(
+            let client = IrohaClient::builder(write_canary_config(
                 context.config(),
                 &public_root,
                 &CanarySigner {
                     account_id: context.config().account.clone(),
                     key_pair: context.config().key_pair.clone(),
                 },
-            )?);
-            let classification = classify_exact_prepared_operation(&client, &validated)?;
+            )?)
+            .build()?
+            .with_request_deadline(deadline);
+            let classification = match classify_exact_prepared_operation(&client, &validated) {
+                Ok(classification) => classification,
+                Err(error) if Instant::now() >= deadline && prepared_request_timed_out(&error) => {
+                    PreparedRecoveryClassification::Pending {
+                        reason: PreparedWritePendingReason::ObservationUnavailable,
+                    }
+                }
+                Err(error) => return Err(error),
+            };
             report_prepared_classification(&public_root, args, &validated, classification)
         }
     }
@@ -3713,17 +4263,23 @@ fn prepare_one_write_canary_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     match args.operation {
         WriteCanaryOperation::Onboarding => {
-            prepare_onboarding_operation(config, args, public_root, binding, &fee_payment)
+            prepare_onboarding_operation(config, args, public_root, binding, &fee_payment, deadline)
         }
         WriteCanaryOperation::Faucet => {
-            prepare_faucet_operation(config, args, public_root, binding, &fee_payment)
+            prepare_faucet_operation(config, args, public_root, binding, &fee_payment, deadline)
         }
-        WriteCanaryOperation::FinalCanary => {
-            prepare_final_canary_operation(config, args, public_root, binding, fee_payment)
-        }
+        WriteCanaryOperation::FinalCanary => prepare_final_canary_operation(
+            config,
+            args,
+            public_root,
+            binding,
+            fee_payment,
+            deadline,
+        ),
     }
 }
 
@@ -3733,12 +4289,13 @@ fn prove_predecessor_applied(
     public_root: &str,
     current_binding: &PreparedMutationBindingV1,
     expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<()> {
-    let predecessor = match args.operation {
-        WriteCanaryOperation::Onboarding => return Ok(()),
-        WriteCanaryOperation::Faucet => WriteCanaryOperation::Onboarding,
-        WriteCanaryOperation::FinalCanary => WriteCanaryOperation::Faucet,
-    };
+    if args.operation == WriteCanaryOperation::Onboarding {
+        return Ok(());
+    }
+    let policy_context = PreparedOperationPolicyContext::Predecessor(args);
+    let predecessor = policy_context.operation()?;
     let fd = args
         .prerequisite_envelope_fd
         .ok_or_else(|| eyre!("the next operation requires its exact predecessor envelope"))?;
@@ -3757,8 +4314,7 @@ fn prove_predecessor_applied(
         .transpose()?;
     let mut validated = validate_prepared_operation(
         config,
-        args,
-        predecessor,
+        policy_context,
         &predecessor_binding,
         public_root,
         envelope,
@@ -3771,19 +4327,20 @@ fn prove_predecessor_applied(
         account_id: config.account.clone(),
         key_pair: config.key_pair.clone(),
     };
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
-    match classify_exact_prepared_operation(&client, &validated)? {
-        PreparedRecoveryClassification::Applied { .. } => Ok(()),
-        PreparedRecoveryClassification::Absent => {
-            eyre::bail!("predecessor transaction is absent; refusing to prepare the next operation")
+    let canary_config = write_canary_config(config, public_root, &signer)?;
+    let client = IrohaClient::builder(canary_config)
+        .build()?
+        .with_request_deadline(deadline);
+    await_predecessor_applied(deadline, Duration::from_millis(200), |_| {
+        match classify_exact_prepared_operation(&client, &validated)? {
+            PreparedRecoveryClassification::Applied { .. } => Ok(true),
+            PreparedRecoveryClassification::Absent
+            | PreparedRecoveryClassification::Pending { .. } => Ok(false),
+            PreparedRecoveryClassification::Rejected { terminal_kind } => eyre::bail!(
+                "predecessor transaction is terminally rejected (`{terminal_kind}`); refusing to prepare the next operation"
+            ),
         }
-        PreparedRecoveryClassification::Pending { terminal_kind } => eyre::bail!(
-            "predecessor transaction is not Applied (`{terminal_kind}`); refusing to prepare the next operation"
-        ),
-        PreparedRecoveryClassification::Rejected { terminal_kind } => eyre::bail!(
-            "predecessor transaction is terminally rejected (`{terminal_kind}`); refusing to prepare the next operation"
-        ),
-    }
+    })
 }
 
 fn prepare_final_canary_operation(
@@ -3792,11 +4349,16 @@ fn prepare_final_canary_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = BlockingIrohaClient::from_client(IrohaClient::new(canary_config.clone()))
-        .wrap_err("failed to initialize blocking transaction client")?;
+    let client = BlockingIrohaClient::from_client(
+        IrohaClient::builder(canary_config.clone())
+            .build()?
+            .with_request_deadline(deadline),
+    )
+    .wrap_err("failed to initialize blocking transaction client")?;
     let message = prepared_canary_message(binding)?;
     let semantic_sha256 = prepared_semantic_sha256(binding, WRITE_CANARY_OPERATION, &message)?;
     let mut metadata = Metadata::default();
@@ -3855,8 +4417,7 @@ fn prepare_final_canary_operation(
     };
     validate_prepared_operation(
         config,
-        args,
-        args.operation,
+        PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
         envelope.clone(),
@@ -3937,7 +4498,9 @@ fn validate_prepared_binding(binding: &PreparedMutationBindingV1) -> Result<()> 
 }
 
 fn canonical_prepared_envelope_bytes(envelope: &PreparedMutationEnvelopeV1) -> Result<Vec<u8>> {
-    let mut bytes = json::to_json(envelope)
+    let value =
+        json::to_value(envelope).wrap_err("project canonical prepared mutation envelope")?;
+    let mut bytes = json::to_json(&value)
         .wrap_err("encode canonical prepared mutation envelope")?
         .into_bytes();
     bytes.push(b'\n');
@@ -3945,6 +4508,13 @@ fn canonical_prepared_envelope_bytes(envelope: &PreparedMutationEnvelopeV1) -> R
         eyre::bail!("prepared mutation envelope exceeds its V1 byte bound");
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+/// Exercise the actual typed write-envelope producer from authenticated host fixtures.
+pub(crate) fn typed_write_envelope_bytes_for_test(value: Value) -> Result<Vec<u8>> {
+    let envelope: PreparedMutationEnvelopeV1 = json::from_value(value)?;
+    canonical_prepared_envelope_bytes(&envelope)
 }
 
 fn inherited_fd_path(fd: u32) -> Result<PathBuf> {
@@ -4011,8 +4581,7 @@ fn load_and_validate_prepared_operation(
     let binding = args.binding()?;
     let mut validated = validate_prepared_operation(
         config,
-        args,
-        args.operation,
+        PreparedOperationPolicyContext::Current(args),
         &binding,
         public_root,
         envelope,
@@ -4026,8 +4595,7 @@ fn load_and_validate_prepared_operation(
 
 fn validate_prepared_operation(
     config: &Config,
-    args: &WriteCanary,
-    expected_operation: WriteCanaryOperation,
+    policy_context: PreparedOperationPolicyContext<'_>,
     expected_binding: &PreparedMutationBindingV1,
     public_root: &str,
     envelope: PreparedMutationEnvelopeV1,
@@ -4048,8 +4616,9 @@ fn validate_prepared_operation(
     {
         eyre::bail!("prepared mutation envelope does not bind the exact CLI authorization");
     }
+    let expected_operation = policy_context.operation()?;
     let operation = &envelope.operation;
-    if operation.binding() != &envelope.binding
+    if !operation.matches_binding(&envelope.binding)?
         || operation.label() != expected_operation.label()
         || !matches!(
             (expected_operation, operation),
@@ -4072,7 +4641,8 @@ fn validate_prepared_operation(
         account_id: config.account.clone(),
         key_pair: config.key_pair.clone(),
     };
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let client =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?;
     let transaction = match operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
             let expected_alias = canary_alias(signer.key_pair.public_key());
@@ -4121,7 +4691,7 @@ fn validate_prepared_operation(
             None
         }
         PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
-            let faucet_policy = args.faucet_policy()?;
+            let faucet_policy = policy_context.faucet_policy()?;
             if prepared.account_id != config.account.to_string()
                 || prepared.asset_definition_id != faucet_policy.asset_definition_id().to_string()
             {
@@ -4245,16 +4815,8 @@ fn validate_prepared_transaction_closure(
     if prepared.as_bytes() != wire || prepared.hash() != transaction.hash() {
         eyre::bail!("prepared client payload differs from the exact signed transaction");
     }
-    let binding_json = json::to_json(operation.binding())
-        .wrap_err("serialize expected prepared mutation binding")?;
     let metadata = transaction.metadata();
-    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
-    if metadata
-        .get(&binding_name)
-        .map(IrohaJson::get)
-        .map(String::as_str)
-        != Some(binding_json.as_str())
-    {
+    if !prepared_operation_binding_matches(metadata, operation)? {
         eyre::bail!("prepared transaction metadata does not bind `{PREPARED_BINDING_METADATA}`");
     }
     for (key, expected) in [
@@ -4305,10 +4867,16 @@ fn validate_prepared_transaction_closure(
                 eyre::bail!("prepared final-canary instruction or metadata closure is not exact");
             }
         }
-        PreparedTransactionOperationV1::OnboardingPrepared(_)
-        | PreparedTransactionOperationV1::FaucetPrepared(_) => {
+        PreparedTransactionOperationV1::OnboardingPrepared(_) => {
             if metadata.iter().len() != 3 {
-                eyre::bail!("server-prepared transaction metadata closure is not exact");
+                eyre::bail!("prepared onboarding metadata closure is not exact");
+            }
+        }
+        PreparedTransactionOperationV1::FaucetPrepared(_) => {
+            if !prepared_faucet_metadata_closure_is_exact(metadata) {
+                eyre::bail!(
+                    "prepared faucet metadata closure or claim marker version is not exact"
+                );
             }
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(_) => {
@@ -4316,6 +4884,17 @@ fn validate_prepared_transaction_closure(
         }
     }
     Ok(())
+}
+
+fn prepared_faucet_metadata_closure_is_exact(metadata: &Metadata) -> bool {
+    use iroha::data_model::transaction::{
+        FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY, FAUCET_CLAIM_MARKER_VERSION_V1,
+    };
+    metadata.iter().len() == 4
+        && metadata.get(
+            &Name::from_str(FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY)
+                .expect("static faucet claim marker metadata key"),
+        ) == Some(&IrohaJson::new(FAUCET_CLAIM_MARKER_VERSION_V1))
 }
 
 /// Authenticate one exact first-release final-canary operation without network I/O.
@@ -4427,74 +5006,6 @@ fn validate_live_prepared_transaction_freshness(
     Ok(())
 }
 
-fn submit_exact_prepared_operation(
-    config: &Config,
-    args: &WriteCanary,
-    public_root: &str,
-    validated: &ValidatedPreparedOperation,
-    expected_fee_payment: &FeePaymentIntent,
-) -> Result<PreparedRecoveryClassification> {
-    match args.operation {
-        WriteCanaryOperation::Onboarding | WriteCanaryOperation::Faucet => {
-            submit_server_prepared_operation(
-                config,
-                args,
-                public_root,
-                validated,
-                expected_fee_payment,
-            )
-        }
-        WriteCanaryOperation::FinalCanary => {
-            let signer = CanarySigner {
-                account_id: config.account.clone(),
-                key_pair: config.key_pair.clone(),
-            };
-            let client = BlockingIrohaClient::from_client(IrohaClient::new(write_canary_config(
-                config,
-                public_root,
-                &signer,
-            )?))?;
-            let classification = classify_exact_prepared_operation(client.client(), validated)?;
-            if !submit_required_after_classification(&validated.envelope.binding, &classification)?
-            {
-                return Ok(classification);
-            }
-            let transaction = validated.transaction()?;
-            let prepared = iroha::client::PreparedTransactionPayload::from_transaction(transaction);
-            if prepared.as_bytes() != validated.wire()? {
-                eyre::bail!("raw submit bytes differ from the retained prepared envelope");
-            }
-            let submitted = match client.submit_prepared_transaction_payload(&prepared) {
-                Ok(submitted) => submitted,
-                Err(error) => {
-                    return match classify_exact_prepared_operation(client.client(), validated)? {
-                        PreparedRecoveryClassification::Absent => Err(hint_submit_error(error)),
-                        reconciled => Ok(reconciled),
-                    };
-                }
-            };
-            if submitted != transaction.hash() {
-                eyre::bail!("raw submit returned a different transaction hash");
-            }
-            let _ = client.wait_for_transaction_applied(
-                submitted,
-                TransactionWaitOptions {
-                    timeout: Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
-                    poll_interval: Duration::from_millis(500),
-                },
-            );
-            match classify_exact_prepared_operation(client.client(), validated)? {
-                PreparedRecoveryClassification::Absent => {
-                    Ok(PreparedRecoveryClassification::Pending {
-                        terminal_kind: "AcceptedNotVisible".to_owned(),
-                    })
-                }
-                reconciled => Ok(reconciled),
-            }
-        }
-    }
-}
-
 fn classify_exact_prepared_operation(
     client: &IrohaClient,
     validated: &ValidatedPreparedOperation,
@@ -4533,8 +5044,17 @@ fn classify_exact_prepared_operation(
                 .block_height
                 .filter(|height| *height > 0)
                 .ok_or_else(|| eyre!("Applied prepared transaction omits its block height"))?;
-            let evidence =
-                verify_exact_committed_prepared_operation(client, validated)?.to_string();
+            let evidence = match verify_exact_committed_prepared_operation(client, validated) {
+                Ok(evidence) => evidence.to_string(),
+                Err(error) if exact_transaction_details_not_found(&error) => {
+                    // Global status may resolve at a peer ahead of this exact local
+                    // lookup. Keep polling the same hash until its proof is visible.
+                    return Ok(PreparedRecoveryClassification::Pending {
+                        reason: PreparedWritePendingReason::AppliedEvidencePending,
+                    });
+                }
+                Err(error) => return Err(error),
+            };
             Ok(PreparedRecoveryClassification::Applied {
                 block_height: Some(block_height),
                 evidence,
@@ -4547,12 +5067,74 @@ fn classify_exact_prepared_operation(
         }
         "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired" => {
             Ok(PreparedRecoveryClassification::Pending {
-                terminal_kind: status.status.kind,
+                reason: PreparedWritePendingReason::parse(&status.status.kind)?,
             })
         }
         other => Err(eyre!(
             "prepared-transaction status response has unsupported kind `{other}`"
         )),
+    }
+}
+
+/// Only a typed absence from the exact details endpoint permits proof-visibility retry.
+pub(crate) fn exact_transaction_details_not_found(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<iroha::query::QueryError>(),
+            Some(iroha::query::QueryError::Validation(
+                iroha::data_model::ValidationFail::QueryFailed(
+                    iroha::data_model::query::error::QueryExecutionFail::NotFound
+                )
+            ))
+        )
+    })
+}
+
+fn prepared_observation_deadline(timeout_secs: u64, expires_at: Option<u64>) -> Result<Instant> {
+    let mut budget = Duration::from_secs(timeout_secs);
+    if let Some(expires_at) = expires_at {
+        budget = budget.min(Duration::from_millis(
+            expires_at.saturating_sub(current_unix_ms()?),
+        ));
+    }
+    Instant::now()
+        .checked_add(budget)
+        .ok_or_else(|| eyre!("prepared observation deadline overflow"))
+}
+
+fn remaining_prepared_budget(deadline: Instant) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "prepared action exhausted its original deadline",
+        )
+        .into());
+    }
+    Ok(remaining)
+}
+
+/// A successor observes its retained predecessor under one original deadline.
+/// Each observer binds its physical reads to this same absolute deadline.
+fn await_predecessor_applied(
+    deadline: Instant,
+    poll_interval: Duration,
+    mut observe: impl FnMut(Duration) -> Result<bool>,
+) -> Result<()> {
+    if poll_interval.is_zero() {
+        eyre::bail!("predecessor poll interval must be positive");
+    }
+    loop {
+        let request_budget = deadline.saturating_duration_since(Instant::now());
+        if request_budget.is_zero() {
+            eyre::bail!(
+                "predecessor has not reached exact Applied proof within the original deadline"
+            );
+        }
+        if observe(request_budget)? {
+            return Ok(());
+        }
+        std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -4585,12 +5167,12 @@ fn classify_proof_required_current_state(
         }
         AccountOnboardingCurrentStateV1::AliasConflict { .. } => {
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "OnboardingAliasConflict".to_owned(),
+                reason: PreparedWritePendingReason::OnboardingAliasConflict,
             }
         }
         AccountOnboardingCurrentStateV1::AliasAbsent { .. } => {
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "OnboardingStateAbsent".to_owned(),
+                reason: PreparedWritePendingReason::OnboardingStateAbsent,
             }
         }
     }
@@ -4612,38 +5194,21 @@ fn verify_exact_committed_prepared_operation(
     client: &IrohaClient,
     validated: &ValidatedPreparedOperation,
 ) -> Result<Hash> {
-    let expected_binding = json::to_json(&validated.envelope.binding)
-        .wrap_err("serialize expected committed mutation binding")?;
-    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
     let operation_name = Name::from_str(PREPARED_OPERATION_METADATA)?;
     let expected_transaction = validated.transaction()?;
     let entrypoint_hash = expected_transaction.hash_as_entrypoint();
-    let one = NonZeroU64::new(1).expect("nonzero committed lookup bound");
-    let committed = client
-        .query(FindTransactions::new())
-        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
-            entry_eq: Some(entrypoint_hash),
-            ..CommittedTxFilters::default()
-        }))
-        .with_pagination(Pagination::new(Some(one), 0))
-        .with_fetch_size(FetchSize::new(Some(one)))
-        .execute_all()
+    let details = client
+        .get_transaction_details(entrypoint_hash)
         .wrap_err("read-only exact prepared-transaction proof query failed")?;
-    let [committed] = committed.as_slice() else {
-        eyre::bail!("Applied status lacks one exact bounded committed-transaction proof");
-    };
+    let committed = &details.transaction;
     if committed.result().is_err() {
         eyre::bail!("Applied status resolves to a failed committed transaction");
     }
     let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
         eyre::bail!("Applied status resolves to a non-external transaction entrypoint");
     };
-    let binding_matches = transaction
-        .metadata()
-        .get(&binding_name)
-        .and_then(|value| value.try_into_any_norito::<String>().ok())
-        .as_deref()
-        == Some(expected_binding.as_str());
+    let binding_matches =
+        prepared_operation_binding_matches(transaction.metadata(), &validated.envelope.operation)?;
     let operation_matches = transaction
         .metadata()
         .get(&operation_name)
@@ -4664,6 +5229,18 @@ fn verify_exact_committed_prepared_operation(
     Ok(entrypoint_hash.into())
 }
 
+fn prepared_operation_binding_matches(
+    metadata: &Metadata,
+    operation: &PreparedTransactionOperationV1,
+) -> Result<bool> {
+    let (binding_key, expected_binding) = operation.binding_metadata()?;
+    Ok(metadata
+        .get(&Name::from_str(binding_key)?)
+        .map(IrohaJson::get)
+        .map(String::as_str)
+        == Some(expected_binding.as_str()))
+}
+
 fn report_prepared_classification(
     public_root: &str,
     args: &WriteCanary,
@@ -4678,7 +5255,7 @@ fn report_prepared_classification(
             &validated.envelope_bytes,
             "Pending",
             None,
-            Some("Absent".to_owned()),
+            Some(PreparedWritePendingReason::Absent.as_str().to_owned()),
         ),
         PreparedRecoveryClassification::Applied {
             block_height,
@@ -4692,14 +5269,14 @@ fn report_prepared_classification(
             block_height,
             Some(evidence),
         ),
-        PreparedRecoveryClassification::Pending { terminal_kind } => prepared_operation_report(
+        PreparedRecoveryClassification::Pending { reason } => prepared_operation_report(
             public_root,
             args,
             &validated.envelope,
             &validated.envelope_bytes,
             "Pending",
             None,
-            Some(terminal_kind),
+            Some(reason.as_str().to_owned()),
         ),
         PreparedRecoveryClassification::Rejected { terminal_kind } => prepared_operation_report(
             public_root,
@@ -4813,36 +5390,40 @@ fn prepare_onboarding_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let token = args.read_onboarding_token()?;
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::new(canary_config.clone());
+    let client = IrohaClient::builder(canary_config.clone())
+        .build()?
+        .with_request_deadline(deadline);
     let alias = canary_alias(signer.key_pair.public_key());
     let request =
         AccountOnboardingPlanRequestV1::try_new(alias, &signer.account_id, std::iter::empty())?;
     let receipt = client
         .plan_account_onboarding(&request, token.as_str())
         .wrap_err("failed to obtain an authenticated onboarding plan")?;
+    let public_binding = binding.onboarding_binding(&receipt)?;
     let operation = match client
         .prepare_account_onboarding_transaction(
             &request,
             &receipt,
-            binding,
+            &public_binding,
             fee_payment,
             token.as_str(),
         )
         .wrap_err("failed to prepare exact sponsored onboarding transaction")?
     {
         AccountOnboardingPrepareResponseV1::Prepared(prepared) => {
-            PreparedTransactionOperationV1::OnboardingPrepared(prepared)
+            PreparedTransactionOperationV1::OnboardingPrepared(*prepared)
         }
         AccountOnboardingPrepareResponseV1::ProofRequired(result) => {
             PreparedTransactionOperationV1::OnboardingProofRequired(
                 PreparedOnboardingProofRequiredV1 {
                     schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
                     receipt,
-                    result,
+                    result: *result,
                 },
             )
         }
@@ -4862,8 +5443,7 @@ fn prepare_onboarding_operation(
     };
     validate_prepared_operation(
         config,
-        args,
-        WriteCanaryOperation::Onboarding,
+        PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
         envelope.clone(),
@@ -4880,15 +5460,23 @@ fn prepare_faucet_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::new(canary_config.clone());
+    let client = IrohaClient::builder(canary_config.clone())
+        .build()?
+        .with_request_deadline(deadline);
     let faucet_policy = args.faucet_policy()?;
-    let claim =
-        solve_account_faucet_claim(public_root, &signer.account_id, &canary_config.network_id)?;
+    let claim = solve_account_faucet_claim(
+        public_root,
+        &signer.account_id,
+        &canary_config.network_id,
+        deadline,
+    )?;
+    let public_binding = binding.faucet_binding(&claim)?;
     let prepared = client
-        .prepare_account_faucet_transaction(&claim, binding, fee_payment, &faucet_policy)
+        .prepare_account_faucet_transaction(&claim, &public_binding, fee_payment, &faucet_policy)
         .wrap_err("failed to prepare exact faucet transaction")?;
     let wire = hex::decode(&prepared.signed_transaction_wire_hex)
         .wrap_err("prepared faucet wire is not hexadecimal")?;
@@ -4903,8 +5491,7 @@ fn prepare_faucet_operation(
     };
     validate_prepared_operation(
         config,
-        args,
-        WriteCanaryOperation::Faucet,
+        PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
         envelope.clone(),
@@ -4915,18 +5502,27 @@ fn prepare_faucet_operation(
     Ok(envelope)
 }
 
-fn submit_server_prepared_operation(
+fn submit_exact_prepared_operation(
     config: &Config,
     args: &WriteCanary,
     public_root: &str,
     validated: &ValidatedPreparedOperation,
     expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedRecoveryClassification> {
     let signer = resolve_canary_signer(config)?;
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let client = IrohaClient::builder(write_canary_config(config, public_root, &signer)?)
+        .build()?
+        .with_request_deadline(deadline);
     let classification = classify_exact_prepared_operation(&client, validated)?;
     if !submit_required_after_classification(&validated.envelope.binding, &classification)? {
-        return Ok(classification);
+        return await_exact_prepared_operation(
+            &client,
+            validated,
+            classification,
+            deadline,
+            Duration::from_millis(500),
+        );
     }
     let submitted = match &validated.envelope.operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
@@ -4936,55 +5532,152 @@ fn submit_server_prepared_operation(
                 &signer.account_id,
                 std::iter::empty(),
             )?;
-            client.submit_prepared_account_onboarding_transaction(
-                &request,
-                prepared,
-                expected_fee_payment,
-                token.as_str(),
-            )
+            client
+                .submit_prepared_account_onboarding_transaction(
+                    &request,
+                    prepared,
+                    expected_fee_payment,
+                    token.as_str(),
+                )
+                .map(|submitted| submitted.outcome)
         }
         PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
             let faucet_policy = args.faucet_policy()?;
-            client.submit_prepared_account_faucet_transaction(
-                prepared,
-                expected_fee_payment,
-                &faucet_policy,
-            )
+            client
+                .submit_prepared_account_faucet_transaction(
+                    prepared,
+                    expected_fee_payment,
+                    &faucet_policy,
+                )
+                .map(|submitted| submitted.outcome)
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(_) => {
             eyre::bail!("a proof-required onboarding result must never be submitted")
         }
         PreparedTransactionOperationV1::FinalCanary(_) => {
-            eyre::bail!("final-canary transaction reached the server-prepared submit path")
+            let transaction = validated.transaction()?;
+            let prepared = iroha::client::PreparedTransactionPayload::from_transaction(transaction);
+            if prepared.as_bytes() != validated.wire()? {
+                eyre::bail!("raw submit bytes differ from the retained prepared envelope");
+            }
+            let blocking = BlockingIrohaClient::from_client(client.clone())?;
+            blocking
+                .submit_prepared_transaction_payload(&prepared)
+                .and_then(|submitted| {
+                    if submitted != transaction.hash() {
+                        eyre::bail!("raw submit returned a different transaction hash");
+                    }
+                    Ok(PreparedTransactionOutcomeV1::Pending)
+                })
         }
     };
     let submitted = match submitted {
         Ok(submitted) => submitted,
         Err(error) => {
-            return match classify_exact_prepared_operation(&client, validated)? {
-                PreparedRecoveryClassification::Absent => Err(error).wrap_err(
-                    "exact server-prepared transaction submission failed before observability",
+            let reconciled = match classify_exact_prepared_operation(&client, validated) {
+                Ok(reconciled) => reconciled,
+                Err(error) if Instant::now() >= deadline && prepared_request_timed_out(&error) => {
+                    return Ok(PreparedRecoveryClassification::Pending {
+                        reason: PreparedWritePendingReason::ObservationUnavailable,
+                    });
+                }
+                Err(error) => return Err(error),
+            };
+            return match reconciled {
+                PreparedRecoveryClassification::Absent => Err(hint_submit_error(error))
+                    .wrap_err("exact prepared transaction submission failed before observability"),
+                reconciled => await_exact_prepared_operation(
+                    &client,
+                    validated,
+                    reconciled,
+                    deadline,
+                    Duration::from_millis(500),
                 ),
-                reconciled => Ok(reconciled),
             };
         }
     };
-    match submitted.outcome {
+    match submitted {
         PreparedTransactionOutcomeV1::Rejected => Ok(PreparedRecoveryClassification::Rejected {
             terminal_kind: "Rejected".to_owned(),
         }),
         PreparedTransactionOutcomeV1::Applied | PreparedTransactionOutcomeV1::Pending => {
-            match classify_exact_prepared_operation(&client, validated)? {
-                PreparedRecoveryClassification::Absent => {
-                    Ok(PreparedRecoveryClassification::Pending {
-                        terminal_kind: "AcceptedNotVisible".to_owned(),
-                    })
-                }
-                reconciled => Ok(reconciled),
-            }
+            await_exact_prepared_operation(
+                &client,
+                validated,
+                PreparedRecoveryClassification::Pending {
+                    reason: PreparedWritePendingReason::AcceptedNotVisible,
+                },
+                deadline,
+                Duration::from_millis(500),
+            )
         }
     }
 }
+
+fn prepared_request_timed_out(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout)
+            || cause
+                .downcast_ref::<iroha::client::CapabilityProbeError>()
+                .is_some_and(iroha::client::CapabilityProbeError::is_timeout)
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+    })
+}
+/// Poll only the already authenticated transaction; submission is never repeated here.
+/// Timeouts imposed by the remaining confirmation budget retain the last observation.
+fn await_exact_prepared_operation(
+    client: &IrohaClient,
+    validated: &ValidatedPreparedOperation,
+    mut classification: PreparedRecoveryClassification,
+    deadline: Instant,
+    poll_interval: Duration,
+) -> Result<PreparedRecoveryClassification> {
+    if poll_interval.is_zero() {
+        eyre::bail!("prepared confirmation poll interval must be positive");
+    }
+    let bounded_client = client.with_request_deadline(deadline);
+    loop {
+        if matches!(
+            classification,
+            PreparedRecoveryClassification::Applied { .. }
+                | PreparedRecoveryClassification::Rejected { .. }
+        ) {
+            return Ok(classification);
+        }
+        if classification == PreparedRecoveryClassification::Absent {
+            classification = PreparedRecoveryClassification::Pending {
+                reason: PreparedWritePendingReason::AcceptedNotVisible,
+            };
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(classification);
+        }
+        std::thread::sleep(poll_interval.min(remaining));
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(classification);
+        }
+        let deadline_limits_request =
+            client.torii_request_timeout().is_zero() || remaining < client.torii_request_timeout();
+        match classify_exact_prepared_operation(&bounded_client, validated) {
+            Ok(observed) => classification = observed,
+            Err(error)
+                if (deadline_limits_request || Instant::now() >= deadline)
+                    && prepared_request_timed_out(&error) =>
+            {
+                // A shrinking deadline can cancel even a healthy read. Keep the
+                // last observation and retry only within the original deadline.
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn write_canary_config(
     config: &Config,
     public_root: &str,
@@ -5314,6 +6007,7 @@ fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
 }
 fn http_client() -> Result<HttpClient> {
     HttpClient::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(30))
         .user_agent("iroha-taira-devex/1")
         .redirect(reqwest::redirect::Policy::none())
@@ -5346,6 +6040,24 @@ fn http_mcp_json(
     request_id: u64,
     method: &str,
     params: Value,
+) -> Result<HttpJson> {
+    http_mcp_json_with_timeout(
+        http,
+        url,
+        request_id,
+        method,
+        params,
+        Duration::from_secs(30),
+    )
+}
+
+fn http_mcp_json_with_timeout(
+    http: &HttpClient,
+    url: &str,
+    request_id: u64,
+    method: &str,
+    params: Value,
+    timeout: Duration,
 ) -> Result<HttpJson> {
     let mut params = params
         .as_object()
@@ -5394,6 +6106,7 @@ fn http_mcp_json(
     let bytes = json::to_vec(&payload).map_err(|err| eyre!("encode MCP request body: {err}"))?;
     let mut request = http
         .post(url)
+        .timeout(timeout)
         .header(reqwest::header::ACCEPT, MCP_ACCEPT)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(
@@ -5523,48 +6236,90 @@ fn validate_public_status(status: Option<&Value>) -> Result<(), String> {
         })?;
     Ok(())
 }
-fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
+fn validate_time_snapshot(snapshot: Option<&Value>, scope: DoctorScope) -> Result<(), String> {
     let snapshot = snapshot
         .and_then(Value::as_object)
         .ok_or_else(|| "/v1/time/now returned a non-object JSON body".to_owned())?;
-    let positive_u64 = |field: &str| {
+    let unsigned = |field: &str| {
         snapshot
             .get(field)
             .and_then(Value::as_u64)
-            .filter(|value| *value > 0)
-            .ok_or_else(|| format!("/v1/time/now field `{field}` must be a positive integer"))
+            .ok_or_else(|| format!("/v1/time/now field `{field}` must be a nonnegative integer"))
     };
-    positive_u64("now")?;
-    positive_u64("sample_count")?;
-    positive_u64("peer_count")?;
-    snapshot
-        .get("confidence_ms")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            "/v1/time/now field `confidence_ms` must be a nonnegative integer".to_owned()
-        })?;
+    if unsigned("now")? == 0 {
+        return Err("/v1/time/now field `now` must be a positive integer".to_owned());
+    }
+    let samples = unsigned("sample_count")?;
+    let peers = unsigned("peer_count")?;
+    unsigned("confidence_ms")?;
     snapshot
         .get("offset_ms")
         .and_then(Value::as_i64)
         .ok_or_else(|| "/v1/time/now field `offset_ms` must be an integer".to_owned())?;
-    if snapshot.get("enforcement_mode").and_then(Value::as_str) != Some("reject") {
-        return Err("/v1/time/now is not using fail-closed time enforcement".to_owned());
+    let mode = snapshot.get("enforcement_mode").and_then(Value::as_str);
+    if !matches!(mode, Some("warn" | "reject")) {
+        return Err("/v1/time/now has an unknown time enforcement mode".to_owned());
     }
-    if snapshot.get("fallback").and_then(Value::as_bool) != Some(false) {
-        return Err("/v1/time/now is using the local-clock fallback".to_owned());
-    }
-    for field in ["healthy", "min_samples_ok", "offset_ok", "confidence_ok"] {
-        if snapshot
-            .get("health")
-            .and_then(Value::as_object)
-            .and_then(|health| health.get(field))
+    let fallback = snapshot
+        .get("fallback")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "/v1/time/now field `fallback` must be a boolean".to_owned())?;
+    let health = snapshot
+        .get("health")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/v1/time/now field `health` must be an object".to_owned())?;
+    let flag = |field: &str| {
+        health
+            .get(field)
             .and_then(Value::as_bool)
-            != Some(true)
-        {
-            return Err(format!("/v1/time/now health field `{field}` is not true"));
+            .ok_or_else(|| format!("/v1/time/now health field `{field}` must be a boolean"))
+    };
+    let healthy = flag("healthy")?;
+    let min_samples_ok = flag("min_samples_ok")?;
+    let offset_ok = flag("offset_ok")?;
+    let confidence_ok = flag("confidence_ok")?;
+    if healthy != (!fallback && min_samples_ok && offset_ok && confidence_ok)
+        || (min_samples_ok && (samples == 0 || peers == 0))
+        || samples > peers
+    {
+        return Err("/v1/time/now has inconsistent sample or health fields".to_owned());
+    }
+    // Missing synchronization is visible but does not gate the basic testnet.
+    // An observed violation of the node's configured clock bounds still does.
+    if !offset_ok || !confidence_ok {
+        return Err("/v1/time/now exceeds configured offset or confidence bounds".to_owned());
+    }
+    if scope == DoctorScope::Full {
+        if mode != Some("reject") {
+            return Err("/v1/time/now is not using fail-closed time enforcement".to_owned());
+        }
+        if fallback {
+            return Err("/v1/time/now is using the local-clock fallback".to_owned());
+        }
+        if !healthy {
+            return Err("/v1/time/now network time is not healthy".to_owned());
         }
     }
     Ok(())
+}
+
+fn collect_time_warnings(snapshot: Option<&Value>, warnings: &mut Vec<String>) {
+    let Some(snapshot) = snapshot else { return };
+    if snapshot.get("enforcement_mode").and_then(Value::as_str) != Some("reject")
+        || snapshot.pointer("/health/healthy").and_then(Value::as_bool) != Some(true)
+    {
+        warnings.push(format!(
+            "network time: enforcement_mode={}, fallback={}, sample_count={}, peer_count={}, healthy={}, min_samples_ok={}, offset_ok={}, confidence_ok={}",
+            snapshot["enforcement_mode"].as_str().expect("validated mode"),
+            snapshot["fallback"].as_bool().expect("validated fallback"),
+            snapshot["sample_count"].as_u64().expect("validated sample count"),
+            snapshot["peer_count"].as_u64().expect("validated peer count"),
+            snapshot["health"]["healthy"].as_bool().expect("validated health"),
+            snapshot["health"]["min_samples_ok"].as_bool().expect("validated samples"),
+            snapshot["health"]["offset_ok"].as_bool().expect("validated offset"),
+            snapshot["health"]["confidence_ok"].as_bool().expect("validated confidence"),
+        ));
+    }
 }
 
 fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String> {
@@ -6760,8 +7515,27 @@ fn validate_modern_mcp_result<'a>(
             "MCP {method} response has a substituted JSON-RPC envelope"
         ));
     }
-    if payload.get("error").is_some() {
-        return Err(format!("MCP {method} response contains a JSON-RPC error"));
+    if let Some(error) = payload.get("error") {
+        // Preserve bounded machine diagnostics without copying the upstream
+        // free-form message, arbitrary data, or the complete response body.
+        let code = error
+            .get("code")
+            .and_then(Value::as_i64)
+            .map_or_else(|| "invalid".to_owned(), |code| code.to_string());
+        let error_code = error
+            .pointer("/data/error_code")
+            .and_then(Value::as_str)
+            .filter(|code| {
+                !code.is_empty()
+                    && code.len() <= 64
+                    && code.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+            })
+            .unwrap_or("unspecified");
+        return Err(format!(
+            "MCP {method} response contains a JSON-RPC error: code={code}, error_code={error_code}"
+        ));
     }
     let result = payload
         .get("result")
@@ -6826,6 +7600,68 @@ fn validate_mcp_discovery_response(payload: Option<&Value>) -> Result<(), String
     Ok(())
 }
 
+fn read_mcp_tool_catalog(
+    http: &HttpClient,
+    url: &str,
+) -> Result<(u16, Result<Vec<String>, String>)> {
+    let mut names = BTreeSet::new();
+    let mut cursor = 0_u64;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    // A bounded walk consumes the actual Torii pagination contract. A missing
+    // required tool on an early page is not evidence that the tool is absent.
+    for _ in 0..64 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok((200, Err("MCP tools/list exceeded its deadline".to_owned())));
+        }
+        let params = if cursor == 0 {
+            norito::json!({})
+        } else {
+            norito::json!({ "cursor": (cursor.to_string()) })
+        };
+        let response = http_mcp_json_with_timeout(http, url, 2, "tools/list", params, remaining)?;
+        if response.status != 200 {
+            return Ok((response.status, Ok(Vec::new())));
+        }
+        let page = match mcp_tool_names(response.body.as_ref()) {
+            Ok(page) => page,
+            Err(error) => return Ok((200, Err(error))),
+        };
+        for name in page {
+            if !names.insert(name) {
+                return Ok((
+                    200,
+                    Err("MCP tools/list repeats a tool across pages".to_owned()),
+                ));
+            }
+        }
+        let next = response
+            .body
+            .as_ref()
+            .and_then(|body| body.pointer("/result/nextCursor"));
+        let Some(next) = next else {
+            return Ok((200, Ok(names.into_iter().collect())));
+        };
+        let next = next.as_str().and_then(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|number| value == number.to_string())
+        });
+        let Some(next) = next.filter(|next| *next > cursor && *next == names.len() as u64) else {
+            return Ok((
+                200,
+                Err("MCP tools/list has an invalid or nonprogressing cursor".to_owned()),
+            ));
+        };
+        cursor = next;
+    }
+    Ok((
+        200,
+        Err("MCP tools/list exceeds the 64-page doctor bound".to_owned()),
+    ))
+}
+
 fn mcp_tool_names(payload: Option<&Value>) -> Result<Vec<String>, String> {
     let result = validate_modern_mcp_result(payload, 2, "tools/list")?;
     let tools = result
@@ -6842,7 +7678,7 @@ fn mcp_tool_names(payload: Option<&Value>) -> Result<Vec<String>, String> {
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("MCP tool {index} omits a string name"))?;
-        if !name.starts_with("iroha.")
+        if !(name.starts_with("iroha.") || name.starts_with("torii."))
             || name.len() > 128
             || name.ends_with('.')
             || name.contains("..")
@@ -6886,10 +7722,17 @@ fn solve_account_faucet_claim(
     public_root: &str,
     account_id: &AccountId,
     expected_network_id: &NetworkId,
+    deadline: Instant,
 ) -> Result<AccountFaucetClaimV1> {
     let http = http_client()?;
     let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
-    let puzzle = http_json(&http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
+    let response = http
+        .get(puzzle_url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(30).min(remaining_prepared_budget(deadline)?))
+        .send()
+        .wrap_err("faucet puzzle request failed")?;
+    let puzzle = decode_http_json_response(response)?;
     if puzzle.status != 200 {
         eyre::bail!(
             "faucet puzzle request failed with HTTP {}; no transaction was prepared",
@@ -6900,7 +7743,12 @@ fn solve_account_faucet_claim(
         .body
         .as_ref()
         .ok_or_else(|| eyre!("faucet puzzle response was not canonical JSON"))?;
-    let claim = solve_faucet_puzzle(&account_id.to_string(), expected_network_id, puzzle)?;
+    let claim = solve_faucet_puzzle(
+        &account_id.to_string(),
+        expected_network_id,
+        puzzle,
+        deadline,
+    )?;
     json::from_value(claim).wrap_err("decode solved faucet claim into its closed V1 schema")
 }
 
@@ -6908,6 +7756,7 @@ fn solve_faucet_puzzle(
     account_id: &str,
     expected_network_id: &NetworkId,
     puzzle: &Value,
+    deadline: Instant,
 ) -> Result<Value> {
     validate_exact_faucet_puzzle_shape(puzzle)?;
     let algorithm = required_str(puzzle, "algorithm")?;
@@ -6949,7 +7798,7 @@ fn solve_faucet_puzzle(
         .map_err(|err| eyre!("invalid faucet scrypt parameters: {err}"))?;
     let difficulty_bits =
         u32::try_from(difficulty_bits).map_err(|_| eyre!("faucet difficulty is too large"))?;
-    let nonce = solve_faucet_pow(&challenge, &params, difficulty_bits)?;
+    let nonce = solve_faucet_pow(&challenge, &params, difficulty_bits, deadline)?;
     body.insert("pow_anchor_height".into(), Value::from(anchor_height));
     body.insert("pow_nonce_hex".into(), Value::String(hex::encode(nonce)));
     Ok(Value::Object(body))
@@ -7069,12 +7918,15 @@ fn solve_faucet_pow(
     challenge: &[u8; 32],
     params: &ScryptParams,
     difficulty_bits: u32,
+    deadline: Instant,
 ) -> Result<[u8; 8]> {
     for nonce in 0_u64..(1_u64 << 63) {
+        remaining_prepared_budget(deadline)?;
         let nonce_bytes = nonce.to_be_bytes();
         let mut digest = [0_u8; 32];
         derive_scrypt(&nonce_bytes, challenge, params, &mut digest)
             .map_err(|err| eyre!("failed faucet scrypt derivation: {err}"))?;
+        remaining_prepared_budget(deadline)?;
         if leading_zero_bits(&digest) >= difficulty_bits {
             return Ok(nonce_bytes);
         }
@@ -7132,6 +7984,7 @@ fn compact_json(value: &Value) -> String {
 }
 #[cfg(test)]
 mod tests {
+    include!("taira_canary_deadline_tests.rs");
     use super::*;
     use clap::Parser as _;
     use iroha_i18n::{Bundle, Language, Localizer};
@@ -7215,6 +8068,128 @@ mod tests {
         let _error = zero_amount
             .faucet_policy()
             .expect_err("zero faucet amount must fail closed");
+    }
+
+    #[test]
+    fn final_canary_predecessor_requires_its_independent_faucet_policy() {
+        let mut args = fixture_write_canary_args(WriteCanaryOperation::FinalCanary);
+        args.prerequisite_envelope_fd = Some(4);
+        args.validated_action().expect("complete final preparation");
+        let expected = fixture_write_canary_args(WriteCanaryOperation::Faucet)
+            .faucet_policy()
+            .expect("independent operator policy");
+        let predecessor = PreparedOperationPolicyContext::Predecessor(&args);
+        assert_eq!(
+            predecessor.operation().unwrap(),
+            WriteCanaryOperation::Faucet
+        );
+        assert_eq!(predecessor.faucet_policy().unwrap(), expected);
+        assert!(
+            args.faucet_policy().is_err(),
+            "current-child faucet guard stays strict"
+        );
+        assert!(
+            PreparedOperationPolicyContext::Current(&args)
+                .faucet_policy()
+                .is_err()
+        );
+
+        for field in ["authority", "asset", "amount"] {
+            let mut missing = fixture_write_canary_args(WriteCanaryOperation::FinalCanary);
+            missing.prerequisite_envelope_fd = Some(4);
+            match field {
+                "authority" => missing.predecessor_faucet_authority = None,
+                "asset" => missing.predecessor_faucet_asset_id = None,
+                "amount" => missing.predecessor_faucet_amount = None,
+                _ => unreachable!(),
+            }
+            assert!(
+                missing.validated_action().is_err(),
+                "missing predecessor {field}"
+            );
+            assert!(
+                PreparedOperationPolicyContext::Predecessor(&missing)
+                    .faucet_policy()
+                    .is_err()
+            );
+        }
+        for (asset, amount) in [("xor#universal", "25000"), (DEFAULT_GAS_ASSET_ID, "0")] {
+            args.predecessor_faucet_asset_id = Some(asset.to_owned());
+            args.predecessor_faucet_amount = Some(amount.to_owned());
+            assert!(
+                args.validated_action().is_err(),
+                "invalid predecessor policy"
+            );
+        }
+    }
+
+    #[test]
+    fn write_canary_policy_inputs_are_operation_and_action_scoped() {
+        for operation in [
+            WriteCanaryOperation::Onboarding,
+            WriteCanaryOperation::Faucet,
+            WriteCanaryOperation::FinalCanary,
+        ] {
+            for action in [
+                PreparedEnvelopeAction::Prepare(3),
+                PreparedEnvelopeAction::Submit(3),
+                PreparedEnvelopeAction::Recover(3),
+            ] {
+                let mut args = fixture_write_canary_args(operation);
+                args.prepare_envelope = matches!(action, PreparedEnvelopeAction::Prepare(_));
+                args.prepared_output_fd = args.prepare_envelope.then_some(3);
+                args.submit_prepared_envelope_fd =
+                    matches!(action, PreparedEnvelopeAction::Submit(_)).then_some(3);
+                args.recover_prepared_envelope_fd =
+                    matches!(action, PreparedEnvelopeAction::Recover(_)).then_some(3);
+                args.prerequisite_envelope_fd = (args.prepare_envelope
+                    && operation != WriteCanaryOperation::Onboarding)
+                    .then_some(4);
+                args.onboarding_token_fd = (operation == WriteCanaryOperation::Onboarding
+                    && !matches!(action, PreparedEnvelopeAction::Recover(_)))
+                .then_some(5);
+                let predecessor_required =
+                    args.prepare_envelope && operation == WriteCanaryOperation::FinalCanary;
+                if !predecessor_required {
+                    args.predecessor_faucet_authority = None;
+                    args.predecessor_faucet_asset_id = None;
+                    args.predecessor_faucet_amount = None;
+                }
+                assert_eq!(
+                    args.validated_action().unwrap(),
+                    action,
+                    "{operation:?}/{action:?}"
+                );
+                let predecessor = PreparedOperationPolicyContext::Predecessor(&args);
+                if args.prepare_envelope && operation != WriteCanaryOperation::Onboarding {
+                    assert_eq!(
+                        predecessor.operation().unwrap(),
+                        if operation == WriteCanaryOperation::Faucet {
+                            WriteCanaryOperation::Onboarding
+                        } else {
+                            WriteCanaryOperation::Faucet
+                        }
+                    );
+                } else {
+                    assert!(
+                        predecessor.operation().is_err(),
+                        "no predecessor in this action"
+                    );
+                }
+                if operation != WriteCanaryOperation::Faucet {
+                    args.faucet_amount = Some("25000".to_owned());
+                    assert!(args.validated_action().is_err(), "misplaced current policy");
+                    args.faucet_amount = None;
+                }
+                if !predecessor_required {
+                    args.predecessor_faucet_amount = Some("25000".to_owned());
+                    assert!(
+                        args.validated_action().is_err(),
+                        "misplaced predecessor policy"
+                    );
+                }
+            }
+        }
     }
 
     #[derive(clap::Parser, Debug)]
@@ -7327,6 +8302,7 @@ mod tests {
     fn inrou_canary_binding_and_prerequisite_are_child_exact() {
         let nonce = "n".repeat(32);
         let mut args = InrouCanary {
+            probe_scope: InrouProbeScope::Public,
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
             stage_dir: PathBuf::from("/private/runtime/inrou-stage"),
             mode: InrouCanaryMode::Deploy,
@@ -7463,7 +8439,7 @@ mod tests {
             assert_eq!(
                 classify_proof_required_current_state(&"ab".repeat(32), state),
                 PreparedRecoveryClassification::Pending {
-                    terminal_kind: expected_kind.to_owned(),
+                    reason: PreparedWritePendingReason::parse(expected_kind).unwrap()
                 }
             );
         }
@@ -7509,6 +8485,717 @@ mod tests {
         }
     }
 
+    fn queued_onboarding_fixture() -> ValidatedPreparedOperation {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        ))
+        .unwrap();
+        let vector = fixture
+            .pointer("/vectors")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| {
+                value.pointer("/name").and_then(Value::as_str) == Some("onboarding_prepared")
+            })
+            .unwrap();
+        let prepared: AccountOnboardingPreparedTransactionV1 =
+            json::from_value(vector.pointer("/response").unwrap().clone()).unwrap();
+        let transaction = iroha::client::verify_account_onboarding_prepared_transaction_v1(
+            json::from_value(vector.pointer("/network_id").unwrap().clone()).unwrap(),
+            &prepared.receipt.body.request,
+            &prepared,
+            &prepared.receipt,
+            &prepared.binding,
+            &prepared.fee_payment,
+        )
+        .expect("actual signed onboarding fixture must satisfy SDK closure");
+        let wire = hex::decode(&prepared.signed_transaction_wire_hex).unwrap();
+        let mut envelope = final_canary_envelope_fixture();
+        envelope.operation = PreparedTransactionOperationV1::OnboardingPrepared(prepared);
+        let envelope_bytes = json::to_vec(&envelope).unwrap();
+        ValidatedPreparedOperation {
+            envelope,
+            transaction: Some(transaction),
+            wire: Some(wire),
+            envelope_bytes,
+        }
+    }
+
+    fn prepared_status_response(
+        transaction: &SignedTransaction,
+        kind: &str,
+        source: &str,
+    ) -> MockResponse {
+        MockResponse::json(
+            200,
+            json::to_value(&PipelineTransactionStatusResponse::new(
+                hex::encode(transaction.hash().as_ref()),
+                iroha_torii_shared::PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: (kind == "Applied").then_some(2),
+                },
+                "global".to_owned(),
+                source.to_owned(),
+            ))
+            .unwrap(),
+        )
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PreparedStatusPoll {
+        Status(&'static str, &'static str),
+        Failure(std::io::ErrorKind),
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("scripted prepared status transport failure")]
+    struct PreparedStatusTransportError(#[source] std::io::Error);
+
+    #[derive(Debug)]
+    struct PreparedStatusTransport {
+        transaction: SignedTransaction,
+        polls: Vec<PreparedStatusPoll>,
+        timeouts: Mutex<Vec<Option<Duration>>>,
+    }
+
+    impl iroha::http::HttpTransport for PreparedStatusTransport {
+        fn send_blocking(
+            &self,
+            request: iroha::http::TransportRequest,
+        ) -> Result<iroha::http::Response<Vec<u8>>> {
+            assert_eq!(request.method, iroha::http::Method::GET);
+            assert_eq!(request.url.path(), "/v1/pipeline/transactions/status");
+            assert_eq!(
+                request.url.query_pairs().into_owned().collect::<Vec<_>>(),
+                vec![
+                    ("hash".to_owned(), self.transaction.hash().to_string()),
+                    ("scope".to_owned(), "global".to_owned()),
+                ]
+            );
+            assert!(request.body.is_empty());
+            let mut timeouts = self.timeouts.lock().expect("prepared status timeouts");
+            let poll = self.polls[timeouts.len().min(self.polls.len() - 1)];
+            timeouts.push(request.timeout);
+            drop(timeouts);
+            match poll {
+                PreparedStatusPoll::Status(kind, source) => {
+                    let response = prepared_status_response(&self.transaction, kind, source);
+                    Ok(iroha::http::Response::builder()
+                        .status(response.status)
+                        .header("Content-Type", response.content_type)
+                        .body(response.body)
+                        .expect("prepared status response"))
+                }
+                PreparedStatusPoll::Failure(kind) => Err(PreparedStatusTransportError(
+                    std::io::Error::new(kind, "scripted prepared status failure"),
+                ))
+                .wrap_err("prepared status transport failed"),
+            }
+        }
+
+        fn send(&self, request: iroha::http::TransportRequest) -> iroha::http::TransportFuture<'_> {
+            Box::pin(async move { self.send_blocking(request) })
+        }
+    }
+
+    fn prepared_status_transport_client(
+        validated: &ValidatedPreparedOperation,
+        request_timeout: Duration,
+        polls: &[PreparedStatusPoll],
+    ) -> (IrohaClient, Arc<PreparedStatusTransport>) {
+        assert!(!polls.is_empty());
+        let transport = Arc::new(PreparedStatusTransport {
+            transaction: validated.transaction().unwrap().clone(),
+            polls: polls.to_vec(),
+            timeouts: Mutex::new(Vec::new()),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse("http://127.0.0.1:1").unwrap();
+        config.torii_request_timeout = request_timeout;
+        let client = IrohaClient::builder(config)
+            .http_transport(transport.clone())
+            .build()
+            .expect("valid Taira fixture context");
+        (client, transport)
+    }
+
+    #[test]
+    fn prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire() {
+        use iroha::data_model::{
+            query::CommittedTransaction,
+            transaction::{DataTriggerSequence, TransactionResult},
+        };
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+        let committed = CommittedTransaction {
+            block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"confirmed block")),
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint: TransactionEntrypoint::External(transaction.clone()),
+            result_hash: result.hash(),
+            result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+            merge_inclusion: None,
+        };
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: transaction.hash_as_entrypoint().to_string(),
+            transaction: committed,
+            trigger_completions: Vec::new(),
+        };
+        let query_bytes = norito::to_bytes(&details).unwrap();
+        let polls = AtomicUsize::new(0);
+        let server = spawn_mock_http(6, move |request| match path_only(&request.path) {
+            "/v1/pipeline/transactions/status" => {
+                assert!(request.path.contains("scope=global"));
+                if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    prepared_status_response(&transaction, "Queued", "queue")
+                } else {
+                    prepared_status_response(&transaction, "Applied", "state")
+                }
+            }
+            "/v1/node/capabilities" => MockResponse::json(
+                200,
+                norito::json!({
+                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                }),
+            ),
+            "/v1/pipeline/transactions/details" => {
+                assert_eq!(request.header_values("accept"), ["application/x-norito"]);
+                assert_eq!(
+                    request.header_values("content-type"),
+                    ["application/x-norito"]
+                );
+                MockResponse {
+                    status: 200,
+                    content_type: "application/x-norito",
+                    headers: Vec::new(),
+                    body: query_bytes.clone(),
+                }
+            }
+            other => panic!("confirmation must never submit: {other}"),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
+        let outcome = await_exact_prepared_operation(
+            &client,
+            &validated,
+            PreparedRecoveryClassification::Absent,
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_millis(1),
+        )
+        .expect("queued submission must wait for its exact committed transaction");
+        assert_eq!(
+            outcome,
+            PreparedRecoveryClassification::Applied {
+                block_height: Some(2),
+                evidence: validated
+                    .transaction()
+                    .unwrap()
+                    .hash_as_entrypoint()
+                    .to_string(),
+            }
+        );
+        verify_exact_committed_transaction(
+            &client,
+            validated.transaction().unwrap(),
+            validated.wire().unwrap(),
+        )
+        .expect("Inrou predecessor verification uses the same exact details route");
+        let mut substituted_wire = validated.wire().unwrap().to_vec();
+        substituted_wire[0] ^= 1;
+        let _ = verify_exact_committed_transaction(
+            &client,
+            validated.transaction().unwrap(),
+            &substituted_wire,
+        )
+        .expect_err("an exact details response must not authorize substituted retained bytes");
+        let requests = finish_mock(server);
+        assert_eq!(requests.len(), 6);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| path_only(&request.path) == "/v1/node/capabilities")
+                .count(),
+            1,
+            "deadline-bounded clones must reuse the client's capability cache"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "POST")
+                .count(),
+            3
+        );
+        assert_eq!(
+            path_only(&requests.last().unwrap().path),
+            "/v1/pipeline/transactions/details"
+        );
+    }
+
+    #[test]
+    fn prepared_predecessor_wait_retries_delayed_exact_proof_with_one_deadline() {
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let result = iroha::data_model::transaction::TransactionResult::new(Ok(
+            iroha::data_model::transaction::DataTriggerSequence::default(),
+        ));
+        let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
+            hash: transaction.hash_as_entrypoint().to_string(),
+            transaction: iroha::data_model::query::CommittedTransaction {
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"exact proof block",
+                )),
+                entrypoint_hash: transaction.hash_as_entrypoint(),
+                entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                entrypoint: TransactionEntrypoint::External(transaction.clone()),
+                result_hash: result.hash(),
+                result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                result,
+                merge_inclusion: None,
+            },
+            trigger_completions: Vec::new(),
+        };
+        let proof_reads = AtomicUsize::new(0);
+        let server = spawn_mock_http(6, move |request| match path_only(&request.path) {
+            "/v1/pipeline/transactions/status" => {
+                prepared_status_response(&transaction, "Applied", "state")
+            }
+            "/v1/node/capabilities" => MockResponse::json(
+                200,
+                norito::json!({
+                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                }),
+            ),
+            "/v1/pipeline/transactions/details" => {
+                if proof_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    MockResponse {
+                        status: 404,
+                        content_type: "application/x-norito",
+                        headers: Vec::new(),
+                        body: norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+                            "transaction_details_not_found",
+                            "The exact committed transaction proof is not available.",
+                        ))
+                        .unwrap(),
+                    }
+                } else {
+                    MockResponse {
+                        status: 200,
+                        content_type: "application/x-norito",
+                        headers: Vec::new(),
+                        body: norito::to_bytes(&details).unwrap(),
+                    }
+                }
+            }
+            other => panic!("successor confirmation must read only exact proof: {other}"),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let mut budgets = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        await_predecessor_applied(deadline, Duration::from_millis(1), |budget| {
+            budgets.push(budget);
+            let mut config = config.clone();
+            config.torii_request_timeout = budget;
+            let client = IrohaClient::builder(config).build()?;
+            Ok(matches!(
+                classify_exact_prepared_operation(&client, &validated)?,
+                PreparedRecoveryClassification::Applied { .. }
+            ))
+        })
+        .expect("local proof may become visible after globally Applied status");
+        assert_eq!(budgets.len(), 2);
+        assert!(budgets[1] < budgets[0]);
+        assert!(budgets[0] <= Duration::from_secs(5));
+        assert_eq!(finish_mock(server).len(), 6);
+
+        let mut observations = 0;
+        let _ = await_predecessor_applied(Instant::now(), Duration::from_millis(1), |_| {
+            observations += 1;
+            Ok(true)
+        })
+        .expect_err("an expired deadline cannot trigger another network observation");
+        assert_eq!(observations, 0);
+        let error = await_predecessor_applied(deadline, Duration::from_millis(1), |_| {
+            observations += 1;
+            Err(eyre!("authenticated exact proof denied"))
+        })
+        .expect_err("semantic failures must terminate immediately");
+        assert_eq!(observations, 1);
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated exact proof denied")
+        );
+    }
+
+    #[test]
+    fn prepared_inrou_observation_preserves_auth_and_proof_errors() {
+        let denied = eyre::Report::new(iroha::query::QueryError::Validation(
+            iroha::data_model::ValidationFail::NotPermitted("private exact transaction".to_owned()),
+        ));
+        assert!(!observation_transport_unavailable(&denied));
+        assert!(!exact_transaction_details_not_found(&denied));
+        assert!(!observation_transport_unavailable(&eyre!(
+            "malformed committed proof"
+        )));
+        let truncated_decode = eyre::Report::new(iroha::query::QueryError::Other(
+            eyre::Report::new(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "truncated canonical frame",
+            )),
+        ));
+        assert!(!observation_transport_unavailable(&truncated_decode));
+        let absent = eyre::Report::new(iroha::query::QueryError::Validation(
+            iroha::data_model::ValidationFail::QueryFailed(
+                iroha::data_model::query::error::QueryExecutionFail::NotFound,
+            ),
+        ));
+        assert!(exact_transaction_details_not_found(&absent));
+        assert!(!observation_transport_unavailable(&absent));
+        let timeout = eyre::Report::new(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "read deadline",
+        ));
+        assert!(observation_transport_unavailable(&timeout));
+        assert!(!exact_transaction_details_not_found(&timeout));
+        assert!(prepared_observation_deadline(120, Some(1)).unwrap() <= Instant::now());
+    }
+
+    #[test]
+    fn prepared_applied_confirmation_waits_for_exact_details_visibility() {
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let server = spawn_mock_http(3, move |request| match path_only(&request.path) {
+            "/v1/pipeline/transactions/status" => {
+                prepared_status_response(&transaction, "Applied", "state")
+            }
+            "/v1/node/capabilities" => MockResponse::json(
+                200,
+                norito::json!({
+                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                }),
+            ),
+            "/v1/pipeline/transactions/details" => MockResponse {
+                status: 404,
+                content_type: "application/x-norito",
+                headers: Vec::new(),
+                body: norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+                    "transaction_details_not_found",
+                    "The exact committed transaction proof is not available.",
+                ))
+                .unwrap(),
+            },
+            other => panic!("confirmation must never submit or read global inventory: {other}"),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let outcome = classify_exact_prepared_operation(
+            &IrohaClient::builder(config).build().unwrap(),
+            &validated,
+        )
+        .expect("an advanced peer's global Applied status does not imply local proof visibility");
+        assert_eq!(
+            outcome,
+            PreparedRecoveryClassification::Pending {
+                reason: PreparedWritePendingReason::AppliedEvidencePending
+            }
+        );
+        assert_eq!(finish_mock(server).len(), 3);
+    }
+
+    #[test]
+    fn prepared_applied_confirmation_rejects_unauthorized_or_malformed_exact_details() {
+        let denied = norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+            "query_validation_failed",
+            "exact transaction is private",
+        ))
+        .unwrap();
+        for (status, body) in [
+            (403, denied.clone()),
+            (404, denied.clone()),
+            (404, b"untyped missing proof".to_vec()),
+            (200, denied[..denied.len() - 1].to_vec()),
+            (200, b"invalid canonical Norito proof".to_vec()),
+        ] {
+            let validated = queued_onboarding_fixture();
+            let transaction = validated.transaction().unwrap().clone();
+            let server = spawn_mock_http(3, move |request| match path_only(&request.path) {
+                "/v1/pipeline/transactions/status" => {
+                    prepared_status_response(&transaction, "Applied", "state")
+                }
+                "/v1/node/capabilities" => MockResponse::json(
+                    200,
+                    norito::json!({
+                        "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                    }),
+                ),
+                "/v1/pipeline/transactions/details" => MockResponse {
+                    status,
+                    content_type: "application/x-norito",
+                    headers: Vec::new(),
+                    body: body.clone(),
+                },
+                other => panic!("confirmation must use the exact read route: {other}"),
+            });
+            let mut config = crate::fallback_config();
+            config.torii_api_url = Url::parse(&server.base_url).unwrap();
+            let error = classify_exact_prepared_operation(
+                &IrohaClient::builder(config).build().unwrap(),
+                &validated,
+            )
+            .expect_err("authorization and malformed proof failures must not become Pending");
+            assert!(!observation_transport_unavailable(&error));
+            assert!(!exact_transaction_details_not_found(&error));
+            assert_eq!(finish_mock(server).len(), 3);
+        }
+    }
+
+    #[test]
+    fn prepared_server_confirmation_preserves_fixed_failure_and_deadline() {
+        for kind in ["Rejected", "Expired"] {
+            let validated = queued_onboarding_fixture();
+            let transaction = validated.transaction().unwrap().clone();
+            let server = spawn_mock_http(1, move |_| {
+                prepared_status_response(&transaction, kind, "state")
+            });
+            let mut config = crate::fallback_config();
+            config.torii_api_url = Url::parse(&server.base_url).unwrap();
+            let client = IrohaClient::builder(config)
+                .build()
+                .expect("valid Taira fixture context");
+            let outcome = await_exact_prepared_operation(
+                &client,
+                &validated,
+                PreparedRecoveryClassification::Absent,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(1),
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                PreparedRecoveryClassification::Rejected {
+                    terminal_kind: kind.to_owned(),
+                }
+            );
+            assert_eq!(finish_mock(server).len(), 1);
+            let pending = PreparedRecoveryClassification::Pending {
+                reason: PreparedWritePendingReason::Queued,
+            };
+            assert_eq!(
+                await_exact_prepared_operation(
+                    &client,
+                    &validated,
+                    pending,
+                    Instant::now(),
+                    Duration::from_secs(1),
+                )
+                .unwrap(),
+                PreparedRecoveryClassification::Pending {
+                    reason: PreparedWritePendingReason::Queued
+                },
+                "an elapsed deadline must retain the last observation without another request"
+            );
+        }
+        let validated = queued_onboarding_fixture();
+        let configured_timeout = Duration::from_secs(5);
+        let wait_budget = Duration::from_millis(200);
+        let (client, transport) = prepared_status_transport_client(
+            &validated,
+            configured_timeout,
+            &[
+                PreparedStatusPoll::Status("Expired", "cache"),
+                PreparedStatusPoll::Failure(std::io::ErrorKind::TimedOut),
+            ],
+        );
+        let first = classify_exact_prepared_operation(&client, &validated).unwrap();
+        let started = Instant::now();
+        let outcome = await_exact_prepared_operation(
+            &client,
+            &validated,
+            first,
+            started + wait_budget,
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert_eq!(
+            outcome,
+            PreparedRecoveryClassification::Pending {
+                reason: PreparedWritePendingReason::Expired
+            },
+            "cache expiry cannot become a definitive failure at the wait deadline"
+        );
+        assert!(started.elapsed() >= wait_budget);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let timeouts = transport.timeouts.lock().unwrap();
+        assert_eq!(timeouts[0], Some(configured_timeout));
+        assert!(timeouts.iter().skip(1).all(|timeout| {
+            timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget)
+        }));
+    }
+
+    #[test]
+    fn prepared_server_confirmation_retries_deadline_timeout_until_fixed_failure() {
+        let validated = queued_onboarding_fixture();
+        let wait_budget = Duration::from_secs(5);
+        for configured_timeout in [Duration::ZERO, Duration::from_secs(30)] {
+            let (client, transport) = prepared_status_transport_client(
+                &validated,
+                configured_timeout,
+                &[
+                    PreparedStatusPoll::Failure(std::io::ErrorKind::TimedOut),
+                    PreparedStatusPoll::Status("Rejected", "state"),
+                ],
+            );
+            let outcome = await_exact_prepared_operation(
+                &client,
+                &validated,
+                PreparedRecoveryClassification::Pending {
+                    reason: PreparedWritePendingReason::Queued,
+                },
+                Instant::now() + wait_budget,
+                Duration::from_millis(1),
+            )
+            .expect("a deadline-bounded timeout must allow a later definitive observation");
+            assert_eq!(
+                outcome,
+                PreparedRecoveryClassification::Rejected {
+                    terminal_kind: "Rejected".to_owned(),
+                }
+            );
+            let timeouts = transport.timeouts.lock().unwrap();
+            assert_eq!(timeouts.len(), 2);
+            assert!(timeouts.iter().all(|timeout| {
+                timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget)
+            }));
+        }
+    }
+
+    #[test]
+    fn prepared_server_confirmation_preserves_configured_timeout_errors() {
+        let validated = queued_onboarding_fixture();
+        let configured_timeout = Duration::from_millis(1);
+        let (client, transport) = prepared_status_transport_client(
+            &validated,
+            configured_timeout,
+            &[PreparedStatusPoll::Failure(std::io::ErrorKind::TimedOut)],
+        );
+        let error = await_exact_prepared_operation(
+            &client,
+            &validated,
+            PreparedRecoveryClassification::Pending {
+                reason: PreparedWritePendingReason::Queued,
+            },
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_millis(1),
+        )
+        .expect_err("a shorter configured timeout must remain a transport failure");
+        assert_eq!(
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            *transport.timeouts.lock().unwrap(),
+            vec![Some(configured_timeout)]
+        );
+    }
+
+    #[test]
+    fn prepared_server_confirmation_preserves_other_transport_errors() {
+        let validated = queued_onboarding_fixture();
+        let wait_budget = Duration::from_secs(5);
+        let (client, transport) = prepared_status_transport_client(
+            &validated,
+            Duration::from_secs(30),
+            &[PreparedStatusPoll::Failure(
+                std::io::ErrorKind::ConnectionReset,
+            )],
+        );
+        let error = await_exact_prepared_operation(
+            &client,
+            &validated,
+            PreparedRecoveryClassification::Pending {
+                reason: PreparedWritePendingReason::Queued,
+            },
+            Instant::now() + wait_budget,
+            Duration::from_millis(1),
+        )
+        .expect_err("a non-timeout transport failure must not become a pending observation");
+        assert_eq!(
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::ConnectionReset
+        );
+        let timeouts = transport.timeouts.lock().unwrap();
+        assert_eq!(timeouts.len(), 1);
+        assert!(
+            timeouts[0].is_some_and(|timeout| { !timeout.is_zero() && timeout <= wait_budget })
+        );
+    }
+
+    #[test]
+    fn prepared_server_confirmation_rejects_malformed_status_without_resubmission() {
+        let validated = queued_onboarding_fixture();
+        let server = spawn_mock_http(1, |_| {
+            MockResponse::json(
+                200,
+                norito::json!({
+                    "hash": "substituted", "scope": "global", "resolved_from": "state",
+                    "status": {"kind": "Applied", "block_height": 2}
+                }),
+            )
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        assert!(
+            await_exact_prepared_operation(
+                &IrohaClient::builder(config)
+                    .build()
+                    .expect("valid Taira fixture context"),
+                &validated,
+                PreparedRecoveryClassification::Absent,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(1),
+            )
+            .is_err()
+        );
+        assert_eq!(finish_mock(server).len(), 1);
+        let server = spawn_mock_http(1, |_| MockResponse::text(503, "unavailable"));
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        assert!(
+            await_exact_prepared_operation(
+                &IrohaClient::builder(config)
+                    .build()
+                    .expect("valid Taira fixture context"),
+                &validated,
+                PreparedRecoveryClassification::Pending {
+                    reason: PreparedWritePendingReason::Queued
+                },
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(1),
+            )
+            .is_err()
+        );
+        let requests = finish_mock(server);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
     #[test]
     fn prepared_envelope_rejects_legacy_zero_or_multi_operation_shapes() {
         for operations in [norito::json!([]), norito::json!([{}, {}])] {
@@ -7536,11 +9223,104 @@ mod tests {
         }
     }
 
+    pub(super) fn core_report_cases(
+        classification: PreparedRecoveryClassification,
+    ) -> Result<Vec<(String, Vec<u8>, Value)>> {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        ))?;
+        let vectors = fixture.get("vectors").and_then(Value::as_array).unwrap();
+        let response = |name: &str| {
+            vectors
+                .iter()
+                .find(|vector| vector.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap()
+                .get("response")
+                .unwrap()
+                .clone()
+        };
+        let onboarding: AccountOnboardingPreparedTransactionV1 =
+            json::from_value(response("onboarding_prepared"))?;
+        let proof = PreparedOnboardingProofRequiredV1 {
+            schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
+            receipt: onboarding.receipt.clone(),
+            result: json::from_value(response("onboarding_proof_required"))?,
+        };
+        let faucet = json::from_value(response("faucet_prepared"))?;
+        let mut cases = Vec::new();
+        for (operation, prepared) in [
+            (
+                WriteCanaryOperation::Onboarding,
+                PreparedTransactionOperationV1::OnboardingPrepared(onboarding),
+            ),
+            (
+                WriteCanaryOperation::Onboarding,
+                PreparedTransactionOperationV1::OnboardingProofRequired(proof),
+            ),
+            (
+                WriteCanaryOperation::Faucet,
+                PreparedTransactionOperationV1::FaucetPrepared(faucet),
+            ),
+            (
+                WriteCanaryOperation::FinalCanary,
+                final_canary_envelope_fixture().operation,
+            ),
+        ] {
+            let args = fixture_write_canary_args(operation);
+            let mut envelope = final_canary_envelope_fixture();
+            envelope.binding = args.binding()?;
+            envelope.operation = prepared;
+            if let PreparedTransactionOperationV1::FinalCanary(operation) = &mut envelope.operation
+            {
+                operation.binding = envelope.binding.clone();
+            }
+            let envelope_bytes = canonical_prepared_envelope_bytes(&envelope)?;
+            let validated = ValidatedPreparedOperation {
+                envelope,
+                transaction: None,
+                wire: None,
+                envelope_bytes: envelope_bytes.clone(),
+            };
+            let report = report_prepared_classification(
+                &args.public_root,
+                &args,
+                &validated,
+                classification.clone(),
+            )?;
+            cases.push((operation.mutation_kind().to_owned(), envelope_bytes, report));
+        }
+        Ok(cases)
+    }
+
     #[test]
-    fn inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer() {
+    fn core_pending_reason_codec_is_closed_and_round_trips_every_variant() {
+        let mut labels = std::collections::BTreeSet::new();
+        for reason in PreparedWritePendingReason::ALL.iter().copied() {
+            assert_eq!(
+                PreparedWritePendingReason::parse(reason.as_str()).unwrap(),
+                reason
+            );
+            assert!(labels.insert(reason.as_str()));
+        }
+        assert_eq!(labels.len(), 12);
+        for unknown in [
+            "",
+            "queued",
+            "Queued ",
+            "ObservationDeadlineReached",
+            "SubmissionOutcomeUnknown",
+            "Unknown",
+            "Rejected\n",
+        ] {
+            assert!(PreparedWritePendingReason::parse(unknown).is_err());
+        }
+    }
+
+    fn final_canary_envelope_fixture() -> PreparedMutationEnvelopeV1 {
         let account = AccountId::new(fixture_key_pair(0x45).public_key().clone());
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
-        let binding = TairaPublicResetMutationBindingV1 {
+        let binding = PreparedMutationBindingV1 {
             schema: PREPARED_BINDING_SCHEMA_V1.to_owned(),
             authorization_sha256: "ab".repeat(32),
             authorization_nonce: "n".repeat(32),
@@ -7563,7 +9343,7 @@ mod tests {
                 observation: iroha_torii_shared::FeeQuoteObservation {
                     ledger_time_ms: 1,
                     next_block_height: 1,
-                    route_dataspace_id: iroha::data_model::nexus::DataSpaceId::UNIVERSAL,
+                    route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 },
                 components: Vec::new(),
                 capacities: Vec::new(),
@@ -7575,7 +9355,7 @@ mod tests {
                 },
             },
         };
-        let envelope = PreparedMutationEnvelopeV1 {
+        PreparedMutationEnvelopeV1 {
             schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
             binding,
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
@@ -7583,7 +9363,275 @@ mod tests {
             network_id: "fixture-network".to_owned(),
             authority: account.to_string(),
             operation: PreparedTransactionOperationV1::FinalCanary(operation),
+        }
+    }
+
+    #[test]
+    fn prepared_binding_metadata_matches_objects_before_submission_and_after_commit() {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        ))
+        .expect("public signed preparation fixtures");
+        let vectors = fixture
+            .pointer("/vectors")
+            .and_then(Value::as_array)
+            .unwrap();
+        let vector = |name: &str| {
+            vectors
+                .iter()
+                .find(|value| value.pointer("/name").and_then(Value::as_str) == Some(name))
+                .expect("named signed fixture")
         };
+        let onboarding: AccountOnboardingPreparedTransactionV1 = json::from_value(
+            vector("onboarding_prepared")
+                .pointer("/response")
+                .unwrap()
+                .clone(),
+        )
+        .expect("typed onboarding fixture");
+        let proof = PreparedOnboardingProofRequiredV1 {
+            schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
+            receipt: onboarding.receipt.clone(),
+            result: json::from_value(
+                vector("onboarding_proof_required")
+                    .pointer("/response")
+                    .unwrap()
+                    .clone(),
+            )
+            .expect("typed onboarding proof fixture"),
+        };
+        let faucet = json::from_value(
+            vector("faucet_prepared")
+                .pointer("/response")
+                .unwrap()
+                .clone(),
+        )
+        .expect("typed faucet fixture");
+        for operation in [
+            PreparedTransactionOperationV1::OnboardingPrepared(onboarding),
+            PreparedTransactionOperationV1::OnboardingProofRequired(proof),
+            PreparedTransactionOperationV1::FaucetPrepared(faucet),
+            final_canary_envelope_fixture().operation,
+        ] {
+            let value = json::to_value(&operation).expect("typed operation projection");
+            let binding = value
+                .pointer("/envelope/binding")
+                .or_else(|| value.pointer("/envelope/result/binding"))
+                .expect("operation binding object");
+            let (binding_key, expected) = operation.binding_metadata().unwrap();
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                Name::from_str(binding_key).unwrap(),
+                IrohaJson::from_norito_value_ref(binding)
+                    .expect("actual binding metadata producer"),
+            );
+            assert!(prepared_operation_binding_matches(&metadata, &operation).unwrap());
+            insert_string_metadata(&mut metadata, binding_key, &expected).unwrap();
+            assert!(
+                !prepared_operation_binding_matches(&metadata, &operation).unwrap(),
+                "a JSON string must not substitute for the bound object"
+            );
+            let mut substituted = binding.clone();
+            substituted
+                .as_object_mut()
+                .unwrap()
+                .insert("execution_expires_at_unix_ms".to_owned(), 1_u64.into());
+            metadata.insert(
+                Name::from_str(binding_key).unwrap(),
+                IrohaJson::from_norito_value_ref(&substituted).unwrap(),
+            );
+            assert!(
+                !prepared_operation_binding_matches(&metadata, &operation).unwrap(),
+                "a changed binding field must remain fatal"
+            );
+
+            if matches!(
+                operation,
+                PreparedTransactionOperationV1::OnboardingPrepared(_)
+                    | PreparedTransactionOperationV1::FaucetPrepared(_)
+            ) {
+                let wire = hex::decode(operation.signed_transaction_wire_hex().unwrap()).unwrap();
+                let transaction = SignedTransaction::decode_all_versioned(&wire)
+                    .expect("actual signed fixture transaction");
+                let verified = match &operation {
+                    PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
+                        let network = json::from_value(
+                            vector("onboarding_prepared")
+                                .pointer("/network_id")
+                                .unwrap()
+                                .clone(),
+                        )
+                        .unwrap();
+                        iroha::client::verify_account_onboarding_prepared_transaction_v1(
+                            network,
+                            &prepared.receipt.body.request,
+                            prepared,
+                            &prepared.receipt,
+                            &prepared.binding,
+                            &prepared.fee_payment,
+                        )
+                        .expect(
+                            "actual SDK onboarding verifier accepts the signed producer fixture",
+                        )
+                    }
+                    PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
+                        let network = json::from_value(
+                            vector("faucet_prepared")
+                                .pointer("/network_id")
+                                .unwrap()
+                                .clone(),
+                        )
+                        .unwrap();
+                        let policy = AccountFaucetPolicyV1::try_new(
+                            AccountId::new(fixture_key_pair(0x61).public_key().clone()),
+                            "4rPeAP6jAjiLVZThZYwwPRBuQagt".parse().unwrap(),
+                            5_u64.into(),
+                        )
+                        .expect("independent public fixture faucet policy");
+                        iroha::client::verify_account_faucet_prepared_transaction_v1(
+                            network,
+                            prepared,
+                            &prepared.claim,
+                            &prepared.binding,
+                            &prepared.fee_payment,
+                            &policy,
+                        )
+                        .expect("actual SDK faucet verifier accepts the signed producer fixture")
+                    }
+                    _ => unreachable!("selected server-prepared transaction variants"),
+                };
+                assert_eq!(verified.encode_wire_v1().unwrap(), wire);
+                validate_prepared_transaction_closure(
+                    &transaction,
+                    &operation,
+                    &wire,
+                    transaction.network_id().unwrap(),
+                )
+                .expect("real pre-submit closure accepts signed object binding");
+                assert!(
+                    prepared_operation_binding_matches(transaction.metadata(), &operation)
+                        .expect("same exact binding check used by committed transaction proof")
+                );
+                if matches!(operation, PreparedTransactionOperationV1::FaucetPrepared(_)) {
+                    use iroha::data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY;
+                    let marker = Name::from_str(FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY).unwrap();
+                    for invalid in [None, Some(IrohaJson::new(2_u64)), Some(IrohaJson::new("1"))] {
+                        let mut metadata = transaction.metadata().clone();
+                        metadata.remove(&marker);
+                        if let Some(value) = invalid {
+                            metadata.insert(marker.clone(), value);
+                        }
+                        assert!(
+                            !prepared_faucet_metadata_closure_is_exact(&metadata),
+                            "faucet claim marker must exist as the exact numeric V1 value"
+                        );
+                    }
+                    let mut metadata = transaction.metadata().clone();
+                    metadata.insert(Name::from_str("unexpected").unwrap(), IrohaJson::new(1_u64));
+                    assert!(
+                        !prepared_faucet_metadata_closure_is_exact(&metadata),
+                        "faucet metadata remains a closed four-field shape"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_inrou_envelopes_reach_fd_and_exact_predecessor_consumers() {
+        use std::{io::Seek as _, os::fd::AsRawFd as _};
+
+        let _chain = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let canary = final_canary_envelope_fixture();
+        let PreparedTransactionOperationV1::FinalCanary(final_operation) = &canary.operation else {
+            panic!("final-canary fixture");
+        };
+        for operation in [
+            InrouCanaryOperation::BundlePin,
+            InrouCanaryOperation::GuestPin,
+            InrouCanaryOperation::DiscoveryPin,
+            InrouCanaryOperation::ServiceMutation,
+        ] {
+            let binding = crate::soracloud::TairaMutationBindingV1 {
+                authorization_sha256: canary.binding.authorization_sha256.clone(),
+                authorization_nonce: canary.binding.authorization_nonce.clone(),
+                kind: operation.mutation_kind().to_owned(),
+                phase: canary.binding.phase.clone(),
+                idempotency_key: canary.binding.idempotency_key.clone(),
+                execution_expires_at_unix_ms: canary.binding.execution_expires_at_unix_ms,
+            };
+            let transaction = PreparedInrouTransactionV1 {
+                schema: PREPARED_INROU_OPERATION_SCHEMA_V1.to_owned(),
+                binding: binding.clone(),
+                operation: operation.label().to_owned(),
+                transaction_hash_hex: final_operation.transaction_hash_hex.clone(),
+                signed_transaction_wire_hex: final_operation.signed_transaction_wire_hex.clone(),
+                signed_transaction_wire_sha256: final_operation
+                    .signed_transaction_wire_sha256
+                    .clone(),
+                fee_payment: final_operation.fee_payment.clone(),
+                fee_quote: final_operation.fee_quote.clone(),
+            };
+            let tagged = match operation {
+                InrouCanaryOperation::BundlePin => {
+                    PreparedInrouOperationV1::InrouBundlePin(transaction)
+                }
+                InrouCanaryOperation::GuestPin => {
+                    PreparedInrouOperationV1::InrouGuestPin(transaction)
+                }
+                InrouCanaryOperation::DiscoveryPin => {
+                    PreparedInrouOperationV1::InrouDiscoveryPin(transaction)
+                }
+                InrouCanaryOperation::ServiceMutation => {
+                    PreparedInrouOperationV1::InrouCanary(transaction)
+                }
+            };
+            let envelope = PreparedInrouEnvelopeV1 {
+                schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+                probe_scope: "candidate".to_owned(),
+                binding,
+                public_root: canary.public_root.clone(),
+                chain_id: canary.chain_id.clone(),
+                network_id: canary.network_id.clone(),
+                authority: canary.authority.clone(),
+                stage: (&inrou_canary_stage_identity("deploy", "v1")).into(),
+                operation: tagged,
+            };
+            let produced = canonical_prepared_inrou_envelope_bytes(&envelope)
+                .expect("actual typed Inrou producer");
+            let mut canonical = json::to_json(&json::to_value(&envelope).unwrap())
+                .unwrap()
+                .into_bytes();
+            canonical.push(b'\n');
+            assert_eq!(produced, canonical, "host canonical JSON boundary");
+            let mut file = NamedTempFile::new().unwrap();
+            file.write_all(&produced).unwrap();
+            file.rewind().unwrap();
+            let (reopened, bytes) =
+                read_prepared_inrou_envelope(u32::try_from(file.as_raw_fd()).unwrap())
+                    .expect("actual inherited-FD consumer");
+            assert_eq!(reopened, envelope);
+            assert_eq!(bytes, produced);
+            if operation != InrouCanaryOperation::ServiceMutation {
+                let predecessor =
+                    decode_exact_inrou_predecessor_v1(&produced, operation.mutation_kind())
+                        .expect("actual typed predecessor consumer");
+                assert_eq!(predecessor, json::to_value(&envelope).unwrap());
+            }
+            let mut declaration_order = json::to_json(&envelope).unwrap().into_bytes();
+            declaration_order.push(b'\n');
+            assert_ne!(
+                produced, declaration_order,
+                "fixture exercises differing object field orders"
+            );
+        }
+    }
+
+    #[test]
+    fn inrou_predecessor_decoder_rejects_unknown_fields_at_every_envelope_layer() {
+        let envelope = final_canary_envelope_fixture();
         let exact = canonical_prepared_envelope_bytes(&envelope).expect("canonical predecessor");
         decode_exact_inrou_predecessor_v1(&exact, "write_canary")
             .expect("exact final-canary predecessor");
@@ -7656,9 +9704,17 @@ mod tests {
         );
         WriteCanary {
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
-            faucet_authority: Some(faucet_authority.to_string()),
-            faucet_asset_id: Some(DEFAULT_GAS_ASSET_ID.to_owned()),
-            faucet_amount: Some("25000".to_owned()),
+            faucet_authority: (operation == WriteCanaryOperation::Faucet)
+                .then(|| faucet_authority.to_string()),
+            faucet_asset_id: (operation == WriteCanaryOperation::Faucet)
+                .then(|| DEFAULT_GAS_ASSET_ID.to_owned()),
+            faucet_amount: (operation == WriteCanaryOperation::Faucet).then(|| "25000".to_owned()),
+            predecessor_faucet_authority: (operation == WriteCanaryOperation::FinalCanary)
+                .then(|| faucet_authority.to_string()),
+            predecessor_faucet_asset_id: (operation == WriteCanaryOperation::FinalCanary)
+                .then(|| DEFAULT_GAS_ASSET_ID.to_owned()),
+            predecessor_faucet_amount: (operation == WriteCanaryOperation::FinalCanary)
+                .then(|| "25000".to_owned()),
             onboarding_token_file: None,
             onboarding_token_fd: None,
             operation,
@@ -7672,6 +9728,7 @@ mod tests {
             submit_prepared_envelope_fd: None,
             recover_prepared_envelope_fd: None,
             prerequisite_envelope_fd: None,
+            timeout_secs: 120,
             json: true,
         }
     }
@@ -7714,7 +9771,7 @@ mod tests {
         status: u16,
         content_type: &'static str,
         headers: Vec<(&'static str, String)>,
-        body: String,
+        body: Vec<u8>,
     }
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -7771,15 +9828,16 @@ mod tests {
                 status,
                 content_type: "application/json",
                 headers: Vec::new(),
-                body: json::to_json(&value).expect("mock JSON response"),
+                body: json::to_vec(&value).expect("mock JSON response"),
             }
         }
         fn text(status: u16, body: impl Into<String>) -> Self {
+            let body: String = body.into();
             Self {
                 status,
                 content_type: "text/plain",
                 headers: Vec::new(),
-                body: body.into(),
+                body: body.into_bytes(),
             }
         }
     }
@@ -7803,7 +9861,11 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let server_stop = Arc::clone(&stop);
         let responder = Arc::new(responder);
+        let chain_discriminant = iroha::data_model::account::address::chain_discriminant();
         let handle = thread::spawn(move || {
+            // Account JSON uses a thread-scoped network identity. The fixture's
+            // HTTP peer must decode and encode in the caller's selected network.
+            let _chain = ChainDiscriminantGuard::enter(chain_discriminant);
             let mut accepted = 0_usize;
             while accepted < expected_requests && !server_stop.load(Ordering::Acquire) {
                 match listener.accept() {
@@ -7899,7 +9961,7 @@ mod tests {
             503 => "Service Unavailable",
             _ => "OK",
         };
-        let body = response.body.as_bytes();
+        let body = response.body.as_slice();
         write!(
             stream,
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -8063,12 +10125,14 @@ mod tests {
             }
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 assert_modern_mcp_request(request, 2, "tools/list");
-                let tools: Vec<Value> = REQUIRED_MCP_TOOLS
+                let mut tools: Vec<Value> = REQUIRED_MCP_TOOLS
                     .iter()
+                    .chain(FULL_MCP_TOOLS)
                     .copied()
                     .filter(|name| Some(*name) != omit_tool)
                     .map(|name| norito::json!({ "name": name, "description": "mock" }))
                     .collect();
+                tools.push(norito::json!({ "name": "torii.get_v1_accounts", "description": "projected route" }));
                 MockResponse::json(
                     200,
                     norito::json!({
@@ -8207,8 +10271,7 @@ mod tests {
                 (reqwest::header::ETAG.as_str(), etag),
                 ("x-content-type-options", "nosniff".to_owned()),
             ],
-            body: String::from_utf8(expected.document_bytes)
-                .expect("canonical discovery document is UTF-8"),
+            body: expected.document_bytes,
         }
     }
 
@@ -8347,7 +10410,7 @@ mod tests {
                 reqwest::header::LOCATION.as_str(),
                 "https://attacker.invalid/substituted".to_owned(),
             )],
-            body: String::new(),
+            body: Vec::new(),
         });
         let error = fetch_exact_inrou_public_discovery_document(
             &inrou_public_discovery_http_client(),
@@ -9817,6 +11880,86 @@ mod tests {
         .expect("a DeterministicService revision may project an explicit all-null route");
     }
     #[test]
+    fn native_reset_projection_keeps_operator_authority_out_of_public_binding() {
+        let fixture: Value = json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+        )))
+        .expect("public receipt fixture");
+        let receipt: AccountOnboardingPlanReceiptV1 =
+            json::from_value(fixture["account_onboarding_receipt_vector"]["receipt_json"].clone())
+                .expect("typed receipt");
+        let native = fixture_write_canary_args(WriteCanaryOperation::Onboarding)
+            .binding()
+            .expect("native custody");
+        let public = native
+            .onboarding_binding(&receipt)
+            .expect("public projection");
+        assert_eq!(public.request_id, native.idempotency_key);
+        assert_eq!(
+            public.semantic_hash_hex,
+            hex::encode(receipt.plan_hash.as_ref())
+        );
+        assert_eq!(
+            public.execution_expires_at_unix_ms,
+            native
+                .execution_expires_at_unix_ms
+                .min(receipt.body.valid_until_ms)
+        );
+        let value = json::to_value(&public).expect("public JSON");
+        let fields = value.as_object().expect("binding object");
+        assert_eq!(fields.len(), 5);
+        for private_field in [
+            "authorization_sha256",
+            "authorization_nonce",
+            "phase",
+            "idempotency_key",
+        ] {
+            assert!(!fields.contains_key(private_field));
+        }
+        assert_eq!(native.schema, PREPARED_BINDING_SCHEMA_V1);
+        let mut different = native.clone();
+        different.idempotency_key = "aa".repeat(32);
+        assert_ne!(
+            different
+                .onboarding_binding(&receipt)
+                .expect("other request"),
+            public
+        );
+        different = native.clone();
+        different.kind = "faucet".to_owned();
+        assert!(different.onboarding_binding(&receipt).is_err());
+        let mut changed = receipt;
+        changed.body.request.alias.push('x');
+        assert!(native.onboarding_binding(&changed).is_err());
+    }
+
+    #[test]
+    fn native_faucet_projection_changes_with_exact_claim() {
+        let native = fixture_write_canary_args(WriteCanaryOperation::Faucet)
+            .binding()
+            .expect("native faucet custody");
+        let account = AccountId::new(fixture_key_pair(0x45).public_key().clone());
+        let claim = AccountFaucetClaimV1 {
+            account_id: account.to_string(),
+            pow_anchor_height: 42,
+            pow_nonce_hex: "0001".to_owned(),
+        };
+        let public = native.faucet_binding(&claim).expect("project claim");
+        assert_eq!(public.request_id, native.idempotency_key);
+        let mut changed = claim;
+        changed.pow_nonce_hex = "0002".to_owned();
+        let changed_public = native
+            .faucet_binding(&changed)
+            .expect("project different claim");
+        assert_ne!(public.semantic_hash_hex, changed_public.semantic_hash_hex);
+        assert_eq!(public.request_id, changed_public.request_id);
+        let mut wrong_kind = native;
+        wrong_kind.kind = "onboarding".to_owned();
+        assert!(wrong_kind.faucet_binding(&changed).is_err());
+    }
+
+    #[test]
     fn write_canary_child_idempotency_keys_are_domain_separated() {
         let nonce = "n".repeat(32);
         let phase = "pre_edge";
@@ -9948,10 +12091,18 @@ mod tests {
         config.key_pair = key_pair;
         config.torii_api_url =
             Url::parse(&format!("{}/", server.base_url)).expect("mock Torii URL");
-        let client = IrohaClient::new(config);
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
 
-        let observation = probe_inrou_service(&server.base_url, &client, &deployment, 3)
-            .expect("probe converges after a final current route success");
+        let observation = probe_inrou_service(
+            &server.base_url,
+            &client,
+            &deployment,
+            Instant::now() + Duration::from_secs(3),
+            InrouProbeScope::Public,
+        )
+        .expect("probe converges after a final current route success");
         assert!(
             observation.failures.is_empty(),
             "unexpected probe failures: {:?}",
@@ -10016,8 +12167,11 @@ mod tests {
             &status_config,
             &stage,
             2,
+            InrouProbeScope::Public,
         )
         .expect("status and route probes use their distinct configured origins");
+        crate::taira_public_reset::validate_inrou_checks_for_test(&report, InrouProbeScope::Public)
+            .expect("active public probe output satisfies the host receipt contract");
         assert_eq!(report_status(&report), Some("ok"));
         assert_eq!(route_index.load(Ordering::Acquire), 4);
 
@@ -10038,6 +12192,148 @@ mod tests {
             4
         );
     }
+    #[test]
+    fn candidate_inrou_qualifies_runtime_before_public_discovery_exists() {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        for scope in [InrouProbeScope::Candidate, InrouProbeScope::Public] {
+            let service_version = inrou_canary_artifact_version(0x26);
+            let stage = inrou_canary_stage_identity("deploy", &service_version);
+            let status = exact_inrou_status(&service_version, "Deploy", 1);
+            let route_index = Arc::new(AtomicUsize::new(0));
+            let server_route_index = Arc::clone(&route_index);
+            let server = spawn_mock_http(100, move |request| {
+                assert_eq!(request.method, "GET");
+                match path_only(&request.path) {
+                    "/v1/soracloud/status" => {
+                        assert!(
+                            !request.header_values("x-iroha-signature").is_empty(),
+                            "authoritative status must retain account authentication"
+                        );
+                        MockResponse::json(200, status.clone())
+                    }
+                    "/api/v1/inrou-canary/health" => {
+                        let slot = u64::try_from(
+                            server_route_index.fetch_add(1, Ordering::AcqRel) % 4 + 1,
+                        )
+                        .expect("bounded replica slot");
+                        MockResponse::json(200, exact_inrou_health_response(&service_version, slot))
+                    }
+                    _ => MockResponse::json(404, norito::json!({"error": "edge not installed"})),
+                }
+            });
+            let key_pair = fixture_key_pair(0x44);
+            let mut config = crate::fallback_config();
+            config.account = AccountId::new(key_pair.public_key().clone());
+            config.key_pair = key_pair;
+            config.torii_api_url =
+                Url::parse(&format!("{}/", server.base_url)).expect("candidate Torii URL");
+            let report = verify_inrou_check_from_selected_status_origin(
+                &server.base_url,
+                &config,
+                &stage,
+                2,
+                scope,
+            )
+            .expect("probe report");
+            assert_eq!(
+                report.get("probe_scope").and_then(Value::as_str),
+                Some(scope.label())
+            );
+            assert_eq!(
+                report
+                    .get("replica_identities")
+                    .and_then(Value::as_array)
+                    .map(Vec::len),
+                Some(4)
+            );
+            let checks = report
+                .get("checks")
+                .and_then(Value::as_array)
+                .expect("probe checks");
+            let expected_checks: &[&str] = match scope {
+                InrouProbeScope::Candidate => {
+                    &["inrou_authoritative_status", "inrou_public_routes"]
+                }
+                InrouProbeScope::Public => &[
+                    "inrou_authoritative_status",
+                    "inrou_public_routes",
+                    "inrou_public_discovery",
+                ],
+            };
+            assert_eq!(
+                checks
+                    .iter()
+                    .map(|check| check
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("check name"))
+                    .collect::<Vec<_>>(),
+                expected_checks
+            );
+            let accepted =
+                crate::taira_public_reset::validate_inrou_checks_for_test(&report, scope);
+            let requests = finish_mock(server);
+            if scope == InrouProbeScope::Candidate {
+                assert_eq!(report_status(&report), Some("ok"));
+                accepted.expect("actual candidate producer output satisfies the host contract");
+                assert_eq!(requests.len(), 8);
+                assert!(requests.iter().all(|request| matches!(
+                    path_only(&request.path),
+                    "/v1/soracloud/status" | "/api/v1/inrou-canary/health"
+                )));
+                assert!(
+                    crate::taira_public_reset::validate_inrou_checks_for_test(
+                        &report,
+                        InrouProbeScope::Public
+                    )
+                    .is_err(),
+                    "candidate evidence must never qualify public cutover"
+                );
+            } else {
+                assert_eq!(report_status(&report), Some("fail"));
+                assert!(
+                    accepted.is_err(),
+                    "missing public discovery must block public qualification"
+                );
+                assert!(requests.iter().any(|request| !matches!(
+                    path_only(&request.path),
+                    "/v1/soracloud/status" | "/api/v1/inrou-canary/health"
+                )));
+                assert_eq!(
+                    checks
+                        .last()
+                        .and_then(|check| check.get("ok"))
+                        .and_then(Value::as_bool),
+                    Some(false)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_inrou_scope_rejects_remote_or_implicit_probe_destinations() {
+        InrouProbeScope::Candidate
+            .validate_root("http://127.0.0.1:8080")
+            .expect("inventory can bind an explicit local Torii port");
+        for root in [
+            "https://taira.sora.org",
+            "http://127.0.0.1",
+            "http://localhost:8080",
+            "http://192.0.2.1:8080",
+            "http://127.0.0.1:8080/redirect",
+            "http://127.0.0.1:8080?route=other",
+            "http://user@127.0.0.1:8080",
+        ] {
+            assert!(
+                InrouProbeScope::Candidate.validate_root(root).is_err(),
+                "candidate root accepted {root}"
+            );
+        }
+        InrouProbeScope::Public
+            .validate_root(DEFAULT_PUBLIC_ROOT)
+            .expect("public endpoint");
+    }
+
     #[test]
     fn inrou_health_identity_requires_exact_v1_shape_and_version() {
         let service_version = inrou_canary_artifact_version(0x22);
@@ -10110,7 +12406,7 @@ mod tests {
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
         let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
         assert!(
@@ -10160,7 +12456,9 @@ mod tests {
         config.key_pair = key_pair;
         config.torii_api_url =
             Url::parse(&format!("{}/", server.base_url)).expect("mock Torii URL");
-        let client = IrohaClient::new(config);
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
         let status = account_signed_soracloud_status(&client).expect("signed status response");
         assert_eq!(status.status, 200);
         assert_eq!(status.body, Some(norito::json!({ "schema_version": 1 })));
@@ -10275,60 +12573,186 @@ mod tests {
     #[test]
     fn time_snapshot_requires_network_time_and_every_health_axis() {
         let healthy = norito::json!({
-            "now": 1_u64,
-            "offset_ms": 0,
-            "confidence_ms": 0_u64,
-            "sample_count": 3_u64,
-            "peer_count": 3_u64,
-            "enforcement_mode": "reject",
-            "fallback": false,
-            "health": {
-                "healthy": true,
-                "min_samples_ok": true,
-                "offset_ok": true,
-                "confidence_ok": true
-            }
+            "now": 1_u64, "offset_ms": 0, "confidence_ms": 0_u64,
+            "sample_count": 3_u64, "peer_count": 3_u64,
+            "enforcement_mode": "reject", "fallback": false,
+            "health": {"healthy": true, "min_samples_ok": true,
+                "offset_ok": true, "confidence_ok": true}
         });
-        validate_time_snapshot(Some(&healthy)).expect("healthy network time");
-        for (label, mutation) in [
-            ("fallback", "/v1/time/now is using the local-clock fallback"),
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            validate_time_snapshot(Some(&healthy), scope).expect("healthy network time");
+            for (path, value) in [
+                ("/now", Value::from(0_u64)),
+                ("/offset_ms", Value::from("0")),
+                ("/confidence_ms", Value::from(-1_i64)),
+                ("/sample_count", Value::from(4_u64)),
+                ("/peer_count", Value::from("3")),
+                ("/enforcement_mode", Value::from("disabled")),
+                ("/fallback", Value::from("false")),
+                ("/health/healthy", Value::Bool(false)),
+                ("/health/min_samples_ok", Value::from("true")),
+            ] {
+                let mut invalid = healthy.clone();
+                *invalid.pointer_mut(path).expect("tested field") = value;
+                assert!(
+                    validate_time_snapshot(Some(&invalid), scope).is_err(),
+                    "{path}"
+                );
+            }
+            for flag in ["offset_ok", "confidence_ok"] {
+                let mut invalid = healthy.clone();
+                *invalid
+                    .pointer_mut("/health/healthy")
+                    .expect("health field") = Value::Bool(false);
+                *invalid
+                    .pointer_mut(&format!("/health/{flag}"))
+                    .expect("health bound") = Value::Bool(false);
+                assert!(
+                    validate_time_snapshot(Some(&invalid), scope)
+                        .expect_err("observed clock bound violation")
+                        .contains("bounds")
+                );
+            }
+            assert!(validate_time_snapshot(None, scope).is_err());
+        }
+        let mut unsynchronized = healthy.clone();
+        *unsynchronized
+            .pointer_mut("/enforcement_mode")
+            .expect("snapshot field") = Value::from("warn");
+        *unsynchronized
+            .pointer_mut("/sample_count")
+            .expect("snapshot field") = Value::from(0_u64);
+        *unsynchronized
+            .pointer_mut("/peer_count")
+            .expect("snapshot field") = Value::from(0_u64);
+        *unsynchronized
+            .pointer_mut("/fallback")
+            .expect("snapshot field") = Value::Bool(true);
+        *unsynchronized
+            .pointer_mut("/health/healthy")
+            .expect("health field") = Value::Bool(false);
+        *unsynchronized
+            .pointer_mut("/health/min_samples_ok")
+            .expect("health field") = Value::Bool(false);
+        validate_time_snapshot(Some(&unsynchronized), DoctorScope::Basic)
+            .expect("basic scope reports synchronization separately");
+        assert!(validate_time_snapshot(Some(&unsynchronized), DoctorScope::Full).is_err());
+    }
+
+    #[test]
+    fn doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes() {
+        for (args, expected) in [
+            (vec!["taira-test", "doctor"], DoctorScope::Basic),
             (
-                "samples",
-                "/v1/time/now field `sample_count` must be a positive integer",
-            ),
-            ("health", "/v1/time/now health field `healthy` is not true"),
-            (
-                "enforcement",
-                "/v1/time/now is not using fail-closed time enforcement",
+                vec!["taira-test", "doctor", "--scope", "full"],
+                DoctorScope::Full,
             ),
         ] {
-            let mut hostile = healthy.clone();
-            let object = hostile.as_object_mut().expect("object");
-            match label {
-                "fallback" => {
-                    object.insert("fallback".into(), Value::Bool(true));
-                }
-                "samples" => {
-                    object.insert("sample_count".into(), Value::from(0_u64));
-                }
-                "health" => {
-                    object
-                        .get_mut("health")
-                        .and_then(Value::as_object_mut)
-                        .expect("health")
-                        .insert("healthy".into(), Value::Bool(false));
-                }
-                "enforcement" => {
-                    object.insert("enforcement_mode".into(), Value::from("warn"));
-                }
-                _ => unreachable!(),
+            let cli = TestTairaCli::try_parse_from(args).expect("doctor scope arguments");
+            let Command::Doctor(doctor) = cli.command else {
+                panic!("expected doctor command");
+            };
+            assert_eq!(doctor.scope, expected);
+        }
+        assert!(
+            TestTairaCli::try_parse_from(["taira-test", "doctor", "--scope", "unknown"]).is_err()
+        );
+        let server = spawn_mock_http(16, |request| {
+            let mut response = doctor_mock_response(request, None);
+            if path_only(&request.path) == "/v1/time/now" {
+                let mut body: Value = json::from_slice(&response.body).unwrap();
+                *body
+                    .pointer_mut("/enforcement_mode")
+                    .expect("snapshot field") = Value::from("warn");
+                *body.pointer_mut("/sample_count").expect("snapshot field") = Value::from(0_u64);
+                *body.pointer_mut("/peer_count").expect("snapshot field") = Value::from(0_u64);
+                *body.pointer_mut("/fallback").expect("snapshot field") = Value::Bool(true);
+                *body.pointer_mut("/health/healthy").expect("health field") = Value::Bool(false);
+                *body
+                    .pointer_mut("/health/min_samples_ok")
+                    .expect("health field") = Value::Bool(false);
+                response.body = json::to_vec(&body).unwrap();
             }
+            response
+        });
+        let report = run_doctor(&server.base_url, DoctorScope::Basic).expect("basic doctor");
+        let requests = finish_mock(server);
+        assert_eq!(report_status(&report), Some("ok"));
+        assert_eq!(report["scope"].as_str(), Some("basic"));
+        let warnings = report["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        let warning = warnings[0].as_str().unwrap();
+        assert!(
+            warning.contains("enforcement_mode=warn")
+                && warning.contains("fallback=true")
+                && warning.contains("healthy=false")
+                && warning.contains("sample_count=0")
+        );
+        for (name, _, path, _) in ROUTE_CHECKS {
+            if !DoctorScope::Basic.includes_route(name) {
+                assert!(
+                    !requests
+                        .iter()
+                        .any(|request| path_only(&request.path) == *path)
+                );
+            }
+        }
+        let checks = report["checks"].as_array().unwrap();
+        let expected = doctor_expected_checks(DoctorScope::Basic);
+        assert_eq!(checks.len(), expected.len());
+        for (actual, (name, status, detail)) in checks.iter().zip(expected) {
+            assert_eq!(actual["name"].as_str(), Some(name));
+            assert_eq!(actual["http_status"].as_u64(), Some(status));
             assert_eq!(
-                validate_time_snapshot(Some(&hostile)),
-                Err(mutation.to_owned())
+                actual.get("detail").and_then(Value::as_str),
+                detail.as_deref()
             );
         }
-        assert!(validate_time_snapshot(None).is_err());
+    }
+
+    #[test]
+    fn doctor_tools_list_consumes_pages_and_rejects_invalid_cursors() {
+        for invalid_cursor in [false, true] {
+            let server = spawn_mock_http(16, move |request| {
+                let mut response = doctor_mock_response(request, None);
+                if request.method == "POST" && request.body.contains("tools/list") {
+                    let request_body: Value = json::from_str(&request.body).unwrap();
+                    let mut body: Value = json::from_slice(&response.body).unwrap();
+                    let tools = body
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                        .unwrap();
+                    if request_body.pointer("/params/cursor").is_none() {
+                        tools.truncate(1);
+                        body.pointer_mut("/result")
+                            .and_then(Value::as_object_mut)
+                            .unwrap()
+                            .insert(
+                                "nextCursor".into(),
+                                Value::from(if invalid_cursor { "0" } else { "1" }),
+                            );
+                    } else {
+                        assert_eq!(request_body["params"]["cursor"].as_str(), Some("1"));
+                        tools.remove(0);
+                    }
+                    response.body = json::to_vec(&body).unwrap();
+                }
+                response
+            });
+            let report = run_doctor(&server.base_url, DoctorScope::Basic).expect("paged doctor");
+            let requests = finish_mock(server);
+            assert_eq!(
+                report_status(&report),
+                Some(if invalid_cursor { "fail" } else { "ok" })
+            );
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request.body.contains("tools/list"))
+                    .count(),
+                if invalid_cursor { 1 } else { 2 }
+            );
+        }
     }
     #[test]
     fn kagemusha_readiness_requires_exact_universal_kagemusha_contract() {
@@ -10600,7 +13024,7 @@ mod tests {
         let server = spawn_mock_http(16, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let _requests = finish_mock(server);
         let failures = report
             .as_object()
@@ -10624,17 +13048,17 @@ mod tests {
             {
                 let mut response = doctor_mock_response(request, None);
                 let mut payload: Value =
-                    json::from_str(&response.body).expect("mock discovery JSON");
+                    json::from_slice(&response.body).expect("mock discovery JSON");
                 *payload
                     .pointer_mut("/result/supportedVersions")
                     .expect("mock supportedVersions") = norito::json!(["2024-11-05"]);
-                response.body = json::to_json(&payload).expect("encode mock discovery JSON");
+                response.body = json::to_vec(&payload).expect("encode mock discovery JSON");
                 response
             } else {
                 doctor_mock_response(request, None)
             }
         });
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let _requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("fail"));
         assert!(
@@ -10675,7 +13099,7 @@ mod tests {
                     doctor_mock_response(request, None)
                 }
             });
-            let report = run_doctor(&server.base_url).expect("doctor report");
+            let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
             let _requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("fail"));
             assert!(
@@ -10704,7 +13128,7 @@ mod tests {
                 doctor_mock_response(request, None)
             }
         });
-        let report = run_doctor(&server.base_url).expect("doctor report");
+        let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let _requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("fail"));
         assert!(
@@ -10718,9 +13142,32 @@ mod tests {
         );
     }
     #[test]
-    fn doctor_rejects_non_iroha_or_malformed_mcp_tools() {
+    fn doctor_reports_bounded_mcp_application_error_codes() {
+        let payload = norito::json!({
+            "jsonrpc": "2.0", "id": 2,
+            "error": {"code": (-32000_i64), "message": "do-not-forward-server-message",
+                "data": {"error_code": "response_too_large", "private": "do-not-forward-data"}}
+        });
+        let error = mcp_tool_names(Some(&payload)).expect_err("MCP application error");
+        assert!(error.contains("code=-32000") && error.contains("error_code=response_too_large"));
+        assert!(!error.contains("do-not-forward"));
+        for value in [
+            Value::from("injected\ncode"),
+            Value::from("x".repeat(65)),
+            Value::Bool(false),
+        ] {
+            let mut invalid = payload.clone();
+            *invalid.pointer_mut("/error/data/error_code").unwrap() = value;
+            let error = mcp_tool_names(Some(&invalid)).unwrap_err();
+            assert!(error.contains("error_code=unspecified"));
+        }
+    }
+
+    #[test]
+    fn doctor_rejects_unknown_namespaces_or_malformed_mcp_tools() {
         for hostile_tool in [
             norito::json!({"name": "connect.legacy", "description": "retired"}),
+            norito::json!({"name": "torii.get-v1-accounts", "description": "malformed"}),
             norito::json!({"description": "missing name"}),
             norito::json!({"name": (REQUIRED_MCP_TOOLS[0]), "description": "duplicate"}),
         ] {
@@ -10731,19 +13178,19 @@ mod tests {
                 {
                     let mut response = doctor_mock_response(request, None);
                     let mut payload: Value =
-                        json::from_str(&response.body).expect("mock tools/list JSON");
+                        json::from_slice(&response.body).expect("mock tools/list JSON");
                     payload
                         .pointer_mut("/result/tools")
                         .and_then(Value::as_array_mut)
                         .expect("mock tools array")
                         .push(hostile_tool.clone());
-                    response.body = json::to_json(&payload).expect("encode mock tools/list JSON");
+                    response.body = json::to_vec(&payload).expect("encode mock tools/list JSON");
                     response
                 } else {
                     doctor_mock_response(request, None)
                 }
             });
-            let report = run_doctor(&server.base_url).expect("doctor report");
+            let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
             let _requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("fail"));
         }
@@ -10838,6 +13285,7 @@ mod tests {
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             &network_id,
             &puzzle,
+            Instant::now() + Duration::from_secs(5),
         )
         .expect_err("pre-release faucet algorithm must fail closed");
         let message = format!("{error:#}");
@@ -10882,6 +13330,7 @@ mod tests {
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             &network_id,
             &puzzle,
+            Instant::now() + Duration::from_secs(5),
         )
         .expect_err("zero-difficulty faucet puzzle must fail closed");
         assert!(format!("{error:#}").contains("difficulty_bits must be positive"));
@@ -10907,6 +13356,7 @@ mod tests {
                 "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 &network_id,
                 &missing,
+                Instant::now() + Duration::from_secs(5),
             )
             .expect_err("omitted exact puzzle field must fail closed");
             assert!(format!("{error:#}").contains("exact V1 field set"));
@@ -10922,6 +13372,7 @@ mod tests {
                 "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 &network_id,
                 &unknown,
+                Instant::now() + Duration::from_secs(5),
             )
             .is_err(),
             "unknown puzzle fields must fail closed"

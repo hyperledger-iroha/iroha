@@ -41,8 +41,8 @@ use super::{
     schema::{AttestedReadyValidateDemand, DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
     wal_recovery::{
-        AuthenticatedRecoveredWalControlProjection,
-        AuthenticatedRecoveredWalDecisionFetchProjection, AuthenticatedWalVoteLifecycleRepair,
+        AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection, AuthenticatedWalVoteLifecycleRepair,
         DurableAuthenticatedWalVoteLifecycleRepair, DurableRecoveredWalControlSignCarrierV1,
         DurableRecoveredWalDecisionFetchCarrierV1, RecoveredDecisionFetchStoreProjectionV1,
         RecoveredDecisionStoreValidateProjectionV1, RecoveredDecisionValidateInstalledSealV1,
@@ -56,10 +56,8 @@ use super::{
 };
 use iroha_config::parameters::actual::SumeragiV2Config;
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire},
-    peer::PeerId,
-};
+use iroha_data_model::block::{CertifiedMergeLedgerReference, SignedBlock, consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use norito::codec::Encode;
 use std::{collections::BTreeMap, fmt, path::Path, sync::Arc};
 use thiserror::Error;
@@ -276,6 +274,72 @@ pub(in crate::sumeragi) enum ClaimedCertifiedServeDispatchErrorV1 {
     InvalidCarrier,
 }
 impl ConcreteLifecycleWorkRegistry {
+    /// Check the complete Ready census before retaining a fresh Serve payload.
+    ///
+    /// A request may enter the Serve-only scheduler when no work is Ready, or
+    /// when its exact incumbent is the sole Ready row. Every other Ready row
+    /// must run first. Deferring here leaves ingress and durable storage intact;
+    /// publishing the Serve first would make the later full-census claim fail.
+    pub(super) fn certified_serve_ingress_has_competing_ready_work(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<bool, ReadyCertifiedServeAttestationErrorV1> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(ReadyCertifiedServeAttestationErrorV1::CoordinatorUnavailable);
+        }
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::LedgerMismatch);
+        }
+        let ready = coordinator
+            .records
+            .iter()
+            .filter_map(|(&ordinal, record)| {
+                (record.state == super::LifecycleState::Ready).then_some(ordinal)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if ready != coordinator.ready_index
+            || !self.exactly_covers_all_live_work(verified, coordinator)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier);
+        }
+        if ready.is_empty() {
+            return Ok(false);
+        }
+        if ready.len() == 1 {
+            let ordinal = *ready.first().expect("one Ready row exists");
+            let record = &coordinator.records[&ordinal];
+            if record.work_class == LifecycleWorkClass::CertifiedServe
+                && coordinator
+                    .durable_records
+                    .get(&ordinal)
+                    .is_some_and(|metadata| {
+                        metadata
+                            .replay_authority
+                            .exactly_matches_certified_serve_request(authenticated)
+                    })
+            {
+                // This census only validates readiness; dispatch mints and consumes
+                // its own attestation after admission under the held queue cut.
+                drop(self.attest_ready_certified_serve_request(
+                    coordinator,
+                    ledger,
+                    authenticated,
+                )?);
+                return Ok(false);
+            }
+        }
+        // Preserve the ProducerTurn's adjacent Serve/debt check when it is the
+        // oldest Ready row; the ordinary runtime owns all other Ready classes.
+        self.attest_ready_producer_turn_census(verified, coordinator, ledger)
+            .map_err(|_| ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        Ok(true)
+    }
+
     /// Seal one exact Ready Serve, current LedgerV1 frame, installed durable
     /// carrier, and authenticated request without accepting raw coordinates.
     pub(super) fn attest_ready_certified_serve_request(
@@ -1372,7 +1436,7 @@ impl RecoveredDecisionFetchDispatchIdentityV1 {
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
-        sources: &[iroha_data_model::peer::PeerId],
+        sources: &[iroha_model_base::peer::PeerId],
         certificate: &wire::QuorumCertificate,
     ) -> bool {
         if self.key.height != tag.height()
@@ -1691,6 +1755,12 @@ enum DurableRecoveredLifecycleSignParentV1 {
     Control(DurableRecoveredWalControlSignWork),
 }
 impl DurableRecoveredLifecycleSignParentV1 {
+    fn source_matches_coordinator(&self, coordinator: &LifecycleCoordinator) -> bool {
+        match self {
+            Self::Control(parent) => parent.carrier.source_matches_coordinator(coordinator),
+            Self::Live(_) | Self::PhaseVote(_) | Self::NextWalVote(_) => true,
+        }
+    }
     fn dispatch_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
         match self {
             Self::Live(parent) => parent.dispatch_key,
@@ -1848,6 +1918,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         coordinator: &LifecycleCoordinator,
     ) -> bool {
         self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_ready_record(
                 coordinator.active_context,
                 address,
@@ -1862,6 +1933,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         coordinator: &LifecycleCoordinator,
     ) -> bool {
         self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_finalization_record(
                 coordinator.active_context,
                 address,
@@ -1877,6 +1949,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         expected_active_lease: Option<&TurnLease>,
     ) -> bool {
         self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_parked_record(
                 coordinator.active_context,
                 address,
@@ -1936,6 +2009,7 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
     ) -> Option<RecoveredLifecycleSignedBroadcastOutputAuthorityV1> {
         (lease.output_reservation().is_none()
             && self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
             && self.broadcast.matches_current_claimed_record(
                 coordinator.active_context,
                 address,
@@ -2880,7 +2954,7 @@ impl ReadyRecoveredDecisionFetchAttestationV1 {
     pub(super) fn matches_ready_record(&self, record: &super::LifecycleRecord) -> bool {
         record.state == super::LifecycleState::Ready
             && record.work_class == LifecycleWorkClass::Fetch
-            && record.key.phase() == LifecyclePhase::Fetch
+            && record.key.phase() == LifecyclePhase::FetchDecision
             && record.stage.kind() == LifecycleStageKind::FetchBody
             && record.stage.predecessor_scope() == PredecessorScope::Independent
             && record.physical_slots.len() == 1
@@ -5023,6 +5097,7 @@ pub(in crate::sumeragi) struct ReadyValidatedExecutorCatalogAuthorityV1 {
     validated: ValidatedBodyReceipt,
 }
 include!("v2_lifecycle_work_registry_recovered_wal.rs");
+include!("v2_lifecycle_control_continuation_registry.rs");
 include!("v2_lifecycle_work_registry_validate_recovery.rs");
 include!("v2_lifecycle_work_registry_validate_execution.rs");
 include!("v2_lifecycle_work_registry_validate_sidecar.rs");

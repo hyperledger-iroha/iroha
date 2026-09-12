@@ -193,15 +193,85 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def validate(self) -> None:
+    def validate(self, lockfile: Path = ROOT / "Cargo.lock") -> None:
         validator.validate(
             root=ROOT,
+            lockfile_path=lockfile,
             xcframework=self.xcframework,
             manifest_path=self.manifest,
             manifest_link=self.manifest_link,
             expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
             swift_loader=self.loader,
         )
+
+    def test_explicit_external_lock_is_authenticated_without_replacing_root_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory).resolve() / "Cargo.lock"
+            external.write_bytes((ROOT / "Cargo.lock").read_bytes())
+            root_before = (ROOT / "Cargo.lock").read_bytes()
+            source_seal = validator._load_swift_pin_owner(ROOT)
+            digest = hashlib.sha256(external.read_bytes()).hexdigest()
+            self.payload["cargo_lock_sha256"] = digest
+            self.write_manifest()
+            with (
+                mock.patch.object(validator, "_load_swift_pin_owner", return_value=source_seal),
+            ):
+                validator.validate(
+                    root=ROOT, lockfile_path=external, xcframework=self.xcframework,
+                    manifest_path=self.manifest, manifest_link=self.manifest_link,
+                    expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+                    swift_loader=self.loader,
+                )
+                self.assertEqual((ROOT / "Cargo.lock").read_bytes(), root_before)
+                # Replacing the selected inode with identical bytes is still
+                # mutation; a matching digest alone cannot authorize success.
+                def replace_selected(*_arguments):
+                    replacement = external.with_name("replacement.lock")
+                    replacement.write_bytes(external.read_bytes())
+                    replacement.replace(external)
+                with (
+                    mock.patch.object(validator, "_validate_swift_pins", side_effect=replace_selected),
+                    self.assertRaisesRegex(validator.ValidationError, "changed during artifact validation"),
+                ):
+                    validator.validate(
+                        root=ROOT, lockfile_path=external, xcframework=self.xcframework,
+                        manifest_path=self.manifest, manifest_link=self.manifest_link,
+                        expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+                        swift_loader=self.loader,
+                    )
+            external.write_bytes(b"unreviewed validator fixture\n")
+            with self.assertRaisesRegex(validator.ValidationError, "canonical reviewed graph"):
+                validator.validate(
+                    root=ROOT, lockfile_path=external, xcframework=self.xcframework,
+                    manifest_path=self.manifest, manifest_link=self.manifest_link,
+                    expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+                )
+
+    def test_privacy_artifact_cannot_select_root_even_with_matching_graph_bytes(self) -> None:
+        payload = dict(self.payload, privacy_production_enabled=True)
+        with self.assertRaisesRegex(validator.ValidationError, "explicit external canonical graph snapshot"):
+            validator._validate_root_identity(ROOT, payload, ROOT / "Cargo.lock")
+
+    def test_privacy_artifact_requires_readonly_external_bytes_but_development_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory).resolve() / "Cargo.lock"
+            external.write_bytes((ROOT / "Cargo.lock").read_bytes())
+            payload = dict(self.payload, privacy_production_enabled=True)
+            external.chmod(0o600)
+            with self.assertRaisesRegex(validator.ValidationError, "must be read-only"):
+                validator._validate_root_identity(ROOT, payload, external)
+            validator._validate_root_identity(ROOT, self.payload, external)
+            external.chmod(0o400)
+            validator._validate_root_identity(ROOT, payload, external)
+            self.assertEqual(external.read_bytes(), (ROOT / "Cargo.lock").read_bytes())
+
+    def test_missing_lock_selection_has_no_default(self) -> None:
+        with self.assertRaisesRegex(TypeError, "lockfile_path"):
+            validator.validate(
+                root=ROOT, xcframework=self.xcframework,
+                manifest_path=self.manifest, manifest_link=self.manifest_link,
+                expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
+            )
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
@@ -234,6 +304,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.write_manifest()
         arguments = {
             "root": ROOT,
+            "lockfile_path": ROOT / "Cargo.lock",
             "xcframework": self.xcframework,
             "manifest_path": self.manifest,
             "manifest_link": self.manifest_link,
@@ -257,6 +328,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         ):
             validator.validate(
                 root=ROOT,
+            lockfile_path=ROOT / "Cargo.lock",
                 xcframework=self.xcframework,
                 manifest_path=self.manifest,
                 manifest_link=self.manifest_link,
@@ -340,9 +412,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_standalone_owner_recomputes_source_provenance(self) -> None:
         source_seal = types.SimpleNamespace(
-            seal_inputs=lambda _root, _platform, _lock: ["Cargo.lock"],
-            fingerprint=lambda _root, _inputs, _lock: "2" * 64,
-            status=lambda _root, _inputs, _lock: "",
+            snapshot=lambda _root, _platform, _lock: {"source_fingerprint_sha256": "2" * 64, "source_tree_dirty": False},
         )
         pin_commit = types.SimpleNamespace(
             validate_pin_relationship=lambda _root, _commit: "direct",
@@ -356,7 +426,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             ),
             mock.patch.object(validator, "_validate_tool_provenance"),
         ):
-            validator._validate_repository_provenance(ROOT, self.payload)
+            validator._validate_repository_provenance(ROOT, self.payload, ROOT / "Cargo.lock")
 
         self.payload["embedded_source_commit"] = "3" * 40
         with (
@@ -371,13 +441,11 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 "embedded source commit does not match",
             ),
         ):
-            validator._validate_repository_provenance(ROOT, self.payload)
+            validator._validate_repository_provenance(ROOT, self.payload, ROOT / "Cargo.lock")
         self.payload["embedded_source_commit"] = "1" * 40
 
         dirty_source_seal = types.SimpleNamespace(
-            seal_inputs=lambda _root, _platform, _lock: ["Cargo.lock"],
-            fingerprint=lambda _root, _inputs, _lock: "2" * 64,
-            status=lambda _root, _inputs, _lock: " M Cargo.lock\n",
+            snapshot=lambda _root, _platform, _lock: {"source_fingerprint_sha256": "2" * 64, "source_tree_dirty": True},
         )
         pin_parent = types.SimpleNamespace(
             validate_pin_relationship=lambda _root, _commit: "pin-parent",
@@ -395,7 +463,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
                 validator.ValidationError, "clean authenticated source closure"
             ),
         ):
-            validator._validate_repository_provenance(ROOT, self.payload)
+            validator._validate_repository_provenance(ROOT, self.payload, ROOT / "Cargo.lock")
 
         self.payload["source_tree_dirty"] = False
 
@@ -409,7 +477,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             mock.patch.object(validator, "_validate_tool_provenance"),
             self.assertRaisesRegex(validator.ValidationError, "fingerprint"),
         ):
-            validator._validate_repository_provenance(ROOT, self.payload)
+            validator._validate_repository_provenance(ROOT, self.payload, ROOT / "Cargo.lock")
 
     def test_tool_provenance_accepts_exact_tools_and_rejects_identity_drift(self) -> None:
         tools_root = Path(self.temporary.name).resolve() / "tools"
@@ -545,15 +613,19 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         self.payload["privacy_production_enabled"] = True
         self.payload["cargo_features"] = ["privacy-production-enabled"]
         self.write_manifest()
-        marker = self.xcframework / ".privacy-production-enabled"
-        marker.mkdir()
-        with self.assertRaisesRegex(validator.ValidationError, "regular file"):
-            self.validate()
-        marker.rmdir()
+        with tempfile.TemporaryDirectory() as directory:
+            lockfile = Path(directory).resolve() / "Cargo.lock"
+            lockfile.write_bytes((ROOT / "Cargo.lock").read_bytes())
+            lockfile.chmod(0o400)
+            marker = self.xcframework / ".privacy-production-enabled"
+            marker.mkdir()
+            with self.assertRaisesRegex(validator.ValidationError, "regular file"):
+                self.validate(lockfile)
+            marker.rmdir()
 
-        marker.write_bytes(b"enabled\n")
-        with self.assertRaisesRegex(validator.ValidationError, "must be empty"):
-            self.validate()
+            marker.write_bytes(b"enabled\n")
+            with self.assertRaisesRegex(validator.ValidationError, "must be empty"):
+                self.validate(lockfile)
 
 if __name__ == "__main__":
     unittest.main()

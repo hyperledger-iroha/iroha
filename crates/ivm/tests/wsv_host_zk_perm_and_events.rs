@@ -1,7 +1,7 @@
 use iroha_crypto::PublicKey;
+use iroha_model_base::domain::DomainId;
 use ivm::mock_wsv::{
-    AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, PermissionToken,
-    ZkPolicyConfig,
+    AccountId, AssetDefinitionId, Mintable, MockWorldStateView, PermissionToken, ZkPolicyConfig,
 };
 fn account(public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");

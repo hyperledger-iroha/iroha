@@ -11,8 +11,8 @@ use crate::{
 use iroha_data_model::{
     asset::AssetId,
     fastpq::{TransferDeltaTranscript, TransferTranscript},
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
@@ -360,7 +360,7 @@ fn private_path_only_changes_survive_first_repeat_and_ordered_capture_extraction
                 .fastpq_witness_context
                 .as_ref()
                 .unwrap()
-                .source_inventory
+                ._source_inventory
                 .as_ref()
                 .unwrap(),
             &owned,

@@ -714,13 +714,21 @@ fn rejected_completion_atomically_publishes_exact_ready_carrier() {
     let before_capacity_generation = coordinator.capacity_generation.clone();
     let before_durable = coordinator.durable_records.clone();
     let before_debts = coordinator.producer_debts.clone();
+    let validation_calls = std::cell::Cell::new(0);
     let executed = dispatch
         .execute(&mut store, |_| {
+            validation_calls.set(validation_calls.get() + 1);
             Err::<wire::ExecutionCommitment, _>(DetachedValidationError::Invalid(
                 "deterministic rejected completion",
             ))
         })
         .expect("execute exact rejected Validate dispatch");
+    assert_eq!(validation_calls.get(), 1);
+    assert_eq!(
+        executed.outcome().rejection_reason(),
+        Some("deterministic rejected completion"),
+        "diagnostics retain the original failure before reducer publication"
+    );
 
     let publication = coordinator
         .complete_durable_validate_dispatch(&mut holder, executed)
@@ -1702,6 +1710,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let initial_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("cold open installs one recovered Validate retry seal");
+    // A durable validation marker supplies a commitment, not quorum authority.
     assert_eq!(initial_seal.phase(), None);
     assert_eq!(initial_seal.commitment_ceiling(), Some(commitment));
     assert!(executor.recovered_validate_retry_corridor_is_inert_for_test());
@@ -1822,6 +1831,9 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(queued_after_debt.5, queued_debt.5);
     assert_eq!(queued_after_debt.6, queued_debt.6);
     assert_eq!(queued_after_debt.7, 1);
+    let queued_retry_seal = executor
+        .recovered_durable_validate_retry_snapshot_for_test(key)
+        .expect("the raw periodic retry retains the recovered Validate seal");
     let first_output_settlement =
         executor.settle_pending_lifecycle_output_admissions(&mut owner, &mut services);
     let first_output_summary = match first_output_settlement {
@@ -1942,9 +1954,19 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let queued_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("Queued retry retains the recovered seal");
+    assert_eq!(
+        queued_seal, queued_retry_seal,
+        "output settlement cannot change the authority learned by the raw periodic retry"
+    );
     assert!(queued_seal.same_owner(&initial_seal));
     assert!(queued_seal.effect_tag() >= initial_seal.effect_tag());
-    assert_eq!(queued_seal.phase(), initial_seal.phase());
+    // The authenticated PrepareQC advances only the retry authority frontier;
+    // the already queued Validate retains its sole physical execution owner.
+    assert_eq!(
+        queued_seal.phase(),
+        Some(wire::GlobalPhase::Prepare),
+        "the first periodic PrepareQC must refine the marker-only recovery authority"
+    );
     assert_eq!(queued_seal.commitment_ceiling(), Some(commitment));
     let queued_trace_root = queued_trace_root
         .expect("the exact raw periodic Validate records its authenticated trace root");
@@ -2052,6 +2074,9 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(active_after_debt.5, active_debt.5);
     assert_eq!(active_after_debt.6, active_debt.6);
     assert_eq!(active_after_debt.7, 1);
+    let active_retry_seal = executor
+        .recovered_durable_validate_retry_snapshot_for_test(key)
+        .expect("the active periodic retry retains the recovered Validate seal");
     let duplicate_output_settlement =
         executor.settle_pending_lifecycle_output_admissions(&mut owner, &mut services);
     let duplicate_output_summary = match duplicate_output_settlement {
@@ -2070,7 +2095,7 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     assert_eq!(duplicate_output_summary.already_completed(), 1);
     assert!(
         !duplicate_output_summary.requires_outer_executor_yield(),
-        "an exact terminal duplicate stutters before service I/O and cannot starve ingress"
+        "an exact terminal duplicate does not require another outer executor yield"
     );
     assert_eq!(
         services.consensus_broadcast_count_for_test(&prepare_qc_envelope),
@@ -2116,6 +2141,10 @@ fn cold_ready_validate_open_stutters_real_periodic_retry_fixture() {
     let active_seal = executor
         .recovered_durable_validate_retry_snapshot_for_test(key)
         .expect("Active retry retains the recovered seal");
+    assert_eq!(
+        active_seal, active_retry_seal,
+        "duplicate output settlement cannot change the active retry authority"
+    );
     assert!(active_seal.same_owner(&initial_seal));
     assert!(active_seal.effect_tag() >= queued_seal.effect_tag());
     assert_eq!(active_seal.phase(), queued_seal.phase());
@@ -3670,3 +3699,666 @@ impl super::super::ProductionLifecycleOwnerV1 {
 
 include!("v2_lifecycle_work_registry_validate_apply_cases.rs");
 include!("v2_lifecycle_work_registry_validate_completion_cases.rs");
+
+#[cfg(feature = "bls")]
+#[test]
+fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wait() {
+    let handle = std::thread::Builder::new()
+        .name("registered-sidecar-ordinary-completion".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false))
+        .expect("spawn registered-sidecar Completion fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasing_wait() {
+    let handle = std::thread::Builder::new()
+        .name("registered-sidecar-decided-recovery".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true))
+        .expect("spawn registered-sidecar decided recovery fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool) {
+    let marker = 0xDF;
+    let (mut lane_work, keys, verified, reference, kura) =
+        crate::sumeragi::v2_lane_work::tests::missing_lifecycle_sidecar_fixture_for_test();
+    let context = verified.context();
+    let parent = context
+        .parent_commit_qc
+        .as_ref()
+        .expect("real durable parent")
+        .subject
+        .block_hash;
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let leader = context.leader(0);
+    let header = BlockHeader::new(
+        NonZeroU64::new(context.height).expect("non-zero successor height"),
+        Some(parent),
+        None,
+        None,
+        1_000,
+        0,
+    );
+    let signature = SignatureOf::try_from_hash(keys[leader as usize].private_key(), header.hash())
+        .expect("sign the exact durable Validate body");
+    let block = SignedBlock::presigned(
+        BlockSignature::new(u64::from(leader), signature),
+        header,
+        Vec::new(),
+    );
+    let canonical_wire = block.encode_wire().expect("canonical Validate block wire");
+    let subject = wire::BlockSubject {
+        parent_block_hash: Some(parent),
+        block_hash: block.hash(),
+        payload_hash: Hash::new(&canonical_wire),
+    };
+    let manifest = encode_payload(context, round, subject, &canonical_wire)
+        .expect("signed RS16 fixture payload")
+        .manifest()
+        .clone();
+    let fixture =
+        durable_validate_fixture_from_material(marker, verified, manifest, canonical_wire);
+    let (mut fixture, _body_directory, body_store, durable) =
+        durable_validate_store_fixture_from_fixture(fixture, None);
+    let AdapterEffect::ValidateBody { tag, .. } = &fixture.effect else {
+        unreachable!("local registered-sidecar fixture retains one Validate effect")
+    };
+    let tag = *tag;
+    let validate_ordinal = fixture.lease.ordinal();
+    let coordinator = ready_durable_validate_coordinator(&[&fixture]);
+    let registry = take_dispatch_registry(&mut fixture);
+    let owner_directory = TempDir::new().expect("temporary registered-sidecar lifecycle owner");
+    let (mut owner, runtime_ordinal_authority) =
+        super::super::ProductionLifecycleOwnerV1::ready_validate_completion_owner_for_test(
+            fixture.verified.clone(),
+            coordinator,
+            registry,
+            body_store,
+            owner_directory.path(),
+        );
+    let lifecycle_ordinals =
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_ordinal_authority,
+        );
+
+    let runtime_directory = TempDir::new().expect("temporary registered-sidecar safety WAL");
+    let local_validator = fixture.verified.context().leader(0);
+    let fingerprints = AdapterFingerprints {
+        node: Hash::new(b"registered-sidecar sidecar Validate node"),
+        build: Hash::new(b"registered-sidecar sidecar Validate build"),
+        config: Hash::new(b"registered-sidecar sidecar Validate config"),
+    };
+    let wal_owner = fingerprints.node.into();
+    let (mut adapter, startup) = SumeragiV2Adapter::open(
+        &runtime_directory.path().join("safety.wal"),
+        fixture.verified.clone(),
+        Some(local_validator),
+        tag.generation(),
+        [marker; 32],
+        fingerprints,
+        DeferredAdmissionOrdinalSource::new(
+            validate_ordinal
+                .checked_add(1)
+                .expect("sidecar Validate successor ordinal remains representable"),
+        ),
+    )
+    .expect("open registered-sidecar sidecar Validate adapter");
+    assert!(startup.is_empty());
+    if decided_recovery {
+        let mut proposal = wire::Proposal {
+            round,
+            proposer: local_validator,
+            subject,
+            manifest: fixture.manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification {
+                    certificate: fixture.verified.context().parent_commit_qc.clone(),
+                },
+            ),
+            signature: Vec::new(),
+        };
+        proposal.signature = iroha_crypto::Signature::new(
+            keys[local_validator as usize].private_key(),
+            &proposal.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let message = adapter
+            .authenticate(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ))
+            .expect(
+                "authenticate the signed body proposal against the frozen four-validator context",
+            );
+        let effects = adapter
+            .receive_authenticated(message)
+            .expect("admit exact body proposal")
+            .into_effects();
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::FetchBody { .. }]
+        ));
+        let effects = adapter
+            .body_available(tag, fixture.manifest.clone())
+            .expect("observe exact body")
+            .into_effects();
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::StoreBody { .. }]
+        ));
+        let effects = adapter
+            .body_stored(tag, round, subject, &durable)
+            .expect("join the actual durable body")
+            .into_effects();
+        assert!(matches!(
+            effects.as_slice(),
+            [AdapterEffect::ValidateBody { .. }]
+        ));
+        for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
+            let mut certificate = wire::QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase,
+                subject,
+                execution_commitment: ValidatedBodyReceipt::for_test(durable.clone())
+                    .execution_commitment(),
+                signers: vec![0, 1, 2],
+                aggregate_signature: Vec::new(),
+            };
+            let vote = wire::Vote {
+                round,
+                proposal_round: round,
+                phase,
+                subject,
+                execution_commitment: certificate.execution_commitment,
+                signer: 0,
+                signature: Vec::new(),
+            };
+            let signatures = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    iroha_crypto::Signature::new(
+                        keys[*index as usize].private_key(),
+                        &vote.signature_preimage(),
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate exact quorum signatures");
+            let message = adapter
+                .authenticate(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+                ))
+                .expect("authenticate the exact signed quorum certificate");
+            assert!(
+                adapter
+                    .receive_authenticated(message)
+                    .expect("persist the real Decision while Validate waits")
+                    .effects()
+                    .is_empty()
+            );
+        }
+    }
+    let recovery_authority = adapter
+        .leader_wire_recovery_authority()
+        .expect("retain authority from the actual open safety WAL before transferring its adapter");
+    let started = std::time::Instant::now();
+    let round_timeout = std::time::Duration::from_secs(60);
+    let (runtime, startup) =
+        crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+            adapter,
+            startup,
+            started,
+            round_timeout,
+            crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            lifecycle_ordinals.clone(),
+        )
+        .expect("wrap registered-sidecar sidecar Validate adapter");
+    assert!(startup.is_empty());
+
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let mut services =
+        crate::sumeragi::v2_worker::tests::service_for_history_context_with_local_validator(
+            std::sync::Arc::clone(&kura),
+            fixture.verified.context().clone(),
+            &keys,
+            local_validator,
+        );
+    crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
+    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        std::sync::Arc::clone(&output_guard),
+        local_validator,
+        4,
+    );
+    let signer = usize::try_from(local_validator).expect("local leader index is representable");
+    crate::sumeragi::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[signer]);
+    executor
+        .arm_live_clocks(
+            super::super::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
+        .expect("arm registered-sidecar sidecar Validate clocks after service construction");
+    let binding_directory = TempDir::new().expect("temporary registered-sidecar ingress binding");
+    let validator = fixture.verified.context().roster[signer].validator.clone();
+    let ingress = if decided_recovery {
+        super::super::LaunchedProductionLifecycleV1::prepare_registered_validate_recovery_ingress_for_test(
+            &executor, &binding_directory, wal_owner,
+            recovery_authority, lifecycle_ordinals.clone(),
+        )
+    } else {
+        super::super::LaunchedProductionLifecycleV1::prepare_ready_local_proposal_sign_ingress_for_test(
+            &executor, &binding_directory, &validator,
+        )
+    };
+    let mut launched =
+        super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
+            owner, executor, services, ingress,
+        );
+
+    let (dispatched, after_validate_dispatch) =
+        super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            fixture.verified.context(),
+            super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| {
+                let ready = match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => ready,
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                        drop(runner);
+                        panic!("Ready sidecar Validate unexpectedly passed through Completion")
+                    }
+                    super::super::ProductionLifecycleCompletionPreGateV1::Selected(_) => {
+                        panic!("Ready sidecar Validate selected a parked completion")
+                    }
+                };
+                match launched.drive_ready_completion_turn(ready) {
+                    super::super::ProductionLifecycleCompletionTurnV1::Selected(
+                        super::super::ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(
+                            result,
+                        ),
+                    ) => result.expect("dispatch the genuine sidecar Validate worker"),
+                    super::super::ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("Ready sidecar Validate unexpectedly passed through Ready dispatch")
+                    }
+                    super::super::ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                        panic!("Ready sidecar Validate selected the wrong Completion class")
+                    }
+                }
+            },
+        );
+    assert_eq!(
+        after_validate_dispatch,
+        super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
+    );
+    assert_eq!(
+        dispatched,
+        super::super::ProductionCompletionDispatchV1::ValidateQueued {
+            ordinal: validate_ordinal,
+        }
+    );
+
+    planner_io.activate_one_lifecycle_validate();
+    assert_eq!(
+        planner_io.execute_held_lifecycle_validate_result_fixture(
+            Err(DetachedValidationError::MissingMergeSidecar(
+                reference.clone()
+            )),
+            std::sync::Arc::clone(&output_guard),
+        ),
+        1,
+        "the durable worker executes the real body and retains its exact missing dependency"
+    );
+    let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
+    for registered in [false, true] {
+        let (selection, after) =
+            super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+                fixture.verified.context(),
+                super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+                |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                    super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
+                        selected
+                    }
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                        drop(runner);
+                        panic!("the physical Validate cannot pass through ordinary Completion");
+                    }
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
+                        drop(ready);
+                        panic!("the deferred Validate retains its existing sealed owner");
+                    }
+                },
+            );
+        assert_eq!(
+            after,
+            super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
+        );
+        assert!(if registered {
+            matches!(selection, super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting)
+        } else {
+            matches!(
+                selection,
+                super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
+            )
+        });
+    }
+    let registration_before = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+        load_registration_for_test(&owner.coordinator)
+            .expect("read durable sidecar registration")
+            .expect("the missing exact reference remains registered")
+    });
+    assert_eq!(registration_before.reference(), &reference);
+    assert_eq!(
+        registration_before.dispatch_key().lifecycle_ordinal(),
+        validate_ordinal
+    );
+    let retained_before = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+        (
+            format!("{:?}", owner.coordinator),
+            format!("{:?}", owner.registry.registry_for_test()),
+        )
+    });
+    let runtime_before = launched.runtime_queue_snapshot_for_ready_sign_test(started);
+    let retained_physical = launched
+        .planner
+        .as_ref()
+        .expect("owned planner")
+        .lifecycle_validate_io_snapshot()
+        .completion_owners();
+
+    // No physical head is ordinary: the same wait is polled, never generic Runtime.
+    let (waiting, _) = super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+        fixture.verified.context(),
+        super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+        |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+            super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => selected,
+            super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                drop(runner);
+                panic!("an empty physical head cannot release the Validate wait");
+            }
+            super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
+                drop(ready);
+                panic!("a missing sidecar cannot become Ready");
+            }
+        },
+    );
+    assert!(matches!(
+        waiting,
+        super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting
+    ));
+    if decided_recovery {
+        let ingress = launched.registered_validate_ingress_for_test();
+        ingress
+            .open()
+            .expect("open the already-bound exact ingress");
+        let parent_height = std::num::NonZeroUsize::new(1).expect("non-zero parent height");
+        let parent_block = kura
+            .get_block(parent_height)
+            .expect("read the receiver's exact durable parent");
+        let (parent_finality, _) = kura
+            .v2_finality_artifact_with_receipt(1)
+            .expect("authenticate the receiver's retained parent finality")
+            .expect("the durable parent has retained finality");
+        assert_eq!(parent_block.hash(), parent);
+        let (keeper_kura, advert) = parent_finality
+            .commit_qc
+            .signers
+            .iter()
+            .find_map(|index| {
+                let index = usize::try_from(*index).expect("keeper index fits usize");
+                let key = &keys[index];
+                let peer = crate::PeerId::new(key.public_key().clone());
+                assert_eq!(parent_finality.height_context.roster[index].validator, peer);
+                let publisher = crate::kura::Kura::blank_kura_for_testing();
+                publisher
+                    .bind_local_peer_id(peer)
+                    .expect("bind this independent historical publisher to its own identity");
+                publisher
+                    .store_block(std::sync::Arc::clone(&parent_block))
+                    .expect("persist the same canonical parent at the historical publisher");
+                publisher
+                    .store_v2_finality_artifact(&parent_finality)
+                    .expect("authenticate the same parent CommitQC at the historical publisher");
+                publisher
+                    .build_signed_kura_replica_advert(1, key)
+                    .expect("validate exact keeper eligibility and complete canonical body")
+                    .map(|advert| (publisher, advert))
+            })
+            .expect("the exact parent CommitQC has a deterministic keeper with its retained body");
+        let keeper = advert.keeper.clone();
+        assert!(matches!(
+            ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    crate::BlockMessage::KuraReplicaAdvert(advert),
+                    keeper,
+                )
+            ),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let mut request = wire::CommitCertificateRequest {
+            protocol_version: wire::PROTOCOL_VERSION,
+            network_id: fixture.verified.context().network_id,
+            context_id: fixture.verified.context().id(),
+            height: round.height,
+            requester: validator.clone(),
+            signature: Vec::new(),
+        };
+        request.signature =
+            iroha_crypto::Signature::new(keys[signer].private_key(), &request.signature_preimage())
+                .payload()
+                .to_vec();
+        assert!(matches!(
+            ingress.try_push(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                    crate::BlockMessage::V2(wire::ConsensusMessageV2::new(
+                        wire::ConsensusMessageV2Payload::CommitCertificateRequest(request)
+                    )),
+                    validator.clone(),
+                )
+            ),
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(ingress.len(), 2);
+        let admitted_lifecycle_ordinals = ingress
+            .state
+            .lock()
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .map(|entry| {
+                entry
+                    .ownership_snapshot
+                    .first
+                    .lifecycle_ordinal
+                    .expect("bound ingress records the shared lifecycle ordinal")
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(admitted_lifecycle_ordinals.len(), 2);
+        assert!(
+            admitted_lifecycle_ordinals
+                .iter()
+                .all(|ordinal| *ordinal > 224 && *ordinal > validate_ordinal)
+        );
+        assert_eq!(
+            lifecycle_ordinals.next_ordinal_for_test().unwrap(),
+            admitted_lifecycle_ordinals
+                .last()
+                .map(|ordinal| ordinal + 1),
+            "Runtime and ingress retain the same actor-global ordinal source"
+        );
+        let retained_after_admission =
+            launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+                assert_eq!(
+                    load_registration_for_test(&owner.coordinator)
+                        .expect("read durable wait after ingress admission")
+                        .as_ref(),
+                    Some(&registration_before)
+                );
+                (
+                    format!("{:?}", owner.coordinator),
+                    format!("{:?}", owner.registry.registry_for_test()),
+                )
+            });
+        assert_eq!(
+            retained_after_admission.1, retained_before.1,
+            "ingress admission cannot mutate the registered private work registry"
+        );
+        let claim =
+            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        assert!(
+            claim
+                .decided_validate_sidecar_recovery_permit(false)
+                .is_none()
+        );
+        let local_signer = keys[signer].clone();
+        let mut block_sync =
+            crate::sumeragi::v2_block_sync::V2BlockSyncServer::new_with_historical_body_service(
+                fixture.verified.context().network_id,
+                4,
+                std::sync::Arc::clone(&kura),
+                local_signer,
+                crate::sumeragi::v2_block_sync::HistoricalBodyServeLimits::first_release(4, 4)
+                    .expect("bounded historical service"),
+            )
+            .expect("open exact recovery service");
+        let admitted_high_water = ingress.state.lock().last_admission_ordinal;
+        let wal_before = std::fs::read(runtime_directory.path().join("safety.wal"))
+            .expect("read durable Decision WAL");
+        for remaining in [1, 0] {
+            let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
+                let directive = executor.local_proposal_directive().expect("read actual executor Decision");
+                assert_eq!(directive.decided_subject(), Some(subject));
+                let _permit = claim.decided_validate_sidecar_recovery_permit(directive.decided_subject().is_some())
+                    .expect("only actual Decision opens the registered-wait recovery seam");
+                crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
+                    &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
+                ).expect("retire exactly one authenticated recovery occurrence")
+            });
+            assert!(drained);
+            assert_eq!(ingress.len(), remaining);
+            assert_eq!(
+                ingress.state.lock().last_admission_ordinal,
+                admitted_high_water
+            );
+            assert_eq!(claim, super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar);
+            let retained_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+                assert_eq!(
+                    load_registration_for_test(&owner.coordinator)
+                        .expect("read exact durable wait")
+                        .as_ref(),
+                    Some(&registration_before)
+                );
+                (
+                    format!("{:?}", owner.coordinator),
+                    format!("{:?}", owner.registry.registry_for_test()),
+                )
+            });
+            assert_eq!(
+                retained_after, retained_after_admission,
+                "recovery cannot mutate registered private work"
+            );
+            assert_eq!(
+                launched.runtime_queue_snapshot_for_ready_sign_test(started),
+                runtime_before
+            );
+            assert_eq!(
+                std::fs::read(runtime_directory.path().join("safety.wal")).unwrap(),
+                wal_before,
+                "recovery cannot step the reducer or append safety work"
+            );
+            assert!(!output_guard.restart_required());
+        }
+        assert_eq!(
+            keeper_kura
+                .canonical_block_wire_bytes_for_testing(parent_height)
+                .expect("the keeper retains its exact body through recovery"),
+            parent_block.encode_wire().expect("canonical parent wire")
+        );
+        return;
+    }
+    for _ in 0..2 {
+        launched
+            .planner
+            .as_ref()
+            .expect("owned planner")
+            .publish_auxiliary_completion_fixture();
+    }
+    for remaining in [1, 0] {
+        let (drained, after) = super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            fixture.verified.context(),
+            super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                    let drained = launched
+                        .drain_ordinary_completion_head_for_ready_sign_test()
+                        .expect("drain only one ordinary physical Completion");
+                    drop(runner);
+                    drained
+                }
+                super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
+                    assert!(!matches!(selected, super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting),
+                        "a registered missing-sidecar wait must not starve an ordinary physical Completion head");
+                    panic!("the unchanged registration selected unexpected lifecycle work");
+                }
+                super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
+                    drop(ready);
+                    panic!("ordinary Completion cannot wake the private Validate owner");
+                }
+            },
+        );
+        assert_eq!(
+            drained, 1,
+            "one Completion turn drains exactly one physical head"
+        );
+        assert_eq!(
+            after,
+            super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
+        );
+        let physical = launched
+            .planner
+            .as_ref()
+            .expect("owned planner")
+            .lifecycle_validate_io_snapshot();
+        assert_eq!(physical.completion_owners(), retained_physical + remaining);
+        let registration_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+            load_registration_for_test(&owner.coordinator).expect("read still-durable registration")
+        });
+        assert_eq!(registration_after.as_ref(), Some(&registration_before));
+        let retained_after = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+            (
+                format!("{:?}", owner.coordinator),
+                format!("{:?}", owner.registry.registry_for_test()),
+            )
+        });
+        assert!(
+            retained_after == retained_before,
+            "ordinary drain preserves the full private row, generation, physical slots and registry seal"
+        );
+        let runtime_after = launched.runtime_queue_snapshot_for_ready_sign_test(started);
+        assert_eq!(
+            runtime_after, runtime_before,
+            "ordinary auxiliary Completion cannot enter the reducer FIFO"
+        );
+        assert!(!output_guard.restart_required());
+    }
+}

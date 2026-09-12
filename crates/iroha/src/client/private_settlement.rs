@@ -24,9 +24,9 @@ use iroha_data_model::{
         PrivateSettlementProvisionalLegMaterialV1, PrivateSettlementSidecarAvailabilityBodyV1,
         PrivateSettlementSidecarAvailabilityV1,
     },
-    peer::PeerId,
     transaction::Executable,
 };
+use iroha_model_base::peer::PeerId;
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
     PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
@@ -125,10 +125,7 @@ fn validate_private_settlement_committee_endpoints_v1(endpoints: &[Url]) -> Resu
     for endpoint in endpoints {
         validate_private_settlement_endpoint_v1(endpoint)?;
     }
-    let unique = endpoints
-        .iter()
-        .map(|endpoint| endpoint.as_str())
-        .collect::<BTreeSet<_>>();
+    let unique = endpoints.iter().map(Url::as_str).collect::<BTreeSet<_>>();
     if endpoints.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
         || unique.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
     {
@@ -174,9 +171,7 @@ fn select_private_settlement_authenticated_quorum_v1<T>(
         };
         let entry = views.entry(candidate.canonical_view).or_insert_with(|| {
             ExactPrivateSettlementAuthenticatedQuorumViewV1 {
-                responses: Vec::with_capacity(usize::from(
-                    PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
-                )),
+                responses: Vec::with_capacity(PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1),
                 responders: BTreeSet::new(),
             }
         });
@@ -230,9 +225,9 @@ where
                 .or_insert_with(|| ExactPrivateSettlementQuorumViewV1 {
                     representative: response,
                     count: 0,
-                    authoritative_heights: Vec::with_capacity(usize::from(
+                    authoritative_heights: Vec::with_capacity(
                         PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
-                    )),
+                    ),
                 });
         entry.count = entry.count.saturating_add(1);
         entry.authoritative_heights.push(authoritative_height);
@@ -597,6 +592,15 @@ fn validate_phase_certificate_v1(
     .map_err(|_| eyre!("private-settlement phase certificate is invalid"))
 }
 
+#[derive(Clone, Copy)]
+enum PrivateSettlementPhaseRecoveryV1<'a> {
+    Prepare,
+    Commit {
+        prepared_bundle_digest: Hash,
+        expected_prepare: &'a PrivateSettlementPhaseCertificateV1,
+    },
+}
+
 fn phase_certificate_acknowledgement_is_valid_v1(
     phase: PrivateSettlementPhaseV1,
     lifecycle: PrivateSettlementLifecycleDtoV1,
@@ -614,7 +618,7 @@ fn phase_certificate_acknowledgement_is_valid_v1(
 }
 
 fn aggregate_phase_votes_v1(
-    body: PrivateSettlementPhaseBodyV1,
+    body: &PrivateSettlementPhaseBodyV1,
     authority_catalog_index: u8,
     authority: &PrivateSettlementCommitteeAuthorityV1,
     votes: &[PrivateSettlementPhaseVoteV1],
@@ -624,7 +628,7 @@ fn aggregate_phase_votes_v1(
     }
     let mut indexed = BTreeMap::new();
     for vote in votes {
-        let index = validate_phase_vote_v1(vote, &body, authority)?;
+        let index = validate_phase_vote_v1(vote, body, authority)?;
         if indexed.insert(index, vote.signature.clone()).is_some() {
             return Err(eyre!("private-settlement phase vote is duplicated"));
         }
@@ -639,13 +643,13 @@ fn aggregate_phase_votes_v1(
         .collect::<Vec<_>>();
     let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let certificate = PrivateSettlementPhaseCertificateV1 {
-        body,
+        body: *body,
         authority_catalog_index,
         signers_bitmap,
         aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
             .map_err(|_| eyre!("private-settlement phase aggregation failed"))?,
     };
-    validate_phase_certificate_v1(&certificate, &body, authority_catalog_index, authority)?;
+    validate_phase_certificate_v1(&certificate, body, authority_catalog_index, authority)?;
     Ok(certificate)
 }
 
@@ -707,7 +711,7 @@ fn validate_leg_status_response_v1(
     response: &PrivateSettlementLegStatusResponseV1,
 ) -> Result<()> {
     if response.payload_digest != requested
-        || response.route.dataspace_id == iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+        || response.route.dataspace_id == iroha_model_base::topology::DataSpaceId::UNIVERSAL
         || response.stored_at_height == 0
         || response.lifecycle_height < response.stored_at_height
         || response.expiry_height <= response.stored_at_height
@@ -864,9 +868,75 @@ fn validate_bundle_receipt_response_v1(
     Ok(())
 }
 
+// Authenticate Commit certificates against the caller-validated complete Prepare barrier.
+fn build_private_settlement_commit_bundle_v1(
+    barrier: &PrivateSettlementPrepareBarrierV1,
+    commit_certificates: &[PrivateSettlementPhaseCertificateV1],
+) -> Result<PrivateSettlementCommitBundleV1> {
+    if commit_certificates.len() != barrier.manifest.legs.len() {
+        return Err(eyre!(
+            "private-settlement finalization Commit barrier is incomplete"
+        ));
+    }
+
+    let mut legs = Vec::with_capacity(barrier.manifest.legs.len());
+    for (index, ((delta, prepare), commit)) in barrier
+        .deltas
+        .iter()
+        .zip(&barrier.prepare_certificates)
+        .zip(commit_certificates)
+        .enumerate()
+    {
+        let ordinal = u8::try_from(index)
+            .map_err(|_| eyre!("private-settlement finalization ordinal is invalid"))?;
+        let authority = barrier
+            .authority_catalog
+            .authority_for_leg(&barrier.manifest, index)
+            .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
+        let expected = expected_phase_body_v1(
+            &barrier.manifest,
+            ordinal,
+            &authority,
+            PrivateSettlementPhaseV1::Commit,
+            barrier.prepared_bundle_digest,
+        )?;
+        validate_phase_certificate_v1(commit, &expected, ordinal, &authority)?;
+        legs.push(PrivateSettlementLegReceiptV1 {
+            delta: delta.clone(),
+            prepare: prepare.clone(),
+            commit: commit.clone(),
+        });
+    }
+
+    let bundle = PrivateSettlementCommitBundleV1 {
+        version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+        manifest: barrier.manifest.clone(),
+        authority_catalog: barrier.authority_catalog.clone(),
+        legs,
+    };
+    bundle
+        .clone()
+        .into_receipt(barrier.manifest.authority_context_height)
+        .validate_shape()
+        .map_err(|_| eyre!("private-settlement finalization bundle is invalid"))?;
+    Ok(bundle)
+}
+
+fn validate_private_settlement_sponsor_context_v1(
+    manifest: &AtomicPrivateSettlementV1,
+    network_id: &NetworkId,
+    sponsor: &AccountId,
+    context: &'static str,
+) -> Result<()> {
+    if &manifest.network_id != network_id || &manifest.sponsor != sponsor {
+        return Err(eyre!("{context}"));
+    }
+    Ok(())
+}
+
 impl Client {
     fn decode_private_settlement_response_v1<T>(
-        response: Response<Vec<u8>>,
+        response: &Response<Vec<u8>>,
         context: &'static str,
     ) -> Result<T>
     where
@@ -876,7 +946,7 @@ impl Client {
     }
 
     fn decode_private_settlement_accepted_response_v1<T>(
-        response: Response<Vec<u8>>,
+        response: &Response<Vec<u8>>,
         context: &'static str,
     ) -> Result<T>
     where
@@ -890,7 +960,7 @@ impl Client {
     }
 
     fn decode_private_settlement_response_with_status_v1<T>(
-        response: Response<Vec<u8>>,
+        response: &Response<Vec<u8>>,
         expected_status: StatusCode,
         context: &'static str,
     ) -> Result<T>
@@ -903,7 +973,7 @@ impl Client {
                 response.status()
             ));
         }
-        let content_type = Self::response_content_type(&response);
+        let content_type = Self::response_content_type(response);
         if !Self::is_json_content_type(content_type) {
             return Err(eyre!(
                 "{context}: invalid content-type (expected application/json)"
@@ -953,7 +1023,7 @@ impl Client {
         }
         let decoded: super::PrivateSettlementTestNetworkStateEvidenceResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement test-network state evidence failed",
             )?;
         if decoded.format_version != 1
@@ -1007,7 +1077,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementAvailabilityShareResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement availability share failed",
             )?;
         validate_availability_share_v1(
@@ -1117,7 +1187,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementPhaseVoteResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement Prepare vote failed",
             )?;
         validate_phase_vote_v1(&decoded.vote, &expected, authority)?;
@@ -1162,7 +1232,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementPhaseCertificateResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement phase certificate persistence failed",
             )?;
         if decoded.bundle_id != manifest.bundle_id
@@ -1187,10 +1257,23 @@ impl Client {
         manifest: &AtomicPrivateSettlementV1,
         payload_digest: Hash,
         authority: &PrivateSettlementCommitteeAuthorityV1,
-        phase: PrivateSettlementPhaseV1,
-        prepared_bundle_digest: Hash,
-        expected_prepare: Option<&PrivateSettlementPhaseCertificateV1>,
+        recovery: PrivateSettlementPhaseRecoveryV1<'_>,
     ) -> Result<Option<PrivateSettlementPhaseCertificateV1>> {
+        let (phase, prepared_bundle_digest, expected_prepare) = match recovery {
+            PrivateSettlementPhaseRecoveryV1::Prepare => (
+                PrivateSettlementPhaseV1::Prepare,
+                private_settlement_reserved_prepared_digest_v1(),
+                None,
+            ),
+            PrivateSettlementPhaseRecoveryV1::Commit {
+                prepared_bundle_digest,
+                expected_prepare,
+            } => (
+                PrivateSettlementPhaseV1::Commit,
+                prepared_bundle_digest,
+                Some(expected_prepare),
+            ),
+        };
         if committee_endpoints.len() != authority.validators.len() {
             return Err(eyre!(
                 "private-settlement recovery endpoints must match the four-validator roster"
@@ -1290,9 +1373,7 @@ impl Client {
             manifest,
             payload_digest,
             authority,
-            PrivateSettlementPhaseV1::Prepare,
-            private_settlement_reserved_prepared_digest_v1(),
-            None,
+            PrivateSettlementPhaseRecoveryV1::Prepare,
         )
     }
 
@@ -1321,9 +1402,10 @@ impl Client {
             &barrier.manifest,
             payload_digest,
             authority,
-            PrivateSettlementPhaseV1::Commit,
-            barrier.prepared_bundle_digest,
-            Some(expected_prepare),
+            PrivateSettlementPhaseRecoveryV1::Commit {
+                prepared_bundle_digest: barrier.prepared_bundle_digest,
+                expected_prepare,
+            },
         )
     }
 
@@ -1435,7 +1517,7 @@ impl Client {
             validate_phase_certificate_v1(&certificate, &body, ordinal, authority)?;
             certificate
         } else {
-            aggregate_phase_votes_v1(body, ordinal, authority, selected)?
+            aggregate_phase_votes_v1(&body, ordinal, authority, selected)?
         };
         for index in responders {
             let endpoint = &committee_endpoints[index];
@@ -1471,15 +1553,13 @@ impl Client {
     /// Rejects incomplete, reordered, substituted, or cryptographically invalid material.
     pub fn build_private_settlement_prepare_barrier_v1(
         manifest: AtomicPrivateSettlementV1,
-        authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+        authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
         deltas: Vec<PrivateSettlementDeltaV1>,
         prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
     ) -> Result<PrivateSettlementPrepareBarrierV1> {
-        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
-            &manifest,
-            &authority_catalog,
-        )
-        .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
+        let authority_catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, authority_catalog)
+                .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
         let prepared_bundle_digest = prepared_bundle_digest_v1(
             &manifest,
             &authority_catalog,
@@ -1541,7 +1621,7 @@ impl Client {
         }
         Self::build_private_settlement_prepare_barrier_v1(
             manifest.clone(),
-            authority_catalog.to_vec(),
+            authority_catalog,
             deltas.to_vec(),
             certificates,
         )
@@ -1594,7 +1674,7 @@ impl Client {
         }
         Self::build_private_settlement_prepare_barrier_v1(
             manifest.clone(),
-            authority_catalog.to_vec(),
+            authority_catalog,
             deltas.to_vec(),
             certificates,
         )
@@ -1642,7 +1722,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementPhaseVoteResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement Commit vote failed",
             )?;
         validate_phase_vote_v1(&decoded.vote, &expected, authority)?;
@@ -1755,7 +1835,7 @@ impl Client {
             validate_phase_certificate_v1(&certificate, &body, ordinal, authority)?;
             certificate
         } else {
-            aggregate_phase_votes_v1(body, ordinal, authority, selected)?
+            aggregate_phase_votes_v1(&body, ordinal, authority, selected)?
         };
         for index in responders {
             let endpoint = &committee_endpoints[index];
@@ -1877,13 +1957,12 @@ impl Client {
             ));
         }
         validate_prepare_barrier_v1(barrier)?;
-        if barrier.manifest.network_id != self.network_id
-            || barrier.manifest.sponsor != self.account
-        {
-            return Err(eyre!(
-                "private-settlement Prepare registration sponsor or network binding is invalid"
-            ));
-        }
+        validate_private_settlement_sponsor_context_v1(
+            &barrier.manifest,
+            &self.network_id,
+            &self.account,
+            "private-settlement Prepare registration sponsor or network binding is invalid",
+        )?;
         let instruction = RegisterAtomicPrivateSettlementPrepareV1::new(barrier.clone());
         let instruction_bytes = u64::try_from(
             norito::encode_canonical(&instruction)
@@ -1997,11 +2076,12 @@ impl Client {
         manifest
             .validate()
             .map_err(|_| eyre!("private-settlement abort manifest is invalid"))?;
-        if manifest.network_id != self.network_id || manifest.sponsor != self.account {
-            return Err(eyre!(
-                "private-settlement abort sponsor or network binding is invalid"
-            ));
-        }
+        validate_private_settlement_sponsor_context_v1(
+            manifest,
+            &self.network_id,
+            &self.account,
+            "private-settlement abort sponsor or network binding is invalid",
+        )?;
 
         let instruction = AbortAtomicPrivateSettlementV1::new(manifest.clone(), reason);
         let boxed_instruction = InstructionBox::from(instruction);
@@ -2081,59 +2161,13 @@ impl Client {
             ));
         }
         validate_prepare_barrier_v1(barrier)?;
-        if barrier.manifest.network_id != self.network_id
-            || barrier.manifest.sponsor != self.account
-        {
-            return Err(eyre!(
-                "private-settlement finalization sponsor or network binding is invalid"
-            ));
-        }
-        if commit_certificates.len() != barrier.manifest.legs.len() {
-            return Err(eyre!(
-                "private-settlement finalization Commit barrier is incomplete"
-            ));
-        }
-
-        let mut legs = Vec::with_capacity(barrier.manifest.legs.len());
-        for (index, ((delta, prepare), commit)) in barrier
-            .deltas
-            .iter()
-            .zip(&barrier.prepare_certificates)
-            .zip(commit_certificates)
-            .enumerate()
-        {
-            let ordinal = u8::try_from(index)
-                .map_err(|_| eyre!("private-settlement finalization ordinal is invalid"))?;
-            let authority = barrier
-                .authority_catalog
-                .authority_for_leg(&barrier.manifest, index)
-                .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
-            let expected = expected_phase_body_v1(
-                &barrier.manifest,
-                ordinal,
-                &authority,
-                PrivateSettlementPhaseV1::Commit,
-                barrier.prepared_bundle_digest,
-            )?;
-            validate_phase_certificate_v1(commit, &expected, ordinal, &authority)?;
-            legs.push(PrivateSettlementLegReceiptV1 {
-                delta: delta.clone(),
-                prepare: prepare.clone(),
-                commit: commit.clone(),
-            });
-        }
-
-        let bundle = PrivateSettlementCommitBundleV1 {
-            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-            manifest: barrier.manifest.clone(),
-            authority_catalog: barrier.authority_catalog.clone(),
-            legs,
-        };
-        bundle
-            .clone()
-            .into_receipt(barrier.manifest.authority_context_height)
-            .validate_shape()
-            .map_err(|_| eyre!("private-settlement finalization bundle is invalid"))?;
+        validate_private_settlement_sponsor_context_v1(
+            &barrier.manifest,
+            &self.network_id,
+            &self.account,
+            "private-settlement finalization sponsor or network binding is invalid",
+        )?;
+        let bundle = build_private_settlement_commit_bundle_v1(barrier, commit_certificates)?;
         let instruction_bytes = u64::try_from(
             bundle
                 .canonical_carrier_bytes_len()
@@ -2235,7 +2269,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementLegUploadResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement leg upload failed",
             )?;
         if decoded.bundle_id != request.manifest.bundle_id
@@ -2356,7 +2390,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
-            response,
+            &response,
             "private-settlement leg status failed",
         )?;
         validate_leg_status_response_v1(payload_digest, &decoded)?;
@@ -2386,7 +2420,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
-            response,
+            &response,
             "private-settlement phase-certificate recovery failed",
         )?;
         validate_phase_certificates_response_v1(payload_digest, &decoded)?;
@@ -2426,7 +2460,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
-            response,
+            &response,
             "private-settlement committee proof fetch failed",
         )?;
         validate_private_settlement_committee_proof_response_v1(
@@ -2474,7 +2508,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
-            response,
+            &response,
             "private-settlement auditor capsule fetch failed",
         )?;
         validate_private_settlement_auditor_capsule_response_v1(
@@ -2684,7 +2718,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementAuditApprovalResponseV1 =
             Self::decode_private_settlement_response_v1(
-                response,
+                &response,
                 "private-settlement auditor approval failed",
             )?;
         validate_private_settlement_audit_approval_response_v1(payload_digest, request, &decoded)
@@ -2877,7 +2911,7 @@ impl Client {
         )?;
         let decoded: PrivateSettlementBundleSubmitResponseV1 =
             Self::decode_private_settlement_accepted_response_v1(
-                response,
+                &response,
                 "private-settlement bundle submission failed",
             )?;
         if decoded.bundle_id != expected_bundle || decoded.carrier_id != expected_carrier {
@@ -2902,7 +2936,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
-            response,
+            &response,
             "private-settlement bundle status failed",
         )?;
         validate_bundle_status_response_v1(bundle_id, &decoded)?;
@@ -2925,7 +2959,7 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
-            response,
+            &response,
             "private-settlement bundle receipt failed",
         )?;
         validate_bundle_receipt_response_v1(bundle_id, &decoded)?;
@@ -2940,13 +2974,14 @@ mod tests {
         SnapshotStore, base_url, client_with_base_url, respond_with, with_mock_http,
     };
     use iroha_data_model::{
-        nexus::{DataSpaceId, LaneId, PrivateSettlementLegCommitmentV1, PrivateSettlementRouteV1},
+        nexus::{PrivateSettlementLegCommitmentV1, PrivateSettlementRouteV1},
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
             PrivacyRecipientIdV1, PrivacyRootV1,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{
         num::NonZeroU64,
         sync::{Arc, Mutex},
@@ -2979,7 +3014,7 @@ mod tests {
     fn auditor_responder_must_be_unique_and_endpoint_roster_aligned() {
         let validators = (0_u8..4)
             .map(|index| {
-                iroha_data_model::peer::PeerId::from(
+                iroha_model_base::peer::PeerId::from(
                     iroha_crypto::KeyPair::from_seed(
                         vec![0x91_u8.saturating_add(index); 32],
                         Algorithm::BlsNormal,
@@ -3351,8 +3386,8 @@ mod tests {
         PrivateSettlementPhaseBodyV1,
     ) {
         let route = iroha_data_model::nexus::PrivateSettlementRouteV1 {
-            dataspace_id: iroha_data_model::nexus::DataSpaceId::new(31),
-            lane_id: iroha_data_model::nexus::LaneId::new(7),
+            dataspace_id: iroha_model_base::topology::DataSpaceId::new(31),
+            lane_id: iroha_model_base::topology::LaneId::new(7),
             lane_incarnation: Hash::new(b"client-phase-incarnation"),
         };
         let keys = (0_u8..4)
@@ -3365,7 +3400,7 @@ mod tests {
             .collect::<Vec<_>>();
         let validators = keys
             .iter()
-            .map(|key| iroha_data_model::peer::PeerId::from(key.public_key().clone()))
+            .map(|key| iroha_model_base::peer::PeerId::from(key.public_key().clone()))
             .collect::<Vec<_>>();
         let authority = PrivateSettlementCommitteeAuthorityV1 {
             route,
@@ -3401,15 +3436,15 @@ mod tests {
     fn phase_votes_v1(
         authority: &PrivateSettlementCommitteeAuthorityV1,
         keys: &[iroha_crypto::KeyPair],
-        body: PrivateSettlementPhaseBodyV1,
+        body: &PrivateSettlementPhaseBodyV1,
         indexes: &[usize],
     ) -> Vec<PrivateSettlementPhaseVoteV1> {
-        let preimage = phase_signature_preimage_v1(&body).expect("phase preimage");
+        let preimage = phase_signature_preimage_v1(body).expect("phase preimage");
         indexes
             .iter()
             .map(|index| PrivateSettlementPhaseVoteV1 {
                 version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
-                body,
+                body: *body,
                 signer: authority.validators[*index].clone(),
                 signature: Signature::try_new(keys[*index].private_key(), &preimage)
                     .expect("phase signature")
@@ -3483,7 +3518,7 @@ mod tests {
             .collect::<Vec<_>>();
         let validators = keys
             .iter()
-            .map(|key| iroha_data_model::peer::PeerId::from(key.public_key().clone()))
+            .map(|key| iroha_model_base::peer::PeerId::from(key.public_key().clone()))
             .collect::<Vec<_>>();
         let authority = PrivateSettlementCommitteeAuthorityV1 {
             route,
@@ -3565,12 +3600,9 @@ mod tests {
         delta
     }
 
-    fn finalization_fixture_v1(
+    fn finalization_manifest_v1(
         client: &Client,
-    ) -> (
-        PrivateSettlementPrepareBarrierV1,
-        Vec<PrivateSettlementPhaseCertificateV1>,
-    ) {
+    ) -> (AtomicPrivateSettlementV1, Vec<PrivateSettlementDeltaV1>) {
         let mut manifest = AtomicPrivateSettlementV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             network_id: client.network_id,
@@ -3629,6 +3661,16 @@ mod tests {
             .validate()
             .expect("finalization fixture manifest validates");
 
+        (manifest, deltas)
+    }
+
+    fn finalization_fixture_v1(
+        client: &Client,
+    ) -> (
+        PrivateSettlementPrepareBarrierV1,
+        Vec<PrivateSettlementPhaseCertificateV1>,
+    ) {
+        let (manifest, deltas) = finalization_manifest_v1(client);
         let authority_material = manifest
             .legs
             .iter()
@@ -3652,17 +3694,17 @@ mod tests {
                 )
                 .expect("finalization fixture Prepare body");
                 aggregate_phase_votes_v1(
-                    body,
+                    &body,
                     ordinal,
                     authority,
-                    &phase_votes_v1(authority, keys, body, &[0, 1, 2]),
+                    &phase_votes_v1(authority, keys, &body, &[0, 1, 2]),
                 )
                 .expect("finalization fixture Prepare QC")
             })
             .collect::<Vec<_>>();
         let barrier = Client::build_private_settlement_prepare_barrier_v1(
             manifest,
-            authorities,
+            &authorities,
             deltas,
             prepare_certificates,
         )
@@ -3681,15 +3723,141 @@ mod tests {
                 )
                 .expect("finalization fixture Commit body");
                 aggregate_phase_votes_v1(
-                    body,
+                    &body,
                     ordinal,
                     authority,
-                    &phase_votes_v1(authority, keys, body, &[0, 1, 2]),
+                    &phase_votes_v1(authority, keys, &body, &[0, 1, 2]),
                 )
                 .expect("finalization fixture Commit QC")
             })
             .collect();
         (barrier, commits)
+    }
+
+    #[test]
+    fn sponsor_context_checks_network_and_authority_independently() {
+        let client = client_with_base_url(base_url());
+        let (barrier, _) = finalization_fixture_v1(&client);
+        let manifest = &barrier.manifest;
+        validate_private_settlement_sponsor_context_v1(
+            manifest,
+            &client.network_id,
+            &client.account,
+            "binding mismatch",
+        )
+        .expect("exact sponsor context");
+        let other_network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+            Hash::new(b"private-settlement-other-network"),
+        ));
+        let (other_sponsor, _) = iroha_test_samples::gen_account_in("other-settlement-sponsor");
+        for (network_id, sponsor) in [
+            (&other_network, &client.account),
+            (&client.network_id, &other_sponsor),
+        ] {
+            let error = validate_private_settlement_sponsor_context_v1(
+                manifest,
+                network_id,
+                sponsor,
+                "binding mismatch",
+            )
+            .expect_err("each independent context substitution must fail");
+            assert_eq!(error.to_string(), "binding mismatch");
+        }
+    }
+
+    fn phase_recovery_response_fixture_v1(
+        response: &PrivateSettlementPhaseCertificatesResponseV1,
+    ) -> Response<Vec<u8>> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(norito::json::to_vec(response).expect("encode recovery fixture"))
+            .expect("response build")
+    }
+
+    #[test]
+    fn recovery_scope_selects_bound_certificates_and_rejects_substitution() {
+        let client = client_with_base_url(base_url());
+        let (barrier, commits) = finalization_fixture_v1(&client);
+        let endpoints = committee_endpoint_fixture_v1();
+        let payload_digest = barrier.manifest.legs[0].payload_digest;
+        let authority = barrier
+            .authority_catalog
+            .authority_for_leg(&barrier.manifest, 0)
+            .expect("fixture authority");
+        let response = PrivateSettlementPhaseCertificatesResponseV1 {
+            bundle_id: barrier.manifest.bundle_id,
+            payload_digest,
+            leg_ordinal: 0,
+            lifecycle: PrivateSettlementLifecycleDtoV1::CommitCertified,
+            prepare_certificate: Some(barrier.prepare_certificates[0].clone()),
+            commit_certificate: Some(commits[0].clone()),
+        };
+        for phase in [
+            PrivateSettlementPhaseV1::Prepare,
+            PrivateSettlementPhaseV1::Commit,
+        ] {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let recovered = with_mock_http(
+                respond_with(&snapshots, phase_recovery_response_fixture_v1(&response)),
+                |transport| {
+                    let context = client.clone().with_test_http_transport(transport);
+                    match phase {
+                        PrivateSettlementPhaseV1::Prepare => context
+                            .recover_private_settlement_prepare_certificate_v1(
+                                &endpoints,
+                                &barrier.manifest,
+                                payload_digest,
+                                &authority,
+                            ),
+                        PrivateSettlementPhaseV1::Commit => context
+                            .recover_private_settlement_commit_certificate_v1(
+                                &endpoints,
+                                payload_digest,
+                                &barrier,
+                                &authority,
+                            ),
+                    }
+                },
+            )
+            .expect("exact committee recovery")
+            .expect("certificate exists");
+            let expected = match phase {
+                PrivateSettlementPhaseV1::Prepare => &barrier.prepare_certificates[0],
+                PrivateSettlementPhaseV1::Commit => &commits[0],
+            };
+            assert_eq!(&recovered, expected);
+            assert_eq!(snapshots.lock().expect("snapshots").len(), 4);
+        }
+        let mut substituted = response;
+        substituted
+            .commit_certificate
+            .as_mut()
+            .expect("fixture Commit certificate")
+            .body
+            .prepared_bundle_digest = Hash::new(b"substituted-recovery-barrier");
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(
+            respond_with(&snapshots, phase_recovery_response_fixture_v1(&substituted)),
+            |transport| {
+                client
+                    .clone()
+                    .with_test_http_transport(transport)
+                    .recover_private_settlement_commit_certificate_v1(
+                        &endpoints,
+                        payload_digest,
+                        &barrier,
+                        &authority,
+                    )
+            },
+        )
+        .expect_err("Commit recovery cannot substitute its prepared bundle");
+        assert!(
+            error
+                .to_string()
+                .contains("three valid committee responses")
+        );
+        assert_eq!(snapshots.lock().expect("snapshots").len(), 4);
     }
 
     #[test]
@@ -3713,39 +3881,39 @@ mod tests {
     #[test]
     fn client_phase_aggregation_requires_exact_three_distinct_valid_votes() {
         let (authority, keys, body) = phase_fixture_v1();
-        let exact = phase_votes_v1(&authority, &keys, body, &[0, 1, 3]);
+        let exact = phase_votes_v1(&authority, &keys, &body, &[0, 1, 3]);
         let certificate =
-            aggregate_phase_votes_v1(body, 0, &authority, &exact).expect("exact quorum");
+            aggregate_phase_votes_v1(&body, 0, &authority, &exact).expect("exact quorum");
         assert_eq!(certificate.signers_bitmap, 0b1011);
         assert!(validate_phase_certificate_v1(&certificate, &body, 0, &authority).is_ok());
 
         assert!(
             aggregate_phase_votes_v1(
-                body,
+                &body,
                 0,
                 &authority,
-                &phase_votes_v1(&authority, &keys, body, &[0, 1]),
+                &phase_votes_v1(&authority, &keys, &body, &[0, 1]),
             )
             .is_err()
         );
         assert!(
             aggregate_phase_votes_v1(
-                body,
+                &body,
                 0,
                 &authority,
-                &phase_votes_v1(&authority, &keys, body, &[0, 1, 2, 3]),
+                &phase_votes_v1(&authority, &keys, &body, &[0, 1, 2, 3]),
             )
             .is_err()
         );
 
-        let mut duplicate = phase_votes_v1(&authority, &keys, body, &[0, 1, 2]);
+        let mut duplicate = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2]);
         duplicate[1] = duplicate[0].clone();
-        assert!(aggregate_phase_votes_v1(body, 0, &authority, &duplicate).is_err());
-        let mut malformed = phase_votes_v1(&authority, &keys, body, &[0, 1, 2]);
+        assert!(aggregate_phase_votes_v1(&body, 0, &authority, &duplicate).is_err());
+        let mut malformed = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2]);
         malformed[2].signature[0] ^= 1;
-        assert!(aggregate_phase_votes_v1(body, 0, &authority, &malformed).is_err());
+        assert!(aggregate_phase_votes_v1(&body, 0, &authority, &malformed).is_err());
 
-        let all_four = phase_votes_v1(&authority, &keys, body, &[0, 1, 2, 3]);
+        let all_four = phase_votes_v1(&authority, &keys, &body, &[0, 1, 2, 3]);
         let selected = canonical_phase_vote_quorum_v1(&all_four)
             .expect("four-endpoint fanout deterministically selects a quorum");
         assert_eq!(selected.len(), 3);
@@ -3753,7 +3921,7 @@ mod tests {
         assert_eq!(selected[1].signer, authority.validators[1]);
         assert_eq!(selected[2].signer, authority.validators[2]);
         assert!(
-            canonical_phase_vote_quorum_v1(&phase_votes_v1(&authority, &keys, body, &[0, 1],))
+            canonical_phase_vote_quorum_v1(&phase_votes_v1(&authority, &keys, &body, &[0, 1],))
                 .is_err()
         );
     }
@@ -3762,10 +3930,10 @@ mod tests {
     fn phase_certificate_recovery_response_is_exact_and_monotonic() {
         let (authority, keys, prepare_body) = phase_fixture_v1();
         let prepare = aggregate_phase_votes_v1(
-            prepare_body,
+            &prepare_body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, prepare_body, &[0, 1, 2]),
+            &phase_votes_v1(&authority, &keys, &prepare_body, &[0, 1, 2]),
         )
         .expect("Prepare QC");
         let payload_digest = Hash::new(b"client-recovered-phase-payload");
@@ -3787,10 +3955,10 @@ mod tests {
         commit_body.phase = PrivateSettlementPhaseV1::Commit;
         commit_body.prepared_bundle_digest = Hash::new(b"client-recovered-prepared-bundle");
         let commit = aggregate_phase_votes_v1(
-            commit_body,
+            &commit_body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, commit_body, &[0, 1, 2]),
+            &phase_votes_v1(&authority, &keys, &commit_body, &[0, 1, 2]),
         )
         .expect("Commit QC");
         let complete = PrivateSettlementPhaseCertificatesResponseV1 {
@@ -3833,17 +4001,17 @@ mod tests {
     fn recovered_phase_certificates_normalize_quorum_equivalent_signer_sets() {
         let (authority, keys, body) = phase_fixture_v1();
         let first = aggregate_phase_votes_v1(
-            body,
+            &body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, body, &[0, 1, 2]),
+            &phase_votes_v1(&authority, &keys, &body, &[0, 1, 2]),
         )
         .expect("first exact quorum");
         let second = aggregate_phase_votes_v1(
-            body,
+            &body,
             0,
             &authority,
-            &phase_votes_v1(&authority, &keys, body, &[1, 2, 3]),
+            &phase_votes_v1(&authority, &keys, &body, &[1, 2, 3]),
         )
         .expect("second exact quorum");
         assert_ne!(first, second);
@@ -4456,13 +4624,13 @@ mod tests {
         };
 
         let decoded: norito::json::Value = Client::decode_private_settlement_response_v1(
-            response(StatusCode::OK),
+            &response(StatusCode::OK),
             "private-settlement exact-200 test",
         )
         .expect("ordinary routes accept 200");
         assert_eq!(decoded, payload);
         let decoded: norito::json::Value = Client::decode_private_settlement_accepted_response_v1(
-            response(StatusCode::ACCEPTED),
+            &response(StatusCode::ACCEPTED),
             "private-settlement exact-202 test",
         )
         .expect("bundle admission accepts 202");
@@ -4474,7 +4642,7 @@ mod tests {
             StatusCode::NO_CONTENT,
         ] {
             let error = Client::decode_private_settlement_response_v1::<norito::json::Value>(
-                response(status),
+                &response(status),
                 "private-settlement exact-200 test",
             )
             .expect_err("ordinary routes reject alternate 2xx responses");
@@ -4484,7 +4652,7 @@ mod tests {
         for status in [StatusCode::OK, StatusCode::CREATED, StatusCode::NO_CONTENT] {
             let error =
                 Client::decode_private_settlement_accepted_response_v1::<norito::json::Value>(
-                    response(status),
+                    &response(status),
                     "private-settlement exact-202 test",
                 )
                 .expect_err("bundle admission rejects alternate 2xx responses");
@@ -4498,7 +4666,7 @@ mod tests {
             .body(format!(r#"{{"{CANARY}":1,"{CANARY}":2}}"#).into_bytes())
             .expect("malformed response build");
         let error = Client::decode_private_settlement_response_v1::<norito::json::Value>(
-            malformed,
+            &malformed,
             "private-settlement malformed response test",
         )
         .expect_err("malformed response is rejected without retaining parser details");
@@ -4514,7 +4682,7 @@ mod tests {
             .body(body)
             .expect("malicious content-type response build");
         let error = Client::decode_private_settlement_response_v1::<norito::json::Value>(
-            malicious_content_type,
+            &malicious_content_type,
             "private-settlement content-type response test",
         )
         .expect_err("untrusted content type is rejected without echoing it");

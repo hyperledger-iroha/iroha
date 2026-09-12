@@ -55,8 +55,6 @@ use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
-#[cfg(feature = "bls")]
-use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     NetworkId,
     account::{AccountController, AccountId, rekey::AccountAlias},
@@ -80,16 +78,19 @@ use iroha_data_model::{
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLaneBinding},
     nexus::{
         AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry,
-        AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId,
-        LaneRelayEnvelope, LaneSettlementBufferPolicy, ProofBlob,
+        AxtProofEnvelope, AxtRejectReason, DataSpaceCatalog, LaneConfig, LaneRelayEnvelope,
+        LaneSettlementBufferPolicy, ProofBlob,
     },
-    peer::PeerId,
     transaction::{
         Executable, SignedTransaction, TransactionEntrypoint,
         error::{TransactionLimitError, TransactionRejectionReason},
         signed::TransactionResultInner,
     },
 };
+#[cfg(feature = "bls")]
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{numeric::Quantity, small::SmallVec};
@@ -166,7 +167,7 @@ mod external_entrypoint_count_tests {
 #[cfg(feature = "bls")]
 fn bls_pop_from_metadata(
     metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
+    key: &iroha_model_base::name::Name,
 ) -> Option<Vec<u8>> {
     let json = metadata.get(key)?;
     let val: JsonValue = norito::json::from_str(json.get()).ok()?;
@@ -178,7 +179,7 @@ fn bls_pop_from_metadata(
 #[cfg(feature = "bls")]
 fn bls_small_pop_from_metadata(
     metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
+    key: &iroha_model_base::name::Name,
 ) -> Option<Vec<u8>> {
     bls_pop_from_metadata(metadata, key)
 }
@@ -351,12 +352,10 @@ mod overlay_error_tests {
     use super::*;
     use iroha_data_model::{
         ValidationFail,
-        nexus::{
-            AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason, DataSpaceId,
-            LaneId,
-        },
+        nexus::{AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason},
         transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     #[test]
     fn map_overlay_error_preserves_axt_context() {
         let ctx = AxtRejectContext {
@@ -1834,7 +1833,7 @@ const QUARANTINE_METADATA_KEY: &str = "quarantine";
 /// Missing values, `false`, and string or numeric lookalikes remain in the
 /// normal lane.
 fn is_quarantine_transaction(tx: &SignedTransaction) -> bool {
-    let Ok(key) = iroha_data_model::name::Name::from_str(QUARANTINE_METADATA_KEY) else {
+    let Ok(key) = iroha_model_base::name::Name::from_str(QUARANTINE_METADATA_KEY) else {
         return false;
     };
     tx.metadata()
@@ -2178,13 +2177,15 @@ mod prefetch_tests {
         Registrable,
         account::{Account, AccountAlias, AccountAliasDomain, AccountDetails, AccountValue},
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{InstructionBox, Log},
-        name::Name,
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata},
         role::RoleId,
     };
     use iroha_logger::Level;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
     #[test]
@@ -2311,7 +2312,7 @@ mod prefetch_tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         world.smart_contract_state_mut_for_testing().insert(
             crate::sns::record_storage_key(&selector),
@@ -2370,7 +2371,7 @@ mod prefetch_tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
+            iroha_model_base::metadata::Metadata::default(),
         );
         world.smart_contract_state_mut_for_testing().insert(
             crate::sns::record_storage_key(&selector),
@@ -4087,11 +4088,11 @@ pub(crate) mod valid {
     use crate::state::{StateBlock, StateTransaction, storage_transactions::TransactionsReadOnly};
     use crate::sumeragi::network_topology::Role;
     use commit::CommittedBlock;
-    #[cfg(test)]
-    use iroha_data_model::ChainId;
     use iroha_data_model::events::pipeline::PipelineEventBox;
     use iroha_data_model::nexus::AxtPolicySnapshot;
     use iroha_logger::warn;
+    #[cfg(test)]
+    use iroha_model_base::chain::ChainId;
     use iroha_primitives::time::TimeSource;
     use std::{num::NonZeroUsize, time::Instant};
     #[derive(Clone, Copy)]
@@ -9518,6 +9519,12 @@ pub(crate) mod valid {
             let mut seen_reservation_entrypoints = BTreeSet::new();
             let mut seen_entrypoints = BTreeSet::new();
             let mut total_entrypoints = 0_usize;
+            // These envelopes originate at this carrier height. Static validation reads its
+            // committed parent policy, including during replay, before any carrier effects.
+            // Bound each independent source, not the sum of sources: separate sources may
+            // consume separate future merge carriers, but one source cannot be split later.
+            let source_gas_limit =
+                crate::state::gas_limit_from_parameters(state.world().parameters());
             for (index, envelope) in envelopes.iter().enumerate() {
                 let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
                     envelope,
@@ -9696,6 +9703,17 @@ pub(crate) mod valid {
                 if total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
                     return Err(Self::execution_context_error(format!(
                         "autonomous lane payload entrypoint count exceeds hard limit {MAX_MERGE_EXECUTION_ENTRYPOINTS} at envelope {index}"
+                    )));
+                }
+                let source_gas = crate::state::merge_execution_proposal_gas(&payload.entrypoints)
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "autonomous lane payload envelope {index} has invalid proposal gas accounting: {error}"
+                        ))
+                    })?;
+                if !crate::gas::gas_components_fit_block_limit(source_gas_limit, [source_gas]) {
+                    return Err(Self::execution_context_error(format!(
+                        "autonomous lane payload envelope {index} exceeds its origin block proposal gas budget: {source_gas} > {source_gas_limit}"
                     )));
                 }
                 for ((entrypoint_hash, reservation), entrypoint) in payload
@@ -10312,9 +10330,9 @@ pub(crate) mod valid {
                 msg: [u8; 32],
                 sig: Vec<u8>,
             }
-            static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+            static BLS_POP_KEY: LazyLock<iroha_model_base::name::Name> =
                 LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-            static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+            static BLS_POP_SMALL_KEY: LazyLock<iroha_model_base::name::Name> =
                 LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
             let mut all_normal_have_pop = true;
             let mut all_small_have_pop = true;
@@ -11548,6 +11566,13 @@ pub(crate) mod valid {
                 Self::validate_sccp_commitment_root(block)?;
             }
             state_block
+                .stage_ordinary_lane_frontiers(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "ordinary lane application frontier is invalid: {error}"
+                    ))
+                })?;
+            state_block
                 .stage_canonical_carrier_membership(
                     crate::tx::canonical_carrier_membership_hashes(
                         state_block,
@@ -11807,7 +11832,7 @@ pub(crate) mod valid {
                             )),
                         )
                     }
-                    AcceptTransactionFail::TransactionInTheFuture => {
+                    AcceptTransactionFail::TransactionInTheFuture { .. } => {
                         TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(
                                 "transaction creation time is in the future".to_owned(),
@@ -12245,9 +12270,9 @@ pub(crate) mod valid {
                         msg: [u8; 32],
                         sig: Vec<u8>,
                     }
-                    static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+                    static BLS_POP_KEY: LazyLock<iroha_model_base::name::Name> =
                         LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-                    static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+                    static BLS_POP_SMALL_KEY: LazyLock<iroha_model_base::name::Name> =
                         LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
                     let mut all_normal_have_pop = true;
                     let mut all_small_have_pop = true;
@@ -14423,6 +14448,7 @@ pub(crate) mod valid {
                             }
                             let mut state_tx = state_block.transaction();
                             let mut batch_successes = 0usize;
+                            let mut batch_touched_lanes = BTreeSet::new();
                             let mut batch_gas_used = 0u64;
                             let mut aborts: Vec<(usize, &'static str)> = Vec::new();
                             for p in prepared_chunk {
@@ -14529,6 +14555,7 @@ pub(crate) mod valid {
                                         batch_successes = batch_successes.saturating_add(1);
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
+                                        batch_touched_lanes.insert(lane_id);
                                         let summary = lane_summaries.entry(lane_id).or_default();
                                         summary.detached_merged =
                                             summary.detached_merged.saturating_add(1);
@@ -14563,8 +14590,12 @@ pub(crate) mod valid {
                                 // active when it was recorded. Clear the overlay hash so apply()
                                 // flushes batched transcripts into their per-transaction buckets.
                                 state_tx.tx_call_hash = None;
+                                // The last attempted lane can belong to a rejected entry.
+                                // Publish the complete successful set only after applying.
+                                state_tx.current_lane_id = None;
                                 let confidential_work = ConfidentialWorkV1::capture(&state_tx);
                                 state_tx.apply();
+                                state_block.record_applied_batch_lanes(batch_touched_lanes);
                                 account_transaction_gas(state_block, batch_gas_used);
                                 confidential_work.account(state_block);
                                 state_block
@@ -15481,6 +15512,13 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
             state_block
+                .stage_ordinary_lane_frontiers(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "ordinary lane application frontier is invalid: {error}"
+                    ))
+                })?;
+            state_block
                 .stage_canonical_carrier_membership(
                     crate::tx::canonical_carrier_membership_hashes(
                         state_block,
@@ -15882,17 +15920,14 @@ pub(crate) mod valid {
                 pin_intent::{DaPinIntent, DaPinIntentBundle},
                 types::{BlobDigest, StorageTicketId},
             },
-            domain::DomainId,
             isi::{InstructionBox, Log, error::Mismatch},
             merge::MergeQuorumCertificate,
-            metadata::Metadata,
-            name::Name,
             nexus::{
-                AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog, DataSpaceId,
-                DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+                AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog,
+                DataSpaceMetadata, LaneCatalog, LaneConfig,
             },
             parameter::{Parameter, Parameters, system::SumeragiNposParameters},
-            prelude::{Account, Domain, PeerId, Register},
+            prelude::{Account, Domain, Register},
             soracloud::{
                 SORA_STATE_BINDING_VERSION_V1, SoraCapabilityPolicyV1,
                 SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -15912,6 +15947,11 @@ pub(crate) mod valid {
             trigger::DataTriggerSequence,
         };
         use iroha_logger::Level;
+        use iroha_model_base::domain::DomainId;
+        use iroha_model_base::metadata::Metadata;
+        use iroha_model_base::name::Name;
+        use iroha_model_base::peer::PeerId;
+        use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
         use iroha_primitives::time::TimeSource;
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -16710,6 +16750,17 @@ pub(crate) mod valid {
             lane_incarnation_override: Option<Hash>,
             lane_block_view: u64,
         ) -> AutonomousAnchorFixture {
+            autonomous_anchor_fixture_with_gas_limits(
+                lane_incarnation_override,
+                lane_block_view,
+                None,
+            )
+        }
+        fn autonomous_anchor_fixture_with_gas_limits(
+            lane_incarnation_override: Option<Hash>,
+            lane_block_view: u64,
+            gas_limits: Option<&[u64]>,
+        ) -> AutonomousAnchorFixture {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let validator_keys = core::iter::repeat_with(|| {
@@ -16780,8 +16831,35 @@ pub(crate) mod valid {
                 iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
             )
             .sign(signer.private_key());
-            let entrypoint = TransactionEntrypoint::External(signed);
-            let entrypoint_hash = Hash::from(entrypoint.hash());
+            let entrypoints = gas_limits.map_or_else(
+                || vec![TransactionEntrypoint::External(signed.clone())],
+                |gas_limits| {
+                    gas_limits.iter().enumerate().map(|(index, gas)| {
+                        TransactionEntrypoint::External(TransactionBuilder::new_with_time_source(
+                            state.network_id,
+                            signed.authority().clone(),
+                            &time_source,
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(), core::num::NonZeroU64::new(*gas),
+                            ),
+                        )
+                        .with_executable(Executable::ContractCall(
+                            iroha_data_model::transaction::executable::ContractInvocation {
+                                contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+                                    .parse().expect("contract address"),
+                                expected_code_hash: Hash::new(b"autonomous-anchor-gas-contract"),
+                                entrypoint: format!("configure_{index}"),
+                                arguments: None,
+                            },
+                        ))
+                        .with_admission_intent(
+                            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+                        )
+                        .sign(signer.private_key()))
+                    }).collect::<Vec<_>>()
+                },
+            );
+            let entrypoint = entrypoints[0].clone();
             let mut validator_set = topology.as_ref().to_vec();
             validator_set.sort();
             let validator_count =
@@ -16802,8 +16880,13 @@ pub(crate) mod valid {
                 subject_hash: Hash::new(b"block-autonomous-anchor-subject"),
                 payload_ownership_hash: Hash::new(b"block-autonomous-anchor-ownership"),
                 rbc_instance_hash: Hash::new(b"block-autonomous-anchor-rbc"),
-                accepted_candidate_indices: vec![0],
-                accepted_transaction_hashes: vec![entrypoint_hash],
+                accepted_candidate_indices: (0..entrypoints.len())
+                    .map(|index| u64::try_from(index).expect("fixture index fits u64"))
+                    .collect(),
+                accepted_transaction_hashes: entrypoints
+                    .iter()
+                    .map(|entrypoint| Hash::from(entrypoint.hash()))
+                    .collect(),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set: validator_set.clone(),
@@ -16863,15 +16946,24 @@ pub(crate) mod valid {
                 reservation_owner_hash,
                 proposal_identity_hash,
             };
+            let reservations = entrypoints
+                .iter()
+                .map(|entrypoint| {
+                    let mut reservation = reservation.clone();
+                    reservation.entrypoint_hash = entrypoint.hash();
+                    reservation
+                })
+                .collect();
+            let entrypoint_count = entrypoints.len();
             let payload =
                 crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
                     network_id,
                     epoch,
                     proposal,
-                    vec![entrypoint.clone()],
-                    vec![reservation],
-                    vec![routing_plan],
-                    vec![None],
+                    entrypoints,
+                    reservations,
+                    vec![routing_plan; entrypoint_count],
+                    vec![None; entrypoint_count],
                     producer,
                     producer_key.private_key(),
                 )
@@ -16944,6 +17036,7 @@ pub(crate) mod valid {
             .expect("exact control-only autonomous anchor must validate");
         }
         include!("block/autonomous_anchor_network_tests.rs");
+        include!("block/autonomous_anchor_gas_budget_tests.rs");
         #[test]
         fn autonomous_anchor_admission_uses_lane_slot_author_not_global_leader() {
             let fixture = autonomous_anchor_fixture(None, 0);
@@ -18001,6 +18094,11 @@ pub(crate) mod valid {
                 .expect("persist actual predecessor finality before application receipts");
             {
                 let mut state_block = state.block(committed.as_ref().header());
+                // This fixture supplies the results directly, so it must also stage
+                // the execution-owned frontier before finality applies those results.
+                state_block
+                    .stage_ordinary_lane_frontiers(committed.as_ref())
+                    .expect("stage the exact predecessor execution frontier");
                 let _ = state_block
                     .apply_without_execution_with_verified_v2_finality(&committed)
                     .expect("apply predecessor under exact finality topology");
@@ -20151,6 +20249,20 @@ pub(crate) mod valid {
                 .expect("publish exact finality before admitting raw predecessor ownership");
             {
                 let mut state_block = state.block(committed_first.as_ref().header());
+                let error = state_block
+                    .apply_without_execution_with_verified_v2_finality(&committed_first)
+                    .expect_err("finality alone cannot invent an unexecuted lane frontier");
+                assert!(
+                    matches!(
+                        error,
+                        crate::state::MergeLedgerCommitError::ExecutionMarkerConflict(ref message)
+                            if message.contains("missing its exact executed frontier")
+                    ),
+                    "unexpected unexecuted predecessor error: {error:?}"
+                );
+                state_block
+                    .stage_ordinary_lane_frontiers(committed_first.as_ref())
+                    .expect("stage the result-bearing predecessor execution frontier");
                 let _ = state_block
                     .apply_without_execution_with_verified_v2_finality(&committed_first)
                     .expect("apply the exact predecessor under its frozen finality authority");
@@ -22201,7 +22313,7 @@ pub(crate) mod valid {
                 world,
                 Arc::clone(&kura),
                 query,
-                iroha_data_model::ChainId::from("da-duplicate-ticket-test"),
+                iroha_model_base::chain::ChainId::from("da-duplicate-ticket-test"),
                 test_da_network_id(),
             );
             let _prev_hash =
@@ -22264,7 +22376,7 @@ pub(crate) mod valid {
                 world,
                 Arc::clone(&kura),
                 query,
-                iroha_data_model::ChainId::from("da-consensus-quota-test"),
+                iroha_model_base::chain::ChainId::from("da-consensus-quota-test"),
                 test_da_network_id(),
             );
             state.nexus.write().da.ingest_quota_max_count_per_account =
@@ -22366,7 +22478,7 @@ pub(crate) mod valid {
                 world,
                 Arc::clone(&kura),
                 query,
-                iroha_data_model::ChainId::from("da-replay-test"),
+                iroha_model_base::chain::ChainId::from("da-replay-test"),
                 test_da_network_id(),
             );
             let _prev_hash =
@@ -24686,10 +24798,10 @@ pub(crate) mod valid {
                     ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
                 },
                 parameter::{Parameter, system::SumeragiParameter},
-                peer::PeerId,
                 prelude::*,
             };
             use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+            use iroha_model_base::peer::PeerId;
             iroha_genesis::init_instruction_registry();
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
             let genesis_keypair = crate::block::checked_keypair();
@@ -24873,6 +24985,7 @@ mod commit {
             query::store::LiveQueryStore,
             state::{State, World},
         };
+        use iroha_data_model::Registrable;
         use iroha_data_model::fastpq::{
             TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferSmtWitness,
             TransferTranscript,
@@ -24886,7 +24999,7 @@ mod commit {
             MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES, ManifestVersion, ProofBlob, RemoteSpendIntent,
             SpendOp, TouchManifest, UniversalAccountId,
         };
-        use iroha_data_model::{DomainId, Registrable};
+        use iroha_model_base::domain::DomainId;
         use iroha_primitives::time::TimeSource;
         use std::{collections::BTreeMap, time::Duration};
         const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -27902,7 +28015,7 @@ mod event {
                 | AcceptTransactionFail::SignatureVerification(_)
                 | AcceptTransactionFail::UnexpectedGenesisAccountSignature
                 | AcceptTransactionFail::TransactionDomainMismatch(_)
-                | AcceptTransactionFail::TransactionInTheFuture
+                | AcceptTransactionFail::TransactionInTheFuture { .. }
                 | AcceptTransactionFail::TransactionExpired { .. }
                 | AcceptTransactionFail::NetworkTimeUnhealthy { .. } => {
                     Reason::TransactionValidationFailed
@@ -28510,7 +28623,6 @@ pub(crate) mod tests {
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
-        state_path::StatePath,
         transaction::{
             ExecutableBatchItem,
             signed::{
@@ -28521,6 +28633,10 @@ pub(crate) mod tests {
         },
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::{name::Name, state_path::StatePath};
     use iroha_primitives::json::Json;
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
@@ -32301,7 +32417,7 @@ seiyaku DynamicTarget {
     fn verify_validator_signatures_accepts_bls_normal() {
         use crate::sumeragi::network_topology::Topology;
         use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::prelude::PeerId;
+        use iroha_model_base::peer::PeerId;
         // 3 BLS peers
         let kp0 = KeyPair::try_from_seed(b"seed0".to_vec(), Algorithm::BlsNormal)
             .expect("test BLS validator keypair should be valid");
@@ -32357,7 +32473,7 @@ fn committed_teu_by_lane_from_routes(
 #[cfg(test)]
 mod committed_teu_tests {
     use super::committed_teu_by_lane_from_routes;
-    use iroha_data_model::nexus::{DataSpaceId, LaneId};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     #[test]
     fn committed_teu_attribution_uses_supplied_routes_not_cached_hints() {
         let stale_hint_lane = LaneId::new(99);

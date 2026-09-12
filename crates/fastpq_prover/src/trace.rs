@@ -50,7 +50,8 @@ const METADATA_COMMITMENT_PHASE_V1: &[u8] = b"commitment";
 /// Number of canonical Goldilocks limbs carrying the six-lane metadata commitment.
 pub(crate) const METADATA_COMMITMENT_LIMBS: usize = 6;
 /// Default maximum canonical trace columns admitted before prover allocation.
-pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize = 512;
+pub(crate) const DEFAULT_MAX_TRACE_COLUMNS: usize =
+    fastpq_isi::resource_limits::FASTPQ_MAX_TRACE_COLUMNS_V1;
 /// Domain tag for hashing DS identifiers.
 const DSID_DOMAIN: &[u8] = b"fastpq:v1:dsid";
 /// Domain tag binding role, permission, and epoch into one permission-tree leaf.
@@ -2444,10 +2445,10 @@ mod tests {
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use norito::to_bytes;
@@ -2485,7 +2486,7 @@ mod tests {
     }
     fn sample_balance_key(label: &str) -> Vec<u8> {
         let asset = iroha_data_model::asset::id::AssetDefinitionId::derive_from_components(
-            iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let account = iroha_data_model::account::AccountId::new(

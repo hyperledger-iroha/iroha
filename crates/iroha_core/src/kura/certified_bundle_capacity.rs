@@ -265,7 +265,9 @@ impl Kura {
                     "latest certified lane block frontier build conflicts with the durable frontier",
                 ));
             }
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            let accounting_mutation = self
+                .begin_total_disk_usage_mutation()
+                .with_resource_paths(vec![frontier_path.to_path_buf(), build_path.to_path_buf()]);
             Self::remove_bound_progress_temp_if_present(namespace, build_path)
                 .map_err(|error| Error::IO(error, build_path.to_path_buf()))?;
             Self::sync_bound_progress_intent_directories(namespace)
@@ -274,6 +276,9 @@ impl Kura {
             accounting_mutation.finish();
             return Ok(());
         }
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![frontier_path.to_path_buf(), build_path.to_path_buf()]);
         build
             .sync_all()
             .map_err(|error| Error::IO(error, build_path.to_path_buf()))?;
@@ -309,6 +314,7 @@ impl Kura {
                 "recovered latest certified lane block frontier changed before readback",
             ));
         }
+        accounting_mutation.finish_resources_before_disk_rescan();
         Ok(())
     }
     fn persist_committed_lane_block_session_inner(
@@ -1373,7 +1379,9 @@ impl Kura {
         entry: &LaneConfigEntry,
         frontier: Option<&CertifiedLaneBlockArtifact>,
         frontier_source: Option<&DurableAutonomousLaneMergeSource>,
-    ) -> Result<Vec<(u64, iroha_data_model::NetworkId, u64)>> {
+        retention: Option<&AuthenticatedLaneHistoryRetention>,
+        obsolete_bundle_recovery: Option<&CertifiedBundleAppendRecovery>,
+    ) -> Result<Vec<AutonomousLaneMergeBundleV1>> {
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
         let certified_recovery = if let Some(frontier) = frontier {
@@ -1411,6 +1419,16 @@ impl Kura {
                 &source.source_bundle,
                 AutonomousLaneMergeBundleV1::FORMAT_LABEL,
             )?
+        } else if let Some(recovery) = obsolete_bundle_recovery {
+            if !frontier.is_some_and(|frontier| {
+                retention.is_some_and(|proof| proof.permits_discard(&frontier.proposal.descriptor))
+            }) {
+                return Err(Self::invalid_lane_artifact_error(
+                    bundle_data_path,
+                    "obsolete bundle append preimage lacks authenticated terminal authority",
+                ));
+            }
+            Some(recovery.clone())
         } else {
             if self.certified_bundle_pair_has_any_recovery_locked(
                 &bundle_data_path,
@@ -1617,7 +1635,16 @@ impl Kura {
                 "durable certified frontier conflicts with its indexed lane slot",
             ));
         }
-        let mut persisted = Vec::new();
+        // A terminal cursor owns only missing cross-pair dependencies below
+        // its discarded prefix. Physical history must still have a frontier,
+        // remain below it, and agree with its exact indexed current slot.
+        certified.retain(|_, artifact| {
+            !retention.is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
+        });
+        bundles.retain(|_, bundle| {
+            !retention
+                .is_some_and(|proof| proof.permits_discard(&bundle.certified.proposal.descriptor))
+        });
         for (height, bundle) in &bundles {
             let Some(artifact) = certified.get(height) else {
                 return Err(Self::invalid_lane_artifact_error(
@@ -1625,23 +1652,18 @@ impl Kura {
                     "autonomous bundle exists without its exact certified lane slot",
                 ));
             };
-            let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref() else {
+            if artifact.prepare_qc.payload_availability_qc.is_none() {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
                     "autonomous bundle exists for an ordinary certified lane slot",
                 ));
-            };
+            }
             if bundle.certified != *artifact {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
                     "autonomous bundle differs from its exact certified lane slot",
                 ));
             }
-            persisted.push((
-                *height,
-                availability.body.network_id,
-                availability.body.epoch,
-            ));
         }
         for (height, artifact) in &certified {
             if artifact.prepare_qc.payload_availability_qc.is_some()
@@ -1654,7 +1676,11 @@ impl Kura {
                 ));
             }
         }
-        Ok(persisted)
+        // Preserve the complete authenticated rows, including an append's
+        // stable preimage. A caller must not discard this evidence and reread
+        // the same pair through the live no-recovery-artifacts path before
+        // all-route capacity admission permits completing the pending append.
+        Ok(bundles.into_values().collect())
     }
     fn certified_bundle_capacity_consumed_components_locked(
         &self,
@@ -1823,7 +1849,7 @@ impl Kura {
                 "another certified/bundle capacity identity is still outstanding for this route",
             ));
         }
-        if let Some(reservation) = reservations.get_mut(&plan.identity) {
+        let remove_completed = if let Some(mut reservation) = reservations.get_mut(&plan.identity) {
             if reservation.plan.identity != plan.identity
                 || reservation.plan.certified_bytes_hash != plan.certified_bytes_hash
                 || reservation.plan.frontier_bytes_hash != plan.frontier_bytes_hash
@@ -1855,15 +1881,23 @@ impl Kura {
                 .outstanding_components
                 .retain(|component| !consumed.contains(component));
             if reservation.outstanding_components.is_empty() {
-                reservations.remove(&plan.identity);
-                return Ok(0);
+                drop(reservation);
+                true
+            } else {
+                return reservation.reserved_bytes().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "certified/bundle remaining reservation bytes overflowed",
+                    )
+                });
             }
-            return reservation.reserved_bytes().ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "certified/bundle remaining reservation bytes overflowed",
-                )
-            });
+        } else {
+            false
+        };
+        // End the optional value guard's borrow before removing its map entry.
+        if remove_completed {
+            reservations.remove(&plan.identity);
+            return Ok(0);
         }
         let outstanding_components = plan
             .component_bytes
@@ -2049,7 +2083,7 @@ impl Kura {
         let Some(identity) = identities.first().copied() else {
             return Ok(());
         };
-        let reservation = reservations
+        let mut reservation = reservations
             .get_mut(&identity)
             .expect("collected certified/bundle reservation identity exists");
         if reservation.plan.certified_bytes_hash != certified_hash {
@@ -2076,7 +2110,9 @@ impl Kura {
             ));
         }
         reservation.outstanding_components.remove(&component);
-        if reservation.outstanding_components.is_empty() {
+        let complete = reservation.outstanding_components.is_empty();
+        drop(reservation);
+        if complete {
             reservations.remove(&identity);
         }
         Ok(())
@@ -2124,219 +2160,277 @@ impl Kura {
     /// authenticated durable frontier before either certified-pair or bundle
     /// repair may mutate storage.
     fn rebuild_certified_bundle_capacity_reservations_on_startup(&self) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let entries = {
-            let _geometry_guard = self.lane_geometry_lock.lock();
-            self.lane_storage_entries
-                .lock()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let mut rebuilt =
-            BTreeMap::<CertifiedBundleCapacityIdentity, CertifiedBundleCapacityReservation>::new();
-        for entry in entries {
-            let artifact = {
+        // This fence owns no additional associations: nested real map owners
+        // publish their exact deltas while the full reconstruction stays busy.
+        let resource_fence = self
+            .resource_inventory
+            .begin(resource_inventory::Family::ResidentFrontier.mask())
+            .ok();
+        self.certified_resident_recovery_complete
+            .store(false, Ordering::Release);
+        let result = (|| {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let entries = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
-                let active = self.lane_storage_entry(entry.lane_id)?;
-                if active != entry {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "lane geometry changed during certified/bundle reservation rebuild",
-                    ));
-                }
-                let _sidecar_guard = self.sidecar_lock.lock();
-                let frontier =
-                    self.read_latest_certified_lane_block_frontier_locked(&active, true)?;
-                if let Some(frontier) = frontier {
-                    self.confirm_latest_certified_lane_block_frontier_read_locked(
-                        &active,
-                        &frontier.snapshot,
-                    )?;
-                    Some(frontier.frontier.artifact)
-                } else {
-                    None
-                }
+                self.lane_storage_entries
+                    .lock()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
             };
-            let Some(artifact) = artifact else {
-                let _geometry_guard = self.lane_geometry_lock.lock();
-                let active = self.lane_storage_entry(entry.lane_id)?;
-                let _sidecar_guard = self.sidecar_lock.lock();
-                self.preflight_certified_bundle_inventory_locked(&active, None, None)?;
-                continue;
-            };
-            let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref() else {
-                let persisted = {
+            let mut rebuilt = BTreeMap::<
+                CertifiedBundleCapacityIdentity,
+                CertifiedBundleCapacityReservation,
+            >::new();
+            let mut obsolete_append_plans = Vec::new();
+            for entry in entries {
+                let retention =
+                    self.authenticated_lane_history_retention_under_prune_guard(&entry)?;
+                let artifact = {
                     let _geometry_guard = self.lane_geometry_lock.lock();
                     let active = self.lane_storage_entry(entry.lane_id)?;
-                    self.require_active_lane_artifact(&active, &artifact.proposal.descriptor)?;
+                    if active != entry {
+                        return Err(Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "lane geometry changed during certified/bundle reservation rebuild",
+                        ));
+                    }
+                    let _sidecar_guard = self.sidecar_lock.lock();
+                    let frontier =
+                        self.read_latest_certified_lane_block_frontier_locked(&active, true)?;
+                    if let Some(frontier) = frontier {
+                        self.confirm_latest_certified_lane_block_frontier_read_locked(
+                            &active,
+                            &frontier.snapshot,
+                        )?;
+                        Some(frontier.frontier.artifact)
+                    } else {
+                        None
+                    }
+                };
+                self.recover_certified_bundle_history_rewrites_under_prune_guard(
+                    &entry,
+                    retention.as_ref(),
+                    artifact.as_ref(),
+                )?;
+                let Some(artifact) = artifact else {
+                    let _geometry_guard = self.lane_geometry_lock.lock();
+                    let active = self.lane_storage_entry(entry.lane_id)?;
                     let _sidecar_guard = self.sidecar_lock.lock();
                     self.preflight_certified_bundle_inventory_locked(
                         &active,
-                        Some(&artifact),
                         None,
-                    )?
+                        None,
+                        retention.as_ref(),
+                        None,
+                    )?;
+                    continue;
                 };
-                for (height, network_id, epoch) in persisted {
-                    self.durable_autonomous_lane_merge_source_under_prune_guard(
-                        entry.lane_id,
-                        height,
-                        network_id,
-                        epoch,
-                        None,
-                        true,
+                let obsolete_plans = if let Some(proof) = retention.as_ref()
+                    && proof.permits_discard(&artifact.proposal.descriptor)
+                {
+                    self.plan_obsolete_certified_bundle_appends_under_prune_guard(
+                        &entry, &artifact, proof,
+                    )?
+                } else {
+                    Vec::new()
+                };
+                if artifact.prepare_qc.payload_availability_qc.is_none()
+                    || retention
+                        .as_ref()
+                        .is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
+                {
+                    let persisted = {
+                        let _geometry_guard = self.lane_geometry_lock.lock();
+                        let active = self.lane_storage_entry(entry.lane_id)?;
+                        self.require_active_lane_artifact(&active, &artifact.proposal.descriptor)?;
+                        let _sidecar_guard = self.sidecar_lock.lock();
+                        self.preflight_certified_bundle_inventory_locked(
+                            &active,
+                            Some(&artifact),
+                            None,
+                            retention.as_ref(),
+                            obsolete_plans
+                                .iter()
+                                .find_map(|plan| plan.bundle_recovery()),
+                        )?
+                    };
+                    for bundle in persisted {
+                        self.validate_startup_persisted_autonomous_bundle_under_prune_guard(
+                            &bundle,
+                        )?;
+                    }
+                    obsolete_append_plans.extend(obsolete_plans);
+                    continue;
+                }
+                let availability = artifact
+                    .prepare_qc
+                    .payload_availability_qc
+                    .as_ref()
+                    .expect("non-discardable autonomous frontier has availability evidence");
+                let descriptor = &artifact.proposal.descriptor;
+                let source = self
+                    .durable_autonomous_lane_merge_source_under_prune_guard(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
+                        availability.body.network_id,
+                        availability.body.epoch,
+                        Some(&artifact),
+                        false,
                     )
                     .map_err(|message| {
                         Self::invalid_lane_artifact_error(
                             self.store_root.clone(),
-                            format!("startup persisted autonomous bundle is invalid: {message}"),
+                            format!(
+                                "certified/bundle reservation startup source is invalid: {message}"
+                            ),
                         )
                     })?;
+                let (plan, consumed, persisted) = {
+                    let _geometry_guard = self.lane_geometry_lock.lock();
+                    let active = self.lane_storage_entry(descriptor.lane_id)?;
+                    self.require_active_lane_artifact(&active, descriptor)?;
+                    let _sidecar_guard = self.sidecar_lock.lock();
+                    let plan = self.certified_bundle_capacity_plan(&active, &artifact, &source)?;
+                    let consumed = self.certified_bundle_capacity_consumed_components_locked(
+                        &active, &artifact, &source, None,
+                    )?;
+                    let persisted = self.preflight_certified_bundle_inventory_locked(
+                        &active,
+                        Some(&artifact),
+                        Some(&source),
+                        retention.as_ref(),
+                        None,
+                    )?;
+                    (plan, consumed, persisted)
+                };
+                for bundle in persisted {
+                    self.validate_startup_persisted_autonomous_bundle_under_prune_guard(&bundle)?;
                 }
-                continue;
-            };
-            let descriptor = &artifact.proposal.descriptor;
-            let source = self
-                .durable_autonomous_lane_merge_source_under_prune_guard(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                    availability.body.network_id,
-                    availability.body.epoch,
-                    Some(&artifact),
-                    false,
-                )
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(
+                if rebuilt.keys().any(|identity| {
+                    identity.lane_id == plan.identity.lane_id
+                        && identity.dataspace_id == plan.identity.dataspace_id
+                        && *identity != plan.identity
+                }) {
+                    return Err(Self::invalid_lane_artifact_error(
                         self.store_root.clone(),
-                        format!(
-                            "certified/bundle reservation startup source is invalid: {message}"
-                        ),
-                    )
-                })?;
-            let (plan, consumed, persisted) = {
-                let _geometry_guard = self.lane_geometry_lock.lock();
-                let active = self.lane_storage_entry(descriptor.lane_id)?;
-                self.require_active_lane_artifact(&active, descriptor)?;
-                let _sidecar_guard = self.sidecar_lock.lock();
-                let plan = self.certified_bundle_capacity_plan(&active, &artifact, &source)?;
-                let consumed = self.certified_bundle_capacity_consumed_components_locked(
-                    &active, &artifact, &source, None,
-                )?;
-                let persisted = self.preflight_certified_bundle_inventory_locked(
-                    &active,
-                    Some(&artifact),
-                    Some(&source),
-                )?;
-                (plan, consumed, persisted)
-            };
-            for (height, network_id, epoch) in persisted {
-                self.durable_autonomous_lane_merge_source_under_prune_guard(
-                    entry.lane_id,
-                    height,
-                    network_id,
-                    epoch,
-                    None,
-                    true,
-                )
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(
+                        "startup certified/bundle inventory has conflicting identities for one route",
+                    ));
+                }
+                let outstanding_components = plan
+                    .component_bytes
+                    .keys()
+                    .filter(|component| !consumed.contains(component))
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                if outstanding_components.is_empty() {
+                    continue;
+                }
+                if rebuilt.len() >= MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                    return Err(Self::invalid_lane_artifact_error(
                         self.store_root.clone(),
-                        format!("startup persisted autonomous bundle is invalid: {message}"),
+                        "startup certified/bundle reservation inventory exceeds its hard bound",
+                    ));
+                }
+                let identity = plan.identity;
+                if rebuilt
+                    .insert(
+                        identity,
+                        CertifiedBundleCapacityReservation {
+                            plan,
+                            outstanding_components,
+                        },
                     )
-                })?;
+                    .is_some()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "startup certified/bundle reservation inventory duplicates one identity",
+                    ));
+                }
             }
-            if rebuilt.keys().any(|identity| {
-                identity.lane_id == plan.identity.lane_id
-                    && identity.dataspace_id == plan.identity.dataspace_id
-                    && *identity != plan.identity
-            }) {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "startup certified/bundle inventory has conflicting identities for one route",
-                ));
-            }
-            let outstanding_components = plan
-                .component_bytes
-                .keys()
-                .filter(|component| !consumed.contains(component))
-                .copied()
-                .collect::<BTreeSet<_>>();
-            if outstanding_components.is_empty() {
-                continue;
-            }
-            if rebuilt.len() >= MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "startup certified/bundle reservation inventory exceeds its hard bound",
-                ));
-            }
-            let identity = plan.identity;
-            if rebuilt
-                .insert(
-                    identity,
-                    CertifiedBundleCapacityReservation {
-                        plan,
-                        outstanding_components,
-                    },
-                )
-                .is_some()
-            {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "startup certified/bundle reservation inventory duplicates one identity",
-                ));
-            }
-        }
-        if self.max_disk_usage_bytes != 0 && !self.store_root.as_os_str().is_empty() {
-            // `used` already contains any authenticated partial append and its
-            // intent/build files.  Keep the in-memory reservation at its full
-            // envelope, but credit those exact identity-local bytes once for
-            // startup admission.  This computes the larger of the physical
-            // crash stage and the post-recovery publication envelope instead
-            // of counting the same bytes twice.
-            let rebuilt_effective_reserved = rebuilt
-                .values()
-                .try_fold(0_u64, |total, reservation| {
-                    let reserved = reservation.reserved_bytes()?;
-                    total.checked_add(reserved.saturating_sub(
-                        reservation.plan.startup_physical_credit_bytes.min(reserved),
-                    ))
+            let obsolete_append_index_growth = obsolete_append_plans
+                .iter()
+                .try_fold(0_u64, |total, plan| {
+                    total.checked_add(plan.remaining_index_growth())
                 })
                 .ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
                         self.store_root.clone(),
-                        "startup certified/bundle effective reservation total overflows",
+                        "obsolete append recovery index growth overflows",
                     )
                 })?;
-            let used = self.kura_disk_usage_bytes()?;
-            let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
-            let pending_block_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
-            let terminal = self.autonomous_global_terminal_outcome_reserved_bytes()?;
-            let post_wsv = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
-            let required = used
-                .checked_add(pending_block_bytes)
-                .and_then(|bytes| bytes.checked_add(terminal))
-                .and_then(|bytes| bytes.checked_add(post_wsv))
-                .and_then(|bytes| {
-                    bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
-                })
-                .and_then(|bytes| bytes.checked_add(rebuilt_effective_reserved))
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "startup certified/bundle configured-capacity accounting overflowed",
-                    )
-                })?;
-            if required > self.max_disk_usage_bytes {
-                return Err(Error::StorageBudgetExceeded {
-                    limit: self.max_disk_usage_bytes,
-                    used,
-                    required,
-                });
+            if self.max_disk_usage_bytes != 0 && !self.store_root.as_os_str().is_empty() {
+                // `used` already contains any authenticated partial append and its
+                // intent/build files.  Keep the in-memory reservation at its full
+                // envelope, but credit those exact identity-local bytes once for
+                // startup admission.  This computes the larger of the physical
+                // crash stage and the post-recovery publication envelope instead
+                // of counting the same bytes twice.
+                let rebuilt_effective_reserved = rebuilt
+                    .values()
+                    .try_fold(0_u64, |total, reservation| {
+                        let reserved = reservation.reserved_bytes()?;
+                        total.checked_add(reserved.saturating_sub(
+                            reservation.plan.startup_physical_credit_bytes.min(reserved),
+                        ))
+                    })
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "startup certified/bundle effective reservation total overflows",
+                        )
+                    })?;
+                let used = self.kura_disk_usage_bytes()?;
+                let (persisted_count, unindexed_bytes) =
+                    self.persisted_count_and_unindexed_bytes()?;
+                let pending_block_bytes =
+                    self.pending_block_bytes(persisted_count, unindexed_bytes)?;
+                let terminal = self.autonomous_global_terminal_outcome_reserved_bytes()?;
+                let post_wsv = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+                let required = used
+                    .checked_add(pending_block_bytes)
+                    .and_then(|bytes| bytes.checked_add(terminal))
+                    .and_then(|bytes| bytes.checked_add(post_wsv))
+                    .and_then(|bytes| {
+                        bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
+                    })
+                    .and_then(|bytes| bytes.checked_add(rebuilt_effective_reserved))
+                    .and_then(|bytes| bytes.checked_add(obsolete_append_index_growth))
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "startup certified/bundle configured-capacity accounting overflowed",
+                        )
+                    })?;
+                if required > self.max_disk_usage_bytes {
+                    return Err(Error::StorageBudgetExceeded {
+                        limit: self.max_disk_usage_bytes,
+                        used,
+                        required,
+                    });
+                }
+            }
+            *self.certified_bundle_capacity_reservations.lock() = rebuilt.into();
+            // Only now are all current routes' publication obligations and
+            // every obsolete journal's remaining index growth admitted.
+            self.recover_obsolete_certified_bundle_appends_under_prune_guard(
+                &obsolete_append_plans,
+            )?;
+            Ok(())
+        })();
+        if result.is_ok() {
+            self.certified_resident_recovery_complete
+                .store(true, Ordering::Release);
+            if let Some(resource_fence) = resource_fence {
+                let _ = resource_fence.publish(&[(
+                    resource_inventory::Family::ResidentFrontier,
+                    resource_inventory::Usage::default(),
+                    resource_inventory::Usage::default(),
+                )]);
             }
         }
-        *self.certified_bundle_capacity_reservations.lock() = rebuilt;
-        Ok(())
+        result
     }
 }

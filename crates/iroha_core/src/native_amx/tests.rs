@@ -5,10 +5,10 @@ use iroha_data_model::{
         consensus::NativeAmxAttestationBodyV2,
         consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
     },
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::TransactionEntrypoint,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::num::NonZeroUsize;
 fn checked_bls_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -105,6 +105,25 @@ fn signing_journal_identity_ignores_ambient_norito_layout() {
         .expect("derive canonical record hash");
     let canonical_record =
         norito::encode_canonical(&record).expect("encode canonical signing record");
+    let anchor = NativeAmxSigningAnchorV2::empty(binding.clone())
+        .expect("construct canonical empty signing anchor");
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &binding,
+        "iroha_core::native_amx::NativeAmxHeightBindingV2",
+    );
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &record,
+        "iroha_core::native_amx::NativeAmxSigningRecordV2",
+    );
+    crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+        &anchor,
+        "iroha_core::native_amx::NativeAmxSigningAnchorV2",
+    );
+    assert_eq!(anchor.head_hash, genesis_head);
+    assert!(matches!(
+        norito::decode_canonical::<NativeAmxSigningAnchorV2>(&canonical_record),
+        Err(norito::Error::SchemaMismatch)
+    ));
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
     let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);

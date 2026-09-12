@@ -13,15 +13,15 @@ use norito::{
 use super::Owned;
 use crate::{
     account::{AccountAlias, AccountAliasDomain, AccountDetails, OpaqueAccountId},
-    metadata::Metadata,
-    nexus::{DataSpaceId, UniversalAccountId},
+    nexus::UniversalAccountId,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::topology::DataSpaceId;
 
 #[path = "owned_identity_values.rs"]
 mod values;
 
-#[path = "../../tests/support/fixture_json.rs"]
-mod fixture_json;
+use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -40,8 +40,8 @@ where
         + JsonSerialize
         + JsonDeserialize,
 {
-    let serialize_hash = <T as NoritoSerialize>::schema_hash();
-    let deserialize_hash = <T as NoritoDeserialize>::schema_hash();
+    let serialize_hash = norito::schema::identity::frame_hash::<T>();
+    let deserialize_hash = norito::schema::identity::frame_hash::<T>();
     assert_eq!(serialize_hash, deserialize_hash, "directional identity");
     assert_eq!(
         serialize_hash,
@@ -132,7 +132,7 @@ where
     ));
 }
 
-fn pair<T>(case: &str, value: T) -> Value
+fn pair<T>(case: &str, value: &T) -> Value
 where
     T: NoritoSchema
         + NoritoSerialize
@@ -154,7 +154,7 @@ where
             | header_flags::FIELD_BITSET,
     ] {
         let _flags = DecodeFlagsGuard::enter(requested);
-        let inner = frames(&value);
+        let inner = frames(value);
         let owned = frames(&Owned::new(value.clone()));
         assert_eq!(
             inner.pointer("/root/frame_hex"),
@@ -217,7 +217,7 @@ fn render() -> Value {
     let _address = crate::account::address::ChainDiscriminantGuard::enter(42);
     let mut cases = Vec::new();
     for (index, value) in account_values().into_iter().enumerate() {
-        cases.push(pair(&format!("account-{index}"), value));
+        cases.push(pair(&format!("account-{index}"), &value));
     }
     for (index, value) in [
         Quantity::zero(),
@@ -227,17 +227,17 @@ fn render() -> Value {
     .into_iter()
     .enumerate()
     {
-        cases.push(pair(&format!("asset-{index}"), value));
+        cases.push(pair(&format!("asset-{index}"), &value));
     }
     for (index, value) in values::nft_values().into_iter().enumerate() {
-        cases.push(pair(&format!("nft-{index}"), value));
+        cases.push(pair(&format!("nft-{index}"), &value));
     }
     for (index, value) in values::rwa_values().into_iter().enumerate() {
-        cases.push(pair(&format!("rwa-{index}"), value));
+        cases.push(pair(&format!("rwa-{index}"), &value));
     }
     cases.push(pair(
         "forwarded-string",
-        Box::<str>::from("storage projection"),
+        &Box::<str>::from("storage projection"),
     ));
     assert_eq!(cases.len(), 9);
     norito::json!({

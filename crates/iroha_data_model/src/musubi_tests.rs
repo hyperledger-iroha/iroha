@@ -43,7 +43,7 @@ enum UncheckedAccountControllerWire {
     Single(PublicKey),
     Multisig(UncheckedMultisigPolicyWire),
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn every_named_musubi_json_model_rejects_unknown_fields() {
     for (path, source) in [
@@ -193,45 +193,50 @@ fn portable_path_set_rejects_exact_and_casefolded_aliases_and_prefixes() {
 fn release(name: &str, version: &str) -> MusubiReleaseIdV1 {
     MusubiReleaseIdV1::new(package(name), version.parse().expect("version"))
 }
+fn recover(dataspace: u64, expected_revision: u64) -> MusubiParliamentActionV1 {
+    let mut package = package("recoverable");
+    package.home_dataspace = DataSpaceId::new(dataspace);
+    MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
+        package,
+        owners: vec![account(1)],
+        expected_revision,
+    })
+}
+
+fn retarget(dataspace: u64, expected_revision: u64) -> MusubiParliamentActionV1 {
+    let mut target = package("retargeted");
+    target.home_dataspace = DataSpaceId::new(dataspace);
+    MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
+        alias: "stable".parse().expect("alias"),
+        target,
+        expected_revision,
+    })
+}
+
+fn takedown(
+    package_dataspace: u64,
+    major: u64,
+    minor: u64,
+    patch: u64,
+    prerelease: Vec<MusubiPrereleaseIdentifierV1>,
+    expected_artifact_governance_revision: u64,
+) -> MusubiParliamentActionV1 {
+    let mut package = package("takedown");
+    package.home_dataspace = DataSpaceId::new(package_dataspace);
+    MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
+        release: MusubiReleaseIdV1::new(
+            package,
+            MusubiVersionV1::new(major, minor, patch, prerelease).expect("version fixture"),
+        ),
+        reason: "governed-takedown".parse().expect("reason"),
+        expected_artifact_governance_revision,
+    })
+}
+
 #[test]
 fn parliament_actions_check_every_number_encoded_u64_role() {
     let maximum = crate::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
     let hostile = maximum + 1;
-    let recover = |dataspace, expected_revision| {
-        let mut package = package("recoverable");
-        package.home_dataspace = DataSpaceId::new(dataspace);
-        MusubiParliamentActionV1::RecoverPackageOwners(MusubiRecoverPackageOwnersV1 {
-            package,
-            owners: vec![account(1)],
-            expected_revision,
-        })
-    };
-    let retarget = |dataspace, expected_revision| {
-        let mut target = package("retargeted");
-        target.home_dataspace = DataSpaceId::new(dataspace);
-        MusubiParliamentActionV1::RetargetAlias(MusubiRetargetAliasV1 {
-            alias: "stable".parse().expect("alias"),
-            target,
-            expected_revision,
-        })
-    };
-    let takedown = |package_dataspace,
-                    major,
-                    minor,
-                    patch,
-                    prerelease,
-                    expected_artifact_governance_revision| {
-        let mut package = package("takedown");
-        package.home_dataspace = DataSpaceId::new(package_dataspace);
-        MusubiParliamentActionV1::TakedownArtifact(MusubiTakedownArtifactActionV1 {
-            release: MusubiReleaseIdV1::new(
-                package,
-                MusubiVersionV1::new(major, minor, patch, prerelease).expect("version fixture"),
-            ),
-            reason: "governed-takedown".parse().expect("reason"),
-            expected_artifact_governance_revision,
-        })
-    };
     let policy = |policy: MusubiRegistryPolicyV1, expected_revision| {
         MusubiParliamentActionV1::SetRegistryPolicy(MusubiSetRegistryPolicyActionV1 {
             policy,
@@ -239,16 +244,18 @@ fn parliament_actions_check_every_number_encoded_u64_role() {
         })
     };
 
-    let mut baseline_policy = MusubiRegistryPolicyV1::default();
-    baseline_policy.revision = maximum;
-    baseline_policy.allowlisted_dataspaces = vec![DataSpaceId::new(maximum)];
-    baseline_policy.alias_pricing = MusubiAliasPricingPolicyV1 {
+    let baseline_policy = MusubiRegistryPolicyV1 {
         revision: maximum,
-        length_1_xor: maximum,
-        length_2_xor: maximum,
-        length_3_xor: maximum,
-        length_4_xor: maximum,
-        length_5_to_32_xor: maximum,
+        allowlisted_dataspaces: vec![DataSpaceId::new(maximum)],
+        alias_pricing: MusubiAliasPricingPolicyV1 {
+            revision: maximum,
+            length_1_xor: maximum,
+            length_2_xor: maximum,
+            length_3_xor: maximum,
+            length_4_xor: maximum,
+            length_5_to_32_xor: maximum,
+        },
+        ..MusubiRegistryPolicyV1::default()
     };
     for within in [
         recover(maximum, maximum),
@@ -539,7 +546,7 @@ fn resolver_row(version: &str) -> MusubiResolverReleaseRowV1 {
         index_revision: 3,
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn resolver_json_counting_preserves_exact_wire_without_output_scratch() {
     let member_a = KeyPair::try_from_seed(vec![0x21; 32], Algorithm::Ed25519)

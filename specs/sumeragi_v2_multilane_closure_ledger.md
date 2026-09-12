@@ -287,6 +287,51 @@ owner seals. Current tombstone inventory is 28 reads/nine guards plus two typed
 assignments. Exact preimages, semantic controls and unchanged runtime hashes are
 retained in `ingress-effects-review/`; the full source gate remains open.
 
+### 2026-09-08 merged-candidate validation remains open
+
+The pre-merge copied Core run completed **74 pass/17 fail** across all 91 selected
+tests with stable source/binary hashes; SDK status passed 24. Incoming source
+repairs the fixture causes and retains both reachable Commit/live and
+post-tombstone recovery cuts. Exact assertion and relocation reviews are retained
+under `apply-14-private-review/`, `autonomous-restart-fixture-review/` and
+`formal/incoming-merge-review-20260908/`. They are source reviews, not runtime
+passes. The successor V6 manifest captures 51 files, including 45 Rust sources.
+The sixth combined build passes, and its copied Core binary completes all 96
+exact tests at `2026-09-08T02:05:28.643058Z`, with zero failures or ignored tests.
+The repaired historical READY-authority fixture, both cleanup crash cuts and
+all five additional witness/context cases pass. The CLI collector's 17 tests
+also pass after the virtual clock correction; all original 93 assertions remain.
+SDK status retains 24 passing tests on the exact unchanged binary and sources
+revalidated by the sixth build. All selected source and binary hashes remain
+unchanged. Results are retained under `core-direct-96-retry6/`,
+`cli-load-direct-17-retry6/` and `sdk-status-direct-24-retry5/` in the durable
+ignored validation directory; build receipts are under
+`core-sdk-cli-retry6-provenance-review/`. Follow the
+[current goals](sumeragi_v2_multilane_completion_goals.md) for source hashes and
+the formal sequence. Resource accounting, full source/proof qualification and
+live release gates remain open; no milestone or gate closes from this selection.
+
+The eighth combined build adds five passing actual-writer regressions for the
+scoped disk-byte correction: ten redundant total-cache updates are removed,
+with total-only DA accounting preserved. The retained seventh run had three
+passes and two fixture failures; the reviewed corrections bind final configured
+markers/incarnations before lifecycle authority and retain all 228 assertions.
+The same five cases now pass with all 60 selected source files and the copied
+binary unchanged, finishing `2026-09-08T02:37:33.901919Z`. Exact receipts are in
+`core-total-delta-retry8-provenance-review/` and
+`core-kura-total-delta-direct-5-retry8/`. Complete physical/resident resource
+accounting remains uncompiled private work, and every release gate stays open.
+
+The corrected sealed-source fidelity diagnostic finishes at `03:42:25.181097Z`
+with zero errors, exit zero and all 19,328 complete source records unchanged.
+Its real nested-include resolver has the exact original external Git view, with
+positive and missing-provider negative controls. The earlier 718-message attempt
+lacked that environment and remains retained as invalid diagnostic evidence.
+The later published predecessor-anchor repair separately passes all 36 selected
+controls with 69 inputs unchanged. These scoped results do not qualify the full
+release proof ledger or mutable workspace. See the
+[current goals and receipts](sumeragi_v2_multilane_completion_goals.md).
+
 ## 2026-08-19 mutable-development closure snapshot
 
 - The checkout remains an unsigned, dirty mutable-development tree. Its
@@ -1616,10 +1661,13 @@ after the sweep. Invariant `MLLocalProducerRecoveryRequiresQueueOwner`
 requires a nonterminal retained attempt produced by the local validator to
 carry its exact current Queue reservation group before Crash/Recover, while
 an observer may recover from exact local Kura custody with an empty local
-Queue. The network-ingress startup fence remains independent of Queue's
-observed owner-quarantine bit, which may be false for that empty observer
-snapshot; `ML-MUT-AUT-15` drops the local producer's Queue group immediately
-before recovery.
+Queue. Both empty and nonempty journal replays keep Queue's startup
+publication gate closed until exact State/Kura-aware reconciliation completes.
+The lane-evidence repair fence captures that closed gate and the exact owner
+snapshot, then rejects ownership changes or gate publication during repair.
+The network-ingress startup fence remains independent;
+`ML-MUT-AUT-15` drops the local producer's Queue group immediately before
+recovery.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, and `G-12P`.
 
@@ -2352,13 +2400,41 @@ runner integration passes 13 cases/nine subcases; every original test and
 assertion remains. These are synthetic contract checks, retained under
 `scaling-trace-contract/` and `scaling-runner-review/`, not scaling measurements.
 
-The real trial collector is also outstanding. The orchestrator accepts an external
-`--trial-command`; current `tx_load.py` supplies aggregate estimates and the CLI
-ping batch discards per-transaction confirmation results. The owner must provide
-an executable collector using the existing deployment/load paths, with exact
-transaction identities, offer/admission/commit timing, resource samples and fresh
-identity observations. Only then can the strict raw-sample validator and five
-paired measurements qualify throughput and latency.
+The earlier CLI collector's 17 focused regressions retain their exact retry-six
+receipt in `cli-load-direct-17-retry6/`. Retry 22's coordinated build and exact
+61-leaf CLI selection pass: 61 passed, zero failed or ignored, with all 8,821
+source paths and original/retained binary hashes unchanged. See
+`cli-load-direct-61-retry22/result.json`. All 31 resource Clock/IPC/parent controls
+and four new workload regressions pass. The unique Clap group, actual metadata
+value-size and bounded frame-derived decoder allocation repairs are published.
+Retry 21's separate 41-pass/16-fail receipt and independent review remain at
+`cli-load-direct-57-retry21/`; the corrected result does not relabel that cohort.
+The lane variant alone remains no proof of actual canonical lane execution.
+
+The corrected private resource package passes 1,324 cases with 20 stable source
+inputs. It composes the independently reviewed HTTP scope fix and ten-run
+scanner/replay owner; actual worker publication and raw replay cover all ten
+synthetic runs. Exact evidence is retained in
+`scaling-resource-policy-package-review-v2/validation-v1/`. The earlier 1,218-case
+package retains its own exact sources and receipt. These are synthetic/local
+checks, including only the Python test process's own RSS/image smoke and
+test-owned loopback/pipe children. Independent composition review passes;
+publication is pending.
+Main transaction/routing/effect integration, all dynamic writers' allocation
+enforcement and the CLI pre-admission directory handshake remain open.
+
+The retained retry-19 Core/Config selection finishes 206 passed and two failed
+with 8,812 source paths and executable identities stable. Retry 20 separately
+passes both corrected signed-snapshot finalizer tests and their signature-negative
+control with 8,820 source records and binaries stable; its fourth BFV case fails.
+Both combined builds remain exit 101. The private formal successor's 65 cases and
+17 subtests on the exact 348-owner historical capture do not establish a full
+model/live-index pass. Earlier failures and separate receipts remain retained.
+
+Deployment, trusted process and fresh lane identities, canonical routed effects,
+complete resource qualification, strict raw-sample assembly and all five real
+paired trials remain open. The orchestrator still requires an external
+`--trial-command`; no artifact closes G-SCALE.
 
 ### G-SDK — cross-SDK diagnostics and Native V2 parity
 

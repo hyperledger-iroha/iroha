@@ -7,8 +7,9 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
     da::commitment::DaCommitmentBundle,
-    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError},
+    nexus::{LaneFinalityAuthorityV1, LaneRelayEnvelope, LaneRelayError},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use std::collections::HashSet;
 use thiserror::Error;
 use tracing::warn;
@@ -156,15 +157,13 @@ pub fn verify_lane_relay_envelopes(
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, MerkleProof};
-    use iroha_data_model::{
-        block::{
-            consensus::{
-                LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata, LaneVolatilityClass,
-            },
-            consensus_v2::finality::V2FinalityArtifact,
+    use iroha_data_model::block::{
+        consensus::{
+            LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata, LaneVolatilityClass,
         },
-        nexus::LaneId,
+        consensus_v2::finality::V2FinalityArtifact,
     };
+    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU64;
     fn sample_settlement(
         lane_id: LaneId,

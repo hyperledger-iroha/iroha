@@ -19,7 +19,7 @@ isi! {
     #[norito_schema(name = "iroha_data_model::isi::vpn::SettleVpnLease")]
     pub struct SettleVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub lease_id: [u8; 32],
         /// Relay receipt describing final session counters.
         pub relay_receipt: crate::soranet::vpn::VpnSignedSessionReceiptV1,
@@ -47,7 +47,7 @@ isi! {
     #[norito_schema(name = "iroha_data_model::isi::vpn::RefundExpiredVpnLease")]
     pub struct RefundExpiredVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub lease_id: [u8; 32],
     }
 }
@@ -140,7 +140,6 @@ mod tests {
     use crate::{
         account::AccountId,
         asset::AssetDefinitionId,
-        domain::DomainId,
         soranet::vpn::{
             VpnAddressSlotV1, VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1,
             VpnSessionReceiptV1, VpnSignedQuoteV1, VpnSignedSessionReceiptV1, VpnTariffV1,
@@ -149,6 +148,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
     fn account(seed: u8) -> AccountId {

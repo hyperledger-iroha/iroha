@@ -25,9 +25,10 @@ use iroha_data_model::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
         NposPenaltyAction,
     },
-    nexus::LaneId,
-    prelude::{AccountId, PeerId},
+    prelude::AccountId,
 };
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
@@ -746,7 +747,8 @@ fn penalty_staking_fixture_ids() -> (
     AccountId,
 ) {
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
+    use iroha_data_model::asset::AssetDefinitionId;
+    use iroha_model_base::domain::DomainId;
 
     let account = |seed: u8| {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -835,9 +837,9 @@ pub(crate) fn seed_penalty_validator_for_tests(
         account::Account,
         asset::AssetId,
         isi::{Mint, Register},
-        metadata::Metadata,
         nexus::{PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     };
+    use iroha_model_base::metadata::Metadata;
 
     assert!(!stake.is_zero(), "penalty validator stake must be non-zero");
     let (asset_definition, escrow, _slash_sink) = penalty_staking_fixture_ids();
@@ -928,14 +930,15 @@ mod tests {
                 finality::V2FinalityArtifact,
             },
         },
-        metadata::Metadata,
         nexus::{
-            LaneCatalog, LaneConfig, LaneId, LaneVisibility, PublicLaneStakeShare,
-            PublicLaneUnbonding,
+            LaneCatalog, LaneConfig, LaneVisibility, PublicLaneStakeShare, PublicLaneUnbonding,
         },
         parameter::{Parameter, system::SumeragiNposParameters},
-        prelude::{AccountId, PeerId},
+        prelude::AccountId,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
     use std::{
         num::{NonZeroU32, NonZeroU64},

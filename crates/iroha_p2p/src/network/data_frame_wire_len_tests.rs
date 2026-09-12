@@ -1,10 +1,26 @@
 use super::*;
 use iroha_crypto::{Algorithm, KeyPair};
 use norito::codec::{Decode, Encode};
+#[test]
+fn captured_original_test_payload_identities() {
+    crate::frame_identity_tests::test_payload_identity::<Dummy>(
+        "iroha_p2p::network::data_frame_wire_len_tests::Dummy",
+    );
+    crate::frame_identity_tests::test_payload_identity::<DynamicDummy>(
+        "iroha_p2p::network::data_frame_wire_len_tests::DynamicDummy",
+    );
+    crate::frame_identity_tests::test_payload_identity::<DeniedDummy>(
+        "iroha_p2p::network::data_frame_wire_len_tests::DeniedDummy",
+    );
+}
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::network::data_frame_wire_len_tests::Dummy")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy {
     tag: u8,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::network::data_frame_wire_len_tests::DynamicDummy")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DynamicDummy {
     body: Vec<u8>,
@@ -31,6 +47,8 @@ impl message::ClassifyTopic for DynamicDummy {
         Ok(Some(norito::DecodeLimits::new(8, 64, 16, 128, 8)))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::network::data_frame_wire_len_tests::DeniedDummy")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DeniedDummy;
 impl message::ClassifyTopic for DeniedDummy {

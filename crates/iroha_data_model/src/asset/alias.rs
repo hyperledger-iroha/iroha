@@ -1,14 +1,11 @@
 //! Asset definition alias literals and catalog-pinned permission targets.
 pub use self::model::*;
-use crate::{
-    asset::id::AssetDefinitionId,
-    domain::DomainId,
-    error::ParseError,
-    name::Name,
-    nexus::{DataSpaceCatalog, DataSpaceId},
-};
+use crate::{asset::id::AssetDefinitionId, nexus::DataSpaceCatalog};
 use core::fmt;
 use iroha_data_model_derive::model;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -19,6 +16,8 @@ mod model {
     use derive_more::Display;
     use iroha_schema::IntoSchema;
     /// Asset alias in either `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` format.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::asset::alias::model::AssetDefinitionAlias")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -168,10 +167,18 @@ impl AsRef<str> for AssetDefinitionAlias {
 ///
 /// Exact permission scopes use this resolved form so neither a textual dataspace remap nor an
 /// alias rebind can silently transfer an old capability to a different asset definition.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(decode_from_slice)]
 pub struct ResolvedAssetDefinitionAliasV1 {
@@ -242,7 +249,7 @@ impl fmt::Display for ResolvedAssetDefinitionAliasV1 {
         self.canonical_name.fmt(f)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AssetDefinitionAlias {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -254,7 +261,7 @@ impl norito::json::FastJsonWrite for AssetDefinitionAlias {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AssetDefinitionAlias {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -262,7 +269,7 @@ impl norito::json::JsonDeserialize for AssetDefinitionAlias {
         let value = parser.parse_string()?;
         value
             .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
+            .map_err(|err: ParseError| norito::json::Error::Message(err.reason().into()))
     }
 }
 #[cfg(test)]

@@ -90,7 +90,7 @@ pub(super) fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
 fn final_usage_real_proof_binds_all_25_rows_and_both_admission_routes() {
     let fixture = fixture();
     for backend in [ZK_BACKEND_HALO2_IPA, KAIGI_USAGE_BACKEND_V1] {
-        let (proof, vk) = envelope(backend, fixture.vk_bytes.clone(), &[&fixture.instance]);
+        let (proof, vk) = valid_envelope(backend);
         assert!(
             validate_builtin_halo2_ipa_verifying_key_v1(backend, KAIGI_USAGE_CIRCUIT_ID_V1, &vk)
                 .is_ok()

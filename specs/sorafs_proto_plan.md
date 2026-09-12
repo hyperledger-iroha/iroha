@@ -9,7 +9,7 @@ summary: SF-10 implementation status for canonical Norito payloads, fixtures, va
 
 SF-10 has local schema, fixture, and reference-validation foundations. Canonical
 SoraFS payloads live in `crates/sorafs_manifest`, committed fixtures live under
-`fixtures/sorafs_manifest/`, and `sorafs-validate` plus the reference FFI expose
+`fixtures/sorafs_manifest/`, and `iroha` plus the reference FFI expose
 stable validation outcomes for SDK and release smoke tests. Remaining work is
 live release evidence and SDK distribution hygiene, not defining a separate
 `sora-proto` codec outside Norito.
@@ -54,36 +54,36 @@ logic.
 
 ## CLI Surface
 
-The `sorafs-validate` binary provides the release-facing validator:
+The `iroha` binary provides the release-facing validator:
 
 ```sh
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
   advert --input fixtures/sorafs_manifest/provider_admission/advert_v1.to --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
   admission --input fixtures/sorafs_manifest/provider_admission/envelope_v1.to --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
   order --order fixtures/sorafs_manifest/replication_order/order_v1.to --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
-  orderbook --receipt fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to --format json
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
+  orderbook --kind settlement-receipt --input fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
   por --challenge fixtures/sorafs_manifest/por/challenge_v1.to \
       --proof fixtures/sorafs_manifest/por/proof_v1.to \
       --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
   potr --receipt fixtures/sorafs_manifest/potr/receipt_v1.to --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
-  repair --task fixtures/sorafs_manifest/repair/task_v1.to --format json
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
+  repair --kind task --input fixtures/sorafs_manifest/repair/task_v1.to --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
-  governance --node fixtures/sorafs_manifest/governance/node_v1.to --format json
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
+  governance --node fixtures/sorafs_manifest/governance/node_v1.to --cid hex:22cc36bfe1ea242afc1680bed4ab5b707e34316cb8c24c3439db7668d968b3a2 --format json
 
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit validate \
   bundle --bundle fixtures/sorafs_manifest --format json
 ```
 
@@ -95,7 +95,7 @@ Signing helpers are available for adverts, replication orders, and governance
 nodes:
 
 ```sh
-cargo run --locked -p sorafs_manifest --bin sorafs-validate -- \
+cargo run --locked -p iroha_cli --bin iroha -- app sorafs toolkit \
   sign --kind governance \
   --input fixtures/sorafs_manifest/governance/node_v1.to \
   --out artifacts/sorafs/governance/signed_node_v1.to \
@@ -128,7 +128,7 @@ cargo run --locked -p sorafs_manifest --features dev-tools --bin generate_por_fi
 
 Do not document retired generator names as required workflow. When a schema
 changes, refresh the relevant fixture directory and run the matching
-`sorafs-validate` command plus focused crate tests.
+`iroha` command plus focused crate tests.
 
 ## Cross-Language Contract
 

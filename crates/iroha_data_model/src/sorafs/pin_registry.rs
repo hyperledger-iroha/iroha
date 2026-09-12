@@ -1,10 +1,11 @@
 use super::capacity::ProviderId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata, musubi::ArchiveId};
+use crate::{account::AccountId, asset::AssetDefinitionId, musubi::ArchiveId};
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
-#[cfg(feature = "json")]
+
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 /// Exact byte length of a canonical first-release manifest root CID.
@@ -18,6 +19,8 @@ pub const PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1: u32 = 1024;
 /// Canonical binary `CIDv1` identifying the content DAG root of a manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ManifestRootCid")]
 pub struct ManifestRootCid([u8; MANIFEST_ROOT_CID_LENGTH]);
 impl ManifestRootCid {
     /// Constructs a root CID after validating the complete first-release layout.
@@ -78,7 +81,7 @@ impl TryFrom<Vec<u8>> for ManifestRootCid {
         Self::try_from_slice(&bytes)
     }
 }
-impl norito::NoritoSerialize for ManifestRootCid {}
+
 impl norito::SerializePayload for ManifestRootCid {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::SerializePayload::serialize(&self.0, writer)
@@ -90,7 +93,8 @@ impl norito::SerializePayload for ManifestRootCid {
         norito::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for ManifestRootCid {
+
+impl<'de> norito::DeserializePayload<'de> for ManifestRootCid {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("archived manifest root CID must use the canonical first-release layout")
@@ -98,13 +102,14 @@ impl<'de> norito::NoritoDeserialize<'de> for ManifestRootCid {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; MANIFEST_ROOT_CID_LENGTH] as norito::NoritoDeserialize>::try_deserialize(
-            archived.cast(),
-        )?;
+        let bytes =
+            <[u8; MANIFEST_ROOT_CID_LENGTH] as norito::DeserializePayload>::try_deserialize(
+                archived.cast(),
+            )?;
         Self::new(bytes).map_err(|error| norito::core::Error::Message(error.to_string()))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for ManifestRootCid {
     fn json_serialize(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.0, out);
@@ -126,7 +131,7 @@ impl norito::json::JsonSerialize for ManifestRootCid {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ManifestRootCid {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -247,12 +252,9 @@ fn validate_manifest_root_cid_bytes(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ManifestDigest")]
-pub struct ManifestDigest(
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
-);
+pub struct ManifestDigest(#[norito(json = "crate::json_helpers::fixed_bytes")] pub [u8; 32]);
 impl ManifestDigest {
     /// Construct a new manifest digest wrapper.
     #[must_use]
@@ -290,7 +292,7 @@ where
     ManifestDigest: norito::core::DecodeFromSlice<'a>,
 {
 }
-#[cfg(feature = "json")]
+
 impl JsonKeyCodec for ManifestDigest {
     fn encode_json_key(&self, out: &mut String) {
         self.as_bytes().encode_json_key(out);
@@ -300,9 +302,20 @@ impl JsonKeyCodec for ManifestDigest {
     }
 }
 /// Registry handle describing the chunker profile selected for a manifest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle")]
 pub struct ChunkerProfileHandle {
     /// Numeric profile identifier (`ProfileId` from the registry).
@@ -324,9 +337,21 @@ impl ChunkerProfileHandle {
     }
 }
 /// Storage replication policy negotiated with the pin registry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinPolicy")]
 pub struct PinPolicy {
     /// Minimum number of replicas the governance policy requires.
@@ -347,10 +372,22 @@ impl Default for PinPolicy {
 }
 /// Storage tier classification for `SoraFS` replicas.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default, Hash,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "type", content = "value"))]
+#[norito(tag = "type", content = "value")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::StorageClass")]
@@ -364,9 +401,21 @@ pub enum StorageClass {
     Cold,
 }
 /// Optional alias binding approved alongside a manifest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ManifestAliasBinding")]
 pub struct ManifestAliasBinding {
     /// Alias name (e.g., `docs`).
@@ -374,7 +423,7 @@ pub struct ManifestAliasBinding {
     /// Alias namespace (e.g., `sora`).
     pub namespace: String,
     /// Alias proof payload encoded as Norito.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub proof: Vec<u8>,
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for ManifestAliasBinding {
@@ -387,9 +436,21 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ManifestAliasBinding {
     }
 }
 /// Lifecycle status of a manifest within the pin registry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinStatus")]
 pub enum PinStatus {
@@ -414,8 +475,20 @@ impl PinStatus {
     }
 }
 /// Closed lifecycle selector for bounded pin-manifest pages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "status", content = "detail", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinStatusKindV1")]
@@ -441,10 +514,21 @@ impl PinStatusKindV1 {
 }
 /// Consensus-maintained resource usage for a global or per-account pin scope.
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinResourceUsage")]
 pub struct PinResourceUsage {
     /// Number of retained manifest records charged to the scope.
@@ -490,10 +574,21 @@ impl PinResourceUsage {
 }
 /// Consensus-maintained bounded lineage summary for one pin manifest.
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinLineageSummaryV1")]
 pub struct PinLineageSummaryV1 {
     /// Number of predecessor edges from this manifest to the lineage root.
@@ -535,9 +630,18 @@ impl PinLineageSummaryV1 {
 }
 /// XOR fee payment recorded when a public pin manifest is admitted.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinFeePayment")]
 pub struct PinFeePayment {
     /// Account whose balance paid for the public pin.
@@ -551,9 +655,18 @@ pub struct PinFeePayment {
 }
 /// Registry record capturing the lifecycle of a manifest pin request.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinManifestRecord")]
 pub struct PinManifestRecord {
     /// Canonical manifest digest (BLAKE3-256 of Norito encoding).
@@ -563,10 +676,10 @@ pub struct PinManifestRecord {
     /// Chunker profile handle used to produce the CAR commitment.
     pub chunker: ChunkerProfileHandle,
     /// SHA3-256 digest of the ordered chunk metadata emitted during build.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub chunk_digest_sha3_256: [u8; 32],
     /// Merkle root of the canonical Proof-of-Retrievability tree.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub por_root: [u8; 32],
     /// Total payload length covered by the manifest.
     pub content_length: u64,
@@ -585,48 +698,60 @@ pub struct PinManifestRecord {
     /// Optional alias binding approved with the manifest.
     pub alias: Option<ManifestAliasBinding>,
     /// Optional predecessor manifest digest forming a succession chain.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub successor_of: Option<ManifestDigest>,
     /// Optional metadata attached during registration.
     pub metadata: Metadata,
     /// Latest lifecycle status for the manifest.
     pub status: PinStatus,
     /// Optional human-readable explanation recorded alongside retirement.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub retirement_reason: Option<String>,
     /// Optional digest of the `manifest_signatures.json` envelope attached during approval.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub council_envelope_digest: Option<[u8; 32]>,
     /// Public pin fee payment metadata, present only after on-chain fee collection.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub pin_fee_payment: Option<PinFeePayment>,
 }
 /// Finalized block anchor for one coherent pin-manifest query result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinManifestFinalizedCursorV1")]
 pub struct PinManifestFinalizedCursorV1 {
     /// Finalized block height observed by the immutable state view.
     pub height: u64,
     /// Finalized block hash resolved from that same immutable state view.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
 }
 /// One authoritative pin manifest anchored to finalized chain state.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinManifestFinalizedRecordV1")]
 pub struct PinManifestFinalizedRecordV1 {
     /// Finalized state anchor at which the manifest was read.
@@ -639,9 +764,18 @@ pub struct PinManifestFinalizedRecordV1 {
 /// Alias proofs, metadata, council envelopes, and fee-payment details are
 /// intentionally excluded. Callers resolve one exact record through
 /// `FindSorafsPinManifest` when those bounded-detail fields are needed.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinManifestSummaryV1")]
 pub struct PinManifestSummaryV1 {
     /// Canonical manifest digest and page key.
@@ -677,9 +811,18 @@ impl From<&PinManifestRecord> for PinManifestSummaryV1 {
     }
 }
 /// Finalized, exclusive-keyset page of bounded pin-manifest summaries.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::PinManifestPageV1")]
 pub struct PinManifestPageV1 {
     /// Finalized state anchor shared by every entry and the next cursor.
@@ -751,9 +894,21 @@ impl PinManifestRecord {
     }
 }
 /// Canonical identifier for a manifest alias (`namespace/name`).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ManifestAliasId")]
 pub struct ManifestAliasId {
     /// Alias namespace (e.g., `sora`).
@@ -783,9 +938,18 @@ impl From<&ManifestAliasBinding> for ManifestAliasId {
 }
 /// Registry record describing an approved alias binding.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ManifestAliasRecord")]
 pub struct ManifestAliasRecord {
     /// Canonical alias binding payload (includes namespace, name, proof).
@@ -833,12 +997,9 @@ impl ManifestAliasRecord {
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ReplicationOrderId")]
-pub struct ReplicationOrderId(
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))] pub [u8; 32],
-);
+pub struct ReplicationOrderId(#[norito(json = "crate::json_helpers::fixed_bytes")] pub [u8; 32]);
 const SORAFS_AUTO_REPLICATION_ORDER_ID_NAMESPACE_BIT_V1: u8 = 1 << 7;
 /// Maximum ingestion window carried by every automatically issued first-release replication order.
 pub const SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1: u32 = 24 * 60 * 60;
@@ -880,29 +1041,39 @@ pub fn derive_sorafs_auto_replication_order_id_v1(
     ReplicationOrderId::new(bytes)
 }
 /// Governance identity of the exact provider-ingest completion signer policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1"
 )]
 pub struct ProviderIngestCompletionSignerPolicyV1 {
     /// Stable governance identity for this provider-owner signing policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_id: [u8; 32],
     /// Monotonic policy revision beginning at one.
     pub revision: u64,
     /// Digest of the preceding tuple's governed leaf policy, absent only at revision one.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub predecessor_digest: Option<[u8; 32]>,
     /// Digest of the exact governed signer, key, and validity leaf policy.
     ///
     /// The canonical chain identity is the complete tuple of policy id, revision,
     /// predecessor digest, and this leaf-policy digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub policy_digest: [u8; 32],
 }
 impl ProviderIngestCompletionSignerPolicyV1 {
@@ -940,9 +1111,20 @@ impl ProviderIngestCompletionSignerPolicyV1 {
     }
 }
 /// Chain-authoritative owner and governed signer policy for provider ingest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1"
 )]
@@ -971,15 +1153,28 @@ impl ProviderIngestCompletionAuthorityV1 {
     }
 }
 /// Finalized committed-chain anchor carried by a provider completion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1")]
 pub struct ProviderIngestFinalizedAnchorV1 {
     /// One-based committed block height.
     pub height: u64,
     /// Exact committed block hash at `height`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub block_hash: [u8; 32],
 }
 impl ProviderIngestFinalizedAnchorV1 {
@@ -1000,9 +1195,21 @@ impl ProviderIngestFinalizedAnchorV1 {
     }
 }
 /// Lifecycle status for replication orders.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "detail"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "status", content = "detail")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus")]
 pub enum ReplicationOrderStatus {
@@ -1032,9 +1239,18 @@ impl ReplicationOrderStatus {
     }
 }
 /// Provider-scoped completion recorded for a replication assignment.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord")]
 pub struct ReplicationOrderCompletionRecord {
     /// Provider assignment that completed ingestion.
@@ -1051,9 +1267,18 @@ pub struct ReplicationOrderCompletionRecord {
     pub finalized_anchor: ProviderIngestFinalizedAnchorV1,
 }
 /// Record stored for each issued replication order.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::pin_registry::ReplicationOrderRecord")]
 pub struct ReplicationOrderRecord {
     /// Identifier of the replication order.
@@ -1071,7 +1296,7 @@ pub struct ReplicationOrderRecord {
     /// Unix-second deadline for completing ingestion.
     pub deadline_epoch: u64,
     /// Canonical Norito payload describing the replication order.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub canonical_order: Vec<u8>,
     /// Monotonic revision of the canonical provider assignment set.
     pub assignment_revision: u64,
@@ -1207,7 +1432,8 @@ mod tests {
         let forged = ForgedPinFeePayment {
             paid_by: fixture_account(),
             fee_asset_id: AssetDefinitionId::derive_from_components(
-                crate::domain::DomainId::try_new("sora", "universal").expect("domain id"),
+                iroha_model_base::domain::DomainId::try_new("sora", "universal")
+                    .expect("domain id"),
                 "xor".parse().expect("asset name"),
             ),
             treasury_account_id: fixture_account(),
@@ -1299,7 +1525,7 @@ mod tests {
         let encoded = malformed.encode();
         let mut slice = encoded.as_slice();
         assert!(ManifestRootCid::decode(&mut slice).is_err());
-        #[cfg(feature = "json")]
+
         {
             let value = norito::json::to_value(&canonical).expect("canonical CID JSON value");
             assert_eq!(

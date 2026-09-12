@@ -1,3 +1,428 @@
+/// Immutable result of the exact Validate completion retired by a durable
+/// no-successor transaction. This is an inert authority, not a new registry row.
+/// Its original coordinates and result remain together when current certified
+/// authority later asks the reducer to reconsider the completed body.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "a terminal validation outcome must remain with its retry authority"]
+pub(in crate::sumeragi) struct ResolvedLifecycleValidateOutcomeV1 {
+    origin: ResolvedValidateOriginV1,
+    outcome: DurableBodyValidationOutcome,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum ResolvedValidateOriginV1 {
+    Live {
+        terminal: super::LifecycleRecord,
+        metadata: DurableRecordMetadata,
+        effect: AdapterEffect,
+        pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
+    },
+    Cold(super::TerminalValidateNoSuccessorClaim),
+}
+impl ResolvedLifecycleValidateOutcomeV1 {
+    /// Bind a consumed semantically replayed outcome to its actual immutable
+    /// cold ledger claim; no previous-process runtime fingerprint is invented.
+    pub(in crate::sumeragi) fn from_cold_claim(
+        claim: super::TerminalValidateNoSuccessorClaim,
+        outcome: DurableBodyValidationOutcome,
+    ) -> Option<Self> {
+        claim.matches_outcome(&outcome).then_some(Self {
+            origin: ResolvedValidateOriginV1::Cold(claim),
+            outcome,
+        })
+    }
+    /// Return the original immutable terminal ordinal.
+    pub(in crate::sumeragi) fn ordinal(&self) -> u128 {
+        match &self.origin {
+            ResolvedValidateOriginV1::Live { terminal, .. } => terminal.ordinal,
+            ResolvedValidateOriginV1::Cold(claim) => claim.ordinal(),
+        }
+    }
+    /// Return the original complete terminal key without runtime reconstruction.
+    pub(in crate::sumeragi) fn terminal_key(&self) -> super::LifecycleKey {
+        match &self.origin {
+            ResolvedValidateOriginV1::Live { terminal, .. } => terminal.key,
+            ResolvedValidateOriginV1::Cold(claim) => claim.key(),
+        }
+    }
+    /// Return the original terminal root for exact child separation.
+    pub(in crate::sumeragi) fn terminal_causal_root(&self) -> super::CausalRoot {
+        match &self.origin {
+            ResolvedValidateOriginV1::Live { terminal, .. } => terminal.owner.causal_root(),
+            ResolvedValidateOriginV1::Cold(claim) => claim.causal_root(),
+        }
+    }
+    /// Borrow the actual semantically validated durable frame identity.
+    pub(in crate::sumeragi) fn durable(&self) -> &DurableBodyReceipt {
+        self.outcome.durable_body()
+    }
+    /// A deterministic rejection never yields a successful receipt.
+    pub(in crate::sumeragi) fn validated_receipt(&self) -> Option<&ValidatedBodyReceipt> {
+        self.outcome.validated_receipt()
+    }
+    /// Borrow only the actual deterministic rejection retained by this terminal.
+    pub(super) fn rejected_body_outcome(&self) -> Option<&DurableBodyValidationOutcome> {
+        (self.outcome.rejection_identity() == Some(&BodyValidationRejectionIdentity::Rejected))
+            .then_some(&self.outcome)
+    }
+    /// Return the exact durable body identity retained by this result.
+    pub(in crate::sumeragi) fn key(&self) -> (wire::ConsensusRound, wire::BlockSubject) {
+        (self.durable().round(), self.durable().subject())
+    }
+    fn live_identity_is_exact(&self, context: super::LifecycleContext) -> bool {
+        let ResolvedValidateOriginV1::Live {
+            terminal,
+            metadata,
+            effect,
+            pending,
+        } = &self.origin
+        else {
+            return false;
+        };
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = effect
+        else {
+            return false;
+        };
+        let Some(statement) = pending.candidate_statement() else {
+            return false;
+        };
+        terminal.work_class == LifecycleWorkClass::Validate
+            && terminal.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
+            && metadata.continuation == super::schema::DurableContinuation::AdvancedNoSuccessor
+            && pending.exactly_binds_adapter_effect(effect)
+            && statement.context_id() == round.context_id
+            && statement.round().context_id == round.context_id
+            && statement.proposal_round() == *round
+            && statement.subject() == Some(*subject)
+            && self.key() == (*round, *subject)
+            && tag.height() == round.height
+            && tag.height() == statement.round().height
+            && (statement.phase() == Some(wire::GlobalPhase::Commit)
+                || tag.view() >= statement.round().view)
+            && terminal.key.round()
+                == super::LifecycleRound::new(statement.round().height, statement.round().view)
+            && terminal.key.proposal_round()
+                == Some(super::LifecycleRound::new(
+                    statement.proposal_round().height,
+                    statement.proposal_round().view,
+                ))
+            && terminal.key.subject() == statement.subject().map(super::projection::block_subject)
+            && terminal.key.execution_commitment()
+                == statement
+                    .execution_commitment()
+                    .map(super::projection::execution_commitment)
+            && terminal.owner.causal_root()
+                == super::CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()))
+            && super::projection::recovered_validate_no_successor_ledger_identity_is_authenticated(
+                context,
+                terminal.key,
+                terminal.owner.causal_root(),
+                metadata.reconstruction_source,
+                terminal.stage,
+                metadata.payload,
+                &self.outcome,
+            )
+    }
+
+    /// Compare the canonical original encoded terminal record. Cold authority
+    /// uses the actual checksummed row claim; live authority uses its exact
+    /// pre-fsync record and replay metadata snapshot.
+    pub(super) fn matches_ledger_record(
+        &self,
+        context: super::LifecycleContext,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        match &self.origin {
+            ResolvedValidateOriginV1::Cold(claim) => {
+                claim.context() == context
+                    && claim.matches_outcome(&self.outcome)
+                    && claim.exactly_matches_ledger_record(record)
+            }
+            ResolvedValidateOriginV1::Live {
+                terminal, metadata, ..
+            } => {
+                self.live_identity_is_exact(context)
+                    && context.id().as_bytes() == self.durable().round().context_id.0.as_ref()
+                    && context.height() == self.durable().round().height
+                    && super::ledger::LifecycleLedgerRecordV1::new(
+                        terminal.key,
+                        terminal.owner,
+                        terminal.ordinal,
+                        terminal.work_class,
+                        terminal.stage,
+                        Some(super::TerminalOutcome::Advanced),
+                        metadata.reconstruction_source,
+                        metadata.payload,
+                        metadata.replay_authority.clone(),
+                        metadata.continuation,
+                    )
+                    .is_ok_and(|expected| &expected == record)
+            }
+        }
+    }
+    /// Authenticate the exact current coordinator terminal independently of the
+    /// new certified runtime occurrence. Reopened cold terminals have no slots.
+    pub(in crate::sumeragi) fn matches_terminal(&self, coordinator: &LifecycleCoordinator) -> bool {
+        let ResolvedValidateOriginV1::Live {
+            terminal,
+            metadata,
+            effect: _,
+            pending,
+        } = &self.origin
+        else {
+            let ResolvedValidateOriginV1::Cold(claim) = &self.origin else {
+                unreachable!()
+            };
+            return claim.matches_outcome(&self.outcome)
+                && claim.exactly_matches_coordinator_tombstone(claim.context(), coordinator);
+        };
+        let original_is_exact = self.live_identity_is_exact(coordinator.active_context);
+        original_is_exact
+            && coordinator.records.get(&terminal.ordinal) == Some(terminal)
+            && coordinator.durable_records.get(&terminal.ordinal) == Some(metadata)
+            && coordinator.key_index.get(&terminal.key) == Some(&terminal.ordinal)
+            && coordinator.owner_index.get(&terminal.owner.causal_root()) == Some(&terminal.owner)
+            && terminal.work_class == LifecycleWorkClass::Validate
+            && terminal.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
+            && metadata.continuation == super::schema::DurableContinuation::AdvancedNoSuccessor
+            && durable_validate_completion_digest(
+                digest_from_hash(pending.exact_effect_identity()),
+                self.durable().manifest_hash(),
+                &self.outcome,
+            )
+            .is_some_and(|digest| {
+                terminal.physical_slots
+                    == BTreeMap::from([(
+                        PhysicalSlotId::for_capacity(
+                            LifecycleWorkClass::Validate.capacity_class(),
+                            0,
+                        ),
+                        digest,
+                    )])
+            })
+    }
+}
+
+/// One current protected Validate occurrence waiting to replay an authenticated
+/// terminal result. The historical row is never admitted or executed again.
+#[must_use = "a resolved validation replay must settle or retain its current owner"]
+pub(in crate::sumeragi) struct PendingResolvedValidateReplayV1 {
+    terminal: Arc<ResolvedLifecycleValidateOutcomeV1>,
+    current: PreparedLocalBodyValidateReplayPreAdmission,
+    certificate: wire::QuorumCertificate,
+}
+impl PendingResolvedValidateReplayV1 {
+    /// Bind one current full QC and body frame through the existing protected
+    /// LocalBody authority constructor before retaining the terminal result.
+    pub(in crate::sumeragi) fn seal_exact_protected_body(
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        manifest: wire::PayloadManifest,
+        durable_receipt: DurableBodyReceipt,
+        certificate: wire::QuorumCertificate,
+        terminal: Arc<ResolvedLifecycleValidateOutcomeV1>,
+    ) -> Result<Self, &'static str> {
+        if terminal.outcome.durable_body() != &durable_receipt {
+            return Err("terminal replay changed its exact durable body");
+        }
+        let current =
+            PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
+                effect,
+                ownership,
+                manifest,
+                durable_receipt,
+                certificate.clone(),
+            )
+            .map_err(|_| "terminal replay omitted exact current protected authority")?;
+        Ok(Self {
+            terminal,
+            current,
+            certificate,
+        })
+    }
+
+    /// Return the unique durable body key retained by this replay occurrence.
+    pub(in crate::sumeragi) fn key(&self) -> (wire::ConsensusRound, wire::BlockSubject) {
+        self.terminal.key()
+    }
+
+    /// Compare retransmission without exposing the move-only current binding.
+    pub(in crate::sumeragi) fn exactly_matches_retry(
+        &self,
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        self.current.effect == *effect
+            && ownership
+                .exact_pending_adapter_effect_binding(effect)
+                .ok()
+                .as_ref()
+                == Some(&self.current.pending)
+    }
+
+    /// Authenticate the current complete replay authority while independently
+    /// proving that its historical result still names the unchanged terminal.
+    pub(super) fn validates_owner(&self, owner: &super::ProductionLifecycleOwnerV1) -> bool {
+        if !self.terminal.matches_terminal(&owner.coordinator) || !self.current.validates() {
+            return false;
+        }
+        let replay =
+            DurableValidateReplayEvidenceV1::local_body(self.current.replay_evidence.clone());
+        replay
+            .project_sealed_validate_successor_candidate(
+                SealedBodySuccessorProjectionPermit::new(),
+                &owner.verified,
+                &self.current.effect,
+                &self.current.durable_receipt,
+                &self.current.pending,
+            )
+            .is_ok()
+    }
+
+    /// Return the current exact Commit only when the retained physical result
+    /// succeeded with that commitment. Rejection never yields Apply authority.
+    pub(in crate::sumeragi) fn decision(
+        &self,
+    ) -> Option<(
+        wire::ConsensusRound,
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )> {
+        let validated = self.terminal.validated_receipt()?;
+        (self.certificate.phase == wire::GlobalPhase::Commit
+            && self.certificate.execution_commitment == validated.execution_commitment())
+        .then_some((
+            self.certificate.round,
+            self.certificate.proposal_round,
+            self.certificate.subject,
+            self.certificate.execution_commitment,
+        ))
+    }
+
+    /// Retain the closed original result across executor Decision cleanup.
+    pub(in crate::sumeragi) fn terminal(&self) -> &Arc<ResolvedLifecycleValidateOutcomeV1> {
+        &self.terminal
+    }
+
+    /// Project only the current authenticated predecessor into the existing
+    /// live-WAL Sign join; the historical pending owner is never reused.
+    pub(super) fn sign_predecessor(&self) -> ReadyValidateSignPredecessorAuthority<'_> {
+        ReadyValidateSignPredecessorAuthority {
+            effect: &self.current.effect,
+            pending: &self.current.pending,
+            _linearity: ReadyValidateSignPredecessorLinearity,
+        }
+    }
+
+    /// Bind the retained rejection to the current exact certified report branch.
+    pub(super) fn seal_report<'a>(
+        &self,
+        publication: crate::sumeragi::v2::PreparedReadyDurableValidateAdapterPublication<'a>,
+    ) -> Result<
+        crate::sumeragi::v2::PreparedInvalidBodyReportAdapterReplay<'a>,
+        crate::sumeragi::v2::PreparedReadyDurableValidateAdapterPublication<'a>,
+    > {
+        if self.terminal.outcome.rejection_identity()
+            != Some(&BodyValidationRejectionIdentity::Rejected)
+        {
+            return Err(publication);
+        }
+        publication.seal_resolved_invalid_body_report_replay(
+            Arc::clone(&self.terminal),
+            DurableValidateReplayEvidenceV1::local_body(self.current.replay_evidence.clone()),
+            &self.current.effect,
+            &self.current.pending,
+            &self.current.durable_receipt,
+        )
+    }
+
+    /// Project the exact standalone Report while all predecessor parts remain
+    /// private to the fixed replay/outcome join.
+    pub(super) fn project_report_candidate(
+        &self,
+        replay: &crate::sumeragi::v2::PreparedInvalidBodyReportAdapterReplay<'_>,
+        permit: SealedInvalidBodyReportProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        replay.project_invalid_body_report_candidate(
+            &permit,
+            verified,
+            &self.current.effect,
+            &self.current.pending,
+            &self.current.durable_receipt,
+        )
+    }
+
+    /// Transfer only an exact successful current Commit into the existing
+    /// authenticated released-Validate Apply owner.
+    pub(in crate::sumeragi) fn into_apply(
+        self,
+        permit: crate::sumeragi::v2_effects::ReleasedLifecycleValidatedMarkerSealPermitV1,
+    ) -> Option<crate::sumeragi::v2::DeferredReleasedLifecycleValidatedMarkerV1> {
+        self.decision()?;
+        crate::sumeragi::v2::DeferredReleasedLifecycleValidatedMarkerV1::from_resolved_outcome(
+            permit,
+            self.terminal,
+            self.current.effect,
+            self.current.pending,
+            self.certificate,
+        )
+    }
+
+    /// Preview the actual fsynced outcome under the current reducer occurrence.
+    /// Only this registry-owned join can construct the adapter's closed result
+    /// authority; a receipt or an old ordinal alone cannot invoke the callback.
+    pub(in crate::sumeragi) fn prepare_adapter<'a>(
+        &self,
+        adapter: &'a mut crate::sumeragi::v2::SumeragiV2Adapter,
+    ) -> Result<
+        crate::sumeragi::v2::PreparedReadyDurableValidateAdapterPublication<'a>,
+        crate::sumeragi::v2::AdapterError,
+    > {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = &self.current.effect
+        else {
+            return Err(
+                crate::sumeragi::v2::AdapterError::ReadyDurableValidatePublicationContractViolation,
+            );
+        };
+        let preview = if let Some(receipt) = self.terminal.outcome.validated_receipt() {
+            adapter.prepare_sealed_ready_durable_validate_succeeded(
+                ReadyValidatedAdapterAuthority {
+                    tag: *tag,
+                    round: *round,
+                    subject: *subject,
+                    receipt,
+                    local_origin_manifest: None,
+                },
+            )?
+        } else if self.terminal.outcome.rejection_identity()
+            == Some(&BodyValidationRejectionIdentity::Rejected)
+            && self.terminal.outcome.missing_merge_sidecar().is_none()
+        {
+            adapter.prepare_sealed_ready_durable_validate_failed(ReadyRejectedAdapterAuthority {
+                tag: *tag,
+                round: *round,
+                subject: *subject,
+                receipt: self.terminal.outcome.durable_body(),
+                local_origin_manifest: None,
+            })?
+        } else {
+            return Err(
+                crate::sumeragi::v2::AdapterError::ReadyDurableValidatePublicationContractViolation,
+            );
+        };
+        preview.preflight_publication()
+    }
+}
+
 /// Non-forgeable successful-validation input accepted only by the adapter's
 /// sealed direct-preview entry point.
 ///
@@ -400,7 +825,7 @@ impl Drop for LiveValidateSignWorkProjectionLinearity {
     fn drop(&mut self) {}
 }
 impl LiveValidateSignWorkProjectionPermit {
-    fn new(candidate: CandidateAdmission) -> Self {
+    pub(super) fn new(candidate: CandidateAdmission) -> Self {
         Self {
             candidate,
             _linearity: LiveValidateSignWorkProjectionLinearity,
@@ -545,9 +970,26 @@ impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_> {
             release_consensus_reservation,
         ))
     }
+    /// Prepare the original immutable fingerprint before the durable cut.
+    /// The no-successor publication tail consumes this already-checked value.
+    pub(super) fn prepare_terminal_pending_fingerprint(
+        &self,
+    ) -> Option<crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1> {
+        let completion = self._registry.completion()?;
+        completion
+            .incumbent
+            .pending
+            .published_validate_retry_fingerprint(&completion.incumbent.effect)
+    }
+
     /// Remove the exact completed Validate carrier and install the staged
     /// adapter state after the matching terminal LedgerV1 row is durable.
-    pub(super) fn publish_no_successor_after_ledger_fsync(self) {
+    pub(super) fn publish_no_successor_after_ledger_fsync(
+        self,
+        terminal: super::LifecycleRecord,
+        metadata: DurableRecordMetadata,
+        pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectFingerprintV1,
+    ) -> ResolvedLifecycleValidateOutcomeV1 {
         let Self {
             _registry: prepared,
             _adapter: adapter,
@@ -566,12 +1008,32 @@ impl<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_> {
             .remove(&address)
             .expect("durable no-successor Validate retains its exact registry carrier");
         assert!(work.validates_at(address));
-        assert!(matches!(
-            work.kind,
-            ConcreteLifecycleWorkKind::DurableValidateCompletion(_)
-        ));
-        drop(work);
+        let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = work.kind else {
+            unreachable!("no-successor publication retains the completed Validate result")
+        };
+        assert_eq!(terminal.ordinal, address.ordinal);
+        assert_eq!(terminal.owner, address.owner);
+        assert_eq!(terminal.key, lease.key());
+        assert_eq!(terminal.work_class, LifecycleWorkClass::Validate);
+        assert_eq!(
+            terminal.state,
+            super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
+        );
+        assert_eq!(
+            metadata.continuation,
+            super::schema::DurableContinuation::AdvancedNoSuccessor
+        );
+        let outcome = ResolvedLifecycleValidateOutcomeV1 {
+            origin: ResolvedValidateOriginV1::Live {
+                terminal,
+                metadata,
+                effect: completion.incumbent.effect,
+                pending,
+            },
+            outcome: completion.outcome,
+        };
         adapter.commit_no_successor_after_durable_ledger();
+        outcome
     }
 }
 impl<'registry, 'adapter> PreparedReadyDurableValidateAdapterPreview<'registry, 'adapter> {
@@ -2275,30 +2737,33 @@ enum RecoveredWalRegistrySlotV1 {
         broadcast: ConcreteWorkAddress,
         next_sign: ConcreteWorkAddress,
     },
+    ControlContinuation([Option<ConcreteWorkAddress>; 3]),
     DecisionFetch(ConcreteWorkAddress),
     DecisionStore(ConcreteWorkAddress),
     DecisionApply(ConcreteWorkAddress),
 }
 impl RecoveredWalRegistrySlotV1 {
-    const fn addresses(self) -> [Option<ConcreteWorkAddress>; 2] {
+    const fn addresses(self) -> [Option<ConcreteWorkAddress>; 3] {
         match self {
-            Self::None => [None, None],
+            Self::None => [None, None, None],
             Self::PhaseVote(address)
             | Self::ControlSign(address)
             | Self::NextVote(address)
             | Self::SignedBroadcast(address)
             | Self::DecisionFetch(address)
             | Self::DecisionStore(address)
-            | Self::DecisionApply(address) => [Some(address), None],
+            | Self::DecisionApply(address) => [Some(address), None, None],
             Self::SignedBroadcastAndNextVote {
                 broadcast,
                 next_sign,
-            } => [Some(broadcast), Some(next_sign)],
+            } => [Some(broadcast), Some(next_sign), None],
+            Self::ControlContinuation(addresses) => addresses,
         }
     }
-    const fn cardinality(self) -> usize {
+    fn cardinality(self) -> usize {
         match self {
             Self::None => 0,
+            Self::ControlContinuation(addresses) => addresses.into_iter().flatten().count(),
             Self::SignedBroadcastAndNextVote { .. } => 2,
             Self::PhaseVote(_)
             | Self::ControlSign(_)

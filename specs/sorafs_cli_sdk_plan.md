@@ -8,7 +8,7 @@ summary: Implemented SF-6 CLI, validator, release, self-cert, and SDK parity sur
 ## Scope
 
 - Use `sorafs_cli` as the operator CLI for manifest build/submit, CAR packing, storage prepare/pin, proof stream/verify, chunk fetch, reputation, PoR, proxy, Taikai, moderation, and appeal workflows.
-- Use `sorafs-validate` plus `soranet_trustless_verifier --validation-outcome` as the reference validator surface for SDK and release smoke checks.
+- Use `iroha` plus `soranet_trustless_verifier --validation-outcome` as the reference validator surface for SDK and release smoke checks.
 - Use `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`, `scripts/sorafs_gateway_self_cert.sh`, and `cargo xtask sorafs-gateway-attest` for release and self-certification evidence.
 - Keep language SDK parity on the existing SoraFS CI guards for pin-register builders and orchestrator smoke fixtures.
 
@@ -22,7 +22,7 @@ Implemented command families:
   read-only committed-projection and offline verification workflow. Snapshot
   publication is an external threshold-signing/outbox operation and has no
   local-authoritative CLI mutation command.
-- `sorafs-validate` validates and signs reference SDK fixtures; `soranet_trustless_verifier --validation-outcome` emits the same outcome contract for manifest/CAR replay.
+- `iroha` validates and signs reference SDK fixtures; `soranet_trustless_verifier --validation-outcome` emits the same outcome contract for manifest/CAR replay.
 - `scripts/sorafs_gateway_self_cert.sh` and `cargo xtask sorafs-gateway-attest` generate and verify gateway conformance attestations.
 
 Important flag patterns:
@@ -42,7 +42,7 @@ Important flag patterns:
 - Aggregate release manifests are authenticated through
   `scripts/release_sorafs_cli.sh`, the `authenticated_external_signer` provider
   with exact `software` backend, a governed raw Ed25519 public key and
-  fingerprint, and a SHA256-pinned `sorafs-validate release-manifest` binary.
+  fingerprint, and a SHA256-pinned `iroha app sorafs toolkit release-manifest` binary.
   Successful output is `software-key-qualified`.
 - Reusable CI examples live in `fixtures/documentation/sorafs_ci.md`; release checks are scripted by `ci/check_sorafs_cli_release.sh`.
 - Release signing and native manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.

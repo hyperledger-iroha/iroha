@@ -220,22 +220,20 @@ fn canonical_authorization_has_no_vector_cid_wire_fallback() {
         musubi_context: current.musubi_context.clone(),
     };
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let (payload, flags) = norito::codec::encode_with_header_flags(&rejected);
-    let wire =
-        norito::core::frame_bare_with_header_flags::<FinalizedProviderIngestAuthorizationV1>(
-            &payload, flags,
-        )
-        .expect("advertise current schema for rejected vector layout");
-    let error = norito::decode_from_bytes::<FinalizedProviderIngestAuthorizationV1>(&wire)
-        .expect_err("vector CID layout is retired");
+    let wire = norito::codec::encode_adaptive(&rejected);
+    let error =
+        norito::core::decode_field_canonical::<FinalizedProviderIngestAuthorizationV1>(&wire)
+            .expect_err("vector CID field layout is retired");
     assert!(
         !matches!(error, norito::Error::SchemaMismatch),
         "exercise layout rather than unrelated schema"
     );
-    assert!(norito::decode_canonical::<FinalizedProviderIngestAuthorizationV1>(&wire).is_err());
+    assert!(
+        norito::codec::decode_adaptive::<FinalizedProviderIngestAuthorizationV1>(&wire).is_err()
+    );
     assert_eq!(
-        norito::decode_canonical::<FinalizedProviderIngestAuthorizationV1>(
-            &norito::encode_canonical(&current).unwrap()
+        norito::codec::decode_adaptive::<FinalizedProviderIngestAuthorizationV1>(
+            &norito::codec::encode_adaptive(&current)
         )
         .unwrap(),
         current
@@ -329,9 +327,9 @@ fn musubi_context_is_bounded_and_separates_job_identity() {
     assert_eq!(first_context.network_id(), &network_id(0x41));
     assert_eq!(first_context.archive_id(), commitment.archive_id());
     first_context.validate().expect("valid bounded context");
-    let encoded = norito::to_bytes(&first_context).expect("encode context");
+    let encoded = norito::codec::encode_adaptive(&first_context);
     let decoded: FinalizedProviderIngestMusubiContextV1 =
-        norito::decode_from_bytes(&encoded).expect("decode context");
+        norito::codec::decode_adaptive(&encoded).expect("decode nested context");
     assert_eq!(decoded, first_context);
     let first = authorization_with_musubi_context(&generic, first_context.clone());
     let second_context =

@@ -39,6 +39,8 @@ pub const KAIGI_AUTHORIZATION_IDENTITY_MAX_BYTES_V1: usize = 1024 * 1024;
     JsonDeserialize,
 )]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kaigi::authorization::KaigiAuthorizationIdentitiesV1")]
 pub struct KaigiAuthorizationIdentitiesV1 {
     /// Exact network identity supplied by the trusted ledger context.
     pub network_id: NetworkId,
@@ -142,12 +144,10 @@ impl Write for BoundedIdentityFrameV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard},
-        domain::DomainId,
-        name::Name,
-    };
+    use crate::account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
 
     fn account(seed: u8) -> AccountId {
@@ -374,5 +374,17 @@ mod tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::kaigi::authorization::KaigiAuthorizationIdentitiesV1,
+        >("iroha_data_model::kaigi::authorization::KaigiAuthorizationIdentitiesV1");
     }
 }

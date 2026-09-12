@@ -1012,6 +1012,8 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
     for relative in (
         Path("crates/iroha_core/src/lib.rs"),
         Path("crates/iroha_core/src/merge_sidecar.rs"),
+        Path("crates/iroha_core/src/kura/consensus_storage_reads.rs"),
+        Path("crates/iroha_core/src/state/autonomous_predecessor_application.rs"),
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
         Path("crates/iroha_core/src/sumeragi/message.rs"),
         Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),

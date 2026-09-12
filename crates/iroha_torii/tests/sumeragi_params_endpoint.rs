@@ -43,7 +43,7 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
     let telemetry_handle =
         iroha_torii::MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let torii = iroha_torii::Torii::new_with_handle(
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
@@ -55,7 +55,10 @@ fn torii_test_harness(cfg: Root) -> ToriiTestHarness {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        telemetry_handle,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            telemetry_handle,
+        ),
     )
     .expect("valid Torii Sumeragi-parameters fixture");
     ToriiTestHarness {
@@ -753,3 +756,6 @@ async fn configuration_endpoint_rejects_malformed_json_update() {
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
     harness.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

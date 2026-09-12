@@ -618,7 +618,7 @@ def _validate_publish_plan_schema(plan: Mapping[str, object]) -> dict[str, objec
             or plan["manifest_public_key_format"] != "raw-ed25519-32"
             or plan["manifest_signature_verified"] is not True
             or plan["manifest_native_verifier_protocol"]
-            != "sorafs-validate-release-manifest-v1"
+            != "iroha-toolkit-release-manifest-v1"
             or any(
                 not isinstance(plan[field], expected) or not plan[field]
                 for field, expected in required_signed.items()

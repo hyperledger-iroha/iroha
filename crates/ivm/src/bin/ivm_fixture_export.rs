@@ -10,12 +10,12 @@ use iroha_data_model::{
         EventFilterBox,
         time::{ExecutionTime, TimeEventFilter},
     },
-    metadata::Metadata,
     smart_contract::manifest::{
         ContractManifest, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
     },
     trigger::action::Repeats,
 };
+use iroha_model_base::metadata::Metadata;
 use ivm::prebuilt_fixtures::build_default_executor_program;
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::{

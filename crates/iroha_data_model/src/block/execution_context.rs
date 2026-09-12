@@ -1,5 +1,5 @@
 //! Durable execution routing context committed by a block header.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -8,11 +8,11 @@ use crate::{
         consensus::{NativeAmxReceipt, SumeragiLanePayloadOwnership},
     },
     merge::{MergeLedgerEntry, MergeQuorumCertificate},
-    nexus::{DataSpaceId, LaneId},
-    peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Current wire version for a globally committed autonomous lane payload.
@@ -44,8 +44,7 @@ pub fn queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
 /// Role of one route leg in an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "detail", rename_all = "snake_case")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::execution_context::ExternalExecutionRouteRole")]
 pub enum ExternalExecutionRouteRole {
     /// The route coordinates final admission and commit ordering for the plan.
@@ -54,8 +53,20 @@ pub enum ExternalExecutionRouteRole {
     Participant,
 }
 /// Lane/dataspace leg committed as part of an external execution plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::execution_context::ExternalExecutionRouteLeg")]
@@ -83,8 +94,17 @@ impl ExternalExecutionRouteLeg {
     }
 }
 /// Routing context used to execute one external block entrypoint.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::execution_context::ExternalExecutionContext")]
@@ -164,8 +184,19 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
 /// sidecar. Committed blocks carry this bounded reference so merge execution shares the same total
 /// order as ordinary block transactions without duplicating a potentially multi-megabyte transcript
 /// in consensus frames.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::execution_context::CertifiedMergeLedgerReference")]
@@ -249,8 +280,17 @@ impl CertifiedMergeLedgerReference {
 /// duplicated identity fields let admission reject substitutions before making the payload eligible
 /// for lane-local execution. A finalized global block hint is attached only after this envelope has
 /// been committed, so the payload never has to contain the hash of its own carrier.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -287,8 +327,17 @@ pub struct AutonomousLanePayloadEnvelopeV1 {
     pub canonical_payload: Vec<u8>,
 }
 /// Ordered execution context for external entrypoints in a block payload.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::execution_context::BlockExecutionContextBundle")]
@@ -388,12 +437,10 @@ impl Default for BlockExecutionContextBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        merge::{MergeExecutionBatch, MergeLedgerEntry},
-        peer::PeerId,
-    };
+    use crate::merge::{MergeExecutionBatch, MergeLedgerEntry};
     use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::peer::PeerId;
     fn entrypoint_hash(label: &[u8]) -> HashOf<TransactionEntrypoint> {
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(label))
     }
@@ -649,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "json")]
+
     fn execution_context_json_requires_every_nullable_slot() {
         let external = ExternalExecutionContext::new(
             entrypoint_hash(b"explicit-native-amx-slot"),

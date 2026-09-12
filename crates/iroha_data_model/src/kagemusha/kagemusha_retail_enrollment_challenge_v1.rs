@@ -13,8 +13,8 @@ use super::{
     KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentSelectionV1,
     KagemushaRetailEnrollmentSubjectV1, kagemusha_verify_device_response_v1,
 };
-use crate::name::Name;
-#[cfg(feature = "json")]
+use iroha_model_base::name::Name;
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -35,9 +35,22 @@ const ACCOUNT_DOMAIN: &str = "iroha:kagemusha:v1:retail-enrollment-account-posse
 const EVIDENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:retail-enrollment-ceremony-evidence";
 
 /// Exact server-created challenge. Decoding grants no issuer or outstanding-challenge authority.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-challenge")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentChallengeV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-challenge"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentChallengeV1 {
     /// Sole first-release format, 1.
@@ -62,9 +75,22 @@ pub struct KagemushaRetailEnrollmentChallengeV1 {
 }
 
 /// Account-controller signing payload with a separate purpose domain.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-account-proof")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentAccountProofV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-account-proof"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentAccountProofV1 {
     /// Exact account-possession domain populated by `account_signing_payload`.
@@ -74,9 +100,22 @@ pub struct KagemushaRetailEnrollmentAccountProofV1 {
 }
 
 /// Complete dual-possession proof; the challenge must match the server's retained bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-possession-proof")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentPossessionProofV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-possession-proof"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentPossessionProofV1 {
     /// Exact server challenge, never independently trusted from this envelope.
@@ -242,7 +281,7 @@ impl KagemushaRetailEnrollmentChallengeV1 {
     /// Derive op1's outer request identity from every exact challenge field.
     ///
     /// This challenge belongs to the issuer ceremony. It MUST NOT be installed as a native
-    /// BeginObservation nonce, whose one-use lifecycle is independently native-owned.
+    /// `BeginObservation` nonce, whose one-use lifecycle is independently native-owned.
     /// # Errors
     /// Rejects invalid challenge fields or a reserved resulting identity.
     pub fn device_request_id(&self) -> Result<[u8; 32]> {
@@ -441,7 +480,7 @@ impl KagemushaRetailEnrollmentPossessionProofV1 {
     }
     /// Authenticate both proofs against the exact retained server challenge and catalog.
     ///
-    /// The independent issuer must still recheck live MiBank approval/current account and
+    /// The independent issuer must still recheck live `MiBank` approval/current account and
     /// durably consume the challenge with the unique lane ownership/certificate before reply.
     /// # Errors
     /// Rejects any challenge, account proof, governed device or trusted-time mismatch.
@@ -517,178 +556,12 @@ mod tests {
     //! Private catalog-kernel fixtures test real account/device signatures. They do not
     //! construct an authenticated release, enroll physical hardware or test a live issuer.
     use super::*;
+    use crate::kagemusha::kagemusha_retail_enrollment_v1::test_fixture::{
+        Fixture, account, p256_key,
+    };
     use crate::kagemusha::*;
-    use crate::kagemusha::{
-        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
-        KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1,
-        kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
-    };
-    use crate::{
-        NetworkId,
-        account::AccountId,
-        asset::AssetDefinitionId,
-        nexus::{AxtAssetIncarnationV1, DataSpaceId},
-    };
-    use iroha_crypto::{Hash, HashOf, KeyPair};
-    use p256::ecdsa::{SigningKey, signature::Signer as _};
-
-    struct Fixture {
-        issuer: KeyPair,
-        profile: KagemushaHardwareProfileV1,
-        policy: KagemushaRetailEnrollmentIssuerPolicyV1,
-        certificate: KagemushaRetailEnrollmentCertificateV1,
-        selection: KagemushaRetailEnrollmentSelectionV1,
-    }
-
-    fn account(seed: u8) -> AccountId {
-        AccountId::new(
-            KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-    }
-
-    fn p256_key(seed: u8) -> SigningKey {
-        SigningKey::from_bytes((&[seed; 32]).into()).expect("test signing key")
-    }
-
-    fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
-        KagemushaDevicePublicKeyV1::from_sec1_bytes(
-            key.verifying_key().to_encoded_point(false).as_bytes(),
-        )
-        .expect("test public key")
-    }
-
-    impl Fixture {
-        fn new(generation: u8) -> Self {
-            let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
-            let governance = p256_key(2);
-            let device = public(&p256_key(generation + 2));
-            let suite = [31; 32];
-            let profile = KagemushaHardwareProfileV1 {
-                version: 1,
-                protocol_version: 1,
-                hardware_profile_id: [0; 32],
-                provider_id: [1; 32],
-                platform_class: KagemushaHardwarePlatformClassV1::OtherQualified,
-                product_class_digest: [2; 32],
-                firmware_policy_digest: [3; 32],
-                enrollment_attestation_verifier_digest: [4; 32],
-                attestation_trust_roots_digest: [5; 32],
-                allowed_suite_commitment: kagemusha_suite_commitment_v1(suite),
-                policy_epoch: 1,
-                governance_credential_public_key: public(&governance),
-                capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-                qualification_report_digest: [8; 32],
-                valid_from_ms: 100,
-                expires_at_ms: 10_000,
-            }
-            .seal_hardware_profile_id()
-            .expect("test profile identity");
-            let runtime = KagemushaRetailEnrollmentRuntimeV1 {
-                fi_id: "mibank".parse().expect("FI name"),
-                ledger_dataspace_id: DataSpaceId::new(10),
-                authentication_namespace: "mibank.bpng".parse().expect("auth namespace"),
-                network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-                    Hash::new(b"enrollment-test-genesis"),
-                )),
-                asset: AssetDefinitionId::from_uuid_bytes([
-                    0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84,
-                    0xfd, 0xcd, 0x2f,
-                ])
-                .expect("test asset ID"),
-                asset_incarnation: AxtAssetIncarnationV1::try_from_bytes(
-                    *Hash::new(b"enrollment-test-incarnation").as_ref(),
-                )
-                .expect("test asset incarnation"),
-                scale: 2,
-            };
-            let owner = KagemushaRetailEnrollmentOwnerV1 {
-                account_id: account(12),
-                runtime: runtime.clone(),
-                lane_id: [32; 32],
-            };
-            let mut credential = KagemushaHardwareCredentialV1 {
-                version: 1,
-                credential_id: [0; 32],
-                network_id: runtime.network_id,
-                hardware_profile_id: profile.hardware_profile_id,
-                suite_id: suite,
-                firmware_policy_digest: profile.firmware_policy_digest,
-                policy_epoch: profile.policy_epoch,
-                lane_commitment: owner.lane_id,
-                hardware_epoch_id: [generation; 32],
-                hardware_epoch_generation: u64::from(generation),
-                device_public_key: device,
-                device_key_reference: kagemusha_device_key_reference_v1(&device),
-                issued_at_ms: 200,
-                expires_at_ms: 9_000,
-                governance_signature: KagemushaDeviceSignatureV1::from_raw_bytes(&[1; 64])
-                    .expect("placeholder shape"),
-            }
-            .seal_credential_id()
-            .expect("test credential ID");
-            let signature: p256::ecdsa::Signature = governance.sign(
-                &credential
-                    .canonical_signing_bytes()
-                    .expect("credential transcript"),
-            );
-            credential.governance_signature = KagemushaDeviceSignatureV1::from_raw_bytes(
-                &signature.normalize_s().unwrap_or(signature).to_bytes(),
-            )
-            .expect("test credential signature");
-            let issuance = KagemushaRetailEnrollmentIssuanceV1 {
-                release_id: [40 + generation; 32],
-                hardware_policy_digest: [50 + generation; 32],
-                core_authorization_key_reference: [60 + generation; 32],
-                credential,
-            };
-            let policy = KagemushaRetailEnrollmentIssuerPolicyV1 {
-                version: 1,
-                issuer_policy_id: [71; 32],
-                issuer_public_key: issuer.public_key().clone(),
-                issuer_audience: "test-retail-enrollment-service"
-                    .parse()
-                    .expect("test audience"),
-                runtime,
-                valid_from_ms: 100,
-                expires_at_ms: 9_000,
-                maximum_certificate_lifetime_ms: 4_000,
-            };
-            let subject = KagemushaRetailEnrollmentSubjectV1 {
-                version: 1,
-                enrollment_id: owner.enrollment_id().expect("test enrollment ID"),
-                issuer_policy_id: policy.issuer_policy_id,
-                issuer_audience: policy.issuer_audience.clone(),
-                owner,
-                issuance: issuance.clone(),
-                challenge_evidence_digest: [72; 32],
-                issued_at_ms: 1_000,
-                expires_at_ms: 3_000,
-            };
-            let certificate = KagemushaRetailEnrollmentCertificateV1 {
-                signature: SignatureOf::try_new(
-                    issuer.private_key(),
-                    &subject.approval_payload().expect("test subject"),
-                )
-                .expect("test issuer signature"),
-                subject,
-            };
-            let selection = KagemushaRetailEnrollmentSelectionV1 {
-                enrollment_id: certificate.subject.enrollment_id,
-                account_id: certificate.subject.owner.account_id.clone(),
-                lane_id: certificate.subject.owner.lane_id,
-                issuance,
-            };
-            Self {
-                issuer,
-                profile,
-                policy,
-                certificate,
-                selection,
-            }
-        }
-    }
+    use iroha_crypto::KeyPair;
+    use p256::ecdsa::signature::Signer as _;
 
     fn challenge(f: &Fixture) -> KagemushaRetailEnrollmentChallengeV1 {
         KagemushaRetailEnrollmentChallengeV1 {
@@ -726,7 +599,11 @@ mod tests {
         frame.extend_from_slice(&1u16.to_le_bytes());
         frame.extend_from_slice(&[1, 0]);
         frame.extend_from_slice(&id);
-        frame.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        frame.extend_from_slice(
+            &u32::try_from(body.len())
+                .expect("fixture value fits u32")
+                .to_le_bytes(),
+        );
         frame.extend_from_slice(&64u32.to_le_bytes());
         frame.extend_from_slice(&Sha256::digest(&body));
         frame.extend_from_slice(&Sha256::digest(sig));
@@ -741,8 +618,8 @@ mod tests {
             release_id: f.selection.issuance.release_id,
             hardware_policy_digest: f.selection.issuance.hardware_policy_digest,
             core_authorization_key_reference: f.selection.issuance.core_authorization_key_reference,
-            profile: f.profile.clone(),
-            credential: f.selection.issuance.credential.clone(),
+            profile: f.profile,
+            credential: f.selection.issuance.credential,
         }
     }
     fn proof(
@@ -1151,7 +1028,7 @@ mod tests {
             changed.issued_at_ms + KAGEMUSHA_RETAIL_ENROLLMENT_CHALLENGE_LIFETIME_MS_V1 + 1;
         assert!(changed.canonical_bytes().is_err());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_unknown_fields_at_challenge_and_proof_boundaries_are_rejected() {
         let f = Fixture::new(1);
@@ -1183,6 +1060,40 @@ mod tests {
             .insert("kyc_approved".into(), norito::json::Value::Bool(true));
         assert!(
             norito::json::from_value::<KagemushaRetailEnrollmentPossessionProofV1>(value).is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaRetailEnrollmentChallengeV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentChallengeV1",
+            "iroha.kagemusha.v1.retail-enrollment-challenge",
+            "74ce1b21f94a6026ac2cc779881dab96",
+        );
+        check::<super::KagemushaRetailEnrollmentAccountProofV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentAccountProofV1",
+            "iroha.kagemusha.v1.retail-enrollment-account-proof",
+            "7407f1d25a1b28c53783dd2397ad1baf",
+        );
+        check::<super::KagemushaRetailEnrollmentPossessionProofV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentPossessionProofV1",
+            "iroha.kagemusha.v1.retail-enrollment-possession-proof",
+            "d431fc569642c312090e6ee42c3d0337",
         );
     }
 }

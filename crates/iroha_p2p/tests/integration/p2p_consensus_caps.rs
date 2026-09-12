@@ -6,8 +6,9 @@
 )]
 use iroha_config::parameters::actual::Network as Config;
 use iroha_config::parameters::defaults::network::TRUST_GOSSIP;
-use iroha_data_model::{block::consensus_v2::ConsensusMode, prelude::PeerId};
+use iroha_data_model::block::consensus_v2::ConsensusMode;
 use iroha_futures::supervisor::ShutdownSignal;
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::{
     ConfidentialFeatureDigest, ConfidentialHandshakeCaps, ConsensusConfigCaps,
     ConsensusHandshakeCaps, CryptoHandshakeCaps, NetworkHandle, network::message::*,
@@ -15,6 +16,8 @@ use iroha_p2p::{
 use norito::codec::{Decode, Encode};
 use std::{collections::HashSet, num::NonZeroUsize};
 use tokio::time::Duration;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p_consensus_caps::Dummy")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy;
 impl iroha_p2p::network::message::ClassifyTopic for Dummy {}

@@ -38,6 +38,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import private_settlement_release_runner as runner
 import private_settlement_capture_split as capture_split
+import private_settlement_attempt_accounting as accounting
 
 REQUEST_FIELDS = {
     "version",
@@ -1148,6 +1149,10 @@ def run_rust_harness(
     """Build the feature-isolated daemon and run the exact ignored Rust test."""
 
     request_sha = hashlib.sha256(raw_request).hexdigest()
+    if request["kind"] == "benchmark":
+        return run_benchmark_with_retained_terminal(
+            request_path, raw_request, request, evidence_dir
+        )
     with tempfile.TemporaryDirectory(prefix="aps-real-process-") as temporary:
         temporary_root = Path(temporary)
         rust_result = temporary_root / "rust-result.json"
@@ -1258,6 +1263,119 @@ def run_rust_harness(
             request_sha=request_sha,
             evidence_dir=evidence_dir,
         )
+
+
+
+def run_benchmark_with_retained_terminal(
+    request_path: Path,
+    raw_request: bytes,
+    request: Mapping[str, Any],
+    evidence_dir: Path,
+) -> dict[str, Any]:
+    """Retain the mandatory Rust terminal even when its process exits nonzero.
+
+    This private transport directory is permanent attempt evidence, separate
+    from complete successful measurements. Missing or invalid terminals never
+    become a synthetic successful result or an inferred timeout.
+    """
+
+    directory = evidence_dir / accounting.BENCHMARK_PROTOCOL_DIRECTORY
+    try:
+        runner.fresh_private_directory(directory)
+    except (OSError, runner.RunnerError) as error:
+        raise HarnessError("benchmark protocol directory must be new and private") from error
+    result_path = directory / accounting.RUST_TERMINAL_FILE
+    request_sha = hashlib.sha256(raw_request).hexdigest()
+    environment = rust_harness_environment(request)
+    environment.update({
+        "IROHA_TEST_SKIP_BUILD": "1",
+        "IROHA_TEST_BUILD_PROFILE": "release",
+        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": str(VALIDATOR_EXECUTABLE),
+        "APS_REAL_PROCESS_REQUEST": str(request_path),
+        "APS_REAL_PROCESS_RESULT": str(result_path),
+        "APS_REAL_PROCESS_REQUEST_SHA256": request_sha,
+        "APS_REAL_PROCESS_EVIDENCE_DIR": str(evidence_dir),
+    })
+    begun = time.monotonic_ns()
+    phase = "validator_build"
+    exit_code = None
+    terminal_binding = None
+    status, reason = "incomplete", "adapter_interrupted"
+    try:
+        build = subprocess.run([
+            "cargo", "build", "--locked", "--offline", "--release", "-p", "irohad",
+            "--bin", "iroha3d", "--features", "test-network-message-control",
+            "--target-dir", str(TARGET_DIR),
+        ], cwd=REPOSITORY_ROOT, env=environment, check=False)
+        exit_code = build.returncode
+        if exit_code != 0:
+            status, reason = "failed", "validator_build_failed"
+            raise HarnessError("benchmark validator build failed; outcome retained")
+        phase = "validator_identity"
+        status, reason = "invalid", "validator_identity_invalid"
+        environment["APS_REAL_PROCESS_VALIDATOR_SHA256"] = _sha256_file(
+            VALIDATOR_EXECUTABLE, "validator executable"
+        )
+        phase = "benchmark_process"
+        status, reason = "incomplete", "adapter_interrupted"
+        exit_code = None
+        child = subprocess.run([
+            "cargo", "test", "--locked", "--offline", "--release", "-p",
+            "integration_tests", "--test", "nexus_and_streaming", "--features",
+            "atomic-private-settlement-release", "--target-dir", str(TARGET_DIR),
+            BENCHMARK_TEST_NAME, "--", "--ignored", "--exact", "--nocapture",
+            "--test-threads=1",
+        ], cwd=REPOSITORY_ROOT, env=environment, check=False)
+        exit_code = child.returncode
+        phase = "terminal_validation"
+        if not result_path.exists() and not result_path.is_symlink():
+            status, reason = "incomplete", "rust_terminal_missing"
+            raise HarnessError("benchmark process published no terminal; attempt is incomplete")
+        status, reason = "invalid", "rust_terminal_invalid"
+        raw = _regular_file_bytes(
+            result_path, "Rust benchmark terminal", runner.MAX_HARNESS_RESPONSE_BYTES
+        )
+        terminal_binding = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+        try:
+            value = _strict_json_loads(raw.decode("utf-8"), "Rust benchmark terminal")
+            terminal = accounting.validate_benchmark_terminal(
+                value, request=request, request_sha256=request_sha, exit_code=exit_code
+            )
+        except (UnicodeDecodeError, accounting.AccountingError) as error:
+            raise HarnessError("Rust benchmark terminal is invalid") from error
+        status, reason = "invalid", "request_changed"
+        if _regular_file_bytes(request_path, "harness request", MAX_REQUEST_BYTES) != raw_request:
+            raise HarnessError("request changed during benchmark execution")
+        kind = terminal["outcome"]["kind"]
+        if kind != "succeeded":
+            status, reason = kind, "rust_" + kind
+            raise HarnessError("benchmark completed unsuccessfully; typed outcome retained")
+        phase = "measurement_validation"
+        status, reason = "invalid", "measurement_invalid"
+        result = validate_rust_result(
+            terminal["outcome"]["result"], request=request,
+            request_sha=request_sha, evidence_dir=evidence_dir,
+        )
+        status, reason = "succeeded", "rust_succeeded"
+        return result
+    except (KeyboardInterrupt, SystemExit):
+        status, reason = "incomplete", "adapter_interrupted"
+        raise
+    except OSError as error:
+        if phase in ("validator_build", "benchmark_process"):
+            status, reason = "failed", phase + "_spawn_failed"
+        raise HarnessError("benchmark transport failed; evidence retained") from error
+    finally:
+        receipt = {
+            "version": accounting.VERSION, "protocol": accounting.PROTOCOL,
+            "request_id": request["request_id"], "invocation_nonce": request["invocation_nonce"],
+            "request_sha256": request_sha, "commit": request["commit"],
+            "participants": request["participants"],
+            "elapsed_ms": (time.monotonic_ns() - begun) // 1_000_000,
+            "phase": phase, "exit_code": exit_code, "rust_terminal": terminal_binding,
+            "status": status, "reason": reason,
+        }
+        publish_response(directory / accounting.ADAPTER_OUTCOME_FILE, receipt)
 
 
 def validate_rust_result(
@@ -1480,8 +1598,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_rust_harness(request_path, raw_request, request, evidence_dir)
         if _regular_file_bytes(request_path, "harness request", MAX_REQUEST_BYTES) != raw_request:
             raise HarnessError("request changed during real-process execution")
-        if request["kind"] == "benchmark" and list(evidence_dir.iterdir()):
-            raise HarnessError("benchmark emitted undeclared evidence files")
+        if request["kind"] == "benchmark":
+            try:
+                runner.validate_benchmark_transport(
+                    evidence_dir, request=request,
+                    request_sha256=hashlib.sha256(raw_request).hexdigest(),
+                )
+            except runner.RunnerError as error:
+                raise HarnessError("benchmark transport evidence is invalid") from error
         if request["kind"] == "fault" and {
             entry.name for entry in evidence_dir.iterdir()
         } != {

@@ -10,10 +10,10 @@ use core::{
 };
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     core::{self as ncore, Archived},
 };
 use std::{
@@ -27,7 +27,7 @@ use thiserror::Error;
 #[cfg(test)]
 #[path = "address/canonical_multisig_tests.rs"]
 mod canonical_multisig_tests;
-#[cfg(feature = "json")]
+
 pub mod compliance_vectors;
 /// Obtain the currently configured chain discriminant for i105 literal encoding,
 /// honoring any thread-local override.
@@ -366,7 +366,6 @@ impl CanonicalEmissionError<core::convert::Infallible> {
     }
 }
 
-#[cfg(feature = "json")]
 fn write_lower_hex_byte_to(
     out: &mut dyn json::JsonWriteSink,
     byte: u8,
@@ -375,7 +374,7 @@ fn write_lower_hex_byte_to(
     out.push(char::from(ALPHABET[usize::from(byte >> 4)]))?;
     out.push(char::from(ALPHABET[usize::from(byte & 0x0f)]))
 }
-#[cfg(feature = "json")]
+
 #[allow(unsafe_code)]
 fn visit_lower_hex_byte(
     byte: u8,
@@ -390,7 +389,6 @@ fn visit_lower_hex_byte(
     visitor(unsafe { core::str::from_utf8_unchecked(&encoded) })
 }
 
-impl NoritoSerialize for AccountAddress {}
 impl SerializePayload for AccountAddress {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let canonical = self
@@ -399,17 +397,18 @@ impl SerializePayload for AccountAddress {
         <Vec<u8> as SerializePayload>::serialize(&canonical, writer)
     }
 }
-impl<'de> NoritoDeserialize<'de> for AccountAddress {
+
+impl<'de> DeserializePayload<'de> for AccountAddress {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("archived AccountAddress must contain canonical bytes")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let bytes = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast())?;
         AccountAddress::from_canonical_bytes(&bytes).map_err(account_address_norito_error)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for AccountAddress {
     fn json_serialize(&self, out: &mut String) {
         let canonical = self
@@ -436,7 +435,7 @@ impl JsonSerialize for AccountAddress {
         out.push('"')
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for AccountAddress {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let literal = parser.parse_string()?;
@@ -450,7 +449,7 @@ impl JsonDeserialize for AccountAddress {
         account_address_from_json_str(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonObjectKey for AccountAddress {
     fn visit_json_key_text<E>(
         &self,
@@ -479,14 +478,13 @@ impl json::JsonObjectKey for AccountAddress {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonObjectKeyOwned for AccountAddress {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         account_address_from_json_str(key)
     }
 }
 
-#[cfg(feature = "json")]
 fn account_address_from_json_str(literal: &str) -> Result<AccountAddress, json::Error> {
     super::reserve_account_literal_json_decode(literal.len())?;
     match AccountAddress::from_str(literal) {
@@ -503,7 +501,7 @@ fn account_address_from_json_str(literal: &str) -> Result<AccountAddress, json::
         Err(error) => Err(map_account_address_json_error(error)),
     }
 }
-#[cfg(feature = "json")]
+
 fn map_account_address_json_error(error: AccountAddressError) -> json::Error {
     if matches!(error, AccountAddressError::DecodeResourceLimit) {
         json::Error::DecodeResourceLimit
@@ -512,11 +510,10 @@ fn map_account_address_json_error(error: AccountAddressError) -> json::Error {
     }
 }
 
-#[cfg(feature = "json")]
 fn invalid_account_address_json() -> json::Error {
     json::Error::Message("invalid account address".to_owned())
 }
-#[cfg(feature = "json")]
+
 #[allow(unsafe_code)]
 fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::Error> {
     if !encoded.len().is_multiple_of(2) {
@@ -1720,7 +1717,7 @@ mod tests {
         }
         literal
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn account_address_json_roundtrip_supports_canonical_hex_literals() {
         let account = AccountId::new(ed25519_pk());
@@ -1730,7 +1727,7 @@ mod tests {
             norito::json::from_str(&json_literal).expect("deserialize account address");
         assert_eq!(decoded, address);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn account_address_value_and_map_key_json_decoders_are_borrowed_and_measured() {
         use norito::json::JsonDeserialize as _;
@@ -2069,7 +2066,6 @@ mod tests {
             );
             assert_eq!(address.to_string(), canonical_hex);
 
-            #[cfg(feature = "json")]
             {
                 let expected = format!("\"{canonical_hex}\"");
                 assert_eq!(
@@ -2100,7 +2096,7 @@ mod tests {
         let _flags = norito::core::DecodeFlagsGuard::enter(0);
         let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
         let attempt = catch_unwind(AssertUnwindSafe(|| {
-            <AccountAddress as NoritoDeserialize<'_>>::try_deserialize(archived.as_ref())
+            <AccountAddress as DeserializePayload<'_>>::try_deserialize(archived.as_ref())
         }));
         let result = attempt.expect("fallible AccountAddress decode must not panic");
         assert!(result.is_err(), "malformed Vec framing must fail closed");

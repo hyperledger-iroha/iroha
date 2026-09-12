@@ -2428,6 +2428,25 @@ fn historical_sidecar_server_fixture_with_lane_committee(
     request_noncanonical_entry: bool,
     lane_keys: Option<&[KeyPair]>,
 ) -> HistoricalSidecarServerFixture {
+    finalized_sidecar_server_fixture_with_lane_committee(
+        finality_kind,
+        holder_indices,
+        request_noncanonical_entry,
+        lane_keys,
+        true,
+        true,
+    )
+}
+#[allow(clippy::too_many_lines)]
+fn finalized_sidecar_server_fixture_with_lane_committee(
+    finality_kind: HistoricalSidecarFinality,
+    holder_indices: Option<&[usize]>,
+    request_noncanonical_entry: bool,
+    lane_keys: Option<&[KeyPair]>,
+    advance_height: bool,
+    apply_state: bool,
+) -> HistoricalSidecarServerFixture {
+    assert!(!advance_height || apply_state);
     let (mut adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
     if let Some(lane_keys) = lane_keys {
         let lane_committee =
@@ -2532,34 +2551,41 @@ fn historical_sidecar_server_fixture_with_lane_committee(
             .store_v2_finality_artifact(&finality)
             .expect("persist historical sidecar finality");
     }
-    let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
-    commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    let mut successor_context = successor_context_for_parent(&adapter, &block, &keys);
-    // The honest successor extends the exact merge-bearing commitment.
-    // Deliberately foreign stored artifacts remain negative controls and must
-    // not become the successor's trusted parent authority.
-    if matches!(
-        finality_kind,
-        HistoricalSidecarFinality::Exact | HistoricalSidecarFinality::Missing
-    ) {
-        successor_context.parent_commit_qc = Some(finality.commit_qc.clone());
+    if apply_state {
+        let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
     }
-    successor_context
-        .validate()
-        .expect("exact parent QC authorizes the successor");
-    let restart = LaneAdapterRestartParts::capture(&adapter);
     let carrier_height = adapter.context.height;
+    let local_peer = adapter.local_peer.clone();
     let requester = adapter
         .context
         .roster
         .iter()
         .map(|entry| entry.validator.clone())
-        .find(|peer| peer != &restart.local_peer)
-        .expect("historical sidecar fixture has a remote requester");
-    drop(adapter);
-    let successor = restart
-        .reopen(successor_context, true)
-        .expect("open advanced historical sidecar responder");
+        .find(|peer| peer != &local_peer)
+        .expect("finalized sidecar fixture has a remote requester");
+    let successor = if advance_height {
+        let mut successor_context = successor_context_for_parent(&adapter, &block, &keys);
+        // The honest successor extends the exact merge-bearing commitment.
+        // Deliberately foreign stored artifacts remain negative controls and must
+        // not become the successor's trusted parent authority.
+        if matches!(
+            finality_kind,
+            HistoricalSidecarFinality::Exact | HistoricalSidecarFinality::Missing
+        ) {
+            successor_context.parent_commit_qc = Some(finality.commit_qc.clone());
+        }
+        successor_context
+            .validate()
+            .expect("exact parent QC authorizes the successor");
+        let restart = LaneAdapterRestartParts::capture(&adapter);
+        drop(adapter);
+        restart
+            .reopen(successor_context, true)
+            .expect("open advanced historical sidecar responder")
+    } else {
+        adapter
+    };
     let requested_entry_hash = if request_noncanonical_entry {
         successor
             .kura
@@ -2582,7 +2608,7 @@ fn historical_sidecar_server_fixture_with_lane_committee(
         epoch_id: requested_reference.epoch_id,
         reference_digest: certified_merge_reference_digest(&requested_reference),
         requester: requester.clone(),
-        responder: restart.local_peer,
+        responder: local_peer,
     };
     request.request_id = request.canonical_request_id();
     HistoricalSidecarServerFixture {
@@ -3066,6 +3092,186 @@ fn historical_lane_sidecar_corrupt_finality_fails_before_responder_allocation() 
             .has_server_request_gate_for_test(&fixture.requester, &fixture.request,)
     );
 }
+fn current_finalized_lane_sidecar_fixture(
+    finality_kind: HistoricalSidecarFinality,
+    request_noncanonical_entry: bool,
+    apply_state: bool,
+) -> HistoricalSidecarServerFixture {
+    let mut lane_keys = (0xC8_u8..=0xCB)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic current finalized lane validator")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let mut fixture = finalized_sidecar_server_fixture_with_lane_committee(
+        finality_kind,
+        None,
+        request_noncanonical_entry,
+        Some(&lane_keys),
+        false,
+        apply_state,
+    );
+    fixture.requester = PeerId::new(lane_keys[0].public_key().clone());
+    fixture.request.requester = fixture.requester.clone();
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(fixture.adapter.context.height, fixture.carrier_height);
+    assert_eq!(
+        u64::try_from(fixture.adapter.state.committed_height()).unwrap(),
+        fixture.carrier_height - u64::from(!apply_state),
+        "the fixture must distinguish durable finality from local State publication"
+    );
+    assert!(!fixture.adapter.frozen_roster_contains(&fixture.requester));
+    assert!(
+        fixture
+            .finality
+            .height_context
+            .roster
+            .iter()
+            .all(|entry| { entry.validator != fixture.requester })
+    );
+    fixture
+}
+
+#[test]
+fn finalized_current_height_sidecar_serves_exact_disjoint_lane_before_rollover() {
+    for apply_state in [false, true] {
+        let mut fixture = current_finalized_lane_sidecar_fixture(
+            HistoricalSidecarFinality::Exact,
+            false,
+            apply_state,
+        );
+        let carrier_height = fixture.carrier_height;
+        let (header, finality, reference) = fixture
+            .adapter
+            .kura
+            .v2_finality_artifact_with_merge_reference(carrier_height)
+            .expect("authenticate exact durable current-height finality")
+            .expect("current-height finality was published");
+        assert_eq!(header.hash(), finality.block_hash);
+        assert_eq!(finality, fixture.finality);
+        let reference = reference.expect("finality retains the compact merge reference");
+        assert_eq!(reference.entry_hash, fixture.request.entry_hash);
+        let entry = fixture
+            .adapter
+            .kura
+            .merge_entry_by_hash(fixture.request.entry_hash)
+            .expect("read exact current-height sidecar")
+            .expect("exact current-height sidecar is present");
+        assert!(
+            fixture
+                .adapter
+                .finalized_merge_active_lane_committee_contains(&entry, &fixture.requester)
+        );
+        assert_eq!(
+            dispatch_historical_sidecar_request(&mut fixture),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(fixture.adapter.sidecar_effects.iter().any(|effect| {
+            posted_sidecar_chunk(effect).is_some_and(|chunk| {
+                chunk.requester == fixture.requester
+                    && chunk.request_id == fixture.request.request_id
+                    && chunk.entry_hash == fixture.request.entry_hash
+                    && chunk.bytes == entry.canonical_bytes()
+            })
+        }));
+        assert_eq!(
+            fixture.adapter.context.height, carrier_height,
+            "serving must not require or perform a successor transition"
+        );
+        assert!(!fixture.adapter.output_guard.restart_required());
+        assert_eq!(
+            u64::try_from(fixture.adapter.state.committed_height()).unwrap(),
+            carrier_height - u64::from(!apply_state),
+            "sidecar service must not publish State or require local application of the current carrier"
+        );
+    }
+}
+
+#[test]
+fn finalized_current_height_lane_sidecar_rejects_missing_or_foreign_finality() {
+    for (kind, noncanonical) in [
+        (HistoricalSidecarFinality::Missing, false),
+        (HistoricalSidecarFinality::WrongNetwork, false),
+        (HistoricalSidecarFinality::WrongRoster, false),
+        (HistoricalSidecarFinality::Exact, true),
+    ] {
+        let mut fixture = current_finalized_lane_sidecar_fixture(kind, noncanonical, true);
+        assert_eq!(
+            dispatch_historical_sidecar_request(&mut fixture),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(fixture.adapter.sidecar_effects.is_empty());
+        assert!(
+            !fixture
+                .adapter
+                .merge_sidecars
+                .has_server_request_gate_for_test(&fixture.requester, &fixture.request)
+        );
+        assert_eq!(fixture.adapter.context.height, fixture.carrier_height);
+    }
+    let mut unauthorized =
+        current_finalized_lane_sidecar_fixture(HistoricalSidecarFinality::Exact, false, true);
+    unauthorized.requester = PeerId::new(KeyPair::random().public_key().clone());
+    unauthorized.request.requester = unauthorized.requester.clone();
+    unauthorized.request.request_id = unauthorized.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut unauthorized),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(unauthorized.adapter.sidecar_effects.is_empty());
+    assert!(
+        !unauthorized
+            .adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&unauthorized.requester, &unauthorized.request)
+    );
+}
+
+#[test]
+fn finalized_current_height_lane_sidecar_corruption_fails_before_allocation() {
+    let mut fixture =
+        current_finalized_lane_sidecar_fixture(HistoricalSidecarFinality::Exact, false, true);
+    assert!(
+        fixture
+            .adapter
+            .exact_historical_lane_sidecar_requester(&fixture.request, &fixture.requester)
+            .expect("authenticate the current finality before disk corruption")
+    );
+    corrupt_durable_file_for_test(
+        &fixture
+            .adapter
+            .kura
+            .v2_finality_artifact_path_for_testing(fixture.carrier_height),
+    );
+    let hub = PeerId::new(KeyPair::random().public_key().clone());
+    let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+        hub.clone(),
+        fixture.adapter.limits.reply_source_capacity.get(),
+    );
+    let route = routes.mint_via(fixture.requester.clone(), hub);
+    assert!(matches!(
+        fixture.adapter.accept_certified_merge_sidecar_for_test(
+            fixture.requester.clone(),
+            route,
+            fixture.request.clone()
+        ),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    assert!(fixture.adapter.output_guard.restart_required());
+    assert!(fixture.adapter.sidecar_effects.is_empty());
+    assert!(
+        !fixture
+            .adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&fixture.requester, &fixture.request)
+    );
+}
+
 #[test]
 fn disjoint_lane_committee_cannot_fetch_speculative_current_height_sidecar() {
     let CertifiedSidecarServerFixture {

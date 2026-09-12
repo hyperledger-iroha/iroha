@@ -13,7 +13,8 @@ use crate::{
 };
 use derive_more::Display;
 use iroha_crypto::Hash;
-#[cfg(feature = "json")]
+use iroha_model_base::topology::{DataSpaceId, LaneId, ShardId};
+
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::XorQuantity;
 use iroha_schema::IntoSchema;
@@ -39,7 +40,7 @@ pub use endorsement::*;
 pub use fee_sponsor_program::*;
 pub use manifest::*;
 pub use privacy::*;
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 pub(crate) use private_settlement::tests::measured_receipt as measured_private_settlement_receipt;
 pub use private_settlement::*;
 pub mod portfolio;
@@ -91,7 +92,8 @@ pub struct LaneLifecycleIncarnationEntry {
 /// The status carries the exact canonical lane catalog and its domain-separated commitment. Clients
 /// must validate the snapshot before embedding [`Self::catalog_hash`] as
 /// [`LaneLifecycleParameterV1::expected_catalog_hash`].
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::LaneLifecycleStatusV1")]
 pub struct LaneLifecycleStatusV1 {
     /// Status layout version. This must be [`Self::VERSION`].
     pub version: u8,
@@ -330,7 +332,6 @@ impl LaneLifecycleParameterV1 {
             .expect("valid Nexus lane lifecycle custom parameter identifier")
     }
     /// Convert this envelope into the custom parameter accepted by `SetParameter`.
-    #[cfg(feature = "json")]
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(Self::parameter_id(), Json::new(self))
@@ -344,7 +345,6 @@ impl LaneLifecycleParameterV1 {
     ///
     /// Returns [`norito::json::Error`] when a matching payload is malformed or
     /// carries an unsupported lifecycle version.
-    #[cfg(feature = "json")]
     pub fn from_custom_parameter(
         custom: &CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {
@@ -362,282 +362,23 @@ impl LaneLifecycleParameterV1 {
         Ok(Some(payload))
     }
 }
-/// Identifier for a logical execution lane.
-#[derive(
-    Debug,
-    Display,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
-#[repr(transparent)]
-#[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(unsafe {robust})
-)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::LaneId")]
-pub struct LaneId(u32);
-
-/// Identifier for a storage shard within a data space.
-///
-/// Shards map to DA/Kura partitions; today they track lane bindings one-to-one
-/// but remain distinct to allow future resharding. A shard is not a separate
-/// validator/server boundary; that identity belongs to [`DataSpaceId`].
-#[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
-)]
-#[repr(transparent)]
-#[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(unsafe {robust})
-)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::ShardId")]
-pub struct ShardId(u32);
-impl LaneId {
-    /// Canonical primary lane identifier used by the default single-lane catalog.
-    pub const SINGLE: Self = Self(0);
-    /// Construct a [`LaneId`] from a zero-based lane index constrained by the provided lane count.
-    ///
-    /// # Errors
-    /// Returns [`LaneIdError::OutOfBounds`] when the lane index is not representable with the
-    /// configured number of lanes.
-    pub fn from_lane_index(index: u32, lane_count: NonZeroU32) -> Result<Self, LaneIdError> {
-        if index < lane_count.get() {
-            Ok(Self(index))
-        } else {
-            Err(LaneIdError::OutOfBounds {
-                index,
-                lane_count: lane_count.get(),
-            })
-        }
-    }
-    /// Create a `LaneId` from its raw numeric representation.
-    #[must_use]
-    pub const fn new(raw: u32) -> Self {
-        Self(raw)
-    }
-    /// Expose the inner numeric representation.
-    #[must_use]
-    pub const fn as_u32(self) -> u32 {
-        self.0
-    }
-}
-impl From<u32> for LaneId {
-    fn from(value: u32) -> Self {
-        Self(value)
-    }
-}
-impl From<LaneId> for u64 {
-    fn from(value: LaneId) -> Self {
-        u64::from(value.0)
-    }
-}
 impl crate::Identifiable for LaneId {
     type Id = LaneId;
     fn id(&self) -> &Self::Id {
         self
     }
 }
-impl ShardId {
-    /// Construct a `ShardId` from its raw numeric representation.
-    #[must_use]
-    pub const fn new(raw: u32) -> Self {
-        Self(raw)
-    }
-    /// Expose the inner numeric representation.
-    #[must_use]
-    pub const fn as_u32(self) -> u32 {
-        self.0
-    }
-}
-impl From<u32> for ShardId {
-    fn from(value: u32) -> Self {
-        Self(value)
-    }
-}
-impl From<ShardId> for u32 {
-    fn from(value: ShardId) -> Self {
-        value.0
-    }
-}
-impl From<ShardId> for u64 {
-    fn from(value: ShardId) -> Self {
-        u64::from(value.0)
-    }
-}
-impl From<LaneId> for ShardId {
-    fn from(value: LaneId) -> Self {
-        Self(value.as_u32())
-    }
-}
-impl From<ShardId> for LaneId {
-    fn from(value: ShardId) -> Self {
-        Self::new(value.as_u32())
-    }
-}
+
 impl From<ShardId> for IdBox {
     fn from(value: ShardId) -> Self {
         IdBox::LaneId(value.into())
     }
 }
+
 impl crate::Identifiable for ShardId {
     type Id = ShardId;
     fn id(&self) -> &Self::Id {
         self
-    }
-}
-/// Errors returned when deriving a lane identifier from configuration.
-#[derive(Debug, Copy, Clone, Error, PartialEq, Eq)]
-pub enum LaneIdError {
-    /// Provided index exceeds the configured number of lanes.
-    #[error("lane index {index} out of bounds for lane count {lane_count}")]
-    OutOfBounds {
-        /// Lane index that triggered the error.
-        index: u32,
-        /// Total number of configured lanes.
-        lane_count: u32,
-    },
-}
-#[cfg(feature = "json")]
-impl norito::json::FastJsonWrite for LaneId {
-    fn write_json(&self, out: &mut String) {
-        norito::json::JsonSerialize::json_serialize(&self.0, out);
-    }
-    fn write_json_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for LaneId {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_u64()?;
-        let value = u32::try_from(value)
-            .map_err(|_| norito::json::Error::Message("lane id overflow".into()))?;
-        Ok(Self(value))
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonObjectKey for LaneId {
-    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
-        norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonObjectKeyOwned for LaneId {
-    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
-        <u32 as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
-    }
-}
-
-#[cfg(feature = "json")]
-impl norito::json::FastJsonWrite for ShardId {
-    fn write_json(&self, out: &mut String) {
-        norito::json::JsonSerialize::json_serialize(&self.0, out);
-    }
-    fn write_json_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for ShardId {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_u64()?;
-        let value = u32::try_from(value)
-            .map_err(|_| norito::json::Error::Message("shard id overflow".into()))?;
-        Ok(Self(value))
-    }
-}
-/// Identifier for a physical execution, storage, and validator boundary.
-#[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
-)]
-#[repr(transparent)]
-#[norito(decode_from_slice)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    derive(iroha_ffi::FfiType)
-)]
-#[cfg_attr(
-    all(feature = "ffi_export", not(feature = "ffi_import")),
-    ffi_type(unsafe {robust})
-)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::DataSpaceId")]
-pub struct DataSpaceId(u64);
-impl DataSpaceId {
-    /// Identifier for the reserved `universal` data space.
-    pub const UNIVERSAL: Self = Self(0);
-    /// Derive a [`DataSpaceId`] from a stable 32-byte hash.
-    #[must_use]
-    pub const fn from_hash(hash: &[u8; 32]) -> Self {
-        let mut buf = [0u8; 8];
-        let mut idx = 0;
-        while idx < 8 {
-            buf[idx] = hash[idx];
-            idx += 1;
-        }
-        Self(u64::from_le_bytes(buf))
-    }
-    /// Create a `DataSpaceId` from its raw numeric representation.
-    #[must_use]
-    pub const fn new(raw: u64) -> Self {
-        Self(raw)
-    }
-    /// Expose the inner numeric representation.
-    #[must_use]
-    pub const fn as_u64(self) -> u64 {
-        self.0
-    }
-}
-impl Default for DataSpaceId {
-    fn default() -> Self {
-        Self::UNIVERSAL
-    }
-}
-impl From<u64> for DataSpaceId {
-    fn from(value: u64) -> Self {
-        Self(value)
-    }
-}
-impl From<DataSpaceId> for u64 {
-    fn from(value: DataSpaceId) -> Self {
-        value.0
-    }
-}
-impl FromStr for DataSpaceId {
-    type Err = std::num::ParseIntError;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value.parse::<u64>().map(Self)
     }
 }
 /// Metadata key marking a lane as created and owned by the deterministic autoscaler.
@@ -703,10 +444,7 @@ pub struct DaManifestPolicyParseError(pub String);
 /// Optional positive per-lane scheduler overrides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 pub struct LaneSchedulerPolicy {
     /// Positive per-block TEU capacity override; absent values use the global fallback.
     #[norito(required)]
@@ -736,10 +474,7 @@ impl LaneSchedulerPolicy {
 /// Typed settlement reserve configuration for one lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 pub struct LaneSettlementBufferPolicy {
     /// Canonical universal account holding the reserve asset.
     pub account_id: AccountId,
@@ -1108,7 +843,7 @@ pub struct LaneVisibilityParseError(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid lane storage profile `{0}`")]
 pub struct LaneStorageProfileParseError(pub String);
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneVisibility {
     fn write_json(&self, out: &mut String) {
         out.push('"');
@@ -1122,7 +857,7 @@ impl norito::json::FastJsonWrite for LaneVisibility {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneVisibility {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1133,7 +868,7 @@ impl norito::json::JsonDeserialize for LaneVisibility {
             .map_err(|err: LaneVisibilityParseError| norito::json::Error::Message(err.to_string()))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneStorageProfile {
     fn write_json(&self, out: &mut String) {
         out.push('"');
@@ -1147,7 +882,7 @@ impl norito::json::FastJsonWrite for LaneStorageProfile {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneStorageProfile {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1158,7 +893,7 @@ impl norito::json::JsonDeserialize for LaneStorageProfile {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for DaManifestPolicy {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
@@ -1171,7 +906,7 @@ impl norito::json::FastJsonWrite for DaManifestPolicy {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for DaManifestPolicy {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1184,7 +919,7 @@ impl norito::json::JsonDeserialize for DaManifestPolicy {
             })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneConfig {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1295,7 +1030,7 @@ impl norito::json::FastJsonWrite for LaneConfig {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 fn ensure_lane_config_json_fields(
     seen_fields: &BTreeSet<String>,
 ) -> Result<(), norito::json::Error> {
@@ -1327,7 +1062,7 @@ fn ensure_lane_config_json_fields(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneConfig {
     #[allow(
         clippy::too_many_lines,
@@ -1415,7 +1150,7 @@ impl norito::json::JsonDeserialize for LaneConfig {
         Ok(lane)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecyclePlan {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1442,7 +1177,7 @@ impl norito::json::FastJsonWrite for LaneLifecyclePlan {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecyclePlan {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1491,7 +1226,7 @@ impl norito::json::JsonDeserialize for LaneLifecyclePlan {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1530,7 +1265,7 @@ impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1610,7 +1345,7 @@ impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1637,7 +1372,7 @@ impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1686,7 +1421,7 @@ impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1737,7 +1472,7 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2117,39 +1852,6 @@ pub enum DataSpaceCatalogError {
         fault_tolerance: u32,
     },
 }
-#[cfg(feature = "json")]
-impl norito::json::FastJsonWrite for DataSpaceId {
-    fn write_json(&self, out: &mut String) {
-        norito::json::JsonSerialize::json_serialize(&self.0, out);
-    }
-    fn write_json_to(
-        &self,
-        out: &mut dyn norito::json::JsonWriteSink,
-    ) -> Result<(), norito::json::BoundedJsonError> {
-        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for DataSpaceId {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_u64()?;
-        Ok(Self(value))
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonObjectKey for DataSpaceId {
-    fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
-        norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
-    }
-}
-#[cfg(feature = "json")]
-impl norito::json::JsonObjectKeyOwned for DataSpaceId {
-    fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
-        <u64 as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2163,7 +1865,8 @@ mod tests {
             .expect("settlement account key");
         let account_id = AccountId::new(keypair.public_key().clone());
         let asset_definition_id = AssetDefinitionId::derive_from_components(
-            crate::domain::DomainId::try_new("settlement", "universal").expect("settlement domain"),
+            iroha_model_base::domain::DomainId::try_new("settlement", "universal")
+                .expect("settlement domain"),
             "xor".parse().expect("asset name"),
         );
         LaneSettlementBufferPolicy::new(
@@ -2187,38 +1890,6 @@ mod tests {
     fn lifecycle_status(catalog: &LaneCatalog) -> LaneLifecycleStatusV1 {
         LaneLifecycleStatusV1::new(catalog, &incarnation_map(catalog))
             .expect("valid lifecycle status")
-    }
-    #[test]
-    fn lane_id_roundtrip() {
-        let original = LaneId::new(42);
-        let bytes = Encode::encode(&original);
-        let mut slice: &[u8] = &bytes;
-        let decoded = LaneId::decode_all(&mut slice).expect("decode LaneId");
-        assert_eq!(decoded, original);
-        assert_eq!(LaneId::SINGLE.as_u32(), 0);
-    }
-    #[test]
-    fn shard_id_roundtrip() {
-        let original = ShardId::new(24);
-        let bytes = Encode::encode(&original);
-        let mut slice: &[u8] = &bytes;
-        let decoded = ShardId::decode_all(&mut slice).expect("decode ShardId");
-        assert_eq!(decoded, original);
-        assert_eq!(ShardId::new(0).as_u32(), 0);
-    }
-    #[test]
-    fn lane_id_from_lane_index_enforces_bounds() {
-        let lane_count = NonZeroU32::new(2).expect("nonzero");
-        let lane = LaneId::from_lane_index(1, lane_count).expect("valid lane");
-        assert_eq!(lane.as_u32(), 1);
-        let err = LaneId::from_lane_index(2, lane_count).expect_err("should be out of bounds");
-        assert_eq!(
-            err,
-            LaneIdError::OutOfBounds {
-                index: 2,
-                lane_count: 2
-            }
-        );
     }
     #[test]
     fn lane_profile_labels_are_canonical() {
@@ -2262,35 +1933,6 @@ mod tests {
                 "non-canonical proof scheme `{retired_alias}` must fail closed"
             );
         }
-    }
-    #[test]
-    fn dataspace_id_roundtrip() {
-        let original = DataSpaceId::new(7);
-        let bytes = Encode::encode(&original);
-        let mut slice: &[u8] = &bytes;
-        let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId");
-        assert_eq!(decoded, original);
-        assert_eq!(DataSpaceId::UNIVERSAL.as_u64(), 0);
-        assert_eq!(
-            "7".parse::<DataSpaceId>().expect("parse DataSpaceId"),
-            original
-        );
-        assert!("-1".parse::<DataSpaceId>().is_err());
-    }
-    #[test]
-    fn dataspace_id_parses_decimal_cli_form() {
-        assert_eq!("0".parse(), Ok(DataSpaceId::UNIVERSAL));
-        assert_eq!(u64::MAX.to_string().parse(), Ok(DataSpaceId::new(u64::MAX)));
-        assert!("-1".parse::<DataSpaceId>().is_err());
-        assert!("not-a-dataspace".parse::<DataSpaceId>().is_err());
-    }
-    #[test]
-    fn dataspace_id_from_hash_uses_low_bytes() {
-        let mut hash = [0u8; 32];
-        hash[0..8].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05]);
-        let expected = u64::from_le_bytes(hash[..8].try_into().expect("slice length"));
-        let id = DataSpaceId::from_hash(&hash);
-        assert_eq!(id.as_u64(), expected);
     }
     #[test]
     fn lane_catalog_validates_alias_and_range() {
@@ -3315,10 +2957,21 @@ mod tests {
 pub mod prelude {
     pub use super::{
         DaManifestPolicy, DaManifestPolicyParseError, DataSpaceCatalog, DataSpaceCatalogError,
-        DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
-        LaneIdError, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        DataSpaceMetadata, LaneCatalog, LaneCatalogError, LaneConfig,
+        LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusError, LaneLifecycleStatusV1, LaneRelayEmergencyValidatorSet,
         LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
-        ShardId,
     };
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::nexus::LaneLifecycleStatusV1,
+        >("iroha_data_model::nexus::LaneLifecycleStatusV1");
+    }
 }

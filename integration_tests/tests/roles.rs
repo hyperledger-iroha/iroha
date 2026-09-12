@@ -9,6 +9,8 @@ use iroha::{
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
 };
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 use std::time::{Duration, Instant};
@@ -425,7 +427,7 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
-    let metrics_url = test_client.client().torii_url.join("/metrics")?;
+    let metrics_url = test_client.client().endpoint().join("/metrics")?;
     let alice_id = ALICE_ID.clone();
     let role_id: RoleId = "PERM_LAST_WINS".parse()?;
     test_client.submit(

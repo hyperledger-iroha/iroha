@@ -4,7 +4,7 @@ use super::{
     tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
     *,
 };
-use iroha_data_model::nexus::LaneId;
+use iroha_model_base::topology::LaneId;
 use iroha_test_samples::ALICE_ID;
 
 fn assert_no_cached_capture(block: &mut StateBlock<'_>) {
@@ -120,7 +120,7 @@ fn sealed_empty_and_transferred_inventory_capture_without_reconstruction() {
         if with_transfer {
             let context = block.fastpq_witness_context.as_ref().unwrap();
             assert!(Arc::ptr_eq(
-                context.source_inventory.as_ref().unwrap(),
+                context._source_inventory.as_ref().unwrap(),
                 &owned
             ));
             assert_eq!(context.tx_set_hash, Some(owned.tx_set_hash()));

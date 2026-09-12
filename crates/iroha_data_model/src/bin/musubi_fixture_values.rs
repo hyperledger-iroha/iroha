@@ -33,19 +33,18 @@ use iroha_data_model::{
         MusubiNamespaceDelegationApprovalV1, MusubiNamespaceDelegationPayloadV1,
         MusubiNamespaceDelegationV1, MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageNameV1,
         MusubiPackageRoleV1, MusubiPackageScopeV1, MusubiParliamentActionV1,
-        MusubiProviderBundleVerificationApprovalV1, MusubiProviderBundleVerificationAttestationV1,
-        MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
-        MusubiPublicationV1, MusubiReasonV1, MusubiRecoverPackageOwnersV1,
-        MusubiRegistryAdmissionModeV1, MusubiRegistryPolicyV1, MusubiRegistrySnapshotV1,
-        MusubiReleaseDigestV1, MusubiReleaseIdV1, MusubiReleaseManifestV1, MusubiReleaseMetadataV1,
-        MusubiResolutionProofV1, MusubiRetargetAliasV1, MusubiSeedIngressReceiptApprovalV1,
+        MusubiProviderBundleAttestationRefV1, MusubiProviderBundleVerificationApprovalV1,
+        MusubiProviderBundleVerificationAttestationV1, MusubiProviderBundleVerificationBindingV1,
+        MusubiProviderBundleVerificationPayloadV1, MusubiPublicationV1, MusubiReasonV1,
+        MusubiRecoverPackageOwnersV1, MusubiRegistryAdmissionModeV1, MusubiRegistryPolicyV1,
+        MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiReleaseIdV1,
+        MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiResolutionProofV1,
+        MusubiRetargetAliasV1, MusubiSeedIngressReceiptApprovalV1,
         MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
         MusubiSeedIngressReceiptV1, MusubiSetRegistryPolicyActionV1,
         MusubiTakedownArtifactActionV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
         MusubiVersionReqV1, MusubiVersionV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
-    name::Name,
-    nexus::DataSpaceId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -55,6 +54,8 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{DecodeFlagsGuard, DecodeFromSlice},
@@ -79,11 +80,11 @@ const INSTRUCTION_PROVIDER_1_SEED: u8 = 0x90;
 const INSTRUCTION_PROVIDER_2_SEED: u8 = 0x91;
 const INSTRUCTION_PROVIDER_3_SEED: u8 = 0x92;
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) const MUSUBI_FIXTURE_OUTPUTS: [&str; 2] = [
+pub const MUSUBI_FIXTURE_OUTPUTS: [&str; 2] = [
     "fixtures/musubi/instructions_v1.json",
     "fixtures/musubi/sdk_v1.json",
 ];
-pub(crate) fn fixture_network_id() -> NetworkId {
+pub fn fixture_network_id() -> NetworkId {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([FIXTURE_NETWORK_MARKER; Hash::LENGTH]),
     ));
@@ -95,7 +96,7 @@ pub(crate) fn fixture_network_id() -> NetworkId {
     network_id
 }
 /// Synthetic Musubi-purpose order, outside the reserved automatic-order namespace.
-pub(crate) fn fixture_replication_order() -> ReplicationOrderId {
+pub fn fixture_replication_order() -> ReplicationOrderId {
     let order = ReplicationOrderId::new([0x42; 32]);
     assert!(
         !order.is_auto(),
@@ -111,12 +112,12 @@ fn musubi_fixture_order_uses_the_purpose_issued_namespace() {
     assert!(!order.is_auto());
 }
 
-pub(crate) fn keypair(seed: u8) -> KeyPair {
+pub fn keypair(seed: u8) -> KeyPair {
     assert_ne!(seed, 0, "fixture signing seeds must be non-zero");
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixed fixture seed derives an Ed25519 keypair")
 }
-pub(crate) fn account(seed: u8) -> AccountId {
+pub fn account(seed: u8) -> AccountId {
     AccountId::new(keypair(seed).public_key().clone())
 }
 fn package(home_dataspace: u64, scope: MusubiPackageScopeV1, name: &str) -> MusubiPackageIdV1 {
@@ -256,7 +257,7 @@ where
         "id": id,
         "wire_id": wire_id,
         "concrete_schema_name": (type_name::<T>()),
-        "concrete_schema_hash": (encode_hex(&<T as NoritoSerialize>::schema_hash())),
+        "concrete_schema_hash": (encode_hex(&norito::schema::identity::frame_hash::<T>())),
         "header_flags": header_flags,
         "semantic": semantic,
         "bare_payload_hex": (encode_hex(&bare_payload)),
@@ -270,7 +271,7 @@ where
     dead_code,
     reason = "the generator and grouped tests render JSON; library identity tests read these fields"
 )]
-pub(crate) struct MusubiGeneratedIdentityValues {
+pub struct MusubiGeneratedIdentityValues {
     /// Namespace-binding registration fixture.
     pub(crate) register_namespace: RegisterMusubiNamespaceBindingV1,
     /// Archive-registration fixture with a verified seed-ingress receipt.
@@ -301,7 +302,7 @@ pub(crate) struct MusubiGeneratedIdentityValues {
 
 /// Construct the complete instruction fixture from concrete Rust values.
 #[must_use]
-pub(crate) fn instruction_document() -> Value {
+pub fn instruction_document() -> Value {
     instruction_document_and_generated_identity_values().0
 }
 
@@ -311,17 +312,140 @@ pub(crate) fn instruction_document() -> Value {
     reason = "only library identity tests need typed values from this shared fixture module"
 )]
 #[must_use]
-pub(crate) fn generated_identity_values() -> MusubiGeneratedIdentityValues {
+pub fn generated_identity_values() -> MusubiGeneratedIdentityValues {
     instruction_document_and_generated_identity_values().1
 }
 
+// Constructed instructions retain one ordered owner until rendering consumes them.
+struct FixtureInstructions {
+    accept: AcceptMusubiPackageMaintainerV1,
+    revoke: RevokeMusubiPackageMaintainerInvitationV1,
+    alias: RegisterMusubiAliasV1,
+    assertion: AssertMusubiReleaseDigestV1,
+    retire: RetireMusubiArchiveLocationV1,
+    unyank: SetMusubiReleaseYankV1,
+    remove: RemoveMusubiPackageMaintainerV1,
+    register_namespace: RegisterMusubiNamespaceBindingV1,
+    invite: InviteMusubiPackageMaintainerV1,
+    promote: SetMusubiPackageMaintainerRoleV1,
+    recover: RecoverMusubiPackageV1,
+    retarget: RetargetMusubiAliasV1,
+    takedown: SetMusubiArtifactTakedownV1,
+    register_archive: RegisterMusubiArchiveV1,
+    register_provider_attestation: RegisterMusubiProviderBundleAttestationV1,
+    add_location: AddMusubiArchiveLocationV1,
+    publish: PublishMusubiReleaseV1,
+    set_metadata: SetMusubiPackageMetadataV1,
+    set_policy: SetMusubiRegistryPolicyV1,
+}
+
 fn instruction_document_and_generated_identity_values() -> (Value, MusubiGeneratedIdentityValues) {
-    let accept = AcceptMusubiPackageMaintainerV1 {
+    let accept = fixture_maintainer_acceptance();
+    let revoke = fixture_invitation_revocation();
+    let alias = fixture_alias_registration();
+    let assertion = fixture_prerelease_assertion();
+    let retire = fixture_archive_location_retirement();
+    let unyank = fixture_release_unyank();
+    let remove = fixture_maintainer_removal();
+    let register_namespace = fixture_namespace_registration();
+    let invite = fixture_maintainer_invitation();
+    let promote = fixture_maintainer_promotion();
+    let (recovery_action, recover) = fixture_package_recovery();
+    let (retarget_action, retarget) = fixture_alias_retarget();
+    let (takedown_action, takedown) = fixture_artifact_takedown();
+    let commitment = fixture_archive_commitment();
+    let (root_package, publication) = fixture_publication_graph(&commitment);
+    let publisher = account(INSTRUCTION_PUBLISHER_SEED);
+    let (receipt_binding, register_archive) =
+        fixture_archive_registration(&commitment, &publication, &publisher);
+    let replication_order = fixture_replication_order();
+    let provider_attestations = fixture_provider_attestations(
+        &commitment,
+        &publication,
+        &receipt_binding,
+        replication_order,
+    );
+    let (provider_attestation_references, register_provider_attestation, add_location) =
+        fixture_provider_location(&commitment, replication_order, &provider_attestations);
+    let (namespace_binding, namespace_owner, publish) =
+        fixture_delegated_publication(&root_package, publication, &publisher);
+    let set_metadata = fixture_package_metadata(root_package);
+    let (current_policy, policy_action, set_policy) = fixture_registry_policy();
+    verify_revision_and_distinctness_fixtures(
+        &accept, &revoke, &assertion, &retire, &unyank, &remove,
+    );
+    verify_namespace_and_maintainer_fixtures(&register_namespace, &invite, &promote);
+    verify_governance_decision_fixtures(&recover, &retarget, &takedown, &set_policy);
+    verify_governance_action_bindings(
+        &recover,
+        &retarget,
+        &takedown,
+        &recovery_action,
+        &retarget_action,
+        &takedown_action,
+    );
+    verify_archive_publication_binding(
+        &register_archive,
+        &add_location,
+        &publish,
+        &receipt_binding,
+    );
+    verify_provider_location_bindings(
+        &provider_attestations,
+        &register_provider_attestation,
+        &provider_attestation_references,
+        &add_location,
+        &receipt_binding,
+        &publish,
+        &register_archive,
+    );
+    verify_delegated_publication_binding(
+        &publish,
+        &namespace_binding,
+        &namespace_owner,
+        &publisher,
+        &receipt_binding,
+    );
+    verify_metadata_and_policy_fixtures(
+        &set_metadata,
+        &set_policy,
+        &current_policy,
+        &policy_action,
+    );
+    FixtureInstructions {
+        accept,
+        revoke,
+        alias,
+        assertion,
+        retire,
+        unyank,
+        remove,
+        register_namespace,
+        invite,
+        promote,
+        recover,
+        retarget,
+        takedown,
+        register_archive,
+        register_provider_attestation,
+        add_location,
+        publish,
+        set_metadata,
+        set_policy,
+    }
+    .into_document()
+}
+
+fn fixture_maintainer_acceptance() -> AcceptMusubiPackageMaintainerV1 {
+    AcceptMusubiPackageMaintainerV1 {
         package: package(7, MusubiPackageScopeV1::DataspaceRoot, "math-utils"),
         invite_id: MusubiInviteIdV1::new([0x11; 32]),
         expected_governance_revision: u64::MAX,
-    };
-    let revoke = RevokeMusubiPackageMaintainerInvitationV1 {
+    }
+}
+
+fn fixture_invitation_revocation() -> RevokeMusubiPackageMaintainerInvitationV1 {
+    RevokeMusubiPackageMaintainerInvitationV1 {
         package: package(
             42,
             MusubiPackageScopeV1::Domain("finance".parse::<Name>().expect("domain name")),
@@ -329,8 +453,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         ),
         invite_id: MusubiInviteIdV1::new([0x22; 32]),
         expected_governance_revision: 9,
-    };
-    let alias = RegisterMusubiAliasV1::new(
+    }
+}
+
+fn fixture_alias_registration() -> RegisterMusubiAliasV1 {
+    RegisterMusubiAliasV1::new(
         "oracle-tools".parse::<MusubiAliasNameV1>().expect("alias"),
         package(
             u64::MAX,
@@ -338,8 +465,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             "price-feed",
         ),
         17,
-    );
-    let assertion = AssertMusubiReleaseDigestV1::new(
+    )
+}
+
+fn fixture_prerelease_assertion() -> AssertMusubiReleaseDigestV1 {
+    AssertMusubiReleaseDigestV1::new(
         MusubiReleaseIdV1::new(
             package(99, MusubiPackageScopeV1::DataspaceRoot, "compiler-core"),
             "1.2.3-rc.7"
@@ -347,8 +477,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
                 .expect("prerelease version"),
         ),
         MusubiReleaseDigestV1::new([0x33; 32]),
-    );
-    let retire = RetireMusubiArchiveLocationV1 {
+    )
+}
+
+fn fixture_archive_location_retirement() -> RetireMusubiArchiveLocationV1 {
+    RetireMusubiArchiveLocationV1 {
         archive_id: ArchiveId::new([0xA5; 32]),
         location_id: MusubiArchiveLocationIdV1::new([0x5A; 32]),
         expected_location_revision: u64::MAX,
@@ -356,8 +489,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             "Provider lease retired after cross-provider readback failed at epoch 9.",
         )
         .expect("retirement reason"),
-    };
-    let unyank = SetMusubiReleaseYankV1::new(
+    }
+}
+
+fn fixture_release_unyank() -> SetMusubiReleaseYankV1 {
+    SetMusubiReleaseYankV1::new(
         MusubiReleaseIdV1::new(
             package(
                 u64::MAX - 1,
@@ -372,8 +508,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         MusubiReasonV1::new("Replica quorum restored after independent bundle verification.")
             .expect("unyank reason"),
         u64::MAX - 1,
-    );
-    let remove = RemoveMusubiPackageMaintainerV1 {
+    )
+}
+
+fn fixture_maintainer_removal() -> RemoveMusubiPackageMaintainerV1 {
+    RemoveMusubiPackageMaintainerV1 {
         package: package(0, MusubiPackageScopeV1::DataspaceRoot, "access-control"),
         account: AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -381,8 +520,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
                 .expect("public key"),
         ),
         expected_governance_revision: u64::MAX - 2,
-    };
-    let register_namespace = RegisterMusubiNamespaceBindingV1::new(
+    }
+}
+
+fn fixture_namespace_registration() -> RegisterMusubiNamespaceBindingV1 {
+    RegisterMusubiNamespaceBindingV1::new(
         MusubiNamespaceBindingV1 {
             namespace: "governance.universal"
                 .parse::<MusubiNamespaceV1>()
@@ -392,8 +534,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             generation: u64::MAX,
         },
         u64::MAX - 5,
-    );
-    let invite = InviteMusubiPackageMaintainerV1 {
+    )
+}
+
+fn fixture_maintainer_invitation() -> InviteMusubiPackageMaintainerV1 {
+    InviteMusubiPackageMaintainerV1 {
         package: package(
             5_124_095_576_030_430,
             MusubiPackageScopeV1::Domain("security".parse::<Name>().expect("domain name")),
@@ -415,8 +560,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         }),
         expires_at_height: u64::MAX,
         expected_governance_revision: u64::MAX - 3,
-    };
-    let promote = SetMusubiPackageMaintainerRoleV1 {
+    }
+}
+
+fn fixture_maintainer_promotion() -> SetMusubiPackageMaintainerRoleV1 {
+    SetMusubiPackageMaintainerRoleV1 {
         package: package(1, MusubiPackageScopeV1::DataspaceRoot, "consensus-tools"),
         account: AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -425,7 +573,10 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         ),
         role: MusubiPackageRoleV1::Owner,
         expected_governance_revision: u64::MAX - 4,
-    };
+    }
+}
+
+fn fixture_package_recovery() -> (MusubiParliamentActionV1, RecoverMusubiPackageV1) {
     let recovery_package = package(
         u64::MAX,
         MusubiPackageScopeV1::Domain("recovery".parse::<Name>().expect("domain name")),
@@ -467,6 +618,10 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         owners: recovery_owners,
         expected_governance_revision: u64::MAX - 6,
     };
+    (recovery_action, recover)
+}
+
+fn fixture_alias_retarget() -> (MusubiParliamentActionV1, RetargetMusubiAliasV1) {
     let retarget_alias = "x".parse::<MusubiAliasNameV1>().expect("global alias");
     let retarget_target = package(
         0,
@@ -491,6 +646,10 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         target: retarget_target,
         expected_history_revision: u64::MAX - 7,
     };
+    (retarget_action, retarget)
+}
+
+fn fixture_artifact_takedown() -> (MusubiParliamentActionV1, SetMusubiArtifactTakedownV1) {
     let takedown_release = MusubiReleaseIdV1::new(
         package(
             u64::MAX - 9,
@@ -522,6 +681,10 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         reason: takedown_reason,
         expected_artifact_governance_revision: u64::MAX - 8,
     };
+    (takedown_action, takedown)
+}
+
+fn fixture_archive_commitment() -> MusubiArchiveCommitmentV1 {
     let commitment = MusubiArchiveCommitmentV1 {
         root_cid: ManifestRootCid::from_blake3_digest([0x61; 32]).expect("root CID"),
         chunker: ChunkerProfileHandle {
@@ -545,6 +708,12 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     commitment
         .validate()
         .expect("fixture archive commitment is valid");
+    commitment
+}
+
+fn fixture_publication_graph(
+    commitment: &MusubiArchiveCommitmentV1,
+) -> (MusubiPackageIdV1, MusubiPublicationV1) {
     let root_package = package(
         0x0123_4567_89AB_CDEF,
         MusubiPackageScopeV1::Domain("fixture".parse::<Name>().expect("domain name")),
@@ -629,7 +798,14 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     publication
         .validate()
         .expect("fixture publication binds its exact graph");
-    let publisher = account(INSTRUCTION_PUBLISHER_SEED);
+    (root_package, publication)
+}
+
+fn fixture_archive_registration(
+    commitment: &MusubiArchiveCommitmentV1,
+    publication: &MusubiPublicationV1,
+    publisher: &AccountId,
+) -> (MusubiSeedIngressReceiptBindingV1, RegisterMusubiArchiveV1) {
     let broker_keypair = keypair(INSTRUCTION_RECEIPT_BROKER_SEED);
     let receipt_binding = MusubiSeedIngressReceiptBindingV1 {
         network_id: fixture_network_id(),
@@ -666,8 +842,16 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         .expect("fixture staging receipt verifies");
     let register_archive =
         RegisterMusubiArchiveV1::new(commitment.clone(), staging_receipt, u64::MAX - 30);
-    let replication_order = fixture_replication_order();
-    let provider_attestations = [
+    (receipt_binding, register_archive)
+}
+
+fn fixture_provider_attestations(
+    commitment: &MusubiArchiveCommitmentV1,
+    publication: &MusubiPublicationV1,
+    receipt_binding: &MusubiSeedIngressReceiptBindingV1,
+    replication_order: ReplicationOrderId,
+) -> Vec<MusubiProviderBundleVerificationAttestationV1> {
+    [
         (0xD1, INSTRUCTION_PROVIDER_1_SEED, 0xE1, 0xF1, 0x71),
         (0xD2, INSTRUCTION_PROVIDER_2_SEED, 0xE2, 0xF2, 0x72),
         (0xD3, INSTRUCTION_PROVIDER_3_SEED, 0xE3, 0xF3, 0x73),
@@ -729,7 +913,18 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             attestation
         },
     )
-    .collect::<Vec<_>>();
+    .collect::<Vec<_>>()
+}
+
+fn fixture_provider_location(
+    commitment: &MusubiArchiveCommitmentV1,
+    replication_order: ReplicationOrderId,
+    provider_attestations: &[MusubiProviderBundleVerificationAttestationV1],
+) -> (
+    Vec<MusubiProviderBundleAttestationRefV1>,
+    RegisterMusubiProviderBundleAttestationV1,
+    AddMusubiArchiveLocationV1,
+) {
     let provider_attestation_references = provider_attestations
         .iter()
         .map(MusubiProviderBundleVerificationAttestationV1::reference)
@@ -754,6 +949,18 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         expires_at_epoch: 2_000,
         expected_location_revision: u64::MAX - 31,
     };
+    (
+        provider_attestation_references,
+        register_provider_attestation,
+        add_location,
+    )
+}
+
+fn fixture_delegated_publication(
+    root_package: &MusubiPackageIdV1,
+    publication: MusubiPublicationV1,
+    publisher: &AccountId,
+) -> (MusubiNamespaceBindingV1, AccountId, PublishMusubiReleaseV1) {
     let namespace_binding = MusubiNamespaceBindingV1 {
         namespace: "fixture.universal"
             .parse::<MusubiNamespaceV1>()
@@ -788,7 +995,7 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             &namespace_binding,
             &namespace_owner,
             namespace_binding.generation,
-            &publisher,
+            publisher,
             u64::MAX - 2,
         )
         .expect("fixture namespace delegation verifies");
@@ -799,7 +1006,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         u64::MAX - 29,
         None,
     );
-    let set_metadata = SetMusubiPackageMetadataV1 {
+    (namespace_binding, namespace_owner, publish)
+}
+
+fn fixture_package_metadata(root_package: MusubiPackageIdV1) -> SetMusubiPackageMetadataV1 {
+    SetMusubiPackageMetadataV1 {
         package: root_package,
         metadata: metadata(
             "Package metadata replaced after independent source and interface review.",
@@ -809,7 +1020,14 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             &["audit-ready", "sorafs", "supply-chain"],
         ),
         expected_metadata_revision: u64::MAX - 28,
-    };
+    }
+}
+
+fn fixture_registry_policy() -> (
+    MusubiRegistryPolicyV1,
+    MusubiParliamentActionV1,
+    SetMusubiRegistryPolicyV1,
+) {
     let current_policy = MusubiRegistryPolicyV1::default();
     let replacement_policy = MusubiRegistryPolicyV1 {
         version: MUSUBI_REGISTRY_VERSION_V1,
@@ -850,6 +1068,17 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         policy: replacement_policy,
         expected_policy_revision: current_policy.revision,
     };
+    (current_policy, policy_action, set_policy)
+}
+
+fn verify_revision_and_distinctness_fixtures(
+    accept: &AcceptMusubiPackageMaintainerV1,
+    revoke: &RevokeMusubiPackageMaintainerInvitationV1,
+    assertion: &AssertMusubiReleaseDigestV1,
+    retire: &RetireMusubiArchiveLocationV1,
+    unyank: &SetMusubiReleaseYankV1,
+    remove: &RemoveMusubiPackageMaintainerV1,
+) {
     assert_ne!(accept.invite_id, revoke.invite_id);
     assert_ne!(
         accept.invite_id.as_bytes(),
@@ -864,6 +1093,13 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     assert_eq!(retire.expected_location_revision, u64::MAX);
     assert_eq!(unyank.expected_yank_revision, u64::MAX - 1);
     assert_eq!(remove.expected_governance_revision, u64::MAX - 2);
+}
+
+fn verify_namespace_and_maintainer_fixtures(
+    register_namespace: &RegisterMusubiNamespaceBindingV1,
+    invite: &InviteMusubiPackageMaintainerV1,
+    promote: &SetMusubiPackageMaintainerRoleV1,
+) {
     register_namespace
         .binding
         .validate_authority_generation(u64::MAX)
@@ -887,6 +1123,14 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     assert_ne!(invite.invited_account, promote.account);
     assert_eq!(promote.role, MusubiPackageRoleV1::Owner);
     assert_eq!(promote.expected_governance_revision, u64::MAX - 4);
+}
+
+fn verify_governance_decision_fixtures(
+    recover: &RecoverMusubiPackageV1,
+    retarget: &RetargetMusubiAliasV1,
+    takedown: &SetMusubiArtifactTakedownV1,
+    set_policy: &SetMusubiRegistryPolicyV1,
+) {
     for decision in [
         recover.decision,
         retarget.decision,
@@ -906,6 +1150,16 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         .len(),
         4
     );
+}
+
+fn verify_governance_action_bindings(
+    recover: &RecoverMusubiPackageV1,
+    retarget: &RetargetMusubiAliasV1,
+    takedown: &SetMusubiArtifactTakedownV1,
+    recovery_action: &MusubiParliamentActionV1,
+    retarget_action: &MusubiParliamentActionV1,
+    takedown_action: &MusubiParliamentActionV1,
+) {
     assert_eq!(recover.owners.len(), 3);
     assert!(recover.owners.windows(2).all(|pair| pair[0] < pair[1]));
     recovery_action
@@ -917,7 +1171,7 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     takedown_action
         .validate()
         .expect("valid artifact takedown action");
-    let MusubiParliamentActionV1::RecoverPackageOwners(recovery_payload) = &recovery_action else {
+    let MusubiParliamentActionV1::RecoverPackageOwners(recovery_payload) = recovery_action else {
         panic!("fixture recovery action has the expected variant");
     };
     assert_eq!(recovery_payload.package, recover.package);
@@ -930,7 +1184,7 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         recover.decision.action_digest,
         recovery_action.action_digest()
     );
-    let MusubiParliamentActionV1::RetargetAlias(retarget_payload) = &retarget_action else {
+    let MusubiParliamentActionV1::RetargetAlias(retarget_payload) = retarget_action else {
         panic!("fixture alias action has the expected variant");
     };
     assert_eq!(retarget_payload.alias, retarget.alias);
@@ -943,7 +1197,7 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         retarget.decision.action_digest,
         retarget_action.action_digest()
     );
-    let MusubiParliamentActionV1::TakedownArtifact(takedown_payload) = &takedown_action else {
+    let MusubiParliamentActionV1::TakedownArtifact(takedown_payload) = takedown_action else {
         panic!("fixture takedown action has the expected variant");
     };
     assert_eq!(takedown_payload.release, takedown.release);
@@ -960,13 +1214,21 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     assert_eq!(retarget.expected_history_revision, u64::MAX - 7);
     assert_eq!(takedown.expected_artifact_governance_revision, u64::MAX - 8);
     assert!(takedown.release.version.is_prerelease());
+}
+
+fn verify_archive_publication_binding(
+    register_archive: &RegisterMusubiArchiveV1,
+    add_location: &AddMusubiArchiveLocationV1,
+    publish: &PublishMusubiReleaseV1,
+    receipt_binding: &MusubiSeedIngressReceiptBindingV1,
+) {
     register_archive
         .commitment
         .validate()
         .expect("fixture archive commitment remains valid");
     register_archive
         .staging_receipt
-        .verify(&receipt_binding, 1_700_000_000_001)
+        .verify(receipt_binding, 1_700_000_000_001)
         .expect("fixture staging receipt remains bound and signed");
     assert_eq!(
         register_archive.commitment.archive_id(),
@@ -989,6 +1251,17 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         publish.publication.manifest.semantic_digest()
     );
     assert_eq!(register_archive.expected_policy_revision, u64::MAX - 30);
+}
+
+fn verify_provider_location_bindings(
+    provider_attestations: &[MusubiProviderBundleVerificationAttestationV1],
+    register_provider_attestation: &RegisterMusubiProviderBundleAttestationV1,
+    provider_attestation_references: &[MusubiProviderBundleAttestationRefV1],
+    add_location: &AddMusubiArchiveLocationV1,
+    receipt_binding: &MusubiSeedIngressReceiptBindingV1,
+    publish: &PublishMusubiReleaseV1,
+    register_archive: &RegisterMusubiArchiveV1,
+) {
     assert_eq!(provider_attestations.len(), 3);
     assert!(
         provider_attestations
@@ -1013,11 +1286,11 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         musubi_provider_bundle_attestation_set_digest_v1(
             add_location.archive_id,
             add_location.replication_order,
-            &provider_attestation_references,
+            provider_attestation_references,
         )
         .expect("fixture provider attestation references remain canonical")
     );
-    for attestation in &provider_attestations {
+    for attestation in provider_attestations {
         let binding = &attestation.payload.binding;
         attestation
             .verify(binding)
@@ -1046,6 +1319,15 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
             register_archive.commitment.source_tree_digest
         );
     }
+}
+
+fn verify_delegated_publication_binding(
+    publish: &PublishMusubiReleaseV1,
+    namespace_binding: &MusubiNamespaceBindingV1,
+    namespace_owner: &AccountId,
+    publisher: &AccountId,
+    receipt_binding: &MusubiSeedIngressReceiptBindingV1,
+) {
     publish
         .publication
         .validate()
@@ -1059,14 +1341,22 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         .expect("fixture publication carries a namespace delegation");
     delegation
         .verify(
-            &namespace_binding,
-            &namespace_owner,
+            namespace_binding,
+            namespace_owner,
             namespace_binding.generation,
-            &publisher,
+            publisher,
             u64::MAX - 2,
         )
         .expect("fixture namespace delegation remains bound and signed");
     assert_eq!(delegation.payload.delegate, receipt_binding.publisher);
+}
+
+fn verify_metadata_and_policy_fixtures(
+    set_metadata: &SetMusubiPackageMetadataV1,
+    set_policy: &SetMusubiRegistryPolicyV1,
+    current_policy: &MusubiRegistryPolicyV1,
+    policy_action: &MusubiParliamentActionV1,
+) {
     set_metadata
         .metadata
         .validate()
@@ -1074,9 +1364,9 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
     assert_eq!(set_metadata.expected_metadata_revision, u64::MAX - 28);
     set_policy
         .policy
-        .validate_successor(&current_policy)
+        .validate_successor(current_policy)
         .expect("fixture replacement policy remains the exact successor");
-    let MusubiParliamentActionV1::SetRegistryPolicy(policy_payload) = &policy_action else {
+    let MusubiParliamentActionV1::SetRegistryPolicy(policy_payload) = policy_action else {
         panic!("fixture registry policy action has the expected variant");
     };
     assert_eq!(policy_payload.policy, set_policy.policy);
@@ -1089,62 +1379,88 @@ fn instruction_document_and_generated_identity_values() -> (Value, MusubiGenerat
         set_policy.decision.action_digest,
         policy_action.action_digest()
     );
-    let generated_identity_values = MusubiGeneratedIdentityValues {
-        register_namespace: register_namespace.clone(),
-        register_archive: register_archive.clone(),
-        retire_archive_location: retire.clone(),
-        set_package_metadata: set_metadata.clone(),
-        invite_package_maintainer: invite.clone(),
-        accept_package_maintainer: accept.clone(),
-        set_package_maintainer_role: promote.clone(),
-        remove_package_maintainer: remove.clone(),
-        register_alias: alias.clone(),
-        recover_package: recover.clone(),
-        retarget_alias: retarget.clone(),
-        set_artifact_takedown: takedown.clone(),
-        set_registry_policy: set_policy.clone(),
-    };
-    let cases = vec![
-        render_instruction_case("accept-root-max-revision", accept),
-        render_instruction_case("revoke-domain-invitation", revoke),
-        render_instruction_case("register-alias-domain-target", alias),
-        render_instruction_case("assert-prerelease-digest", assertion),
-        render_instruction_case("retire-location-max-revision", retire),
-        render_instruction_case("unyank-domain-release-high-revision", unyank),
-        render_instruction_case("remove-root-maintainer-high-revision", remove),
-        render_instruction_case(
-            "register-domain-namespace-max-generation",
+}
+
+impl FixtureInstructions {
+    fn into_document(self) -> (Value, MusubiGeneratedIdentityValues) {
+        let Self {
+            accept,
+            revoke,
+            alias,
+            assertion,
+            retire,
+            unyank,
+            remove,
             register_namespace,
-        ),
-        render_instruction_case("invite-domain-maintainer-max-expiry", invite),
-        render_instruction_case("promote-root-member-to-owner-high-revision", promote),
-        render_instruction_case("recover-domain-package-three-owners", recover),
-        render_instruction_case("retarget-one-character-alias-high-revision", retarget),
-        render_instruction_case("takedown-max-major-prerelease", takedown),
-        render_instruction_case(
-            "register-archive-max-bounds-signed-receipt",
+            invite,
+            promote,
+            recover,
+            retarget,
+            takedown,
             register_archive,
-        ),
-        render_instruction_case(
-            "register-provider-bundle-attestation",
             register_provider_attestation,
-        ),
-        render_instruction_case("add-location-three-signed-providers", add_location),
-        render_instruction_case("publish-delegated-domain-release", publish),
-        render_instruction_case("replace-domain-metadata-high-revision", set_metadata),
-        render_instruction_case("set-allowlisted-policy-repriced-aliases", set_policy),
-    ];
-    (
-        norito::json!({
-            "format": "iroha-musubi-instructions-v1",
-            "fixture_version": 1,
-            "rust_owner": "iroha_data_model::isi::musubi",
-            "instruction_box_schema_name": (type_name::<(String, Vec<u8>)>()),
-            "instruction_box_schema_hash": (encode_hex(
-                &norito::core::type_name_schema_hash::<(String, Vec<u8>)>(),
-            )),
-            "cases": cases,
-        }),
-        generated_identity_values,
-    )
+            add_location,
+            publish,
+            set_metadata,
+            set_policy,
+        } = self;
+        let generated_identity_values = MusubiGeneratedIdentityValues {
+            register_namespace: register_namespace.clone(),
+            register_archive: register_archive.clone(),
+            retire_archive_location: retire.clone(),
+            set_package_metadata: set_metadata.clone(),
+            invite_package_maintainer: invite.clone(),
+            accept_package_maintainer: accept.clone(),
+            set_package_maintainer_role: promote.clone(),
+            remove_package_maintainer: remove.clone(),
+            register_alias: alias.clone(),
+            recover_package: recover.clone(),
+            retarget_alias: retarget.clone(),
+            set_artifact_takedown: takedown.clone(),
+            set_registry_policy: set_policy.clone(),
+        };
+        let cases = vec![
+            render_instruction_case("accept-root-max-revision", accept),
+            render_instruction_case("revoke-domain-invitation", revoke),
+            render_instruction_case("register-alias-domain-target", alias),
+            render_instruction_case("assert-prerelease-digest", assertion),
+            render_instruction_case("retire-location-max-revision", retire),
+            render_instruction_case("unyank-domain-release-high-revision", unyank),
+            render_instruction_case("remove-root-maintainer-high-revision", remove),
+            render_instruction_case(
+                "register-domain-namespace-max-generation",
+                register_namespace,
+            ),
+            render_instruction_case("invite-domain-maintainer-max-expiry", invite),
+            render_instruction_case("promote-root-member-to-owner-high-revision", promote),
+            render_instruction_case("recover-domain-package-three-owners", recover),
+            render_instruction_case("retarget-one-character-alias-high-revision", retarget),
+            render_instruction_case("takedown-max-major-prerelease", takedown),
+            render_instruction_case(
+                "register-archive-max-bounds-signed-receipt",
+                register_archive,
+            ),
+            render_instruction_case(
+                "register-provider-bundle-attestation",
+                register_provider_attestation,
+            ),
+            render_instruction_case("add-location-three-signed-providers", add_location),
+            render_instruction_case("publish-delegated-domain-release", publish),
+            render_instruction_case("replace-domain-metadata-high-revision", set_metadata),
+            render_instruction_case("set-allowlisted-policy-repriced-aliases", set_policy),
+        ];
+        (
+            norito::json!({
+                "format": "iroha-musubi-instructions-v1",
+                "fixture_version": 1,
+                "rust_owner": "iroha_data_model::isi::musubi",
+                "instruction_box_schema_name": (<InstructionBox as norito::NoritoSchema>::frame_name()),
+                "instruction_box_schema_hash": (encode_hex(
+                    &norito::schema::identity::frame_hash::<InstructionBox>(),
+                )),
+                "cases": cases,
+            }),
+            generated_identity_values,
+        )
+    }
 }

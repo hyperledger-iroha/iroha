@@ -1,8 +1,7 @@
 //! Bounded startup loader for transaction-history mandatory-alias policy files.
 use crate::secure_file_metadata::{self, SecureMetadata};
-use iroha_data_model::{
-    alias_setup::AccountAliasName, name::MAX_NAME_BYTES, nexus::DataSpaceCatalog,
-};
+use iroha_data_model::{alias_setup::AccountAliasName, nexus::DataSpaceCatalog};
+use iroha_model_base::name::MAX_NAME_BYTES;
 use norito::{
     DecodeLimits,
     json::{JsonPreflightLimits, JsonPreflightProfile, Parser, preflight_slice},
@@ -619,7 +618,8 @@ fn replace_policy_file_for_test(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{DataSpaceId, DataSpaceMetadata};
+    use iroha_data_model::nexus::DataSpaceMetadata;
+    use iroha_model_base::topology::DataSpaceId;
     fn catalog() -> DataSpaceCatalog {
         DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),

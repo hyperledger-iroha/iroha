@@ -17,7 +17,6 @@ use iroha_data_model::{
     NetworkId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus::{ExecKv, ExecWitness},
-    domain::DomainId,
     execution_witness::{
         ExecutionWitnessKeyTagV1, FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
     },
@@ -30,8 +29,9 @@ use iroha_data_model::{
         decode_fastpq_ordinary_source_statement_archive_v1,
         verify_fastpq_ordinary_source_statement_archive_v1,
     },
-    nexus::DataSpaceId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 
@@ -45,12 +45,13 @@ fn source() -> FastpqSourceStatementContextV1 {
 }
 
 fn source_entries(count: u32) -> Vec<FastpqSourceExecutionEntryV1> {
-    // Independent complete execution inventory: positions 1..=3 have no transfer
+    // Independent complete execution inventory: positions 1 and 3 have no transfer
     // leaves, but their identities still contribute to the source commitment.
     (0..count)
         .map(|index| FastpqSourceExecutionEntryV1 {
             entry_hash: match index {
                 0 => Hash::new(b"first"),
+                2 => Hash::new(b"second"),
                 4 => Hash::new(b"third"),
                 _ => Hash::new(index.to_le_bytes()),
             },
@@ -90,10 +91,9 @@ fn fixture(count: u32, entries: u32) -> (ExecWitness, Vec<FastpqOrdinarySourceSt
         .map(|index| FastpqOrdinarySourceStatementLeafV1 {
             source: source(),
             statement_index: index,
-            entry_index: if index < 2 { 0 } else { 4 },
-            transcript_index: if index < 2 { index } else { 0 },
+            entry_index: index * 2,
             entry_transcript_count: if index < 2 { count.min(2) } else { 1 },
-            entry_hash: Hash::new(if index < 2 { b"first" } else { b"third" }),
+            entry_hash: source_entries(5)[(index * 2) as usize].entry_hash,
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
@@ -518,9 +518,9 @@ fn model_rejects_tampered_core_built_path_content_and_independent_expectations()
                 )
             }
             9 => expected_root = Hash::new(b"unauthenticated replacement root"),
-            10 => expected_entries[2].entry_hash = Hash::new(b"wrong non-transfer source"),
+            10 => expected_entries[1].entry_hash = Hash::new(b"wrong non-transfer source"),
             11 => {
-                expected_entries.remove(2);
+                expected_entries.remove(1);
             }
             _ => unreachable!(),
         }

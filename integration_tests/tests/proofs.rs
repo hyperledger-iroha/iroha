@@ -243,7 +243,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
             .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [isi],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                iroha_data_model::metadata::Metadata::default(),
+                iroha_model_base::metadata::Metadata::default(),
             ))
             .and_then(|payload| account.sign_transaction(payload))
     }
@@ -300,7 +300,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let snapshot = loop {
         let mut url = peer_clients[next_client_idx % peer_clients.len()]
             .client()
-            .torii_url
+            .endpoint()
             .clone();
         next_client_idx = next_client_idx.wrapping_add(1);
         {

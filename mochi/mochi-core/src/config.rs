@@ -297,7 +297,8 @@ impl PortAllocator {
                 )
             })
     }
-    fn allocate_with_probe<F>(&mut self, mut probe: F) -> Option<u16>
+    /// Search using an explicit availability observation, including wrapping and zero rejection.
+    pub(super) fn allocate_with_probe<F>(&mut self, mut probe: F) -> Option<u16>
     where
         F: FnMut(u16) -> bool,
     {
@@ -345,24 +346,6 @@ fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn can_bind_loopback(context: &str) -> bool {
-        match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
-            Ok(listener) => {
-                drop(listener);
-                true
-            }
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::AddrNotAvailable
-                ) =>
-            {
-                eprintln!("skipping {context}: {err}");
-                false
-            }
-            Err(err) => panic!("{context}: {err}"),
-        }
-    }
     #[test]
     fn profile_topology_matches_preset() {
         let four = NetworkProfile::from_preset(ProfilePreset::FourPeerBft);
@@ -480,45 +463,34 @@ mod tests {
     }
     #[test]
     fn port_allocator_advances_monotonically() {
-        if !can_bind_loopback("port_allocator_advances_monotonically") {
-            return;
-        }
         let mut allocator = PortAllocator::new(4000);
-        assert_eq!(allocator.allocate().unwrap(), 4000);
-        assert_eq!(allocator.allocate().unwrap(), 4001);
-        assert_eq!(allocator.allocate().unwrap(), 4002);
+        assert_eq!(allocator.allocate_with_probe(|_| true), Some(4000));
+        assert_eq!(allocator.allocate_with_probe(|_| true), Some(4001));
+        assert_eq!(allocator.allocate_with_probe(|_| true), Some(4002));
     }
     #[test]
     fn port_allocator_skips_ports_in_use() {
-        use std::{io::ErrorKind, net::TcpListener};
-        let (listener, busy_port) = loop {
-            let candidate = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
-                Ok(listener) => listener,
-                Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                    eprintln!("skipping port allocator test: {err}");
-                    return;
-                }
-                Err(err) => panic!("bind busy port: {err}"),
-            };
-            let port = candidate.local_addr().expect("addr").port();
-            let Some(next_port) = port.checked_add(1) else {
-                continue;
-            };
-            match TcpListener::bind((Ipv4Addr::LOCALHOST, next_port)) {
-                Ok(guard) => {
-                    drop(guard);
-                    break (candidate, port);
-                }
-                Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                    eprintln!("skipping port allocator test: {err}");
-                    return;
-                }
-                Err(_) => continue,
+        let mut controlled = PortAllocator::new(4000);
+        assert_eq!(
+            controlled.allocate_with_probe(|port| port != 4000),
+            Some(4001)
+        );
+        let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping port allocator socket check: {err}");
+                return;
             }
+            Err(err) => panic!("bind busy port: {err}"),
         };
+        let busy_port = listener.local_addr().expect("held listener address").port();
         let mut allocator = PortAllocator::new(busy_port);
-        let allocated = allocator.allocate().expect("allocate port");
-        assert_eq!(allocated, busy_port.wrapping_add(1));
+        let allocated = allocator.allocate().expect("allocate around a held socket");
+        assert_ne!(
+            allocated, busy_port,
+            "the held socket must remain unavailable"
+        );
+        assert_ne!(allocated, 0);
         drop(listener);
     }
     #[test]

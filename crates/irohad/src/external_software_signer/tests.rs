@@ -19,8 +19,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use sorafs_manifest::{
-    POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, StreamTokenBodyV1,
-    proof_stream::ProofStreamTier,
+    POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, proof_stream::ProofStreamTier,
 };
 use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
@@ -71,7 +70,9 @@ fn provisioning(
             signer_id: "billing-signer-primary".to_owned(),
         },
         SignerRoleV1::EvidenceViewer => SignerPurposeBindingV1::EvidenceViewer,
-        SignerRoleV1::StreamToken => SignerPurposeBindingV1::StreamToken,
+        SignerRoleV1::StreamToken => SignerPurposeBindingV1::StreamToken {
+            provider_id: [0x62; 32],
+        },
         SignerRoleV1::ReleaseManifest => SignerPurposeBindingV1::ReleaseManifest {
             deployment_id: "production-primary".into(),
         },
@@ -481,32 +482,6 @@ fn typed_service_boundary_enforces_roles_purposes_algorithms_and_public_identiti
             .expect("cross-purpose replay result")
             .status,
         SignStatusV1::Equivocation
-    );
-    let stream_parent = temporary_parent();
-    let stream = provision(
-        stream_parent.path(),
-        SignerRoleV1::StreamToken,
-        SignerKeyAlgorithmV1::Ed25519,
-    );
-    let stream_message = StreamTokenBodyV1 {
-        token_id: "11".repeat(16),
-        manifest_cid: vec![0x61; 32],
-        provider_id: [0x62; 32],
-        profile_handle: "sorafs.standard".to_owned(),
-        max_streams: 1,
-        ttl_epoch: 1_060,
-        rate_limit_bytes: 1_024,
-        issued_at: 1_000,
-        requests_per_minute: 1,
-        token_pk_version: 1,
-    }
-    .signing_payload_bytes()
-    .expect("stream-token signing payload");
-    assert_typed_signs(
-        &stream,
-        [0x0C; 32],
-        SoftwareSignerPurposeV1::StreamToken,
-        &stream_message,
     );
     let pop_parent = temporary_parent();
     let pop = provision(
@@ -973,3 +948,77 @@ fn cli_value_parsers_accept_only_canonical_role_and_algorithm_labels() {
         assert!(alias.parse::<SignerKeyAlgorithmV1>().is_err());
     }
 }
+
+#[test]
+fn signer_transport_frames_bind_exact_current_owners() {
+    use super::protocol::*;
+    use crate::frame_test_support::assert_current_frame;
+    let parent = temporary_parent();
+    let service = provision(
+        parent.path(),
+        SignerRoleV1::Promotion,
+        SignerKeyAlgorithmV1::Ed25519,
+    );
+    let provenance = service.provenance().expect("fixture provenance");
+    let binding_digest = provenance.binding.digest().expect("fixture binding digest");
+    macro_rules! check {
+        ($value:expr, $name:literal) => {
+            assert_current_frame(
+                &$value,
+                concat!("irohad::external_software_signer::protocol::", $name),
+                concat!("irohad::external_software_signer::protocol::", $name),
+            );
+        };
+    }
+    check!(provenance.binding, "SoftwareSignerPublicBindingV1");
+    check!(provenance, "SoftwareSignerLiveProvenanceV1");
+    check!(
+        QualifyRequestV1 {
+            binding_digest,
+            client_nonce: [0x11; 32]
+        },
+        "QualifyRequestV1"
+    );
+    check!(
+        QualifyResponseV1 {
+            client_nonce: [0x11; 32],
+            server_nonce: [0x22; 32],
+            provenance: provenance.clone(),
+            response_digest: [0x33; 32],
+            response_attestation: vec![0x44; 64],
+        },
+        "QualifyResponseV1"
+    );
+    let mut payload = SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1.to_vec();
+    payload.extend_from_slice(
+        br#"{"schema":"sorafs.production_readiness.foundational_prerequisites.v1"}"#,
+    );
+    let request = sign_request(&service, [0x55; 32], payload);
+    let response = service
+        .handle_sign_request(&request)
+        .expect("fixture signature");
+    assert_eq!(response.status, SignStatusV1::Ok);
+    check!(request, "SignRequestV1");
+    check!(response, "SignResponseV1");
+    check!(response.status, "SignStatusV1");
+    let admin = admin_request(&service, AdminCommandV1::Status);
+    let response = service
+        .handle_admin_request(&admin)
+        .expect("fixture status");
+    check!(admin.command, "AdminCommandV1");
+    check!(admin, "AdminRequestV1");
+    check!(response.status, "AdminStatusV1");
+    check!(response, "AdminResponseV1");
+    check!(
+        SoftwareSignerFrameV1 {
+            magic: SIGNER_PROTOCOL_MAGIC_V1,
+            version: SIGNER_PROTOCOL_VERSION_V1,
+            kind: SIGNER_FRAME_ADMIN_REQUEST_V1,
+            body: norito::encode_canonical(&admin).expect("admin body"),
+        },
+        "SoftwareSignerFrameV1"
+    );
+}
+
+#[path = "tests/stream_token_software_rejection.rs"]
+mod stream_token_software_rejection;

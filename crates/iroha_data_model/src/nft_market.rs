@@ -9,25 +9,33 @@ macro_rules! record {
     ($(#[$meta:meta])* pub struct $name:ident { $($(#[$field_meta:meta])* pub $field:ident: $ty:ty,)* }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+        #[norito (deny_unknown_fields)]
         pub struct $name { $($(#[$field_meta])* pub $field: $ty,)* }
     };
 }
 /// Closed native custody namespaces, with independent account derivation domains.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nft_market::NftCustodyPurposeV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "kind",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 pub enum NftCustodyPurposeV1 {
     /// Exact-price sale offer.
@@ -42,6 +50,8 @@ pub enum NftCustodyPurposeV1 {
 }
 record! {
     /// Permanent custody identity and bounded reservation history for one NFT.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft_market::NftCustodyRecordV1")]
     pub struct NftCustodyRecordV1 {
         /// Version of the retained native format.
         pub version: u16,
@@ -87,15 +97,20 @@ record! {
     }
 }
 /// Terminal offer decisions remain in consensus state to reject all replay.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
-)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum NftSaleStatusV1 {
     /// NFT reserved for these immutable sale terms.
     Open,
@@ -106,6 +121,8 @@ pub enum NftSaleStatusV1 {
 }
 record! {
     /// Exact offer terms and permanent lifecycle decision.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft_market::NftSaleRecordV1")]
     pub struct NftSaleRecordV1 {
         /// Version of the retained format.
         pub version: u16,

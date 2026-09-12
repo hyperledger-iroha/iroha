@@ -144,6 +144,21 @@ root-owned, single-link executables at these exact paths:
 - `/usr/bin/nsenter`
 - `/usr/bin/socat`
 
+QEMU must implement `-run-with exit-with-parent=on`; the stock Debian 13
+QEMU 10 package lacks this required lifecycle capability. With the official
+`trixie-backports` APT source enabled, install the supported QEMU packages
+before packaging the closure:
+
+```bash
+sudo apt-get update
+sudo apt-get install -t trixie-backports qemu-system-arm qemu-utils
+```
+
+The packager probes the exact executable with `-run-with help` and requires
+`exit-with-parent=<bool (on/off)>` before publishing the immutable closure.
+An older package must be upgraded; keep the lifecycle option enabled. Run this
+host dependency preparation before starting a release build or rollout.
+
 QEMU, `setpriv`, `ldd`, `bwrap`, and `nsenter` must be direct files. The `socat`
 entry may resolve through package-managed symlinks. The QEMU and `setpriv` ELF
 interpreters and dynamic-library closure may use merged `/usr` and alternatives
@@ -379,6 +394,18 @@ Before preflight, use the same compiled CLI to create the inventory and owner
 signature locally. `assemble` accepts an existing `InventoryV1` draft with explicit
 approved endpoints and host pins, target occupancy, previous/next genesis anchors,
 source/artifact paths, onboarding request, faucet/fee intent, nonce and timeouts.
+The required `qualification_scope` is `core_testnet` for basic Taira/BPNG
+testing or `inrou` for the additional VM workload qualification. Core scope
+runs the onboarding, faucet and write canaries, four-validator convergence and
+one validator restart followed by the same three canaries, and public Torii/MCP
+checks. Inrou scope exercises all four restart waves and adds its four
+prepared mutations and live workload checks. Inventory, authorization, journal
+and report bind the same scope; recovery cannot change it. A core result does
+not establish Inrou workload readiness. Both scopes retain the installation
+stage/preseed barrier and the same host rollback plan.
+Render validator units using `scripts/taira_validator_unit.py`, then bind the
+generated unit bytes into the inventory. Type=exec waits for the inline signer
+custody launcher; native checks still require the actual daemon and readiness.
 It fills derived hashes, sizes, modes, source/stage identities and validator
 fingerprints from the actual files, then runs the existing admission checks.
 Generate its source manifest with `iroha taira public-reset source-manifest
@@ -386,6 +413,26 @@ Generate its source manifest with `iroha taira public-reset source-manifest
 genesis must use NPoS; each supplied validator config must bind that actual genesis
 and its declared peer. Prepare the deploy-mode Inrou stage before assembly, since
 staging binds the final validator config bytes.
+
+Create a dedicated operator signer with the native command before materializing
+validator configs. Its output contains only the public key and path; the new
+private key is written with mode `0600` in an existing mode-`0700` directory
+outside repositories and is never overwritten:
+
+```bash
+target/release/iroha taira public-reset operator-keygen \
+  --private-key-file /private/runtime/taira-public-reset/validator-operator.key
+```
+
+Set the draft's required `operator_public_key` to that canonical public key.
+For each retained validator config, pass the same public key to native
+`config-rebase --config-fd FD --expected-genesis-file OLD --genesis-file NEW
+--operator-public-key PUBLIC_KEY --output FRESH_PATH`. The command enables
+`torii.operator_signatures` and installs that exact dedicated allowlist while
+preserving the other settings. The retained config enters through an inherited
+read-only private descriptor. Assembly verifies all four validator configs and
+the dedicated key against the inventory; account and validator keys are separate
+credentials.
 
 Both commands below require the same local file arguments. Paths are illustrative;
 use the approved release's actual inputs and an existing mode-0700 output directory.
@@ -398,6 +445,7 @@ reset_local_inputs=(
     /private/runtime/taira-public-reset/client2.toml
     /private/runtime/taira-public-reset/client3.toml
     /private/runtime/taira-public-reset/client4.toml
+  --validator-operator-key /private/runtime/taira-public-reset/validator-operator.key
   --onboarding-token /private/runtime/taira-public-reset/onboarding-token
   --inrou-stage-dir /private/runtime/taira-public-reset/inrou-stage
   --validator-unit /private/runtime/taira-public-reset/validator1.service
@@ -459,6 +507,10 @@ uses the signed install timeout. A failed host check fails the command and names
 the target. `apply` repeats host preflight to detect changes since that check.
 `iroha taira public-reset apply` is the live mutating operation. Apply requires
 explicit owner-private, runtime-only authorization, SSH, and canary inputs. Each
+forward apply and RestartProof recovery also requires `--validator-operator-key`
+pointing at the same dedicated operator credential admitted during assembly.
+The coordinator passes it to signed status children through a retained read-only
+descriptor. Each
 admitted host must already have the trusted compiled dispatcher and reset guard
 provisioned independently of the candidate. The public coordinator requires the
 actual cohort's exact durable Inrou preseed qualifications before startup, then
@@ -517,10 +569,15 @@ target/release/iroha \
   taira doctor --public-root https://taira.sora.org --json
 ```
 
+The public doctor defaults to `--scope basic` for essential network and MCP
+connectivity. Valid local-clock fallback is reported as a warning; malformed
+time or MCP responses fail. `--scope full` adds advanced product readiness and
+synchronized-time requirements. Public-reset selects the doctor scope from its
+signed qualification scope.
 The public doctor remains non-mutating and does not impersonate an operator.
 It requires the exact two-field operator-signature `401` from
-`/v1/sumeragi/status` and the exact two-field canonical-account `401` from
-`/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
+`/v1/sumeragi/status` and, in full scope, the exact two-field canonical-account
+`401` from `/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
 topology and four-replica Inrou convergence belong to the signed Inrou canary,
 not the public route-posture probe.
 

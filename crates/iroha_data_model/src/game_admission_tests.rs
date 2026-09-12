@@ -83,7 +83,7 @@ fn compact_admission_rejects_aliases_colliding_nfts_roles_and_unbounded_data() {
     }
 }
 #[test]
-#[cfg(feature = "json")]
+
 fn compact_admission_json_rejects_omitted_authorization_vectors_and_mutable_record_fields() {
     let value = norito::json::to_value(&body()).unwrap();
     for field in ["version", "participants", "wagers", "resources"] {
@@ -108,7 +108,8 @@ fn compact_admission_json_rejects_omitted_authorization_vectors_and_mutable_reco
 #[test]
 fn ambiguous_typed_nft_identities_are_rejected_before_admission() {
     use crate::game_resources::identity_test_support::assert_ambiguous_domain_label_rejected;
-    use crate::{domain::DomainId, nft::NftId};
+    use crate::nft::NftId;
+    use iroha_model_base::domain::DomainId;
 
     assert!("kit$art.gallery.universal".parse::<NftId>().is_err());
     for (domain, dataspace, label) in [

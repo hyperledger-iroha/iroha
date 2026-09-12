@@ -10,6 +10,7 @@ use iroha_data_model::{
     prelude::*,
     query::error::FindError,
 };
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets
@@ -39,9 +40,11 @@ pub mod isi {
             SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
             error::MintabilityError,
         },
-        nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
+        nexus::{CapabilityRequest, DataSpaceCatalog, ManifestVerdict},
         privacy::PrivacyStatementDigestV1,
     };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::{
         json::Json,
@@ -3290,7 +3293,7 @@ pub mod isi {
     pub(crate) fn execute_staking_bond_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         validator: &AccountId,
         staker: &AccountId,
         genesis: bool,
@@ -3331,7 +3334,7 @@ pub mod isi {
     pub(crate) fn execute_staking_unbond_transfer(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         validator: &AccountId,
         staker: &AccountId,
         request_id: iroha_crypto::Hash,
@@ -7081,7 +7084,145 @@ pub mod isi {
     #[cfg(test)]
     mod prepared_source_additional_owner_tests {
         use super::*;
+        use iroha_model_base::domain::DomainId;
         include!("asset/prepared_source_additional_owner_tests.rs");
+        #[test]
+        fn oracle_movement_frames_bind_owner_and_replay_context() {
+            use iroha_data_model::oracle::{
+                FeedConfigVersion, FeedId, OracleDisputeId, OraclePenaltyKind,
+            };
+            type Reward = (FeedId, FeedConfigVersion, u64, Hash, AccountId, Quantity);
+            type Penalty = (
+                FeedId,
+                FeedConfigVersion,
+                u64,
+                Hash,
+                AccountId,
+                OraclePenaltyKind,
+                Quantity,
+            );
+            let (state, definition, source) = build_asset_transfer_control_test_state(10);
+            let destination = AssetId::new(definition, BOB_ID.clone());
+            let legs = vec![(source.clone(), destination.clone(), Quantity::from(3_u32))];
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let stx = block.transaction();
+            assert!(stx.tx_call_hash.is_none());
+            let dispute_binding = canonical_numeric_movement_binding(&OracleDisputeId(7)).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<OracleDisputeId>(&dispute_binding).unwrap(),
+                OracleDisputeId(7)
+            );
+            let dispute_identity = |binding| {
+                NumericAssetMovementAuthorization::embedded_user(
+                    &ALICE_ID,
+                    EmbeddedNumericAssetMovementPurpose::OracleDisputeBond(binding),
+                )
+                .resolve_transcript_identity(&stx, &legs)
+                .unwrap()
+            };
+            let identity = dispute_identity(dispute_binding.clone());
+            assert_eq!(
+                identity,
+                dispute_identity(canonical_numeric_movement_binding(&OracleDisputeId(7)).unwrap())
+            );
+            assert_ne!(
+                identity,
+                dispute_identity(canonical_numeric_movement_binding(&OracleDisputeId(8)).unwrap())
+            );
+            // An integer binding cannot replay the dispute-owned frame.
+            let integer_binding = canonical_numeric_movement_binding(&7_u64).unwrap();
+            assert!(matches!(
+                norito::decode_canonical::<OracleDisputeId>(&integer_binding),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert_ne!(identity, dispute_identity(integer_binding));
+            let reward: Reward = (
+                FeedId("price_xor_usd".parse().unwrap()),
+                FeedConfigVersion(1),
+                11,
+                Hash::new(b"oracle-request"),
+                ALICE_ID.clone(),
+                Quantity::from(3_u32),
+            );
+            let reward_binding = canonical_numeric_movement_binding(&reward).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<Reward>(&reward_binding).unwrap(),
+                reward
+            );
+            let reward_identity = |binding| {
+                NumericAssetMovementAuthorization::retained(
+                    &ALICE_ID,
+                    RetainedNumericAssetMovementPurpose::OracleReward(binding),
+                )
+                .resolve_transcript_identity(&stx, &legs)
+                .unwrap()
+            };
+            let reward_hash = reward_identity(reward_binding.clone());
+            let mut later_config = reward.clone();
+            later_config.1 = FeedConfigVersion(2);
+            assert_ne!(
+                reward_hash,
+                reward_identity(canonical_numeric_movement_binding(&later_config).unwrap())
+            );
+            let mut later_slot = reward.clone();
+            later_slot.2 += 1;
+            assert_ne!(
+                reward_hash,
+                reward_identity(canonical_numeric_movement_binding(&later_slot).unwrap())
+            );
+            let penalty: Penalty = (
+                reward.0,
+                reward.1,
+                reward.2,
+                reward.3,
+                reward.4,
+                OraclePenaltyKind::Outlier,
+                reward.5,
+            );
+            let penalty_binding = canonical_numeric_movement_binding(&penalty).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<Penalty>(&penalty_binding).unwrap(),
+                penalty
+            );
+            assert!(matches!(
+                norito::decode_canonical::<Reward>(&penalty_binding),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            let penalty_hash = NumericAssetMovementAuthorization::retained(
+                &ALICE_ID,
+                RetainedNumericAssetMovementPurpose::OraclePenalty(reward_binding),
+            )
+            .resolve_transcript_identity(&stx, &legs)
+            .unwrap();
+            assert_ne!(
+                reward_hash, penalty_hash,
+                "purpose tag separates otherwise equal binding bytes"
+            );
+            let resolution = (
+                OracleDisputeId(7),
+                source,
+                destination,
+                Quantity::from(3_u32),
+            );
+            let resolution_binding = canonical_numeric_movement_binding(&resolution).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<(OracleDisputeId, AssetId, AssetId, Quantity)>(
+                    &resolution_binding
+                )
+                .unwrap(),
+                resolution
+            );
+            assert!(
+                norito::decode_canonical::<Penalty>(&penalty_binding[..penalty_binding.len() - 1])
+                    .is_err()
+            );
+            assert!(
+                norito::decode_canonical::<(OracleDisputeId, AssetId, AssetId, Quantity)>(
+                    &resolution_binding[..resolution_binding.len() - 1]
+                )
+                .is_err()
+            );
+        }
     }
 }
 /// Asset-related query implementations.
@@ -7103,6 +7244,7 @@ pub mod query {
             json::PredicateJson,
         },
     };
+    use iroha_model_base::domain::DomainId;
     use norito::json::Value;
     use std::{collections::BTreeSet, sync::Arc};
     #[derive(Debug, Default, Clone)]
@@ -8081,10 +8223,12 @@ pub mod query {
             transfer::{TransferAssetBatch, TransferAssetBatchEntry},
         };
         use iroha_data_model::nexus::{
-            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-            ManifestEffect, ManifestEntry,
+            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, ManifestEffect,
+            ManifestEntry,
         };
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
+        use iroha_model_base::metadata::Metadata;
+        use iroha_model_base::topology::DataSpaceId;
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use nonzero_ext::nonzero;
@@ -8862,7 +9006,7 @@ pub mod query {
         #[test]
         fn transfer_restricted_asset_uses_definition_home_dataspace_from_universal_route() {
             let home_dataspace = DataSpaceId::new(7);
-            let domain_id = wonderland_domain_id();
+            let domain_id = DomainId::try_new("wonderland", "paynet").expect("home domain");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);

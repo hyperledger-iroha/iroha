@@ -8,7 +8,7 @@ use iroha_data_model::events::{
     EventBox,
     pipeline::{TransactionEvent, TransactionStatus},
 };
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 use std::sync::{Barrier, MutexGuard};
 use std::{

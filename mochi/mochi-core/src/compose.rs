@@ -1842,7 +1842,7 @@ mod tests {
             &test_network_id(),
             &ALICE_ID,
             1,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {

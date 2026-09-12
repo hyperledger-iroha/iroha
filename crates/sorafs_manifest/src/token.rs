@@ -14,7 +14,100 @@ pub const STREAM_TOKEN_MAX_WIRE_BYTES_V1: usize = 2_048;
 /// This deliberately leaves headroom over the padded base64 expansion of the
 /// wire ceiling while remaining below common HTTP header budgets.
 pub const STREAM_TOKEN_MAX_BASE64_BYTES_V1: usize = 4_096;
+/// Canonical token IDs are 16 random bytes rendered as lowercase hexadecimal.
+const TOKEN_ID_HEX_LEN: usize = 32;
+/// Maximum manifest CID bytes carried by a token.
+const MAX_MANIFEST_CID_BYTES: usize = 128;
+/// Maximum canonical chunk-profile handle bytes carried by a token.
+const MAX_PROFILE_HANDLE_BYTES: usize = 128;
+/// Maximum concurrency encoded in one token.
+pub const STREAM_TOKEN_MAX_STREAMS_V1: u16 = 1_024;
+/// Maximum per-request byte budget encoded in one token (1 GiB).
+pub const STREAM_TOKEN_MAX_RATE_LIMIT_BYTES_V1: u64 = 1_073_741_824;
+/// Maximum per-token request budget and per-subject issuance quota.
+pub const STREAM_TOKEN_MAX_REQUESTS_PER_MINUTE_V1: u32 = 10_000;
+/// Validate the context-free, canonical v1 stream-token body policy.
+pub fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
+    if body.token_id.len() != TOKEN_ID_HEX_LEN
+        || !body
+            .token_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(StreamTokenBodyError::TokenId);
+    }
+    if body.manifest_cid.is_empty() || body.manifest_cid.len() > MAX_MANIFEST_CID_BYTES {
+        return Err(StreamTokenBodyError::ManifestCid);
+    }
+    if body.provider_id.iter().all(|byte| *byte == 0) {
+        return Err(StreamTokenBodyError::ProviderId);
+    }
+    if body.profile_handle.is_empty()
+        || body.profile_handle.len() > MAX_PROFILE_HANDLE_BYTES
+        || !body.profile_handle.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@' | b':')
+        })
+    {
+        return Err(StreamTokenBodyError::ProfileHandle);
+    }
+    if body.max_streams == 0 || body.max_streams > STREAM_TOKEN_MAX_STREAMS_V1 {
+        return Err(StreamTokenBodyError::MaxStreams);
+    }
+    if body.issued_at == 0 || body.ttl_epoch <= body.issued_at {
+        return Err(StreamTokenBodyError::Lifetime);
+    }
+    if body.ttl_epoch - body.issued_at > STREAM_TOKEN_MAX_TTL_SECS_V1 {
+        return Err(StreamTokenBodyError::Lifetime);
+    }
+    if body.rate_limit_bytes == 0 || body.rate_limit_bytes > STREAM_TOKEN_MAX_RATE_LIMIT_BYTES_V1 {
+        return Err(StreamTokenBodyError::RateLimit);
+    }
+    if body.requests_per_minute == 0
+        || body.requests_per_minute > STREAM_TOKEN_MAX_REQUESTS_PER_MINUTE_V1
+    {
+        return Err(StreamTokenBodyError::RequestsPerMinute);
+    }
+    if body.token_pk_version == 0 {
+        return Err(StreamTokenBodyError::KeyVersion);
+    }
+    Ok(())
+}
+/// Canonical structural errors in a v1 stream-token body.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum StreamTokenBodyError {
+    /// Token IDs must be exactly 16 random bytes encoded as lowercase hex.
+    #[error("token_id must be exactly 32 lowercase hexadecimal characters")]
+    TokenId,
+    /// Manifest CID bytes were empty or exceeded the protocol ceiling.
+    #[error("manifest_cid must contain 1-{MAX_MANIFEST_CID_BYTES} bytes")]
+    ManifestCid,
+    /// The provider identifier used the reserved all-zero value.
+    #[error("provider_id must not be all zero")]
+    ProviderId,
+    /// The chunk-profile handle was empty, oversized, or non-canonical.
+    #[error("profile_handle is not canonical")]
+    ProfileHandle,
+    /// The concurrency budget was zero or exceeded the v1 ceiling.
+    #[error("max_streams must be between 1 and {STREAM_TOKEN_MAX_STREAMS_V1}")]
+    MaxStreams,
+    /// The token lifetime was zero, inverted, or exceeded the v1 ceiling.
+    #[error(
+        "token lifetime must be positive and no more than {STREAM_TOKEN_MAX_TTL_SECS_V1} seconds"
+    )]
+    Lifetime,
+    /// The byte budget was zero or exceeded the v1 ceiling.
+    #[error("rate_limit_bytes must be between 1 and {STREAM_TOKEN_MAX_RATE_LIMIT_BYTES_V1}")]
+    RateLimit,
+    /// The request quota was zero or exceeded the v1 ceiling.
+    #[error("requests_per_minute must be between 1 and {STREAM_TOKEN_MAX_REQUESTS_PER_MINUTE_V1}")]
+    RequestsPerMinute,
+    /// Key version zero is reserved and unsupported.
+    #[error("token_pk_version must be greater than zero")]
+    KeyVersion,
+}
 /// Canonical body for stream tokens issued by gateways.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::token::StreamTokenBodyV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenBodyV1 {
     pub token_id: String,
@@ -43,6 +136,8 @@ impl StreamTokenBodyV1 {
     }
 }
 /// Signed stream token payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::token::StreamTokenV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenV1 {
     pub body: StreamTokenBodyV1,
@@ -307,3 +402,10 @@ mod tests {
         assert!(matches!(err, StreamTokenError::InvalidSignatureFormat));
     }
 }
+
+#[cfg(test)]
+#[path = "token/body_policy_tests.rs"]
+mod body_policy_tests;
+
+#[cfg(test)]
+include!("token/captured_owner_identity_tests.rs");

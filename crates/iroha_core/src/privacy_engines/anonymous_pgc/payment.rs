@@ -236,6 +236,10 @@ fn payment_proof_decode_limits(
     ))
 }
 /// Canonical well-formedness proof for one transfer ciphertext.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcTransferWellFormedProofV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -253,6 +257,10 @@ pub struct PgcTransferWellFormedProofV1 {
     value_response: CanonicalScalarV1,
 }
 /// Schnorr proof that the aggregate transfer plaintext is zero.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcBalanceConservationProofV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -268,6 +276,10 @@ pub struct PgcBalanceConservationProofV1 {
     randomness_response: CanonicalScalarV1,
 }
 /// Exact unsigned 32-bit Pedersen range proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcUnsignedRangeProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -278,6 +290,10 @@ pub struct PgcUnsignedRangeProofV1 {
     branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
 }
 /// Proof that the hidden value in a Pedersen commitment is nonzero.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcCommittedNonZeroProofV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -297,6 +313,10 @@ pub struct PgcCommittedNonZeroProofV1 {
     product_blinding_response: CanonicalScalarV1,
 }
 /// Exact range proof for `[1, 2^32-1]`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcPositiveRangeProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -306,6 +326,10 @@ pub struct PgcPositiveRangeProofV1 {
     nonzero: PgcCommittedNonZeroProofV1,
 }
 /// Hidden selection of one recipient commitment and its committed index.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcRecipientSelectionProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -319,6 +343,10 @@ pub struct PgcRecipientSelectionProofV1 {
     positive_range: PgcPositiveRangeProofV1,
 }
 /// Hidden selection of one zero-valued decoy and its committed index.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcDecoySelectionProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -331,6 +359,10 @@ pub struct PgcDecoySelectionProofV1 {
 }
 /// Hidden sender relation sharing one branch across ownership, transfer, and
 /// post-balance equations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::PgcSenderSelectionProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -348,6 +380,10 @@ pub struct PgcSenderSelectionProofV1 {
     post_balance_range: PgcUnsignedRangeProofV1,
 }
 /// Canonical complete payment proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_engines::anonymous_pgc::payment::AnonymousPgcPaymentProofV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -2279,17 +2315,29 @@ mod tests {
     use super::*;
     use crate::privacy_engines::anonymous_pgc::TwistedElGamalKeyPairV1;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::payment::tests::LegacyDynamicUnsignedRangeProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicUnsignedRangeProofV1 {
         bit_commitments: Vec<CompressedPointV1>,
         branch_challenges: Vec<CanonicalScalarV1>,
         branch_responses: Vec<CanonicalScalarV1>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::payment::tests::LegacyDynamicPositiveRangeProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicPositiveRangeProofV1 {
         unsigned: LegacyDynamicUnsignedRangeProofV1,
         nonzero: PgcCommittedNonZeroProofV1,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::payment::tests::LegacyDynamicRecipientSelectionProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicRecipientSelectionProofV1 {
         value_commitment: CompressedPointV1,
@@ -2299,6 +2347,10 @@ mod tests {
         index_blinding_responses: Vec<CanonicalScalarV1>,
         positive_range: LegacyDynamicPositiveRangeProofV1,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::payment::tests::LegacyDynamicSenderSelectionProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicSenderSelectionProofV1 {
         transfer_magnitude_commitment: CompressedPointV1,
@@ -2312,6 +2364,10 @@ mod tests {
         transfer_range: LegacyDynamicPositiveRangeProofV1,
         post_balance_range: LegacyDynamicUnsignedRangeProofV1,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::privacy_engines::anonymous_pgc::payment::tests::LegacyDynamicPaymentProofV1"
+    )]
     #[derive(norito::derive::NoritoSerialize)]
     struct LegacyDynamicPaymentProofV1 {
         version: u8,
@@ -2676,7 +2732,7 @@ mod tests {
             ),
             (
                 69_859,
-                "2293cddd7d3111d232265a3c0226a906bd6d6b71c01de683a3d4f7ffbabad01d".to_owned()
+                "e14aa4f8f0635e62faa1451e15725486739db23335c23e19003be692e965ad67".to_owned()
             )
         );
     }

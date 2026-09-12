@@ -9,17 +9,18 @@ use iroha::data_model::{
             RevokeSpaceDirectoryManifest,
         },
     },
-    nexus::{AssetPermissionManifest, DataSpaceId},
+    nexus::AssetPermissionManifest,
 };
 use iroha::{config::Config, data_model::Decode};
 use iroha_data_model::{
     asset::AssetDefinitionId,
-    name::Name,
     nexus::{
         Allowance, AllowanceWindow, AmxRole, CapabilityScope, DenyDirective, ManifestEffect,
         ManifestEntry, ManifestVersion, SmartContractId, UniversalAccountId,
     },
 };
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue};
 use reqwest::{
@@ -1183,8 +1184,10 @@ where
         ),
     )
     .map_err(|error| eyre!("{label} exceeds its JSON lexical resource bounds: {error}"))?;
-    norito::with_decode_limits_scope(SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1, || json::from_slice(bytes))
-        .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
+    norito::with_decode_limits_scope(SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1, || {
+        json::from_slice(bytes)
+    })
+    .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
 }
 fn encode_space_directory_json_bounded<T>(value: &T) -> Result<Vec<u8>>
 where
@@ -1405,15 +1408,17 @@ mod tests {
         config::Config,
         crypto::{Algorithm, Hash as CryptoHash, KeyPair},
         data_model::{
-            metadata::Metadata,
             nexus::{
-                Allowance, AllowanceWindow, AmxRole, CapabilityScope, DataSpaceId, ManifestEffect,
+                Allowance, AllowanceWindow, AmxRole, CapabilityScope, ManifestEffect,
                 ManifestEntry, ManifestVersion, UniversalAccountId,
             },
             prelude::*,
         },
     };
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use norito::json::JsonSerialize;
     use std::path::Path;
     use tempfile::tempdir;
@@ -1498,7 +1503,7 @@ mod tests {
             method: Some("transfer".to_owned()),
             asset: Some(
                 AssetDefinitionId::derive_from_components(
-                    iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                    iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
                         .expect("domain"),
                     "cbdc".parse().expect("name"),
                 )

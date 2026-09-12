@@ -6,7 +6,6 @@ version.workspace = true
 authors.workspace = true
 autotests = false
 
-build = "../build-support/script.rs"
 
 description.workspace = true
 repository.workspace = true
@@ -111,13 +110,14 @@ path = "src/bin/attachment_sanitizer.rs"
 required-features = ["app_api"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 fastpq_prover = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["app_api", "runtime"] }
 iroha_config = { workspace = true }
 iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
-iroha_data_model = { workspace = true, default-features = false, features = ["http", "json", "bridge"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["http", "bridge"] }
 iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_sccp = { path = "../iroha_sccp" }
@@ -188,9 +188,6 @@ jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"]
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
-[build-dependencies]
-build-support = { path = "../build-support", default-features = false }
-
 [dev-dependencies]
 iroha_service_model = { workspace = true }
 criterion = { workspace = true }
@@ -214,6 +211,11 @@ harness = false
 name = "torii_hot_paths"
 harness = false
 required-features = ["app_api", "bench"]
+
+[[test]]
+name = "taira_app_contracts"
+path = "tests/grouped/taira_app_contracts.rs"
+required-features = ["node-api"]
 
 [[test]]
 name = "torii_core_routes"

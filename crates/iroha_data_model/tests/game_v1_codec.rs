@@ -1,5 +1,5 @@
 //! Independent Rust/browser compact-Norito parity for generic game authorization.
-#![cfg(feature = "json")]
+
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     NetworkId,
@@ -252,16 +252,16 @@ fn every_generic_game_instruction_roundtrips_through_the_native_registry() {
         ),
         (
             "JoinGameSessionV1",
-            JoinGameSessionV1::new(
-                *join.session_id(),
-                join.input_key().clone(),
-                join.application_data().clone(),
-                join.resources().clone(),
-                join.invitation().clone(),
-                *join.expected_manifest_hash(),
-                join.expected_asset_definition().clone(),
-                join.expected_stake().clone(),
-            )
+            JoinGameSessionV1 {
+                session_id: *join.session_id(),
+                input_key: join.input_key().clone(),
+                application_data: join.application_data().clone(),
+                resources: join.resources().clone(),
+                invitation: join.invitation().clone(),
+                expected_manifest_hash: *join.expected_manifest_hash(),
+                expected_asset_definition: join.expected_asset_definition().clone(),
+                expected_stake: join.expected_stake().clone(),
+            }
             .into(),
         ),
         (

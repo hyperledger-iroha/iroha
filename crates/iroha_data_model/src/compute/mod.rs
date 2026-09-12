@@ -4,10 +4,11 @@
 //! lane along with manifest metadata, sandbox guards, and metering helpers.
 //! All types derive Norito serialization so manifests, calls, and receipts can
 //! be persisted on-chain or shipped between Torii and SDKs deterministically.
-#[cfg(feature = "json")]
+
+use crate::nexus::UniversalAccountId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{name::Name, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{
@@ -15,9 +16,19 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
 /// Payload codec expected by a compute route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "codec", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "codec", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeCodec")]
 pub enum ComputeCodec {
@@ -31,9 +42,18 @@ pub enum ComputeCodec {
     OctetStream,
 }
 /// Price weights used to turn metering data into chargeable compute units.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputePriceWeights")]
 pub struct ComputePriceWeights {
     /// Number of cycles consumed per compute unit (ceil-divided).
@@ -53,9 +73,19 @@ impl ComputePriceWeights {
     }
 }
 /// Multipliers applied to compute units based on execution hints and determinism.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputePriceAmplifiers")]
 pub struct ComputePriceAmplifiers {
     /// Basis-point multiplier for GPU execution (`10_000` = 1.0x).
@@ -103,9 +133,20 @@ impl Default for ComputePriceAmplifiers {
     }
 }
 /// Determinism guarantees requested by a compute route or call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "determinism", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "determinism", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeDeterminism")]
 pub enum ComputeDeterminism {
@@ -116,9 +157,20 @@ pub enum ComputeDeterminism {
     BestEffort,
 }
 /// Execution class requested for the route (affects scheduling and routing).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "class", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeExecutionClass")]
 pub enum ComputeExecutionClass {
@@ -131,9 +183,18 @@ pub enum ComputeExecutionClass {
     Tee,
 }
 /// Reference to a model or dataset stored in `SoraFS`.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeModelRef")]
 pub struct ComputeModelRef {
     /// Content hash of the `SoraFS` bundle backing the model/dataset.
@@ -171,9 +232,19 @@ impl ComputeModelRef {
     }
 }
 /// Limits applied to caller-supplied inputs for a compute route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeInputLimits")]
 pub struct ComputeInputLimits {
     /// Maximum inline payload size allowed for requests (bytes).
@@ -203,9 +274,19 @@ impl ComputeInputLimits {
     }
 }
 /// Fee split applied to compute charges (basis points, denominator = `10_000`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeFeeSplit")]
 pub struct ComputeFeeSplit {
     /// Portion of fees burned (bps).
@@ -227,9 +308,19 @@ impl ComputeFeeSplit {
     }
 }
 /// Sponsor budget caps for subsidised compute calls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeSponsorPolicy")]
 pub struct ComputeSponsorPolicy {
     /// Maximum compute units a sponsor may cover per call.
@@ -240,9 +331,21 @@ pub struct ComputeSponsorPolicy {
 /// Risk classes applied to price families for governance-bound deltas.
 ///
 /// JSON object keys use the exact variant names: `Low`, `Balanced`, and `High`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "class", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputePriceRiskClass")]
 pub enum ComputePriceRiskClass {
@@ -254,9 +357,19 @@ pub enum ComputePriceRiskClass {
     High,
 }
 /// Delta bounds (basis points) used to constrain governance price updates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputePriceDeltaBounds")]
 pub struct ComputePriceDeltaBounds {
     /// Maximum delta for `cycles_per_unit` vs baseline (bps).
@@ -265,9 +378,19 @@ pub struct ComputePriceDeltaBounds {
     pub max_egress_delta_bps: NonZeroU16,
 }
 /// Resource budget applied to a compute route/profile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeResourceBudget")]
 pub struct ComputeResourceBudget {
     /// Maximum deterministic cycle budget allowed for a call.
@@ -286,9 +409,19 @@ pub struct ComputeResourceBudget {
     pub allow_wasi: bool,
 }
 /// Sandbox execution mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "mode", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeSandboxMode")]
 pub enum ComputeSandboxMode {
@@ -298,9 +431,19 @@ pub enum ComputeSandboxMode {
     WasiLite,
 }
 /// Deterministic randomness policy for compute calls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "randomness", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "randomness", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeRandomnessPolicy")]
 pub enum ComputeRandomnessPolicy {
@@ -310,9 +453,19 @@ pub enum ComputeRandomnessPolicy {
     SeededFromRequest,
 }
 /// Storage policy for the compute sandbox.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "storage", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "storage", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeStorageAccess")]
 pub enum ComputeStorageAccess {
@@ -322,9 +475,19 @@ pub enum ComputeStorageAccess {
     ReadWrite,
 }
 /// Sandbox guardrails shared by compute manifests.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeSandboxRules")]
 pub struct ComputeSandboxRules {
     /// Execution mode (IVM-only or WASI-lite).
@@ -334,19 +497,29 @@ pub struct ComputeSandboxRules {
     /// Storage access policy.
     pub storage: ComputeStorageAccess,
     /// Whether non-deterministic syscalls should be rejected at admission.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub deny_nondeterministic_syscalls: bool,
     /// Whether GPU hints are allowed to influence routing.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub allow_gpu_hints: bool,
     /// Whether TEE hints are allowed to influence routing.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub allow_tee_hints: bool,
 }
 /// Authentication policy for a compute route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "mode", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeAuthPolicy")]
 pub enum ComputeAuthPolicy {
@@ -358,9 +531,20 @@ pub enum ComputeAuthPolicy {
     Either,
 }
 /// Unique identifier for a compute route.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeRouteId")]
 pub struct ComputeRouteId {
     /// Service namespace.
@@ -376,9 +560,17 @@ impl ComputeRouteId {
     }
 }
 /// Route descriptor stored inside the compute manifest.
-#[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeRoute")]
 pub struct ComputeRoute {
     /// Route identifier (service + method).
@@ -386,7 +578,7 @@ pub struct ComputeRoute {
     /// Kotodama entrypoint this route should call.
     pub entrypoint: String,
     /// Allowed payload codecs.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub codecs: Vec<ComputeCodec>,
     /// Maximum TTL permitted for calls (slots).
     pub ttl_slots: NonZeroU64,
@@ -397,16 +589,16 @@ pub struct ComputeRoute {
     /// Maximum response payload size (bytes).
     pub max_response_bytes: NonZeroU64,
     /// Determinism guarantee applied to this route.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub determinism: ComputeDeterminism,
     /// Execution class requested for scheduling/routing.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub execution_class: ComputeExecutionClass,
     /// Optional input limits for streamed `SoraFS` payloads.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub input_limits: Option<ComputeInputLimits>,
     /// Optional model/dataset reference stored in `SoraFS`.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub model: Option<ComputeModelRef>,
     /// Price family identifier for this route.
     pub price_family: Name,
@@ -431,9 +623,17 @@ impl ComputeRoute {
     }
 }
 /// Compute manifest binding services/methods to Kotodama entrypoints.
-#[derive(Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeManifest")]
 pub struct ComputeManifest {
     /// Namespace protecting the routes under this manifest.
@@ -443,7 +643,7 @@ pub struct ComputeManifest {
     /// Sandbox guardrails applied to all routes.
     pub sandbox: ComputeSandboxRules,
     /// Route descriptors.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub routes: Vec<ComputeRoute>,
 }
 impl ComputeManifest {
@@ -517,9 +717,8 @@ impl ComputeManifest {
     }
 }
 /// Manifest validation errors.
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "error", content = "data"))]
+#[derive(thiserror::Error, Debug, PartialEq, Eq, DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[norito(tag = "error", content = "data")]
 pub enum ComputeManifestError {
     /// Duplicate route identifiers are not allowed.
     #[error("duplicate compute route {id:?}")]
@@ -537,10 +736,7 @@ pub enum ComputeManifestError {
     #[error("invalid input limits for route {id:?}: {reason}")]
     InvalidInputLimits {
         /// Route identifier, if available.
-        #[cfg_attr(
-            feature = "json",
-            norito(default, skip_serializing_if = "Option::is_none")
-        )]
+        #[norito(default, skip_serializing_if = "Option::is_none")]
         id: Option<ComputeRouteId>,
         /// Reason for invalid limits.
         reason: String,
@@ -549,10 +745,7 @@ pub enum ComputeManifestError {
     #[error("invalid model reference for route {id:?}: {reason}")]
     InvalidModel {
         /// Route identifier, if available.
-        #[cfg_attr(
-            feature = "json",
-            norito(default, skip_serializing_if = "Option::is_none")
-        )]
+        #[norito(default, skip_serializing_if = "Option::is_none")]
         id: Option<ComputeRouteId>,
         /// Reason for invalid model reference.
         reason: String,
@@ -567,13 +760,22 @@ pub enum ComputeManifestError {
     },
 }
 /// Canonical request envelope hashed to derive idempotency/replay keys.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeRequest")]
 pub struct ComputeRequest {
     /// Deterministically ordered headers (case preserved).
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub headers: BTreeMap<String, String>,
     /// Hash of the payload.
     pub payload_hash: Hash,
@@ -586,22 +788,42 @@ impl ComputeRequest {
     }
 }
 /// Authentication payload for an authenticated compute call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeAuthn")]
 pub struct ComputeAuthn {
     /// Universal account identifier for the caller.
     pub uaid: UniversalAccountId,
     /// Optional session hash to distinguish client sessions.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub session_hash: Option<Hash>,
 }
 /// Authentication material provided by the caller.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "mode", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeAuthz")]
 pub enum ComputeAuthz {
@@ -611,9 +833,18 @@ pub enum ComputeAuthz {
     Authenticated(ComputeAuthn),
 }
 /// Caller-supplied request to the compute gateway.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeCall")]
 pub struct ComputeCall {
     /// Target namespace.
@@ -629,22 +860,22 @@ pub struct ComputeCall {
     /// Maximum response size allowed for this call (bytes).
     pub max_response_bytes: NonZeroU64,
     /// Determinism guarantee requested by the caller.
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub determinism: ComputeDeterminism,
     /// Requested execution class (CPU/GPU/TEE).
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub execution_class: ComputeExecutionClass,
     /// Declared inline input size for streamed requests (bytes).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub declared_input_bytes: Option<NonZeroU64>,
     /// Declared number of streamed chunks for `SoraFS` inputs.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub declared_input_chunks: Option<NonZeroU32>,
     /// Optional sponsor-provided compute unit budget for this call.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub sponsor_budget_cu: Option<NonZeroU64>,
     /// Price family to charge for this call.
     pub price_family: Name,
@@ -1025,9 +1256,18 @@ pub fn enforce_sponsor_policy(
     Ok(())
 }
 /// Summary of the call recorded in receipts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeCallSummary")]
 pub struct ComputeCallSummary {
     /// Target namespace.
@@ -1054,15 +1294,15 @@ pub struct ComputeCallSummary {
     pub max_response_bytes: NonZeroU64,
     /// Declared inline input size for streamed requests (bytes).
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub declared_input_bytes: Option<NonZeroU64>,
     /// Declared number of streamed chunks for `SoraFS` inputs.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub declared_input_chunks: Option<NonZeroU32>,
     /// Optional sponsor-provided compute unit budget for this call.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub sponsor_budget_cu: Option<NonZeroU64>,
     /// Caller authentication material.
     pub auth: ComputeAuthz,
@@ -1089,9 +1329,18 @@ impl From<&ComputeCall> for ComputeCallSummary {
     }
 }
 /// Metering data recorded after execution.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeMetering")]
 pub struct ComputeMetering {
     /// Total cycles consumed.
@@ -1108,9 +1357,19 @@ pub struct ComputeMetering {
     pub charged_units: u64,
 }
 /// Outcome kind for a compute call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "outcome", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "outcome", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeOutcomeKind")]
 pub enum ComputeOutcomeKind {
@@ -1126,30 +1385,49 @@ pub enum ComputeOutcomeKind {
     InternalError,
 }
 /// Execution outcome plus optional response details.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeOutcome")]
 pub struct ComputeOutcome {
     /// Outcome classification.
     pub kind: ComputeOutcomeKind,
     /// Optional response hash when available.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub response_hash: Option<Hash>,
     /// Optional response size in bytes.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub response_bytes: Option<u64>,
     /// Optional response codec when a payload exists.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub response_codec: Option<ComputeCodec>,
 }
 /// Receipt emitted after a compute call executes.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::compute::ComputeReceipt")]
 pub struct ComputeReceipt {
     /// Call summary.

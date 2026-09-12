@@ -14,12 +14,15 @@ use iroha::data_model::{
         Log, Mint, Register,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    metadata::Metadata,
-    name::Name,
     parameter::system::SumeragiNposParameters,
     prelude::*,
 };
 use iroha_config::parameters::defaults;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -124,16 +127,21 @@ fn ordered_submit_peer_indices(
     }
     ordered
 }
-fn submit_peer_indices_for_network(
+async fn submit_peer_indices_for_network(
     network: &sandbox::SerializedNetwork,
     probe: &Client,
 ) -> Vec<usize> {
     let peer_count = network.peers().len();
-    let status = network
-        .peers()
-        .iter()
-        .find_map(|peer| peer.client().client().get_status().ok())
-        .or_else(|| probe.client().get_status().ok());
+    let mut status = None;
+    for peer in network.peers() {
+        status = peer.status().await.ok();
+        if status.is_some() {
+            break;
+        }
+    }
+    if status.is_none() {
+        status = probe.client().status().get().await.ok();
+    }
     let sumeragi = network
         .peers()
         .iter()
@@ -475,31 +483,25 @@ async fn collect_network_heights(
     }
     heights
 }
-fn client_observing_height(
+async fn client_observing_height(
     network: &sandbox::SerializedNetwork,
     target_height: u64,
     fallback: &Client,
 ) -> Client {
-    network
-        .peers()
-        .iter()
-        .find_map(|peer| {
-            let storage_reached = peer
-                .best_effort_block_height()
-                .is_some_and(|height| height.total >= target_height);
-            if storage_reached
-                || peer
-                    .client()
-                    .client()
-                    .get_status()
-                    .is_ok_and(|status| status.blocks >= target_height)
-            {
-                Some(peer.client())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| fallback.clone())
+    for peer in network.peers() {
+        let storage_reached = peer
+            .best_effort_block_height()
+            .is_some_and(|height| height.total >= target_height);
+        if storage_reached
+            || peer
+                .status()
+                .await
+                .is_ok_and(|status| status.blocks >= target_height)
+        {
+            return peer.client();
+        }
+    }
+    fallback.clone()
 }
 async fn wait_for_submit_connectivity(
     network: &sandbox::SerializedNetwork,
@@ -509,17 +511,12 @@ async fn wait_for_submit_connectivity(
     let expected = min_connected_peers_for_submit(network.peers().len());
     let mut last_snapshot = Vec::new();
     loop {
-        let peer_counts = network
-            .peers()
-            .iter()
-            .filter_map(|peer| {
-                peer.client()
-                    .client()
-                    .get_status()
-                    .ok()
-                    .map(|status| status.peers)
-            })
-            .collect::<Vec<_>>();
+        let mut peer_counts = Vec::new();
+        for peer in network.peers() {
+            if let Ok(status) = peer.status().await {
+                peer_counts.push(status.peers);
+            }
+        }
         if !peer_counts.is_empty() {
             last_snapshot.clone_from(&peer_counts);
             if peer_counts.iter().all(|count| *count >= expected) {
@@ -540,7 +537,7 @@ async fn submit_progress_log(
     probe: &Client,
     message: String,
 ) -> eyre::Result<()> {
-    let candidate_indices = submit_peer_indices_for_network(network, probe);
+    let candidate_indices = submit_peer_indices_for_network(network, probe).await;
     let transaction = {
         let account = probe.account_client();
         account
@@ -654,7 +651,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     .await?;
     let collectors_url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
     assert_no_single_collector(
@@ -664,10 +661,10 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     )
     .await?;
     advance_to_height(&network, &client, WAIT_HEIGHT, "stake activation tick").await?;
-    let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
+    let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client).await;
     let collectors_url = activation_client
         .client()
-        .torii_url
+        .endpoint()
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
     let expected_peer = eligible_peer.id().to_string();
@@ -813,10 +810,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         "stake activation entity tick",
     )
     .await?;
-    let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
+    let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client).await;
     let collectors_url = activation_client
         .client()
-        .torii_url
+        .endpoint()
         .join("v1/sumeragi/validator-sets")
         .wrap_err("compose validator-set history URL")?;
     let http = integration_tests::http::client();

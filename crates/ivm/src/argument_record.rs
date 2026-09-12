@@ -13,8 +13,11 @@ use crate::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
-    prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
+    prelude::{AssetDefinitionId, AssetId, NftId},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,
@@ -1121,7 +1124,7 @@ fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
 }
 fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: norito::codec::Decode + norito::codec::Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }
@@ -3051,12 +3054,21 @@ mod tests {
             }],
         };
         assert!(schema.validate());
-        let mut value = njson::Value::String("7".to_owned());
-        for _ in 0..levels {
-            value = njson::Value::Array(vec![value]);
-        }
-        let payload = Json::from(norito::json!({ "value": value }));
-        let mut vm = install_record(&schema, &payload);
+        // Logical type depth is represented by a flat tape, independently of
+        // the JSON boundary's smaller structural nesting budget.
+        let schema_bytes = canonical_norito_frame(&schema).expect("encode maximum-depth schema");
+        let mut atoms = vec![EntrypointValueAtomV1::List(1); levels];
+        atoms.push(int_atom(7));
+        let record = EntrypointArgumentRecordV1 {
+            schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
+            atoms,
+        };
+        let encoded = canonical_norito_frame(&record).expect("encode maximum-depth flat tape");
+        assert_eq!(
+            validate_argument_record(&schema, &encoded),
+            Ok(record.clone())
+        );
+        let mut vm = install_raw_record(&schema, &record);
         decode_argument_record(&mut vm).expect("materialize the exact V1 nesting boundary");
         let mut word = decoded_words(&vm)[0];
         let layout = ListLayoutV1::try_new(1, 1).expect("unit-width list layout");
@@ -3076,8 +3088,57 @@ mod tests {
         };
         assert!(!over_limit.validate());
         assert_eq!(
-            argument_record_from_json(&over_limit, &payload),
+            validate_argument_record(&over_limit, &encoded),
             Err(VMError::DecodeError),
+        );
+        assert_eq!(
+            argument_record_from_json(&over_limit, &Json::from(norito::json!({ "value": [] }))),
+            Err(VMError::DecodeError),
+        );
+    }
+    #[test]
+    fn json_list_nesting_boundary_produces_a_flat_record_and_rejects_one_more_level() {
+        // An object envelope and terminal string each consume one JSON level.
+        let levels = njson::MAX_JSON_VALUE_NESTING_DEPTH - 2;
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "value".to_owned(),
+                ty: nested_list_type(levels),
+            }],
+        };
+        let input = format!(
+            r#"{{"value":{}"7"{}}}"#,
+            "[".repeat(levels),
+            "]".repeat(levels)
+        );
+        let payload: Json = input.parse().expect("maximum-depth JSON argument");
+        let record =
+            argument_record_from_json(&schema, &payload).expect("convert JSON to flat tape");
+        assert_eq!(record.atoms.len(), levels + 1);
+        assert!(
+            record.atoms[..levels]
+                .iter()
+                .all(|atom| *atom == EntrypointValueAtomV1::List(1))
+        );
+        assert_eq!(record.atoms.last(), Some(&int_atom(7)));
+        let encoded = canonical_norito_frame(&record).expect("encode converted flat record");
+        assert_eq!(validate_argument_record(&schema, &encoded), Ok(record));
+
+        let too_deep = format!(
+            r#"{{"value":{}"7"{}}}"#,
+            "[".repeat(levels + 1),
+            "]".repeat(levels + 1),
+        );
+        assert!(matches!(
+            njson::parse_value(&too_deep),
+            Err(njson::Error::NestingDepthExceeded { depth, limit, .. })
+                if depth == njson::MAX_JSON_VALUE_NESTING_DEPTH + 1
+                    && limit == njson::MAX_JSON_VALUE_NESTING_DEPTH
+        ));
+        assert!(too_deep.parse::<Json>().is_err());
+        assert!(
+            argument_record_from_json(&schema, &payload).is_ok(),
+            "failure restores nesting budget"
         );
     }
     #[test]
@@ -3201,11 +3262,34 @@ mod tests {
             }],
         };
         let schema_bytes = to_bytes(&schema).expect("encode list schema");
+        let schema_hash = entrypoint_argument_schema_hash_v1(&schema_bytes);
+        let canonical_record = EntrypointArgumentRecordV1 {
+            schema_hash,
+            atoms: vec![EntrypointValueAtomV1::List(1), int_atom(7)],
+        };
+        let canonical = to_bytes(&canonical_record).expect("encode flat list record");
+        assert_eq!(
+            validate_argument_record(&schema, &canonical),
+            Ok(canonical_record),
+            "the corresponding flat list is accepted",
+        );
         let legacy = LegacyRecord {
-            schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
+            schema_hash,
             atoms: vec![LegacyAtom::List(vec![vec![LegacyAtom::Int(7)]])],
         };
-        let encoded = to_bytes(&legacy).expect("encode retired recursive list shape");
+        // Advertise the real record identity so this exercises rejection of the
+        // retired payload shape after frame validation, rather than a name mismatch.
+        let (payload, flags) = norito::codec::encode_with_header_flags(&legacy);
+        let encoded = norito::core::frame_bare_with_header_flags::<EntrypointArgumentRecordV1>(
+            &payload, flags,
+        )
+        .expect("frame retired recursive list shape");
+        let view = norito::core::from_bytes_view(&encoded).expect("valid frame and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<EntrypointArgumentRecordV1>(),
+        );
+        assert_eq!(view.as_bytes(), payload);
         assert_eq!(
             validate_argument_record(&schema, &encoded),
             Err(VMError::DecodeError),

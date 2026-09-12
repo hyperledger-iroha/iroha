@@ -1,7 +1,7 @@
 //! Explicit schema identities composed independently of Rust source locations.
 //!
-//! This contract is being qualified before it is connected to frame encoding.
-//! Implementing it alone does not change `NoritoSerialize` or `NoritoDeserialize`.
+//! Typed readers and writers share this single frame identity contract.
+//! Payload codecs remain independent; schema inspection never selects a frame hash.
 
 use std::{
     borrow::Cow,

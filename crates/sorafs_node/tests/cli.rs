@@ -2,10 +2,8 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{
-    account::{AccountId, address::AccountAddress},
-    peer::PeerId,
-};
+use iroha_data_model::account::{AccountId, address::AccountAddress};
+use iroha_model_base::peer::PeerId;
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceProofs, ManifestBuilder,

@@ -28,3 +28,11 @@ for (const row of fixture.vectors) test(`native equipment ${row.name}/${row.case
   assert.throws(() => decode(name, Buffer.concat([Buffer.from(bytes), Buffer.of(0)])));
   assert.throws(() => decode(name, Buffer.from(row.framed_hex, 'hex')), 'bare codec must not silently accept a framed native value');
 });
+
+test('native resource optional release requires explicit null and preserves primitive rejection', () => {
+  const row = fixture.vectors.find(value => value.name === 'GameResourceReservationRecordV1' && value.case === 'open');
+  assert.equal(row.value.released_at_height, null);
+  assert.equal(Buffer.from(encodeGameResourceValueV1(row.name, row.value)).toString('hex').toUpperCase(), row.encoded_hex);
+  assert.throws(() => encodeGameResourceValueV1(row.name, { ...row.value, released_at_height: undefined }),
+    { name: 'TypeError', message: 'optionalU64 requires an explicit null or value' });
+});

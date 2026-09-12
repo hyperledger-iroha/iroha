@@ -1,8 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Contract preparation and in-memory execution fixtures; public certified admission is tested separately.
-#![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
+//! Public contract preparation and strict admission failure, plus exact-payload Core execution.
+//! The synthetic ledger has no certified coordinator: execution overlays exercise contract
+//! semantics without claiming QueuePlan acceptance or canonical Applied status.
+#![cfg(feature = "app_api")]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
-use axum::{Router, routing::post};
+#[path = "fixtures.rs"]
+mod fixtures;
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -14,10 +17,10 @@ use iroha_core::{
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
-    DomainId,
     asset::AssetDefinitionId,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::domain::DomainId;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -80,7 +83,7 @@ fn grant_contract_operator_permissions(
     Grant::account_permission(
         CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
         },
         authority.clone(),
@@ -335,54 +338,35 @@ fn contract_call_configure_account_map_program() -> Vec<u8> {
         .compile_source(src)
         .expect("compile contract call configure account-map test program")
 }
-fn contract_test_app(
-    state: Arc<State>,
-    _kura: Arc<Kura>,
+struct ContractTestApp {
+    runtime: iroha_torii::TestApiRouterRuntime,
+    _harness: fixtures::ToriiHarness,
+    _data_dir: iroha_torii::test_utils::TestDataDirGuard,
+    authority: iroha_data_model::account::AccountId,
+    key_pair: iroha_crypto::KeyPair,
     queue: Arc<Queue>,
-    _telemetry: iroha_torii::MaybeTelemetry,
-) -> Router {
-    Router::new()
-        .route(
-            "/v1/contracts/call",
-            post({
-                let queue = queue.clone();
-                let state = state.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    match iroha_torii::prepare_contract_call_request(
-                        queue.clone(),
-                        state.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )? {
-                        iroha_torii::PreparedContractCallRequest::Unsigned(response) => {
-                            Ok(iroha_torii::JsonBody(response))
-                        }
-                        iroha_torii::PreparedContractCallRequest::Signed { .. } => {
-                            Err(iroha_torii::Error::AppConflict {
-                                code: "fixture_preparation_only",
-                                message: "This fixture does not admit public transactions"
-                                    .to_owned(),
-                            })
-                        }
-                    }
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/view",
-            post({
-                let state = state.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractViewDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_view(
-                        state.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                }
-            }),
-        )
+    state: Arc<State>,
+}
+impl ContractTestApp {
+    async fn request(&self, request: http::Request<axum::body::Body>) -> axum::response::Response {
+        let (parts, body) = request.into_parts();
+        let bytes = body
+            .collect()
+            .await
+            .expect("collect request body")
+            .to_bytes();
+        let request = http::Request::from_parts(parts, axum::body::Body::from(bytes.clone()));
+        let request =
+            fixtures::app_signed_request(&self.authority, &self.key_pair, request, &bytes);
+        self.runtime
+            .router()
+            .oneshot(request)
+            .await
+            .expect("public contract route response")
+    }
+    async fn shutdown(self) {
+        self.runtime.shutdown().await;
+    }
 }
 fn contract_test_state() -> (
     iroha_torii::test_utils::AuthorityCreds,
@@ -393,44 +377,317 @@ fn contract_test_state() -> (
     let world = iroha_torii::test_utils::world_with_authority(&creds.account);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura.clone(),
+        query,
+        "chain".parse().expect("chain ID"),
+        iroha_torii::test_utils::signed_query_network_id(),
+    ));
     grant_contract_operator_permissions(&state, &creds.account);
     (creds, state, kura)
 }
 fn contract_test_queue_and_app(
     state: &Arc<State>,
     kura: &Arc<Kura>,
-) -> (Arc<Queue>, iroha_data_model::ChainId, Router) {
+    creds: &iroha_torii::test_utils::AuthorityCreds,
+) -> (
+    Arc<Queue>,
+    iroha_model_base::chain::ChainId,
+    ContractTestApp,
+) {
+    let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.common.chain = "chain".parse().expect("test chain ID");
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id = "chain".parse().expect("valid test chain ID");
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    let app = contract_test_app(
-        Arc::clone(state),
-        Arc::clone(kura),
-        Arc::clone(&queue),
-        telemetry,
+    let queue = Arc::new(Queue::from_config(cfg.queue.clone(), events.clone()));
+    let chain_id = cfg.common.chain.clone();
+    let harness = fixtures::ToriiHarness::new_without_telemetry(
+        &cfg,
+        chain_id.clone(),
+        *state.network_id_ref(),
+        kura,
+        state,
+        &queue,
+        events,
     );
+    let runtime = harness.router();
+    let app = ContractTestApp {
+        runtime,
+        _harness: harness,
+        _data_dir: data_dir,
+        authority: creds.account.clone(),
+        key_pair: iroha_crypto::KeyPair::from_private_key(creds.private_key.0.clone())
+            .expect("fixture key pair"),
+        queue: queue.clone(),
+        state: state.clone(),
+    };
     (queue, chain_id, app)
 }
-async fn run_contract_view(
-    app: &Router,
+struct PreparedContractExecution {
+    response: json::Value,
+    transaction: iroha_data_model::transaction::SignedTransaction,
+}
+/// Prepare through the production HTTP router and sign its exact quoted payload locally.
+/// This fixture has no certified coordinator: a detached public submit must fail closed.
+async fn prepare_contract_execution(
+    app: &ContractTestApp,
+    request_body: String,
+) -> PreparedContractExecution {
+    let mut request: json::Value = json::from_str(&request_body).expect("prepare request JSON");
+    assert!(request.get("private_key").is_none());
+    assert_eq!(
+        app.queue.active_len(),
+        0,
+        "preparation starts without queued work"
+    );
+    let response = app
+        .request(
+            http::Request::builder()
+                .method("POST")
+                .uri("/v1/contracts/call")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(request_body))
+                .expect("prepare request"),
+        )
+        .await;
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("prepare response body")
+        .to_bytes();
+    assert_eq!(
+        status,
+        http::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let response: json::Value = json::from_slice(&bytes).expect("prepare response JSON");
+    assert_eq!(
+        response.get("submitted").and_then(json::Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        response
+            .get("pipeline_status")
+            .is_some_and(json::Value::is_null)
+    );
+    assert!(
+        response
+            .get("tx_hash_hex")
+            .is_some_and(json::Value::is_null)
+    );
+    assert!(
+        response
+            .get("entrypoint_hash_hex")
+            .is_some_and(json::Value::is_null)
+    );
+    assert!(response.get("transaction_scaffold_b64").is_none());
+    assert!(response.get("signed_transaction_b64").is_none());
+    let payload_b64 = response
+        .get("transaction_payload_b64")
+        .and_then(json::Value::as_str)
+        .expect("canonical unsigned payload");
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(payload_b64)
+        .expect("decode unsigned payload");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&payload),
+        payload_b64
+    );
+    let builder = TransactionBuilder::decode_payload(&payload).expect("canonical payload decode");
+    assert_eq!(
+        builder.encode_payload(),
+        payload,
+        "unsigned payload round-trip"
+    );
+    assert_eq!(
+        builder.payload().admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    );
+    let signing_b64 = response
+        .get("signing_message_b64")
+        .and_then(json::Value::as_str)
+        .expect("signing preimage");
+    let signing = base64::engine::general_purpose::STANDARD
+        .decode(signing_b64)
+        .expect("decode signing preimage");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(&signing),
+        signing_b64
+    );
+    assert_eq!(
+        signing,
+        builder.payload_hash_bytes(),
+        "signature binds exact quoted QP payload"
+    );
+    let receipt = response
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("prepare receipt");
+    assert_eq!(
+        receipt.get("status").and_then(json::Value::as_str),
+        Some("pending_signature")
+    );
+    assert!(!receipt.contains_key("private_key"));
+    assert!(!receipt.contains_key("payload"));
+    let fee_payment = builder.payload().fee_payment.clone();
+    assert_eq!(
+        receipt.get("fee_payment"),
+        Some(&json::to_value(&fee_payment).expect("fee JSON")),
+        "receipt fee identity matches the signature-bound payload"
+    );
+    let signature = Signature::try_new(app.key_pair.private_key(), &signing)
+        .expect("sign exact returned payload");
+    let fields = request.as_object_mut().expect("request object");
+    fields.insert(
+        "transaction_payload_b64".to_owned(),
+        json::Value::String(payload_b64.to_owned()),
+    );
+    fields.insert(
+        "creation_time_ms".to_owned(),
+        response
+            .get("creation_time_ms")
+            .cloned()
+            .expect("fixed creation time"),
+    );
+    fields.insert(
+        "fee_payment".to_owned(),
+        json::to_value(&fee_payment).expect("quoted fee JSON"),
+    );
+    fields.insert(
+        "public_key_hex".to_owned(),
+        json::Value::String(hex::encode_upper(app.key_pair.public_key().to_bytes().1)),
+    );
+    fields.insert(
+        "signature_b64".to_owned(),
+        json::Value::String(base64::engine::general_purpose::STANDARD.encode(signature.payload())),
+    );
+    let transaction = builder.build_with_signature(signature);
+    transaction
+        .verify_signature()
+        .expect("retained signature verifies");
+    let submitted = app
+        .request(
+            http::Request::builder()
+                .method("POST")
+                .uri("/v1/contracts/call")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .header(http::header::ACCEPT, "application/x-norito")
+                .body(axum::body::Body::from(
+                    json::to_json(&request).expect("detached request JSON"),
+                ))
+                .expect("detached request"),
+        )
+        .await;
+    let status = submitted.status();
+    let bytes = submitted
+        .into_body()
+        .collect()
+        .await
+        .expect("submit response body")
+        .to_bytes();
+    assert_eq!(
+        status,
+        http::StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let error: iroha_torii_shared::ErrorEnvelope =
+        norito::decode_from_bytes(&bytes).expect("strict ingress Norito error envelope");
+    #[cfg(feature = "connect")]
+    let expected_code = "route_unavailable";
+    #[cfg(not(feature = "connect"))]
+    let expected_code = "queue_plan_synced_transport_unavailable";
+    assert_eq!(error.code(), expected_code, "{error:?}");
+    assert_eq!(
+        app.queue.active_len(),
+        0,
+        "neither draft nor failed strict admission enqueues locally"
+    );
+    PreparedContractExecution {
+        response,
+        transaction,
+    }
+}
+/// Execute the unchanged caller-signed payload in an explicit test-only world overlay.
+/// This exercises Core transaction/contract semantics, without synthesizing QP acceptance,
+/// a merge carrier, transaction membership, or a committed block.
+fn execute_prepared_contract_in_test_overlay(
+    state: &Arc<State>,
+    prepared: &PreparedContractExecution,
+    execution_height: u64,
+) {
+    let original_hash = prepared.transaction.hash();
+    prepared
+        .transaction
+        .verify_signature()
+        .expect("exact signed fixture");
+    assert_eq!(
+        prepared.transaction.admission_intent(),
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    );
+    let committed_height = state.committed_height();
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(execution_height).expect("positive execution height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+    let (entrypoint, result) = block.validate_transaction(
+        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(
+            &prepared.transaction,
+        )),
+        &mut cache,
+    );
+    assert_eq!(entrypoint, prepared.transaction.hash_as_entrypoint());
+    result.expect("prepared contract executes exactly once in test overlay");
+    block
+        .commit_world_overlay_for_testing()
+        .expect("publish only contract fixture world effects");
+    assert_eq!(
+        prepared.transaction.hash(),
+        original_hash,
+        "no signed payload mutation"
+    );
+    assert_eq!(
+        state.committed_height(),
+        committed_height,
+        "fixture does not claim block finality"
+    );
+    assert!(
+        !state
+            .queue_plan_admission_registry_entrypoint_present(entrypoint)
+            .expect("query exact QP membership"),
+        "fixture does not invent certified admission"
+    );
+}
+async fn run_contract_view_in_test_overlay(
+    app: &ContractTestApp,
     authority: &iroha_data_model::account::AccountId,
     contract_address: &str,
     entrypoint: &str,
     payload: Option<&norito::json::Value>,
 ) -> json::Value {
-    let (status, body) =
-        run_contract_view_response(app, authority, contract_address, entrypoint, payload).await;
+    let (status, body) = run_contract_view_response_in_test_overlay(
+        app,
+        authority,
+        contract_address,
+        entrypoint,
+        payload,
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK, "{body:?}");
     body
 }
-async fn run_contract_view_response(
-    app: &Router,
+async fn run_contract_view_response_in_test_overlay(
+    app: &ContractTestApp,
     authority: &iroha_data_model::account::AccountId,
     contract_address: &str,
     entrypoint: &str,
@@ -445,202 +702,20 @@ async fn run_contract_view_response(
             gas_limit: 1_500_000,
         },
     );
-    let req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/view")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(body))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    // Local view semantics over the explicitly staged world fixture are independent of
+    // public routed-read authority; this fixture intentionally has no certified committee.
+    let request = json::from_str(&body).expect("view DTO");
+    let (status, bytes) =
+        iroha_torii::handle_post_contract_view(app.state.clone(), iroha_torii::NoritoJson(request))
+            .expect("local contract view");
     (
         status,
         json::from_slice(&bytes).expect("decode contract view response"),
     )
 }
-fn locally_sign_prepared_contract_call_fixture(
-    response_bytes: &[u8],
+async fn run_contract_hajimari_in_test_overlay(
+    app: &ContractTestApp,
     state: &Arc<State>,
-    creds: &iroha_torii::test_utils::AuthorityCreds,
-) -> iroha_data_model::transaction::SignedTransaction {
-    let response: json::Value =
-        json::from_slice(response_bytes).expect("decode unsigned contract-call fixture");
-    assert_eq!(
-        response.get("submitted").and_then(json::Value::as_bool),
-        Some(false)
-    );
-    assert!(
-        response
-            .get("tx_hash_hex")
-            .is_some_and(json::Value::is_null)
-    );
-    let payload_b64 = response
-        .get("transaction_payload_b64")
-        .and_then(json::Value::as_str)
-        .expect("unsigned contract-call payload");
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload_b64)
-        .expect("decode payload");
-    assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(&bytes),
-        payload_b64
-    );
-    let builder =
-        TransactionBuilder::decode_payload(&bytes).expect("strict canonical fixture payload");
-    assert_eq!(builder.encode_payload(), bytes);
-    assert_eq!(builder.payload().network_id(), Some(state.network_id_ref()));
-    assert_eq!(builder.payload().authority, creds.account);
-    assert_eq!(
-        builder.payload().admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    );
-    let signing_b64 = response
-        .get("signing_message_b64")
-        .and_then(json::Value::as_str)
-        .expect("unsigned contract-call signing message");
-    let signing = base64::engine::general_purpose::STANDARD
-        .decode(signing_b64)
-        .expect("decode signing message");
-    assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(&signing),
-        signing_b64
-    );
-    assert_eq!(signing, builder.payload_hash_bytes());
-    let signed = builder.sign(&creds.private_key.0);
-    signed
-        .verify_signature()
-        .expect("locally signed fixture remains valid");
-    signed
-}
-/// Execute one locally signed contract-call fixture without public queue admission.
-///
-/// `execution_height` supplies the synthetic execution context only. Stateless and
-/// stateful admission validate the exact signed transaction, and Core atomically
-/// stages its effects before this helper commits only the world overlay. No block
-/// membership, committed height, Kura record, DA certificate, or queue admission is
-/// created by this fixture.
-fn apply_locally_signed_contract_call_fixture(
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    chain_id: &iroha_data_model::ChainId,
-    execution_height: u64,
-    transaction: iroha_data_model::transaction::SignedTransaction,
-) -> usize {
-    use iroha_core::{
-        smartcontracts::ivm::cache::IvmCache, state::StateReadOnly, tx::AcceptedTransaction,
-    };
-    use iroha_data_model::{
-        block::BlockHeader,
-        transaction::{Executable, TransactionAdmissionIntent},
-    };
-    assert_eq!(
-        transaction.admission_intent(),
-        TransactionAdmissionIntent::QueuePlanSynced
-    );
-    assert!(matches!(
-        transaction.instructions(),
-        Executable::ContractCall(_)
-    ));
-    let queued_before = queue.active_len();
-    let (parameters, committed_height, latest_block) = {
-        let view = state.view();
-        (
-            view.world().parameters().clone(),
-            view.height(),
-            view.latest_block(),
-        )
-    };
-    let latest_hash = latest_block.as_ref().map(|block| block.hash());
-    let accepted = AcceptedTransaction::accept(
-        transaction,
-        state.network_id_ref(),
-        parameters.sumeragi().max_clock_drift(),
-        parameters.transaction(),
-        state.crypto().as_ref(),
-    )
-    .expect("stateless acceptance of locally signed contract-call fixture");
-    let entrypoint_hash = accepted.hash_as_entrypoint();
-    let _routing_plan = queue
-        .route_plan_with_state(&accepted, state)
-        .expect("resolve contract-call fixture routing plan without queue admission");
-    let timestamp_ms = u64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("fixture clock is after the Unix epoch")
-            .as_millis(),
-    )
-    .expect("fixture timestamp fits u64");
-    let header = BlockHeader::new(
-        NonZeroU64::new(execution_height).expect("nonzero fixture execution height"),
-        latest_hash,
-        None,
-        None,
-        timestamp_ms,
-        0,
-    );
-    let mut state_block = state.block(header);
-    state_block.chain_id = chain_id.clone();
-    // This public Core entrypoint resolves the stateful route and runs the
-    // executor, permissions, fees and rollback boundary on the unchanged payload.
-    let (executed_hash, result) = state_block.validate_transaction(accepted, &mut IvmCache::new());
-    assert_eq!(executed_hash, entrypoint_hash);
-    result.expect("stateful execution of locally signed contract-call fixture");
-    state_block
-        .commit_world_overlay_for_testing()
-        .expect("commit only the executed contract-call fixture world overlay");
-    assert_eq!(
-        queue.active_len(),
-        queued_before,
-        "fixture execution must not change queue membership"
-    );
-    let view = state.view();
-    assert_eq!(view.height(), committed_height);
-    assert_eq!(
-        view.latest_block().as_ref().map(|block| block.hash()),
-        latest_hash
-    );
-    1
-}
-fn apply_prepared_contract_call_bytes_fixture(
-    response_bytes: &[u8],
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    chain_id: &iroha_data_model::ChainId,
-    creds: &iroha_torii::test_utils::AuthorityCreds,
-    height: u64,
-) -> usize {
-    let signed = locally_sign_prepared_contract_call_fixture(response_bytes, state, creds);
-    apply_locally_signed_contract_call_fixture(state, queue, chain_id, height, signed)
-}
-async fn apply_prepared_contract_call_fixture(
-    response: axum::response::Response,
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    chain_id: &iroha_data_model::ChainId,
-    creds: &iroha_torii::test_utils::AuthorityCreds,
-    height: u64,
-) -> usize {
-    let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("read preparation response")
-        .to_bytes();
-    assert_eq!(
-        status,
-        http::StatusCode::OK,
-        "{}",
-        String::from_utf8_lossy(&bytes)
-    );
-    apply_prepared_contract_call_bytes_fixture(&bytes, state, queue, chain_id, creds, height)
-}
-async fn run_contract_hajimari_and_apply(
-    app: &Router,
-    state: &Arc<State>,
-    queue: &Arc<Queue>,
-    chain_id: &iroha_data_model::ChainId,
     creds: &iroha_torii::test_utils::AuthorityCreds,
     contract_address: &str,
     payload: Option<&json::Value>,
@@ -655,41 +730,13 @@ async fn run_contract_hajimari_and_apply(
             gas_limit: 1_500_000,
         },
     );
-    let req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(body))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let response_body = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        status,
-        http::StatusCode::OK,
-        "{}",
-        String::from_utf8_lossy(&response_body)
-    );
-    let applied = apply_prepared_contract_call_bytes_fixture(
-        &response_body,
-        state,
-        queue,
-        chain_id,
-        creds,
-        block_height,
-    );
-    assert_eq!(applied, 1, "hajimari transaction must apply exactly once");
+    let prepared = prepare_contract_execution(app, body).await;
+    execute_prepared_contract_in_test_overlay(state, &prepared, block_height);
 }
 #[tokio::test]
-async fn contracts_call_prepares_and_verifies_locally_signed_transactions() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
+async fn contracts_call_prepares_exact_payload_and_requires_certified_admission() {
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_noop_program();
     let (contract_address, code_hash_hex, abi_hash_hex) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -704,9 +751,9 @@ async fn contracts_call_prepares_and_verifies_locally_signed_transactions() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
     let missing_limit_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("authority", creds.account.clone()),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
-        iroha_torii::json_entry("entrypoint", "main"),
     ]);
     let missing_limit_body = json::to_json(&missing_limit_payload).expect("serialize call request");
     let missing_limit_req = http::Request::builder()
@@ -715,7 +762,7 @@ async fn contracts_call_prepares_and_verifies_locally_signed_transactions() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(missing_limit_body))
         .unwrap();
-    let missing_limit_resp = app.clone().oneshot(missing_limit_req).await.unwrap();
+    let missing_limit_resp = app.request(missing_limit_req).await;
     assert_eq!(missing_limit_resp.status(), http::StatusCode::BAD_REQUEST);
     let missing_limit_bytes = missing_limit_resp
         .into_body()
@@ -739,17 +786,53 @@ async fn contracts_call_prepares_and_verifies_locally_signed_transactions() {
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(zero_limit_body))
         .unwrap();
-    let zero_limit_resp = app.clone().oneshot(zero_limit_req).await.unwrap();
+    let zero_limit_resp = app.request(zero_limit_req).await;
     assert_eq!(zero_limit_resp.status(), http::StatusCode::BAD_REQUEST);
     let zero_limit_bytes = zero_limit_resp
         .into_body()
         .collect()
         .await
-        .unwrap()
+        .expect("zero-limit response body")
         .to_bytes();
     assert!(
         String::from_utf8_lossy(&zero_limit_bytes).contains("fee_payment.gas_limit is required")
     );
+    let mut forbidden: json::Value =
+        json::from_str(&iroha_torii::test_utils::contract_call_request_json(
+            &creds.account,
+            &contract_address,
+            iroha_torii::test_utils::ContractCallOptions {
+                entrypoint: "main",
+                payload: None,
+                gas_limit: 5_000,
+            },
+        ))
+        .expect("unsigned public request");
+    forbidden.as_object_mut().expect("request object").insert(
+        "private_key".to_owned(),
+        json::Value::String("forbidden-field-test-marker".to_owned()),
+    );
+    let forbidden_response = app
+        .request(
+            http::Request::builder()
+                .method("POST")
+                .uri("/v1/contracts/call")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    json::to_json(&forbidden).expect("forbidden-field request"),
+                ))
+                .expect("forbidden-field request"),
+        )
+        .await;
+    assert_eq!(forbidden_response.status(), http::StatusCode::BAD_REQUEST);
+    let forbidden_bytes = forbidden_response
+        .into_body()
+        .collect()
+        .await
+        .expect("forbidden-field response body")
+        .to_bytes();
+    assert!(String::from_utf8_lossy(&forbidden_bytes).contains("private_key"));
+    assert_eq!(queue.active_len(), 0);
     let transaction_ttl_ms = 900_000_u64;
     let call_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
@@ -761,420 +844,85 @@ async fn contracts_call_prepares_and_verifies_locally_signed_transactions() {
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
         ),
     ]);
-    let mut retired_private_key_payload = call_payload.clone();
-    retired_private_key_payload
-        .as_object_mut()
-        .expect("call object")
-        .insert(
-            "private_key".to_owned(),
-            json::Value::String(creds.private_key.to_string()),
-        );
-    let retired_private_key_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(
-            json::to_json(&retired_private_key_payload).unwrap(),
-        ))
-        .unwrap();
-    let retired_private_key_resp = app.clone().oneshot(retired_private_key_req).await.unwrap();
-    assert_eq!(
-        retired_private_key_resp.status(),
-        http::StatusCode::BAD_REQUEST
-    );
-    let retired_private_key_bytes = retired_private_key_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    assert!(String::from_utf8_lossy(&retired_private_key_bytes).contains("private_key"));
-    assert_eq!(queue.active_len(), 0);
     let call_body = json::to_json(&call_payload).expect("serialize call request");
-    let call_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(call_body))
-        .unwrap();
-    let call_resp = app.clone().oneshot(call_req).await.unwrap();
-    assert_eq!(call_resp.status(), http::StatusCode::OK);
-    let call_bytes = call_resp.into_body().collect().await.unwrap().to_bytes();
-    let call_json: json::Value = json::from_slice(&call_bytes).unwrap();
-    assert!(
-        call_json
-            .get("ok")
-            .and_then(json::Value::as_bool)
-            .unwrap_or(false)
+    let prepared = prepare_contract_execution(&app, call_body).await;
+    let call_json = &prepared.response;
+    assert_eq!(
+        call_json.get("ok").and_then(json::Value::as_bool),
+        Some(true)
     );
     assert_eq!(
-        call_json
-            .get("dataspace")
-            .and_then(json::Value::as_str)
-            .unwrap(),
-        "universal"
-    );
-    assert_eq!(
-        call_json
-            .get("contract_address")
-            .and_then(json::Value::as_str)
-            .unwrap(),
-        contract_address
-    );
-    assert_eq!(
-        call_json
-            .get("transaction_ttl_ms")
-            .and_then(json::Value::as_u64),
-        Some(transaction_ttl_ms)
-    );
-    assert_eq!(
-        call_json
-            .get("code_hash_hex")
-            .and_then(json::Value::as_str)
-            .unwrap(),
-        code_hash_hex
-    );
-    assert_eq!(
-        call_json
-            .get("abi_hash_hex")
-            .and_then(json::Value::as_str)
-            .unwrap(),
-        abi_hash_hex
-    );
-    assert!(
-        call_json
-            .get("tx_hash_hex")
-            .is_some_and(json::Value::is_null)
-    );
-    assert_eq!(
-        call_json
-            .get("submitted")
-            .and_then(json::Value::as_bool)
-            .unwrap_or(true),
-        false
-    );
-    let call_receipt = call_json
-        .get("operation_receipt")
-        .and_then(json::Value::as_object)
-        .expect("operation_receipt present");
-    assert_eq!(
-        call_receipt
-            .get("operation_kind")
-            .and_then(json::Value::as_str),
-        Some("contract_call")
-    );
-    assert_eq!(
-        call_receipt.get("status").and_then(json::Value::as_str),
-        Some("pending_signature")
-    );
-    assert_eq!(
-        call_receipt.get("transport").and_then(json::Value::as_str),
-        Some("torii")
-    );
-    assert_eq!(
-        call_receipt.get("dataspace").and_then(json::Value::as_str),
+        call_json.get("dataspace").and_then(json::Value::as_str),
         Some("universal")
     );
     assert_eq!(
-        call_receipt
+        call_json
             .get("contract_address")
             .and_then(json::Value::as_str),
         Some(contract_address.as_str())
     );
     assert_eq!(
-        call_receipt
-            .get("tx_hash_hex")
-            .and_then(json::Value::as_str),
-        None
+        call_json.get("code_hash_hex").and_then(json::Value::as_str),
+        Some(code_hash_hex.as_str())
     );
     assert_eq!(
-        call_receipt
+        call_json.get("abi_hash_hex").and_then(json::Value::as_str),
+        Some(abi_hash_hex.as_str())
+    );
+    assert_eq!(
+        call_json
+            .get("transaction_ttl_ms")
+            .and_then(json::Value::as_u64),
+        Some(transaction_ttl_ms)
+    );
+    assert_eq!(
+        prepared.transaction.time_to_live(),
+        Some(Duration::from_millis(transaction_ttl_ms))
+    );
+    assert_eq!(hex::encode(prepared.transaction.hash().as_ref()).len(), 64);
+    let receipt = call_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("contract call receipt");
+    assert_eq!(
+        receipt.get("operation_kind").and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        receipt.get("transport").and_then(json::Value::as_str),
+        Some("torii")
+    );
+    assert_eq!(
+        receipt.get("dataspace").and_then(json::Value::as_str),
+        Some("universal")
+    );
+    assert_eq!(
+        receipt
+            .get("contract_address")
+            .and_then(json::Value::as_str),
+        Some(contract_address.as_str())
+    );
+    assert_eq!(
+        receipt
             .get("payload_digest_hex")
             .and_then(json::Value::as_str)
             .map(str::len),
         Some(64)
     );
-    assert!(!call_receipt.contains_key("private_key"));
-    assert!(!call_receipt.contains_key("payload"));
-    assert_eq!(
-        queue.active_len(),
-        0,
-        "preparation must not admit a transaction"
-    );
-    let locally_signed = locally_sign_prepared_contract_call_fixture(&call_bytes, &state, &creds);
-    assert_eq!(hex::encode(locally_signed.hash().as_ref()).len(), 64);
-    let applied_call =
-        apply_locally_signed_contract_call_fixture(&state, &queue, &chain_id, 2, locally_signed);
-    assert_eq!(applied_call, 1);
-    let draft_body = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("contract_address", contract_address.as_str()),
-        iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
-        iroha_torii::json_entry(
-            "fee_payment",
-            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
-        ),
-    ]);
-    let draft_body = json::to_json(&draft_body).expect("serialize draft call request");
-    let draft_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(draft_body))
-        .unwrap();
-    let draft_resp = app.clone().oneshot(draft_req).await.unwrap();
-    assert_eq!(draft_resp.status(), http::StatusCode::OK);
-    let draft_bytes = draft_resp.into_body().collect().await.unwrap().to_bytes();
-    let draft_json: json::Value = json::from_slice(&draft_bytes).unwrap();
-    assert_eq!(
-        draft_json
-            .get("submitted")
-            .and_then(json::Value::as_bool)
-            .unwrap_or(true),
-        false
-    );
+    assert!(receipt.get("tx_hash_hex").is_some_and(json::Value::is_null));
     assert!(
-        draft_json
-            .get("transaction_payload_b64")
-            .and_then(json::Value::as_str)
-            .is_some(),
-        "expected canonical unsigned contract-call payload when signing material is omitted"
-    );
-    assert!(draft_json.get("transaction_scaffold_b64").is_none());
-    assert!(draft_json.get("signed_transaction_b64").is_none());
-    assert!(
-        draft_json.get("entrypoint_hash_hex").is_none()
-            || draft_json
-                .get("entrypoint_hash_hex")
-                .is_some_and(json::Value::is_null)
-    );
-    assert_eq!(
-        draft_json
-            .get("transaction_ttl_ms")
-            .and_then(json::Value::as_u64),
-        Some(transaction_ttl_ms)
-    );
-    let draft_receipt = draft_json
-        .get("operation_receipt")
-        .and_then(json::Value::as_object)
-        .expect("draft operation_receipt present");
-    assert_eq!(
-        draft_receipt
-            .get("operation_kind")
-            .and_then(json::Value::as_str),
-        Some("contract_call")
-    );
-    assert_eq!(
-        draft_receipt.get("status").and_then(json::Value::as_str),
-        Some("pending_signature")
-    );
-    assert_eq!(
-        draft_receipt.get("transport").and_then(json::Value::as_str),
-        Some("torii")
-    );
-    assert!(!draft_receipt.contains_key("private_key"));
-    assert!(!draft_receipt.contains_key("payload"));
-    let transaction_payload_b64 = draft_json
-        .get("transaction_payload_b64")
-        .and_then(json::Value::as_str)
-        .expect("transaction_payload_b64 present");
-    let transaction_payload_bytes = base64::engine::general_purpose::STANDARD
-        .decode(transaction_payload_b64)
-        .expect("decode transaction payload");
-    assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(&transaction_payload_bytes),
-        transaction_payload_b64,
-        "draft payload must use canonical padded base64"
-    );
-    let transaction_builder = TransactionBuilder::decode_payload(&transaction_payload_bytes)
-        .expect("strictly decode exact canonical transaction payload");
-    assert_eq!(
-        transaction_builder.payload().time_to_live(),
-        Some(Duration::from_millis(transaction_ttl_ms))
-    );
-    assert_eq!(
-        transaction_builder.encode_payload(),
-        transaction_payload_bytes,
-        "draft payload must round-trip byte-for-byte"
-    );
-    let signing_message_b64 = draft_json
-        .get("signing_message_b64")
-        .and_then(json::Value::as_str)
-        .expect("signing_message_b64 present");
-    let creation_time_ms = draft_json
-        .get("creation_time_ms")
-        .and_then(json::Value::as_u64)
-        .expect("creation_time_ms present");
-    let signing_message = base64::engine::general_purpose::STANDARD
-        .decode(signing_message_b64)
-        .expect("decode signing message");
-    assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(&signing_message),
-        signing_message_b64,
-        "signing message must use canonical padded base64"
-    );
-    assert_eq!(
-        signing_message,
-        transaction_builder.payload_hash_bytes(),
-        "signing message must be the exact unsigned payload hash"
-    );
-    let detached_signature =
-        Signature::try_new(&creds.private_key.0, &signing_message).expect("sign detached call");
-    let detached_submit_body = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry(
-            "public_key_hex",
-            hex::encode_upper(
-                iroha_crypto::PublicKey::from(creds.private_key.0.clone())
-                    .to_bytes()
-                    .1,
-            ),
-        ),
-        iroha_torii::json_entry(
-            "signature_b64",
-            base64::engine::general_purpose::STANDARD.encode(detached_signature.payload()),
-        ),
-        iroha_torii::json_entry("contract_address", contract_address.as_str()),
-        iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("creation_time_ms", creation_time_ms),
-        iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
-        iroha_torii::json_entry(
-            "fee_payment",
-            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000)),
-        ),
-    ]);
-    let detached_submit_body =
-        json::to_json(&detached_submit_body).expect("serialize detached submit request");
-    let detached_request: iroha_torii::ContractCallDto =
-        json::from_slice(detached_submit_body.as_bytes()).expect("decode detached request");
-    let expected_signed = transaction_builder.sign(&creds.private_key.0);
-    assert_eq!(queue.active_len(), 0);
-    let prepared = iroha_torii::prepare_contract_call_request(
-        queue.clone(),
-        state.clone(),
-        iroha_torii::NoritoJson(detached_request),
-    )
-    .expect("verify the exact locally signed preparation without admission");
-    let iroha_torii::PreparedContractCallRequest::Signed {
-        transaction,
-        response,
-    } = prepared
-    else {
-        panic!("detached signature must produce a verified signed candidate");
-    };
-    assert_eq!(transaction, expected_signed);
-    assert_eq!(
-        transaction.admission_intent(),
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    );
-    transaction
-        .verify_signature()
-        .expect("pure Signed verification preserves signature");
-    assert_eq!(
-        queue.active_len(),
-        0,
-        "pure Signed preparation is not public admission"
-    );
-    // These are candidate DTO assertions, never a miniature public-submission response.
-    let detached_submit_json: json::Value =
-        json::from_slice(json::to_json(&response).unwrap().as_bytes())
-            .expect("candidate receipt JSON");
-    let detached_submit_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(detached_submit_body))
-        .unwrap();
-    let detached_submit_resp = app.clone().oneshot(detached_submit_req).await.unwrap();
-    assert_eq!(detached_submit_resp.status(), http::StatusCode::CONFLICT);
-    let rejected_bytes = detached_submit_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    assert!(String::from_utf8_lossy(&rejected_bytes).contains("fixture_preparation_only"));
-    assert_eq!(queue.active_len(), 0);
-    assert_eq!(
-        detached_submit_json
-            .get("submitted")
-            .and_then(json::Value::as_bool)
-            .unwrap_or(false),
-        true
-    );
-    let detached_submit_hash = detached_submit_json
-        .get("tx_hash_hex")
-        .and_then(json::Value::as_str)
-        .expect("detached submit tx hash present");
-    assert_eq!(detached_submit_hash.len(), 64);
-    assert_eq!(
-        detached_submit_hash,
-        hex::encode(transaction.hash().as_ref())
-    );
-    assert_eq!(
-        detached_submit_json
+        receipt
             .get("entrypoint_hash_hex")
-            .and_then(json::Value::as_str),
-        Some(hex::encode(transaction.hash_as_entrypoint().as_ref()).as_str())
+            .is_some_and(json::Value::is_null)
     );
-    for field in ["transaction_payload_b64", "signing_message_b64"] {
-        assert!(
-            detached_submit_json.get(field).is_none()
-                || detached_submit_json
-                    .get(field)
-                    .is_some_and(json::Value::is_null),
-            "submitted response must not contain unsigned draft field {field}"
-        );
-    }
-    let detached_receipt = detached_submit_json
-        .get("operation_receipt")
-        .and_then(json::Value::as_object)
-        .expect("detached operation_receipt present");
-    assert_eq!(
-        detached_receipt
-            .get("operation_kind")
-            .and_then(json::Value::as_str),
-        Some("contract_call")
-    );
-    assert_eq!(
-        detached_receipt.get("status").and_then(json::Value::as_str),
-        Some("submitted")
-    );
-    assert_eq!(
-        detached_receipt
-            .get("tx_hash_hex")
-            .and_then(json::Value::as_str),
-        Some(detached_submit_hash)
-    );
-    assert!(!detached_receipt.contains_key("private_key"));
-    assert!(!detached_receipt.contains_key("payload"));
-    assert_eq!(
-        detached_submit_json
-            .get("transaction_ttl_ms")
-            .and_then(json::Value::as_u64),
-        Some(transaction_ttl_ms)
-    );
-    assert!(
-        draft_json.get("tx_hash_hex").is_none()
-            || draft_json
-                .get("tx_hash_hex")
-                .is_some_and(json::Value::is_null)
-    );
-    let applied_detached_submit =
-        apply_locally_signed_contract_call_fixture(&state, &queue, &chain_id, 3, transaction);
-    assert_eq!(applied_detached_submit, 1);
+    execute_prepared_contract_in_test_overlay(&state, &prepared, 2);
+
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
     let (contract_address, _, _) =
@@ -1189,25 +937,15 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-    let body = iroha_torii::test_utils::contract_view_request_json(
+    let (status, value) = run_contract_view_response_in_test_overlay(
+        &app,
         &creds.account,
-        contract_address.as_str(),
-        iroha_torii::test_utils::ContractViewOptions {
-            entrypoint: "explode",
-            payload: None,
-            gas_limit: 10_000,
-        },
-    );
-    let req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/view")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(body))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let value: json::Value = json::from_slice(&bytes).expect("decode contract view error");
+        &contract_address,
+        "explode",
+        None,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(value.get("ok").and_then(json::Value::as_bool), Some(false));
     assert_eq!(
         value.get("entrypoint").and_then(json::Value::as_str),
@@ -1221,17 +959,12 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
             .is_some_and(json::Value::is_null),
         "deployable artifacts exclude compiler source maps; a verified hash-keyed sidecar is required"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_view_bytes_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1259,11 +992,9 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         "asset_input",
         asset_definition_id.to_string(),
     )]);
-    run_contract_hajimari_and_apply(
+    run_contract_hajimari_in_test_overlay(
         &app,
         &state,
-        &queue,
-        &chain_id,
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
@@ -1279,28 +1010,25 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
             gas_limit: 1_500_000,
         },
     );
-    let init_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(init_body))
-        .unwrap();
-    let init_resp = app.clone().oneshot(init_req).await.unwrap();
-    assert_eq!(init_resp.status(), http::StatusCode::OK);
-    let applied_init =
-        apply_prepared_contract_call_fixture(init_resp, &state, &queue, &chain_id, &creds, 3).await;
-    assert_eq!(applied_init, 1);
-    let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
+    let init_prepared = prepare_contract_execution(&app, init_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 3);
+    let literal =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "literal", None)
+            .await;
     assert_eq!(
         literal.get("result").and_then(json::Value::as_str),
         Some("0x7269736b")
     );
-    let target = run_contract_view(&app, &creds.account, &contract_address, "target", None).await;
+    let target =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "target", None)
+            .await;
     assert_eq!(
         target.get("result").and_then(json::Value::as_str),
         Some("0x7269736b5f7661756c743a3a7269736b2e756e6976657273616c")
     );
-    let config = run_contract_view(&app, &creds.account, &contract_address, "config", None).await;
+    let config =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "config", None)
+            .await;
     assert_eq!(
         config.get("result"),
         Some(&json::Value::Array(vec![
@@ -1310,17 +1038,12 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
             ),
         ]))
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_honors_requested_entrypoint_and_payload() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_dispatch_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1337,11 +1060,9 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let hajimari_payload = norito::json!({ "asset_definition_id": initial_asset_literal });
-    run_contract_hajimari_and_apply(
+    run_contract_hajimari_in_test_overlay(
         &app,
         &state,
-        &queue,
-        &chain_id,
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
@@ -1358,18 +1079,9 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
             gas_limit: 1_500_000,
         },
     );
-    let call_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(call_body))
-        .unwrap();
-    let call_resp = app.clone().oneshot(call_req).await.unwrap();
-    assert_eq!(call_resp.status(), http::StatusCode::OK);
-    let applied_call =
-        apply_prepared_contract_call_fixture(call_resp, &state, &queue, &chain_id, &creds, 3).await;
-    assert_eq!(applied_call, 1);
-    let state_after_credit = run_contract_view(
+    let call_prepared = prepare_contract_execution(&app, call_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &call_prepared, 3);
+    let state_after_credit = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -1394,19 +1106,9 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
             gas_limit: 1_500_000,
         },
     );
-    let asset_call_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(asset_call_body))
-        .unwrap();
-    let asset_call_resp = app.clone().oneshot(asset_call_req).await.unwrap();
-    assert_eq!(asset_call_resp.status(), http::StatusCode::OK);
-    let applied_asset_call =
-        apply_prepared_contract_call_fixture(asset_call_resp, &state, &queue, &chain_id, &creds, 4)
-            .await;
-    assert_eq!(applied_asset_call, 1);
-    let state_after_asset = run_contract_view(
+    let asset_call_prepared = prepare_contract_execution(&app, asset_call_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &asset_call_prepared, 4);
+    let state_after_asset = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -1421,17 +1123,12 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
             json::Value::String(asset_literal.to_owned()),
         ]))
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_view_account_id_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1454,24 +1151,25 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         "account_id",
         creds.account.to_string(),
     )]);
-    run_contract_hajimari_and_apply(
+    run_contract_hajimari_in_test_overlay(
         &app,
         &state,
-        &queue,
-        &chain_id,
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
         2,
     )
     .await;
-    let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
+    let literal =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "literal", None)
+            .await;
     assert_eq!(
         literal.get("result").and_then(json::Value::as_str),
         Some(creds.account.to_string().as_str())
     );
     let initialized =
-        run_contract_view(&app, &creds.account, &contract_address, "stored", None).await;
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "stored", None)
+            .await;
     assert_eq!(
         initialized.get("result").and_then(json::Value::as_str),
         Some(initial_account.as_str())
@@ -1485,23 +1183,16 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
             gas_limit: 1_500_000,
         },
     );
-    let bind_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(bind_body))
-        .unwrap();
-    let bind_resp = app.clone().oneshot(bind_req).await.unwrap();
-    assert_eq!(bind_resp.status(), http::StatusCode::OK);
-    let applied_bind =
-        apply_prepared_contract_call_fixture(bind_resp, &state, &queue, &chain_id, &creds, 3).await;
-    assert_eq!(applied_bind, 1);
-    let stored = run_contract_view(&app, &creds.account, &contract_address, "stored", None).await;
+    let bind_prepared = prepare_contract_execution(&app, bind_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &bind_prepared, 3);
+    let stored =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "stored", None)
+            .await;
     assert_eq!(
         stored.get("result").and_then(json::Value::as_str),
         Some(creds.account.to_string().as_str())
     );
-    let stored_tuple = run_contract_view(
+    let stored_tuple = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         &contract_address,
@@ -1516,17 +1207,12 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
             json::Value::String("1".to_owned()),
         ]))
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_configure_roundtrips_account_id_map_state() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_configure_account_map_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1574,62 +1260,35 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
             gas_limit: 1_500_000,
         },
     );
-    let configure_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(configure_body))
-        .unwrap();
-    let configure_resp = app.clone().oneshot(configure_req).await.unwrap();
-    let configure_status = configure_resp.status();
-    let configure_bytes = configure_resp
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    if configure_status != http::StatusCode::OK {
-        panic!(
-            "configure call failed with status {configure_status}: body_lossy={:?} body_hex={}",
-            String::from_utf8_lossy(&configure_bytes),
-            hex::encode(&configure_bytes)
-        );
-    }
-    let applied_configure = apply_prepared_contract_call_bytes_fixture(
-        &configure_bytes,
-        &state,
-        &queue,
-        &chain_id,
-        &creds,
-        2,
-    );
-    assert_eq!(applied_configure, 1);
-    let admin = run_contract_view(&app, &creds.account, &contract_address, "admin", None).await;
+    let configure_prepared = prepare_contract_execution(&app, configure_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &configure_prepared, 2);
+    let admin =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "admin", None)
+            .await;
     assert_eq!(
         admin.get("result").and_then(json::Value::as_str),
         Some(creds.account.to_string().as_str())
     );
-    let inori = run_contract_view(&app, &creds.account, &contract_address, "inori", None).await;
+    let inori =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "inori", None)
+            .await;
     assert_eq!(
         inori.get("result").and_then(json::Value::as_str),
         Some(creds.account.to_string().as_str())
     );
-    let paused = run_contract_view(&app, &creds.account, &contract_address, "paused", None).await;
+    let paused =
+        run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "paused", None)
+            .await;
     assert_eq!(
         paused.get("result").and_then(json::Value::as_str),
         Some("0")
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_fields_across_calls() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
@@ -1646,11 +1305,9 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let hajimari_payload = norito::json!({ "asset_definition_id": initial_asset_literal });
-    run_contract_hajimari_and_apply(
+    run_contract_hajimari_in_test_overlay(
         &app,
         &state,
-        &queue,
-        &chain_id,
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
@@ -1667,18 +1324,8 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
             gas_limit: 1_500_000,
         },
     );
-    let credit_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(credit_body))
-        .unwrap();
-    let credit_resp = app.clone().oneshot(credit_req).await.unwrap();
-    assert_eq!(credit_resp.status(), http::StatusCode::OK);
-    let applied_credit =
-        apply_prepared_contract_call_fixture(credit_resp, &state, &queue, &chain_id, &creds, 3)
-            .await;
-    assert_eq!(applied_credit, 1);
+    let credit_prepared = prepare_contract_execution(&app, credit_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &credit_prepared, 3);
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1689,19 +1336,9 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
             gas_limit: 1_500_000,
         },
     );
-    let asset_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(asset_body))
-        .unwrap();
-    let asset_resp = app.clone().oneshot(asset_req).await.unwrap();
-    assert_eq!(asset_resp.status(), http::StatusCode::OK);
-    let applied_asset =
-        apply_prepared_contract_call_fixture(asset_resp, &state, &queue, &chain_id, &creds, 4)
-            .await;
-    assert_eq!(applied_asset, 1);
-    let view_json = run_contract_view(
+    let asset_prepared = prepare_contract_execution(&app, asset_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &asset_prepared, 4);
+    let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -1723,17 +1360,12 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         Some(asset_literal),
         "unexpected declared asset from view",
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_emitting_isi() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_with_isi_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1748,17 +1380,8 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_and_apply(
-        &app,
-        &state,
-        &queue,
-        &chain_id,
-        &creds,
-        contract_address.as_str(),
-        None,
-        2,
-    )
-    .await;
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+        .await;
     let write_payload = norito::json!({ "amount": "7" });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1769,19 +1392,9 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
             gas_limit: 1_500_000,
         },
     );
-    let write_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(write_body))
-        .unwrap();
-    let write_resp = app.clone().oneshot(write_req).await.unwrap();
-    assert_eq!(write_resp.status(), http::StatusCode::OK);
-    let applied_write =
-        apply_prepared_contract_call_fixture(write_resp, &state, &queue, &chain_id, &creds, 3)
-            .await;
-    assert_eq!(applied_write, 1);
-    let view_json = run_contract_view(
+    let write_prepared = prepare_contract_execution(&app, write_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 3);
+    let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -1796,15 +1409,10 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
             .expect("view int result"),
         "7"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_persists_declared_state_after_mint_asset() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -1833,7 +1441,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     seed_block
         .commit_world_overlay_for_testing()
         .expect("commit seeded asset definition");
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_declared_state_with_mint_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1848,17 +1456,8 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_and_apply(
-        &app,
-        &state,
-        &queue,
-        &chain_id,
-        &creds,
-        contract_address.as_str(),
-        None,
-        2,
-    )
-    .await;
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+        .await;
     let write_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("amount", "7"),
         iroha_torii::json_entry("user", creds.account.clone()),
@@ -1873,19 +1472,9 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
             gas_limit: 1_500_000,
         },
     );
-    let write_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(write_body))
-        .unwrap();
-    let write_resp = app.clone().oneshot(write_req).await.unwrap();
-    assert_eq!(write_resp.status(), http::StatusCode::OK);
-    let applied_write =
-        apply_prepared_contract_call_fixture(write_resp, &state, &queue, &chain_id, &creds, 3)
-            .await;
-    assert_eq!(applied_write, 1);
-    let view_json = run_contract_view(
+    let write_prepared = prepare_contract_execution(&app, write_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 3);
+    let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -1900,15 +1489,10 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
             .expect("view int result"),
         "7"
     );
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -1937,7 +1521,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     seed_block
         .commit_world_overlay_for_testing()
         .expect("commit seeded asset definition");
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -1952,17 +1536,8 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_and_apply(
-        &app,
-        &state,
-        &queue,
-        &chain_id,
-        &creds,
-        contract_address.as_str(),
-        None,
-        2,
-    )
-    .await;
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+        .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         contract_address.as_str(),
@@ -1972,17 +1547,8 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
             gas_limit: 10_000,
         },
     );
-    let init_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(init_body))
-        .unwrap();
-    let init_resp = app.clone().oneshot(init_req).await.unwrap();
-    assert_eq!(init_resp.status(), http::StatusCode::OK);
-    let applied_init =
-        apply_prepared_contract_call_fixture(init_resp, &state, &queue, &chain_id, &creds, 3).await;
-    assert_eq!(applied_init, 1);
+    let init_prepared = prepare_contract_execution(&app, init_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 3);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
@@ -1999,19 +1565,9 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
             gas_limit: 1_500_000,
         },
     );
-    let deposit_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deposit_body))
-        .unwrap();
-    let deposit_resp = app.clone().oneshot(deposit_req).await.unwrap();
-    assert_eq!(deposit_resp.status(), http::StatusCode::OK);
-    let applied_deposit =
-        apply_prepared_contract_call_fixture(deposit_resp, &state, &queue, &chain_id, &creds, 4)
-            .await;
-    assert_eq!(applied_deposit, 1);
-    let view_json = run_contract_view(
+    let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 4);
+    let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -2028,15 +1584,10 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_str), Some("2"));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_str), Some("3"));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_str), Some("6"));
+    app.shutdown().await;
 }
 #[tokio::test]
 async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
     let (creds, state, kura) = contract_test_state();
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain id"),
@@ -2065,7 +1616,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     seed_block
         .commit_world_overlay_for_testing()
         .expect("commit seeded asset definition");
-    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura);
+    let (queue, chain_id, app) = contract_test_queue_and_app(&state, &kura, &creds);
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
@@ -2083,17 +1634,8 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_and_apply(
-        &app,
-        &state,
-        &queue,
-        &chain_id,
-        &creds,
-        contract_address.as_str(),
-        None,
-        2,
-    )
-    .await;
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+        .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         contract_address.as_str(),
@@ -2103,17 +1645,8 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
             gas_limit: 10_000,
         },
     );
-    let init_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(init_body))
-        .unwrap();
-    let init_resp = app.clone().oneshot(init_req).await.unwrap();
-    assert_eq!(init_resp.status(), http::StatusCode::OK);
-    let applied_init =
-        apply_prepared_contract_call_fixture(init_resp, &state, &queue, &chain_id, &creds, 3).await;
-    assert_eq!(applied_init, 1);
+    let init_prepared = prepare_contract_execution(&app, init_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 3);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
@@ -2130,18 +1663,8 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
             gas_limit: 1_500_000,
         },
     );
-    let deposit_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deposit_body))
-        .unwrap();
-    let deposit_resp = app.clone().oneshot(deposit_req).await.unwrap();
-    assert_eq!(deposit_resp.status(), http::StatusCode::OK);
-    let applied_deposit =
-        apply_prepared_contract_call_fixture(deposit_resp, &state, &queue, &chain_id, &creds, 4)
-            .await;
-    assert_eq!(applied_deposit, 1);
+    let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 4);
     let burn_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
@@ -2156,18 +1679,9 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
             gas_limit: 1_500_000,
         },
     );
-    let burn_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(burn_body))
-        .unwrap();
-    let burn_resp = app.clone().oneshot(burn_req).await.unwrap();
-    assert_eq!(burn_resp.status(), http::StatusCode::OK);
-    let applied_burn =
-        apply_prepared_contract_call_fixture(burn_resp, &state, &queue, &chain_id, &creds, 5).await;
-    assert_eq!(applied_burn, 1);
-    let view_json = run_contract_view(
+    let burn_prepared = prepare_contract_execution(&app, burn_body).await;
+    execute_prepared_contract_in_test_overlay(&state, &burn_prepared, 5);
+    let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
         contract_address.as_str(),
@@ -2184,4 +1698,5 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_str), Some("0"));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_str), Some("0"));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_str), Some("0"));
+    app.shutdown().await;
 }

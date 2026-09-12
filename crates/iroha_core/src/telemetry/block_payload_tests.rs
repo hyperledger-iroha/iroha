@@ -108,9 +108,9 @@ fn block_with_da_commitments(height: u64) -> iroha_data_model::block::SignedBloc
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use std::num::NonZeroU64;
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("height must be > 0"),

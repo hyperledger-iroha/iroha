@@ -15,15 +15,14 @@ use std::{
     string::String,
     vec::Vec,
 };
+mod archive_validation;
+mod publication_validation;
 mod streaming;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
     account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
-    error::ParseError,
-    name::Name,
-    nexus::DataSpaceId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -33,8 +32,10 @@ use crate::{
         },
     },
 };
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::{error::ParseError, name::Name};
 use streaming::canonical_frame_len;
-#[cfg(feature = "json")]
+
 use streaming::musubi_json_len_bounded;
 /// Musubi registry schema version shipped by the first release.
 pub const MUSUBI_REGISTRY_VERSION_V1: u8 = 1;
@@ -523,9 +524,21 @@ fn validate_ascii_kebab(raw: &str, maximum: usize, label: &'static str) -> Resul
     Ok(())
 }
 /// Canonical human-facing namespace text resolved through a namespace binding.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiNamespaceV1")]
 pub struct MusubiNamespaceV1(String);
 impl MusubiNamespaceV1 {
@@ -603,12 +616,21 @@ impl fmt::Display for MusubiNamespaceV1 {
     }
 }
 /// Structural package scope within the stable home dataspace.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageScopeV1")]
 pub enum MusubiPackageScopeV1 {
@@ -618,9 +640,21 @@ pub enum MusubiPackageScopeV1 {
     Domain(Name),
 }
 /// Immutable binding from public namespace text to stable structural identity.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiNamespaceBindingV1")]
 pub struct MusubiNamespaceBindingV1 {
@@ -687,9 +721,21 @@ impl MusubiNamespaceBindingV1 {
     }
 }
 /// Canonical package-name segment.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageNameV1")]
 pub struct MusubiPackageNameV1(String);
 impl MusubiPackageNameV1 {
@@ -732,9 +778,21 @@ impl fmt::Display for MusubiPackageNameV1 {
     }
 }
 /// Stable structural package identifier; namespace aliases are not embedded.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageIdV1")]
 pub struct MusubiPackageIdV1 {
@@ -783,9 +841,21 @@ impl fmt::Display for MusubiPackageIdV1 {
     }
 }
 /// User-facing package selector resolved through an immutable namespace binding.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageSelectorV1")]
 pub struct MusubiPackageSelectorV1 {
@@ -828,12 +898,19 @@ impl fmt::Display for MusubiPackageSelectorV1 {
     }
 }
 /// One canonical `SemVer` prerelease identifier.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPrereleaseIdentifierV1")]
 pub enum MusubiPrereleaseIdentifierV1 {
@@ -913,9 +990,19 @@ impl fmt::Display for MusubiPrereleaseIdentifierV1 {
     }
 }
 /// Structured canonical semantic version. Build metadata is forbidden in V1.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiVersionV1")]
 pub struct MusubiVersionV1 {
@@ -1046,12 +1133,22 @@ impl PartialOrd for MusubiVersionV1 {
     }
 }
 /// Comparator operator used by a canonical comma-separated requirement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiComparatorOpV1")]
 pub enum MusubiComparatorOpV1 {
@@ -1067,9 +1164,21 @@ pub enum MusubiComparatorOpV1 {
     Equal,
 }
 /// One exact comparator in a canonical requirement AST.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiVersionComparatorV1")]
 pub struct MusubiVersionComparatorV1 {
@@ -1079,9 +1188,22 @@ pub struct MusubiVersionComparatorV1 {
     pub version: MusubiVersionV1,
 }
 /// Payload of a `MAJOR.MINOR.*` wildcard requirement.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiMinorWildcardV1")]
 pub struct MusubiMinorWildcardV1 {
@@ -1091,12 +1213,21 @@ pub struct MusubiMinorWildcardV1 {
     pub minor: u64,
 }
 /// Canonical Cargo-style version requirement AST.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiVersionReqV1")]
 pub enum MusubiVersionReqV1 {
@@ -1360,11 +1491,8 @@ macro_rules! digest_type {
         )]
         #[norito_schema(name = $schema_name)]
         #[repr(transparent)]
-        #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-        pub struct $name(
-            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-            pub  [u8; 32],
-        );
+        #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+        pub struct $name(#[norito(json = "crate::json_helpers::fixed_bytes")] pub [u8; 32]);
         impl $name {
             /// Construct from exact digest bytes.
             #[must_use]
@@ -1445,9 +1573,20 @@ digest_type!(
     "Digest of canonical query parameters."
 );
 /// Complete source-archive commitment whose domain-separated Norito hash is [`ArchiveId`].
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveCommitmentV1")]
 pub struct MusubiArchiveCommitmentV1 {
@@ -1476,64 +1615,12 @@ pub struct MusubiArchiveCommitmentV1 {
     /// Number of chunks.
     pub chunk_count: u32,
 }
-impl MusubiArchiveCommitmentV1 {
-    /// Validate first-release archive bounds and non-inert commitments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an archive size or count is outside its V1 bound, the chunker handle
-    /// is overlong, or a required commitment digest is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.content_length == 0 || self.content_length > MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1 {
-            return Err(ParseError::new(
-                "Musubi archive bundle payload length is out of bounds",
-            ));
-        }
-        if self.car_size == 0 || self.car_size > MUSUBI_MAX_CAR_BYTES_V1 {
-            return Err(ParseError::new(
-                "Musubi archive CAR length is out of bounds",
-            ));
-        }
-        if self.file_count == 0 || self.file_count > MUSUBI_MAX_FILES_V1 {
-            return Err(ParseError::new(
-                "Musubi archive file count is out of bounds",
-            ));
-        }
-        if self.chunk_count == 0 || self.chunk_count > MUSUBI_MAX_CHUNKS_V1 {
-            return Err(ParseError::new(
-                "Musubi archive chunk count is out of bounds",
-            ));
-        }
-        if self.chunker.to_handle().len() > 128
-            || [
-                self.chunk_plan_digest,
-                self.por_root,
-                self.car_digest,
-                self.bundle_digest,
-                self.source_tree_digest,
-                self.descriptor_digest,
-            ]
-            .iter()
-            .any(MusubiContentDigestV1::is_zero)
-        {
-            return Err(ParseError::new(
-                "Musubi archive contains an invalid or inert commitment",
-            ));
-        }
-        Ok(())
-    }
-    /// Compute the domain-separated `ArchiveId` from canonical Norito bytes.
-    #[must_use]
-    pub fn archive_id(&self) -> ArchiveId {
-        ArchiveId(domain_hash_value(MUSUBI_ARCHIVE_ID_DOMAIN_V1, self))
-    }
-}
 include!("musubi/bundle_file_decode.rs");
 /// Typed descriptor parsed and verified by every provider before serving a bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArtifactDescriptorV1")]
 pub struct MusubiArtifactDescriptorV1 {
@@ -1550,77 +1637,23 @@ pub struct MusubiArtifactDescriptorV1 {
     /// Number of regular files in the positive selected source set.
     pub source_file_count: u32,
 }
-impl MusubiArtifactDescriptorV1 {
-    /// Decode one exact canonical artifact-descriptor bundle file under the shared V1 limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns one stable payload-free error when the file is empty, oversized, malformed,
-    /// trailing, noncanonical, or fails descriptor validation.
-    pub fn decode_canonical_bundle_file(bytes: &[u8]) -> Result<Self, ParseError> {
-        decode_canonical_bundle_file_v1(
-            bytes,
-            MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1,
-            MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1,
-            Self::validate,
-            "Musubi artifact descriptor bundle file is invalid or out of bounds",
-        )
-    }
-    /// Construct and validate a first-release artifact descriptor.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a required digest is zero or the selected source size or file count is
-    /// outside its V1 bound.
-    pub fn new(
-        semantic_release_manifest_digest: MusubiSemanticReleaseDigestV1,
-        source_tree_digest: MusubiContentDigestV1,
-        verification_lock_digest: MusubiVerificationLockDigestV1,
-        source_bytes: u64,
-        source_file_count: u32,
-    ) -> Result<Self, ParseError> {
-        let descriptor = Self {
-            version: MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1,
-            semantic_release_manifest_digest,
-            source_tree_digest,
-            verification_lock_digest,
-            source_bytes,
-            source_file_count,
-        };
-        descriptor.validate()?;
-        Ok(descriptor)
-    }
-    /// Validate descriptor version, digest bindings, and first-release source bounds.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the descriptor version is unsupported, a required digest is zero, or
-    /// the selected source size or file count is outside its V1 bound.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.version != MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1
-            || self.semantic_release_manifest_digest.is_zero()
-            || self.source_tree_digest.is_zero()
-            || self.verification_lock_digest.is_zero()
-            || self.source_bytes == 0
-            || self.source_bytes > MUSUBI_MAX_SOURCE_PAYLOAD_BYTES_V1
-            || self.source_file_count == 0
-            || self.source_file_count > MUSUBI_MAX_FILES_V1
-        {
-            return Err(ParseError::new(
-                "Musubi artifact descriptor is invalid or out of bounds",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Immutable archive-registration projection independent of renewable locations.
 ///
 /// Unlike [`MusubiArchiveRecordV1`], this projection deliberately excludes the mutable location
 /// revision and current location identities. A finalized registration can therefore be revalidated
 /// from a later exact archive read without requiring a historical copy of mutable registry state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveRegistrationProjectionV1")]
 pub struct MusubiArchiveRegistrationProjectionV1 {
@@ -1635,50 +1668,19 @@ pub struct MusubiArchiveRegistrationProjectionV1 {
     /// Finalized block height of registration.
     pub registered_at_height: u64,
 }
-impl MusubiArchiveRegistrationProjectionV1 {
-    /// Validate the immutable archive identity and its exact ingress binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the commitment, receipt, or registrant is invalid, or if the archive
-    /// identity, receipt fields, and nonzero registration height do not agree.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        validate_archive_registration_fields(
-            self.archive_id,
-            &self.commitment,
-            &self.staging_receipt,
-            &self.registered_by,
-            self.registered_at_height,
-        )
-    }
-}
-fn validate_archive_registration_fields(
-    archive_id: ArchiveId,
-    commitment: &MusubiArchiveCommitmentV1,
-    staging_receipt: &MusubiSeedIngressReceiptV1,
-    registered_by: &AccountId,
-    registered_at_height: u64,
-) -> Result<(), ParseError> {
-    commitment.validate()?;
-    staging_receipt.validate()?;
-    validate_musubi_account_id_v1(registered_by)?;
-    if archive_id != commitment.archive_id()
-        || staging_receipt.payload.binding.archive_id != archive_id
-        || staging_receipt.payload.binding.car_body_digest != commitment.car_digest
-        || staging_receipt.payload.binding.car_body_length != commitment.car_size
-        || &staging_receipt.payload.binding.publisher != registered_by
-        || registered_at_height == 0
-    {
-        return Err(ParseError::new(
-            "Musubi archive registration has an invalid identity or receipt",
-        ));
-    }
-    Ok(())
-}
 /// Authoritative archive registration and its mutable renewable-location directory.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveRecordV1")]
 pub struct MusubiArchiveRecordV1 {
@@ -1697,54 +1699,23 @@ pub struct MusubiArchiveRecordV1 {
     /// Sorted identities of current non-retired locations for exact bounded lookup.
     pub location_ids: Vec<MusubiArchiveLocationIdV1>,
 }
-impl MusubiArchiveRecordV1 {
-    /// Return the immutable registration fields reproducible by every later archive read.
-    #[must_use]
-    pub fn registration_projection(&self) -> MusubiArchiveRegistrationProjectionV1 {
-        MusubiArchiveRegistrationProjectionV1 {
-            archive_id: self.archive_id,
-            commitment: self.commitment.clone(),
-            staging_receipt: self.staging_receipt.clone(),
-            registered_by: self.registered_by.clone(),
-            registered_at_height: self.registered_at_height,
-        }
-    }
-    /// Validate the commitment and its derived identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if immutable registration fields are inconsistent, the location revision
-    /// is zero, or location identifiers are oversized, zero, unsorted, or duplicated.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        validate_archive_registration_fields(
-            self.archive_id,
-            &self.commitment,
-            &self.staging_receipt,
-            &self.registered_by,
-            self.registered_at_height,
-        )?;
-        if self.location_revision == 0
-            || self.location_ids.len() > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
-            || self
-                .location_ids
-                .iter()
-                .any(MusubiArchiveLocationIdV1::is_zero)
-            || self.location_ids.windows(2).any(|pair| pair[0] >= pair[1])
-        {
-            return Err(ParseError::new(
-                "Musubi archive record identity, staging receipt, or revision is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Lifecycle of one renewable `SoraFS` archive location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveLocationStateV1")]
 pub enum MusubiArchiveLocationStateV1 {
@@ -1758,9 +1729,22 @@ pub enum MusubiArchiveLocationStateV1 {
     Retired,
 }
 /// Canonical ordered key for one renewable archive location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveLocationKeyV1")]
 pub struct MusubiArchiveLocationKeyV1 {
@@ -1769,20 +1753,22 @@ pub struct MusubiArchiveLocationKeyV1 {
     /// Stable identity within the archive's bounded location set.
     pub location_id: MusubiArchiveLocationIdV1,
 }
-impl MusubiArchiveLocationKeyV1 {
-    /// Construct the canonical ordered location key.
-    #[must_use]
-    pub const fn new(archive_id: ArchiveId, location_id: MusubiArchiveLocationIdV1) -> Self {
-        Self {
-            archive_id,
-            location_id,
-        }
-    }
-}
 /// Fixed-size reverse-index value from one `SoraFS` pin manifest to one Musubi location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPinLocationReferenceV1")]
 pub struct MusubiPinLocationReferenceV1 {
@@ -1793,29 +1779,24 @@ pub struct MusubiPinLocationReferenceV1 {
     /// Whether this is the location's current pin rather than an immutable reuse tombstone.
     pub active: bool,
 }
-impl MusubiPinLocationReferenceV1 {
-    /// Validate non-inert pin and location identities.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the pin-manifest digest, archive identity, or location identity is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if digest_is_zero(self.pin_manifest.as_bytes())
-            || self.location.archive_id.is_zero()
-            || self.location.location_id.is_zero()
-        {
-            return Err(ParseError::new(
-                "Musubi pin-to-location reverse reference is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
 include!("musubi/replication_order_lifecycle.rs");
 /// Ordered provider/location composite key for exact provider-prefix lifecycle refreshes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderLocationKeyV1")]
 pub struct MusubiProviderLocationKeyV1 {
@@ -1824,47 +1805,19 @@ pub struct MusubiProviderLocationKeyV1 {
     /// Musubi location containing verified evidence from this provider.
     pub location: MusubiArchiveLocationKeyV1,
 }
-impl MusubiProviderLocationKeyV1 {
-    /// Construct an exact provider/location reverse-index key.
-    #[must_use]
-    pub const fn new(provider_id: ProviderId, location: MusubiArchiveLocationKeyV1) -> Self {
-        Self {
-            provider_id,
-            location,
-        }
-    }
-    /// Return inclusive ordered bounds covering only one provider's location references.
-    #[must_use]
-    pub fn provider_range(provider_id: ProviderId) -> std::ops::RangeInclusive<Self> {
-        let location = |fill| {
-            MusubiArchiveLocationKeyV1::new(
-                ArchiveId::new([fill; 32]),
-                MusubiArchiveLocationIdV1::new([fill; 32]),
-            )
-        };
-        Self::new(provider_id, location(0))..=Self::new(provider_id, location(u8::MAX))
-    }
-    /// Validate non-inert provider and location identities.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provider, archive, or location identity is the all-zero sentinel.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
-            || self.location.archive_id.is_zero()
-            || self.location.location_id.is_zero()
-        {
-            return Err(ParseError::new(
-                "Musubi provider-to-location reverse key is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Renewable `SoraFS` pin and replication-order binding for an archive.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveLocationV1")]
 pub struct MusubiArchiveLocationV1 {
@@ -1891,46 +1844,23 @@ pub struct MusubiArchiveLocationV1 {
     /// Current location state.
     pub state: MusubiArchiveLocationStateV1,
 }
-impl MusubiArchiveLocationV1 {
-    /// Return the canonical ordered storage key.
-    #[must_use]
-    pub const fn key(&self) -> MusubiArchiveLocationKeyV1 {
-        MusubiArchiveLocationKeyV1::new(self.archive_id, self.location_id)
-    }
-    /// Validate provider, renewal, and revision bounds.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an identity or commitment is zero, providers are empty, oversized,
-    /// unsorted, or duplicated, renewal does not precede expiry, or a revision height is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.location_id.is_zero()
-            || self.archive_id.is_zero()
-            || digest_is_zero(self.pin_manifest.as_bytes())
-            || self.providers.is_empty()
-            || self.providers.len() > MUSUBI_MAX_LOCATION_PROVIDERS_V1
-            || self.provider_attestation_set_digest.is_zero()
-            || self.renew_after_epoch >= self.expires_at_epoch
-            || self.finalized_height == 0
-            || self.revision == 0
-        {
-            return Err(ParseError::new("Musubi archive location is invalid"));
-        }
-        if self.providers.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(ParseError::new(
-                "Musubi archive location providers must be sorted and distinct",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Fresh-selection availability distinct from yank and Parliament takedown state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiStorageAvailabilityV1")]
 pub enum MusubiStorageAvailabilityV1 {
@@ -1942,9 +1872,21 @@ pub enum MusubiStorageAvailabilityV1 {
     Unavailable,
 }
 /// Finalized aggregate availability projection for an archive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveAvailabilityV1")]
 pub struct MusubiArchiveAvailabilityV1 {
@@ -1959,52 +1901,26 @@ pub struct MusubiArchiveAvailabilityV1 {
     /// Finalized anchor height.
     pub finalized_height: u64,
     /// Finalized block hash.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub finalized_block_hash: [u8; 32],
     /// Universal resolver-index revision.
     pub index_revision: u64,
 }
-impl MusubiArchiveAvailabilityV1 {
-    /// Validate aggregate consistency and first-release bounds.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the archive or finalized anchor is inert, replica counts exceed their
-    /// V1 capacity, or the availability class does not agree with those counts.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        let healthy_capacity = usize::from(self.active_locations)
-            .checked_mul(MUSUBI_MAX_LOCATION_PROVIDERS_V1)
-            .expect("bounded Musubi location capacity cannot overflow usize");
-        if self.archive_id.is_zero()
-            || usize::from(self.active_locations) > MUSUBI_MAX_ARCHIVE_LOCATIONS_V1
-            || usize::from(self.healthy_replicas) > healthy_capacity
-            || self.finalized_height == 0
-            || self.index_revision == 0
-            || digest_is_zero(&self.finalized_block_hash)
-        {
-            return Err(ParseError::new(
-                "Musubi archive availability record is invalid",
-            ));
-        }
-        let expected = if self.healthy_replicas >= MUSUBI_MIN_HEALTHY_REPLICAS_V1 {
-            MusubiStorageAvailabilityV1::Selectable
-        } else if self.active_locations > 0 && self.healthy_replicas > 0 {
-            MusubiStorageAvailabilityV1::BelowQuorum
-        } else {
-            MusubiStorageAvailabilityV1::Unavailable
-        };
-        if self.availability != expected {
-            return Err(ParseError::new(
-                "Musubi archive availability classification is inconsistent with its counts",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Bounded universal reverse references from one archive to exact published releases.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArchiveReverseReferencesV1")]
 pub struct MusubiArchiveReverseReferencesV1 {
@@ -2013,31 +1929,22 @@ pub struct MusubiArchiveReverseReferencesV1 {
     /// Sorted exact releases whose immutable manifests reference the archive.
     pub releases: Vec<MusubiReleaseIdV1>,
 }
-impl MusubiArchiveReverseReferencesV1 {
-    /// Validate identity, cardinality, and canonical exact-release order.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the archive identity is zero, the release list is oversized,
-    /// unsorted, or duplicated, or a release identifier is invalid.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.archive_id.is_zero()
-            || self.releases.len() > MUSUBI_MAX_RESOLUTION_NODES_V1
-            || self.releases.windows(2).any(|pair| pair[0] >= pair[1])
-        {
-            return Err(ParseError::new(
-                "Musubi archive reverse references are invalid or noncanonical",
-            ));
-        }
-        self.releases
-            .iter()
-            .try_for_each(MusubiReleaseIdV1::validate)
-    }
-}
 /// Exact structural release identifier.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseIdV1")]
 pub struct MusubiReleaseIdV1 {
@@ -2068,12 +1975,22 @@ impl fmt::Display for MusubiReleaseIdV1 {
     }
 }
 /// Kotodama source edition accepted by Musubi V1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiKotodamaEditionV1")]
 pub enum MusubiKotodamaEditionV1 {
@@ -2081,16 +1998,29 @@ pub enum MusubiKotodamaEditionV1 {
     V1,
 }
 /// Exact IVM ABI binding embedded in every release and lock node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAbiBindingV1")]
 pub struct MusubiAbiBindingV1 {
     /// Must equal [`MUSUBI_IVM_ABI_VERSION_V1`].
     pub abi_version: u16,
     /// Canonical IVM ABI hash.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub abi_hash: [u8; 32],
 }
 impl MusubiAbiBindingV1 {
@@ -2123,9 +2053,21 @@ impl MusubiAbiBindingV1 {
     }
 }
 /// Normal dependency requirement in a published manifest.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiDependencyReqV1")]
 pub struct MusubiDependencyReqV1 {
@@ -2148,12 +2090,22 @@ impl MusubiDependencyReqV1 {
     }
 }
 /// Dependency kind recorded in consumer-owned exact locks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiDependencyKindV1")]
 pub enum MusubiDependencyKindV1 {
@@ -2179,7 +2131,7 @@ macro_rules! bounded_text_type {
             norito::NoritoSchema,
         )]
         #[norito_schema(name = $schema_name)]
-        #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+        #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
         pub struct $name(String);
         impl $name {
             /// Parse canonical bounded text.
@@ -2244,9 +2196,21 @@ bounded_text_type!(
     "Musubi reason is empty, noncanonical, or exceeds 1024 bytes"
 );
 /// Canonical lowercase keyword.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiKeywordV1")]
 pub struct MusubiKeywordV1(String);
 impl MusubiKeywordV1 {
@@ -2272,9 +2236,21 @@ impl fmt::Display for MusubiKeywordV1 {
     }
 }
 /// Immutable descriptive metadata committed by a release digest.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseMetadataV1")]
 pub struct MusubiReleaseMetadataV1 {
@@ -2289,77 +2265,50 @@ pub struct MusubiReleaseMetadataV1 {
     /// Sorted unique keywords.
     pub keywords: Vec<MusubiKeywordV1>,
 }
-impl MusubiReleaseMetadataV1 {
-    /// Canonicalize keyword set order.
-    pub fn canonicalize(&mut self) {
-        self.keywords.sort();
-        self.keywords.dedup();
-    }
-    /// Validate keyword bounds and canonical ordering.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a metadata string or keyword is invalid, or if keywords are oversized,
-    /// unsorted, or duplicated.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if let Some(description) = &self.description {
-            description.validate()?;
-        }
-        if let Some(readme) = &self.readme {
-            readme.validate()?;
-        }
-        if let Some(license) = &self.license {
-            license.validate()?;
-        }
-        if let Some(repository) = &self.repository {
-            repository.validate()?;
-        }
-        if self.keywords.len() > MUSUBI_MAX_KEYWORDS_V1
-            || self.keywords.windows(2).any(|pair| pair[0] >= pair[1])
-        {
-            return Err(ParseError::new(
-                "Musubi keywords exceed their bound or are not sorted and unique",
-            ));
-        }
-        self.keywords.iter().try_for_each(MusubiKeywordV1::validate)
-    }
-}
 /// Finalized universal registry snapshot used by a resolution graph.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiRegistrySnapshotV1")]
 pub struct MusubiRegistrySnapshotV1 {
     /// Finalized block height.
     pub finalized_height: u64,
     /// Finalized block hash.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub finalized_block_hash: [u8; 32],
     /// Resolver sparse-index revision.
     pub index_revision: u64,
 }
-impl MusubiRegistrySnapshotV1 {
-    /// Validate a non-inert finalized anchor and revision.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the finalized height or index revision is zero, or if the block hash
-    /// is the all-zero sentinel.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.finalized_height == 0
-            || self.index_revision == 0
-            || digest_is_zero(&self.finalized_block_hash)
-        {
-            return Err(ParseError::new("Musubi registry snapshot is invalid"));
-        }
-        Ok(())
-    }
-}
 /// Parent-local exact edge in a publication proof or verification lock.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiExactDependencyEdgeV1")]
 pub struct MusubiExactDependencyEdgeV1 {
@@ -2374,31 +2323,22 @@ pub struct MusubiExactDependencyEdgeV1 {
     /// Exact selected release.
     pub selected: MusubiReleaseIdV1,
 }
-impl MusubiExactDependencyEdgeV1 {
-    /// Validate structural identity and requirement satisfaction.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a nested identity or requirement is invalid, or if the exact selection
-    /// belongs to another package or does not satisfy the published requirement.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.package.validate()?;
-        self.selected.validate()?;
-        self.requirement.validate()?;
-        if self.selected.package != self.package
-            || !self.requirement.matches(&self.selected.version)
-        {
-            return Err(ParseError::new(
-                "Musubi exact dependency does not satisfy its package requirement",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Exact immutable dependency node used in publication verification.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiVerificationNodeV1")]
 pub struct MusubiVerificationNodeV1 {
@@ -2417,45 +2357,11 @@ pub struct MusubiVerificationNodeV1 {
     /// Sorted parent-local exact edges with unique parent-local aliases.
     pub dependencies: Vec<MusubiExactDependencyEdgeV1>,
 }
-impl MusubiVerificationNodeV1 {
-    /// Validate node commitments, dependency bounds, and edge order.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a nested identity or ABI binding is invalid, a required commitment is
-    /// zero, or dependencies are non-normal, oversized, unsorted, duplicated, or invalid.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.release.validate()?;
-        self.abi.validate()?;
-        if self.release_digest.is_zero()
-            || self.archive_id.is_zero()
-            || self.source_digest.is_zero()
-            || self.interface_digest.is_zero()
-            || self.dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
-            || self.dependencies.windows(2).any(|pair| pair[0] >= pair[1])
-            || self
-                .dependencies
-                .windows(2)
-                .any(|pair| pair[0].alias >= pair[1].alias)
-            || self
-                .dependencies
-                .iter()
-                .any(|dependency| dependency.kind != MusubiDependencyKindV1::Normal)
-        {
-            return Err(ParseError::new(
-                "Musubi verification node is invalid or noncanonical",
-            ));
-        }
-        self.dependencies
-            .iter()
-            .try_for_each(MusubiExactDependencyEdgeV1::validate)
-    }
-}
 /// Normalized, secret-free exact verification lock packaged with a release.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiVerificationLockV1")]
 pub struct MusubiVerificationLockV1 {
@@ -2471,163 +2377,21 @@ pub struct MusubiVerificationLockV1 {
     /// Sorted exact dependency nodes; the root itself is not included.
     pub nodes: Vec<MusubiVerificationNodeV1>,
 }
-impl MusubiVerificationLockV1 {
-    /// Fixed verification-lock schema label.
-    pub const SCHEMA: &'static str = "musubi-verification-lock";
-    /// Decode one exact canonical verification-lock bundle file under the shared V1 limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns one stable payload-free error when the file is empty, oversized, malformed,
-    /// trailing, noncanonical, or fails verification-lock validation.
-    pub fn decode_canonical_bundle_file(bytes: &[u8]) -> Result<Self, ParseError> {
-        decode_canonical_bundle_file_v1(
-            bytes,
-            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
-            MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1,
-            Self::validate,
-            "Musubi verification lock bundle file is invalid or out of bounds",
-        )
-    }
-    /// Canonicalize all set-like vectors.
-    pub fn canonicalize(&mut self) {
-        self.root_dependencies.sort();
-        self.root_dependencies.dedup();
-        for node in &mut self.nodes {
-            node.dependencies.sort();
-            node.dependencies.dedup();
-        }
-        self.nodes
-            .sort_by(|left, right| left.release.cmp(&right.release));
-        self.nodes
-            .dedup_by(|left, right| left.release == right.release);
-    }
-    /// Validate schema, graph bounds, uniqueness, reachability, cycles, and depth.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the schema or root is invalid, graph collections are oversized or
-    /// noncanonical, a root or node edge is not normal and exact, or the graph is incomplete,
-    /// unreachable, cyclic, or too deep.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.root.validate()?;
-        if self.schema != Self::SCHEMA
-            || self.version != MUSUBI_REGISTRY_VERSION_V1
-            || self.root_dependencies.len() > MUSUBI_MAX_DEPENDENCIES_V1
-            || self
-                .root_dependencies
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            || self
-                .root_dependencies
-                .windows(2)
-                .any(|pair| pair[0].alias >= pair[1].alias)
-            || self.nodes.len() > MUSUBI_MAX_RESOLUTION_NODES_V1
-            || self
-                .nodes
-                .windows(2)
-                .any(|pair| pair[0].release >= pair[1].release)
-            || self.nodes.iter().any(|node| node.release == self.root)
-        {
-            return Err(ParseError::new(
-                "Musubi verification lock is invalid or noncanonical",
-            ));
-        }
-        let nodes = self
-            .nodes
-            .iter()
-            .map(|node| (&node.release, node))
-            .collect::<BTreeMap<_, _>>();
-        for dependency in &self.root_dependencies {
-            dependency.validate()?;
-            if dependency.kind != MusubiDependencyKindV1::Normal
-                || !nodes.contains_key(&dependency.selected)
-            {
-                return Err(ParseError::new(
-                    "Musubi root dependency must be normal and select an exact proof node",
-                ));
-            }
-        }
-        for node in &self.nodes {
-            node.validate()?;
-        }
-        validate_exact_graph(&self.root_dependencies, &self.nodes)
-    }
-    /// Compute the normalized lock digest.
-    #[must_use]
-    pub fn digest(&self) -> MusubiVerificationLockDigestV1 {
-        MusubiVerificationLockDigestV1(domain_hash_value(
-            MUSUBI_VERIFICATION_LOCK_DIGEST_DOMAIN_V1,
-            self,
-        ))
-    }
-}
-fn validate_exact_graph(
-    root_dependencies: &[MusubiExactDependencyEdgeV1],
-    nodes: &[MusubiVerificationNodeV1],
-) -> Result<(), ParseError> {
-    fn visit<'a>(
-        release: &'a MusubiReleaseIdV1,
-        depth: u16,
-        by_release: &BTreeMap<&'a MusubiReleaseIdV1, &'a MusubiVerificationNodeV1>,
-        visiting: &mut BTreeSet<&'a MusubiReleaseIdV1>,
-        complete: &mut BTreeSet<&'a MusubiReleaseIdV1>,
-    ) -> Result<(), ParseError> {
-        if depth > MUSUBI_MAX_RESOLUTION_DEPTH_V1 {
-            return Err(ParseError::new(
-                "Musubi verification graph exceeds maximum depth",
-            ));
-        }
-        if complete.contains(release) {
-            return Ok(());
-        }
-        if !visiting.insert(release) {
-            return Err(ParseError::new(
-                "Musubi verification graph contains a cycle",
-            ));
-        }
-        let node = by_release.get(release).ok_or_else(|| {
-            ParseError::new("Musubi verification graph references a missing node")
-        })?;
-        for edge in &node.dependencies {
-            visit(
-                &edge.selected,
-                depth.saturating_add(1),
-                by_release,
-                visiting,
-                complete,
-            )?;
-        }
-        visiting.remove(release);
-        complete.insert(release);
-        Ok(())
-    }
-    let by_release = nodes
-        .iter()
-        .map(|node| (&node.release, node))
-        .collect::<BTreeMap<_, _>>();
-    let mut complete = BTreeSet::new();
-    let mut visiting = BTreeSet::new();
-    for dependency in root_dependencies {
-        visit(
-            &dependency.selected,
-            1,
-            &by_release,
-            &mut visiting,
-            &mut complete,
-        )?;
-    }
-    if complete.len() != nodes.len() {
-        return Err(ParseError::new(
-            "Musubi verification graph contains unreachable exact nodes",
-        ));
-    }
-    Ok(())
-}
 /// Bounded exact resolution proof supplied at publication.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiResolutionProofV1")]
 pub struct MusubiResolutionProofV1 {
@@ -2636,17 +2400,6 @@ pub struct MusubiResolutionProofV1 {
     /// Normalized exact verification lock.
     pub lock: MusubiVerificationLockV1,
 }
-impl MusubiResolutionProofV1 {
-    /// Validate the finalized anchor and exact graph.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the registry snapshot or verification lock is invalid.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.snapshot.validate()?;
-        self.lock.validate()
-    }
-}
 /// Canonical archive-independent release semantics embedded in the Musubi bundle.
 ///
 /// The archive identity is deliberately absent: the canonical bundle embeds this
@@ -2654,8 +2407,8 @@ impl MusubiResolutionProofV1 {
 /// between the bundle digest and the archive commitment.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSemanticReleaseManifestV1")]
 pub struct MusubiSemanticReleaseManifestV1 {
@@ -2676,85 +2429,21 @@ pub struct MusubiSemanticReleaseManifestV1 {
     /// Digest of the packaged normalized verification lock.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-impl MusubiSemanticReleaseManifestV1 {
-    /// Decode one exact canonical semantic-release bundle file under the shared V1 limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns one stable payload-free error when the file is empty, oversized, malformed,
-    /// trailing, noncanonical, or fails semantic-release validation.
-    pub fn decode_canonical_bundle_file(bytes: &[u8]) -> Result<Self, ParseError> {
-        decode_canonical_bundle_file_v1(
-            bytes,
-            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
-            MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1,
-            Self::validate,
-            "Musubi semantic release bundle file is invalid or out of bounds",
-        )
-    }
-    /// Canonicalize every set-like semantic field before packaging.
-    pub fn canonicalize(&mut self) {
-        self.dependencies.sort();
-        self.dependencies.dedup();
-        self.exports.sort();
-        self.exports.dedup();
-        self.metadata.canonicalize();
-    }
-    /// Validate archive-independent release semantics and canonical ordering.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a nested release field is invalid, collections exceed V1 bounds or are
-    /// noncanonical, a required digest is zero, or the release depends on its own package.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        streaming::validate_semantic_release_fields(
-            &self.release,
-            &self.abi,
-            &self.dependencies,
-            &self.exports,
-            self.interface_digest,
-            &self.metadata,
-            self.verification_lock_digest,
-        )
-    }
-    /// Validate this semantic release against its complete normalized verification lock.
-    ///
-    /// This is the shared bundle/publication boundary: both values must be independently valid,
-    /// the lock must select this exact root and digest, and every published direct dependency must
-    /// correspond one-for-one with a normal exact root edge carrying the same alias, package, and
-    /// requirement.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if either value is invalid or their root, digest, direct-dependency count,
-    /// dependency kind, alias, package, or requirement binding differs.
-    pub fn validate_verification_lock(
-        &self,
-        verification_lock: &MusubiVerificationLockV1,
-    ) -> Result<(), ParseError> {
-        streaming::validate_semantic_release_lock(
-            &self.release,
-            &self.abi,
-            &self.dependencies,
-            &self.exports,
-            &self.metadata,
-            (self.interface_digest, self.verification_lock_digest),
-            verification_lock,
-        )
-    }
-    /// Domain-separated digest used inside bundles, staging receipts, and provider attestations.
-    #[must_use]
-    pub fn semantic_digest(&self) -> MusubiSemanticReleaseDigestV1 {
-        MusubiSemanticReleaseDigestV1(domain_hash_value(
-            MUSUBI_SEMANTIC_RELEASE_DIGEST_DOMAIN_V1,
-            self,
-        ))
-    }
-}
 /// Immutable registry release manifest binding semantic content to one source archive.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseManifestV1")]
 pub struct MusubiReleaseManifestV1 {
@@ -2777,85 +2466,21 @@ pub struct MusubiReleaseManifestV1 {
     /// Digest of the packaged normalized verification lock.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-impl MusubiReleaseManifestV1 {
-    /// Canonicalize set-like fields before publication.
-    pub fn canonicalize(&mut self) {
-        self.dependencies.sort();
-        self.dependencies.dedup();
-        self.exports.sort();
-        self.exports.dedup();
-        self.metadata.canonicalize();
-    }
-    /// Project the canonical archive-independent manifest embedded in the bundle.
-    #[must_use]
-    pub fn semantic_manifest(&self) -> MusubiSemanticReleaseManifestV1 {
-        MusubiSemanticReleaseManifestV1 {
-            release: self.release.clone(),
-            edition: self.edition,
-            abi: self.abi,
-            dependencies: self.dependencies.clone(),
-            exports: self.exports.clone(),
-            interface_digest: self.interface_digest,
-            metadata: self.metadata.clone(),
-            verification_lock_digest: self.verification_lock_digest,
-        }
-    }
-    /// Compute the archive-independent bundle/receipt/provider-attestation digest.
-    #[must_use]
-    pub fn semantic_digest(&self) -> MusubiSemanticReleaseDigestV1 {
-        streaming::semantic_release_digest(self)
-    }
-    /// Explicit alias for [`Self::semantic_digest`].
-    #[must_use]
-    pub fn semantic_release_digest(&self) -> MusubiSemanticReleaseDigestV1 {
-        self.semantic_digest()
-    }
-    /// Validate first-release release-manifest invariants.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the semantic manifest is invalid or the archive identity is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        streaming::validate_semantic_release_fields(
-            &self.release,
-            &self.abi,
-            &self.dependencies,
-            &self.exports,
-            self.interface_digest,
-            &self.metadata,
-            self.verification_lock_digest,
-        )?;
-        if self.archive_id.is_zero() {
-            return Err(ParseError::new(
-                "Musubi registry release manifest has an invalid archive identity",
-            ));
-        }
-        Ok(())
-    }
-    fn validate_verification_lock(
-        &self,
-        verification_lock: &MusubiVerificationLockV1,
-    ) -> Result<(), ParseError> {
-        streaming::validate_semantic_release_lock(
-            &self.release,
-            &self.abi,
-            &self.dependencies,
-            &self.exports,
-            &self.metadata,
-            (self.interface_digest, self.verification_lock_digest),
-            verification_lock,
-        )
-    }
-    /// Domain-separated immutable release digest.
-    #[must_use]
-    pub fn release_digest(&self) -> MusubiReleaseDigestV1 {
-        MusubiReleaseDigestV1(domain_hash_value(MUSUBI_RELEASE_DIGEST_DOMAIN_V1, self))
-    }
-}
 /// Publication payload that binds a release to its independently validated exact proof.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPublicationV1")]
 pub struct MusubiPublicationV1 {
@@ -2864,24 +2489,21 @@ pub struct MusubiPublicationV1 {
     /// Exact dependency proof and packaged verification lock.
     pub resolution: MusubiResolutionProofV1,
 }
-impl MusubiPublicationV1 {
-    /// Validate release, proof root, lock digest, and direct dependency selections.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the manifest or proof is invalid, the proof does not bind the release
-    /// and lock digest, or its exact direct dependencies differ from the manifest.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.manifest.validate()?;
-        self.resolution.validate()?;
-        self.manifest
-            .validate_verification_lock(&self.resolution.lock)
-    }
-}
 /// Exact, replay-resistant request binding accepted by authenticated `SoraFS` seed ingress.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSeedIngressReceiptBindingV1")]
 pub struct MusubiSeedIngressReceiptBindingV1 {
@@ -2902,40 +2524,24 @@ pub struct MusubiSeedIngressReceiptBindingV1 {
     /// Length of the exact CAR request body received by ingress.
     pub car_body_length: u64,
     /// Unpredictable operation nonce preventing receipt replay across attempts.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub nonce: [u8; 32],
 }
-impl MusubiSeedIngressReceiptBindingV1 {
-    /// Validate every exact deployment, actor, commitment, and anti-replay binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an account identity is invalid, the exact network identity is
-    /// malformed, a required identity, digest, or nonce is zero, or the CAR body length is outside
-    /// its V1 bound.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        validate_musubi_account_id_v1(&self.publisher)?;
-        validate_musubi_account_id_v1(&self.ingress_broker)?;
-        if self.network_id.as_bytes()[31] & 1 != 1
-            || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
-            || self.semantic_release_manifest_digest.is_zero()
-            || self.archive_id.is_zero()
-            || self.car_body_digest.is_zero()
-            || self.car_body_length == 0
-            || self.car_body_length > MUSUBI_MAX_CAR_BYTES_V1
-            || digest_is_zero(&self.nonce)
-        {
-            return Err(ParseError::new(
-                "Musubi seed-ingress receipt binding is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Canonical expiring statement signed by an authenticated `SoraFS` seed-ingress broker.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSeedIngressReceiptPayloadV1")]
 pub struct MusubiSeedIngressReceiptPayloadV1 {
@@ -2948,40 +2554,21 @@ pub struct MusubiSeedIngressReceiptPayloadV1 {
     /// Inclusive receipt expiry in Unix milliseconds.
     pub expires_at_ms: u64,
 }
-impl MusubiSeedIngressReceiptPayloadV1 {
-    /// Validate the closed schema, exact request binding, and bounded positive lifetime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request binding is invalid, the schema version is unsupported, or
-    /// the issue and expiry times do not define a positive lifetime within the V1 bound.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.binding.validate()?;
-        let lifetime = self
-            .expires_at_ms
-            .checked_sub(self.issued_at_ms)
-            .filter(|lifetime| *lifetime > 0)
-            .ok_or_else(|| ParseError::new("Musubi seed-ingress receipt lifetime is invalid"))?;
-        if self.version != MUSUBI_REGISTRY_VERSION_V1
-            || self.issued_at_ms == 0
-            || lifetime > MUSUBI_MAX_SEED_INGRESS_RECEIPT_LIFETIME_MS_V1
-        {
-            return Err(ParseError::new(
-                "Musubi seed-ingress receipt lifetime or version is invalid",
-            ));
-        }
-        Ok(())
-    }
-    /// Compute the domain-separated typed hash signed by the ingress broker controller.
-    #[must_use]
-    pub fn signing_hash(&self) -> HashOf<Self> {
-        domain_signing_hash(MUSUBI_SEED_INGRESS_RECEIPT_SIGNATURE_DOMAIN_V1, self)
-    }
-}
 /// One ingress-broker controller approval over an exact staging receipt payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSeedIngressReceiptApprovalV1")]
 pub struct MusubiSeedIngressReceiptApprovalV1 {
@@ -2991,9 +2578,20 @@ pub struct MusubiSeedIngressReceiptApprovalV1 {
     pub signature: SignatureOf<MusubiSeedIngressReceiptPayloadV1>,
 }
 /// Signed, expiring `SoraFS` seed-ingress receipt used by resumable publication.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSeedIngressReceiptV1")]
 pub struct MusubiSeedIngressReceiptV1 {
@@ -3002,106 +2600,21 @@ pub struct MusubiSeedIngressReceiptV1 {
     /// Canonically ordered approvals from the ingress broker controller.
     pub approvals: Vec<MusubiSeedIngressReceiptApprovalV1>,
 }
-impl MusubiSeedIngressReceiptV1 {
-    /// Validate the payload and bounded, strictly ordered controller approval set.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload is invalid, approvals are empty, oversized, unsorted, or
-    /// duplicated, or an approval signature has an invalid payload length.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.payload.validate()?;
-        if self.approvals.is_empty()
-            || self.approvals.len() > MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1
-            || !self
-                .approvals
-                .windows(2)
-                .all(|pair| pair[0].public_key < pair[1].public_key)
-        {
-            return Err(ParseError::new(
-                "Musubi seed-ingress receipt approvals must be bounded, sorted, and unique",
-            ));
-        }
-        self.approvals.iter().try_for_each(|approval| {
-            validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
-        })
-    }
-    /// Verify the exact request binding, receipt validity window, and broker controller quorum.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if validation fails, the expected binding or validity window does not
-    /// match, an approval is not a broker key, a signature fails, or controller quorum is absent.
-    pub fn verify(
-        &self,
-        expected_binding: &MusubiSeedIngressReceiptBindingV1,
-        current_time_ms: u64,
-    ) -> Result<(), ParseError> {
-        self.validate()?;
-        if &self.payload.binding != expected_binding
-            || current_time_ms < self.payload.issued_at_ms
-            || current_time_ms > self.payload.expires_at_ms
-        {
-            return Err(ParseError::new(
-                "Musubi seed-ingress receipt binding or validity window does not match",
-            ));
-        }
-        let signing_hash = self.payload.signing_hash();
-        match self.payload.binding.ingress_broker.controller() {
-            AccountController::Single(public_key) => {
-                let [approval] = self.approvals.as_slice() else {
-                    return Err(ParseError::new(
-                        "Musubi single-key ingress broker requires exactly one approval",
-                    ));
-                };
-                if &approval.public_key != public_key {
-                    return Err(ParseError::new(
-                        "Musubi seed-ingress receipt approval is not a broker key",
-                    ));
-                }
-                approval
-                    .signature
-                    .verify_hash(public_key, signing_hash)
-                    .map_err(|_| ParseError::new("Musubi seed-ingress receipt signature failed"))
-            }
-            AccountController::Multisig(policy) => {
-                let mut approved_weight = 0_u32;
-                for approval in &self.approvals {
-                    let Some(member) = policy
-                        .members()
-                        .iter()
-                        .find(|member| member.public_key() == &approval.public_key)
-                    else {
-                        return Err(ParseError::new(
-                            "Musubi seed-ingress receipt approval is not a broker key",
-                        ));
-                    };
-                    approval
-                        .signature
-                        .verify_hash(&approval.public_key, signing_hash)
-                        .map_err(|_| {
-                            ParseError::new("Musubi seed-ingress receipt signature failed")
-                        })?;
-                    approved_weight = approved_weight
-                        .checked_add(u32::from(member.weight()))
-                        .ok_or_else(|| {
-                            ParseError::new("Musubi seed-ingress receipt weight overflows")
-                        })?;
-                }
-                if approved_weight < u32::from(policy.threshold()) {
-                    return Err(ParseError::new(
-                        "Musubi seed-ingress receipt does not meet broker threshold",
-                    ));
-                }
-                Ok(())
-            }
-        }
-    }
-}
 /// Exact parsed-bundle and finalized-replication completion bound by one provider.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleVerificationBindingV1")]
 pub struct MusubiProviderBundleVerificationBindingV1 {
@@ -3134,47 +2647,21 @@ pub struct MusubiProviderBundleVerificationBindingV1 {
     /// Digest of the normalized source tree parsed from the bundle.
     pub source_tree_digest: MusubiContentDigestV1,
 }
-impl MusubiProviderBundleVerificationBindingV1 {
-    /// Validate exact provider authority, finalized completion, and parsed bundle commitments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an account, provider authority, assignment, finalized anchor, archive,
-    /// replication order, exact network identity, or required bundle commitment is invalid or
-    /// inert.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        validate_musubi_account_id_v1(&self.completed_by)?;
-        validate_musubi_account_id_v1(&self.completion_authority.provider_owner)?;
-        if self.network_id.as_bytes()[31] & 1 != 1
-            || self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
-            || self.completed_by != self.completion_authority.provider_owner
-            || !self.completion_authority.is_valid()
-            || self
-                .replication_order
-                .as_bytes()
-                .iter()
-                .all(|byte| *byte == 0)
-            || self.assignment_revision == 0
-            || self.completion_epoch == 0
-            || !self.finalized_anchor.is_valid()
-            || self.archive_id.is_zero()
-            || self.bundle_digest.is_zero()
-            || self.descriptor_digest.is_zero()
-            || self.semantic_release_manifest_digest.is_zero()
-            || self.verification_lock_digest.is_zero()
-            || self.source_tree_digest.is_zero()
-        {
-            return Err(ParseError::new(
-                "Musubi provider bundle verification binding is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Canonical statement that a provider parsed and verified a bundle before finalized completion.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleVerificationPayloadV1")]
 pub struct MusubiProviderBundleVerificationPayloadV1 {
@@ -3183,31 +2670,21 @@ pub struct MusubiProviderBundleVerificationPayloadV1 {
     /// Exact deployment, bundle, provider, and finalized completion binding.
     pub binding: MusubiProviderBundleVerificationBindingV1,
 }
-impl MusubiProviderBundleVerificationPayloadV1 {
-    /// Validate the closed schema and every exact attestation binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the attestation version is unsupported or its exact provider binding
-    /// is invalid.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.version != MUSUBI_REGISTRY_VERSION_V1 {
-            return Err(ParseError::new(
-                "Musubi provider bundle verification version is invalid",
-            ));
-        }
-        self.binding.validate()
-    }
-    /// Compute the domain-separated typed hash signed by the provider-owner controller.
-    #[must_use]
-    pub fn signing_hash(&self) -> HashOf<Self> {
-        domain_signing_hash(MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SIGNATURE_DOMAIN_V1, self)
-    }
-}
 /// One provider-owner controller approval over an exact bundle verification payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleVerificationApprovalV1")]
 pub struct MusubiProviderBundleVerificationApprovalV1 {
@@ -3217,9 +2694,20 @@ pub struct MusubiProviderBundleVerificationApprovalV1 {
     pub signature: SignatureOf<MusubiProviderBundleVerificationPayloadV1>,
 }
 /// Signed provider proof that the canonical bundle was parsed and verified before completion.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleVerificationAttestationV1")]
 pub struct MusubiProviderBundleVerificationAttestationV1 {
@@ -3228,141 +2716,23 @@ pub struct MusubiProviderBundleVerificationAttestationV1 {
     /// Canonically ordered approvals from the provider-owner controller.
     pub approvals: Vec<MusubiProviderBundleVerificationApprovalV1>,
 }
-impl MusubiProviderBundleVerificationAttestationV1 {
-    /// Validate the payload and bounded, strictly ordered controller approval set.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if canonical encoding fails or is oversized, the payload is invalid,
-    /// approvals are empty or noncanonical, or an approval signature length is invalid.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        let canonical_len = canonical_frame_len(self).map_err(|_| {
-            ParseError::new("Musubi provider bundle attestation has no canonical Norito encoding")
-        })?;
-        if canonical_len == 0
-            || canonical_len > MUSUBI_MAX_PROVIDER_BUNDLE_ATTESTATION_CANONICAL_BYTES_V1
-        {
-            return Err(ParseError::new(
-                "Musubi provider bundle attestation exceeds its canonical byte bound",
-            ));
-        }
-        self.payload.validate()?;
-        if self.approvals.is_empty()
-            || self.approvals.len() > MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1
-            || !self
-                .approvals
-                .windows(2)
-                .all(|pair| pair[0].public_key < pair[1].public_key)
-        {
-            return Err(ParseError::new(
-                "Musubi provider bundle approvals must be bounded, sorted, and unique",
-            ));
-        }
-        self.approvals.iter().try_for_each(|approval| {
-            validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
-        })
-    }
-    /// Return the deterministic immutable storage identity selected by the signed binding.
-    #[must_use]
-    pub const fn key(&self) -> MusubiProviderBundleAttestationKeyV1 {
-        MusubiProviderBundleAttestationKeyV1 {
-            archive_id: self.payload.binding.archive_id,
-            replication_order: self.payload.binding.replication_order,
-            provider_id: self.payload.binding.provider_id,
-        }
-    }
-    /// Compute the domain-separated digest of the complete canonical attestation.
-    #[must_use]
-    pub fn digest(&self) -> MusubiProviderBundleAttestationDigestV1 {
-        MusubiProviderBundleAttestationDigestV1(domain_hash_value(
-            MUSUBI_PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN_V1,
-            self,
-        ))
-    }
-    /// Return the compact provider/digest reference used by an archive-location set commitment.
-    #[must_use]
-    pub fn reference(&self) -> MusubiProviderBundleAttestationRefV1 {
-        MusubiProviderBundleAttestationRefV1 {
-            provider_id: self.payload.binding.provider_id,
-            digest: self.digest(),
-        }
-    }
-    /// Verify the exact finalized completion binding and provider-owner controller quorum.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if validation fails, the expected binding differs, an approval is not a
-    /// provider-owner key, a signature fails, or the provider-owner threshold is not met.
-    pub fn verify(
-        &self,
-        expected_binding: &MusubiProviderBundleVerificationBindingV1,
-    ) -> Result<(), ParseError> {
-        self.validate()?;
-        if &self.payload.binding != expected_binding {
-            return Err(ParseError::new(
-                "Musubi provider bundle verification binding does not match",
-            ));
-        }
-        let signing_hash = self.payload.signing_hash();
-        match self
-            .payload
-            .binding
-            .completion_authority
-            .provider_owner
-            .controller()
-        {
-            AccountController::Single(public_key) => {
-                let [approval] = self.approvals.as_slice() else {
-                    return Err(ParseError::new(
-                        "Musubi single-key provider owner requires exactly one approval",
-                    ));
-                };
-                if &approval.public_key != public_key {
-                    return Err(ParseError::new(
-                        "Musubi provider bundle approval is not a provider-owner key",
-                    ));
-                }
-                approval
-                    .signature
-                    .verify_hash(public_key, signing_hash)
-                    .map_err(|_| ParseError::new("Musubi provider bundle signature failed"))
-            }
-            AccountController::Multisig(policy) => {
-                let mut approved_weight = 0_u32;
-                for approval in &self.approvals {
-                    let Some(member) = policy
-                        .members()
-                        .iter()
-                        .find(|member| member.public_key() == &approval.public_key)
-                    else {
-                        return Err(ParseError::new(
-                            "Musubi provider bundle approval is not a provider-owner key",
-                        ));
-                    };
-                    approval
-                        .signature
-                        .verify_hash(&approval.public_key, signing_hash)
-                        .map_err(|_| ParseError::new("Musubi provider bundle signature failed"))?;
-                    approved_weight = approved_weight
-                        .checked_add(u32::from(member.weight()))
-                        .ok_or_else(|| {
-                            ParseError::new("Musubi provider bundle approval weight overflows")
-                        })?;
-                }
-                if approved_weight < u32::from(policy.threshold()) {
-                    return Err(ParseError::new(
-                        "Musubi provider bundle approvals do not meet provider-owner threshold",
-                    ));
-                }
-                Ok(())
-            }
-        }
-    }
-}
 /// Deterministic immutable identity of one provider's proof for an archive replication order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleAttestationKeyV1")]
 pub struct MusubiProviderBundleAttestationKeyV1 {
@@ -3373,28 +2743,23 @@ pub struct MusubiProviderBundleAttestationKeyV1 {
     /// Provider that completed and attested to the verification.
     pub provider_id: ProviderId,
 }
-impl MusubiProviderBundleAttestationKeyV1 {
-    /// Validate every immutable identity component.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the archive, replication order, or provider identity is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.archive_id.is_zero()
-            || digest_is_zero(self.replication_order.as_bytes())
-            || self.provider_id.as_bytes().iter().all(|byte| *byte == 0)
-        {
-            return Err(ParseError::new(
-                "Musubi provider bundle attestation key is invalid",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Compact immutable provider-attestation reference used by an archive-location set commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleAttestationRefV1")]
 pub struct MusubiProviderBundleAttestationRefV1 {
@@ -3402,21 +2767,6 @@ pub struct MusubiProviderBundleAttestationRefV1 {
     pub provider_id: ProviderId,
     /// Digest of the complete canonical provider attestation.
     pub digest: MusubiProviderBundleAttestationDigestV1,
-}
-impl MusubiProviderBundleAttestationRefV1 {
-    /// Validate the compact provider and digest binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provider identity or attestation digest is zero.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        if self.provider_id.as_bytes().iter().all(|byte| *byte == 0) || self.digest.is_zero() {
-            return Err(ParseError::new(
-                "Musubi provider bundle attestation reference is invalid",
-            ));
-        }
-        Ok(())
-    }
 }
 #[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleAttestationSetPreimageV1")]
@@ -3462,9 +2812,18 @@ pub fn musubi_provider_bundle_attestation_set_digest_v1(
     )))
 }
 /// Immutable full provider-attestation registry record addressed by its exact binding.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleAttestationRecordV1")]
 pub struct MusubiProviderBundleAttestationRecordV1 {
@@ -3479,33 +2838,21 @@ pub struct MusubiProviderBundleAttestationRecordV1 {
     /// Finalized height at which the immutable proof was registered.
     pub registered_at_height: u64,
 }
-impl MusubiProviderBundleAttestationRecordV1 {
-    /// Validate the full proof and every redundant immutable identity binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the key, attestation, or registering account is invalid, or if the
-    /// stored key, digest, and nonzero registration height do not bind that attestation exactly.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.key.validate()?;
-        self.attestation.validate()?;
-        validate_musubi_account_id_v1(&self.registered_by)?;
-        if self.key != self.attestation.key()
-            || self.attestation_digest.is_zero()
-            || self.attestation_digest != self.attestation.digest()
-            || self.registered_at_height == 0
-        {
-            return Err(ParseError::new(
-                "Musubi provider bundle attestation record is inconsistent",
-            ));
-        }
-        Ok(())
-    }
-}
 /// Canonical, domain-separated payload authorized by a namespace owner.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiNamespaceDelegationPayloadV1")]
 pub struct MusubiNamespaceDelegationPayloadV1 {
@@ -3550,9 +2897,20 @@ impl MusubiNamespaceDelegationPayloadV1 {
     }
 }
 /// One owner-controller approval of a namespace delegation payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiNamespaceDelegationApprovalV1")]
 pub struct MusubiNamespaceDelegationApprovalV1 {
@@ -3562,9 +2920,20 @@ pub struct MusubiNamespaceDelegationApprovalV1 {
     pub signature: SignatureOf<MusubiNamespaceDelegationPayloadV1>,
 }
 /// Generation-bound authority to claim an absent package in one namespace.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiNamespaceDelegationV1")]
 pub struct MusubiNamespaceDelegationV1 {
@@ -3679,9 +3048,22 @@ impl MusubiNamespaceDelegationV1 {
     }
 }
 /// Independent package governance revisions used for compare-and-set mutations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageRevisionsV1")]
 pub struct MusubiPackageRevisionsV1 {
@@ -3706,9 +3088,18 @@ impl MusubiPackageRevisionsV1 {
     }
 }
 /// Authoritative package record stored in the stable home dataspace.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageRecordV1")]
 pub struct MusubiPackageRecordV1 {
@@ -3772,9 +3163,22 @@ impl MusubiPackageRecordV1 {
     }
 }
 /// Independent permissions granted to an accepted package maintainer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "four independent permission bits are the canonical Musubi V1 wire shape"
@@ -3799,12 +3203,22 @@ impl MusubiMaintainerPermissionsV1 {
     }
 }
 /// Accepted package member role.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageRoleV1")]
 pub enum MusubiPackageRoleV1 {
@@ -3814,9 +3228,21 @@ pub enum MusubiPackageRoleV1 {
     Maintainer(MusubiMaintainerPermissionsV1),
 }
 /// Canonical package-local ordered key for an accepted member.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageMemberKeyV1")]
 pub struct MusubiPackageMemberKeyV1 {
@@ -3842,9 +3268,20 @@ impl MusubiPackageMemberKeyV1 {
     }
 }
 /// Accepted package member record.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageMemberV1")]
 pub struct MusubiPackageMemberV1 {
@@ -3884,12 +3321,22 @@ impl MusubiPackageMemberV1 {
     }
 }
 /// Invitation lifecycle; only acceptance creates package authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiInvitationStateV1")]
 pub enum MusubiInvitationStateV1 {
@@ -3903,9 +3350,20 @@ pub enum MusubiInvitationStateV1 {
     Expired,
 }
 /// Package owner/maintainer invitation bound to a governance revision.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiMaintainerInvitationV1")]
 pub struct MusubiMaintainerInvitationV1 {
@@ -3955,9 +3413,21 @@ impl MusubiMaintainerInvitationV1 {
 /// Accepted members use `invitation = None`; pending invitations use their
 /// globally unique invitation identity. This orders an accepted member before
 /// any pending invitations for the same account without requiring a scan.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiMaintainerDirectoryKeyV1")]
 pub struct MusubiMaintainerDirectoryKeyV1 {
@@ -4027,12 +3497,20 @@ impl MusubiMaintainerDirectoryKeyV1 {
     }
 }
 /// Accepted member or pending package-governance invitation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiMaintainerDirectoryEntryV1")]
 pub enum MusubiMaintainerDirectoryEntryV1 {
@@ -4176,9 +3654,20 @@ fn maintainer_cursor_key_is_canonical_v1(raw: &str) -> bool {
         && invitation.bytes().any(|byte| byte != b'0')
 }
 /// Mutable package metadata record, separate from immutable release metadata.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiPackageMetadataRecordV1")]
 pub struct MusubiPackageMetadataRecordV1 {
@@ -4211,9 +3700,20 @@ impl MusubiPackageMetadataRecordV1 {
     }
 }
 /// Reversible release-yank state, separate from immutable release content.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseYankV1")]
 pub struct MusubiReleaseYankV1 {
@@ -4224,7 +3724,7 @@ pub struct MusubiReleaseYankV1 {
     /// Required reason for the transition.
     pub reason: MusubiReasonV1,
     /// Account applying the transition.
-    #[cfg_attr(feature = "json", norito(json = "streaming::account_i105_json"))]
+    #[norito(json = "streaming::account_i105_json")]
     pub changed_by: AccountId,
     /// Finalized transition height.
     pub changed_at_height: u64,
@@ -4249,9 +3749,18 @@ impl MusubiReleaseYankV1 {
     }
 }
 /// Persisted outcome of an applied artifact takedown.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArtifactTakedownV1")]
 pub struct MusubiArtifactTakedownV1 {
@@ -4263,12 +3772,18 @@ pub struct MusubiArtifactTakedownV1 {
     pub applied_at_height: u64,
 }
 /// Governed artifact availability, independent of yank and replication health.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiArtifactGovernanceStateV1")]
 pub enum MusubiArtifactGovernanceStateV1 {
@@ -4297,9 +3812,18 @@ impl MusubiArtifactGovernanceStateV1 {
     }
 }
 /// Complete resolver selection state for one exact release.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseSelectionStateV1")]
 pub struct MusubiReleaseSelectionStateV1 {
@@ -4330,9 +3854,22 @@ impl MusubiReleaseSelectionStateV1 {
     }
 }
 /// Independent compare-and-set revisions for mutable release projections.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseRevisionsV1")]
 pub struct MusubiReleaseRevisionsV1 {
@@ -4355,9 +3892,18 @@ impl MusubiReleaseRevisionsV1 {
     }
 }
 /// Authoritative release record; storage health remains a separate universal projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiReleaseRecordV1")]
 pub struct MusubiReleaseRecordV1 {
@@ -4402,9 +3948,21 @@ impl MusubiReleaseRecordV1 {
     }
 }
 /// Canonical permanent global alias name.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasNameV1")]
 pub struct MusubiAliasNameV1(String);
 impl MusubiAliasNameV1 {
@@ -4439,9 +3997,21 @@ impl fmt::Display for MusubiAliasNameV1 {
     }
 }
 /// Prospective global-alias price policy denominated in whole XOR.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasPricingPolicyV1")]
 pub struct MusubiAliasPricingPolicyV1 {
@@ -4501,9 +4071,18 @@ impl MusubiAliasPricingPolicyV1 {
     }
 }
 /// Permanent global alias registration.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasRecordV1")]
 pub struct MusubiAliasRecordV1 {
@@ -4545,12 +4124,22 @@ impl MusubiAliasRecordV1 {
     }
 }
 /// Permanent alias history action.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasHistoryActionV1")]
 pub enum MusubiAliasHistoryActionV1 {
@@ -4560,9 +4149,21 @@ pub enum MusubiAliasHistoryActionV1 {
     ParliamentRetarget,
 }
 /// Canonical permanent-alias history key ordered by alias and revision.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasHistoryKeyV1")]
 pub struct MusubiAliasHistoryKeyV1 {
@@ -4579,9 +4180,20 @@ impl MusubiAliasHistoryKeyV1 {
     }
 }
 /// One immutable alias-history entry.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiAliasHistoryEntryV1")]
 pub struct MusubiAliasHistoryEntryV1 {
@@ -4639,14 +4251,26 @@ impl MusubiAliasHistoryEntryV1 {
     }
 }
 /// Enacted Parliament decision binding one exact Musubi action.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiGovernanceDecisionV1")]
 pub struct MusubiGovernanceDecisionV1 {
     /// Unique enacted decision identifier for replay protection.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub decision_id: [u8; 32],
     /// Digest of the exact action payload.
     pub action_digest: MusubiGovernanceActionDigestV1,
@@ -4674,9 +4298,21 @@ impl MusubiGovernanceDecisionV1 {
     }
 }
 /// Persisted proof that an enacted Parliament decision was consumed on-chain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiGovernanceDecisionConsumptionV1")]
 pub struct MusubiGovernanceDecisionConsumptionV1 {
@@ -4715,9 +4351,20 @@ impl MusubiGovernanceDecisionConsumptionV1 {
     }
 }
 /// Payload for Parliament package-owner recovery.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiRecoverPackageOwnersV1")]
 pub struct MusubiRecoverPackageOwnersV1 {
@@ -4752,9 +4399,18 @@ impl MusubiRecoverPackageOwnersV1 {
     }
 }
 /// Payload for Parliament alias recovery.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiRetargetAliasV1")]
 pub struct MusubiRetargetAliasV1 {
@@ -4766,9 +4422,18 @@ pub struct MusubiRetargetAliasV1 {
     pub expected_revision: u64,
 }
 /// Payload for Parliament artifact takedown.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiTakedownArtifactActionV1")]
 pub struct MusubiTakedownArtifactActionV1 {
@@ -4780,9 +4445,18 @@ pub struct MusubiTakedownArtifactActionV1 {
     pub expected_artifact_governance_revision: u64,
 }
 /// Payload for an enacted Musubi registry-policy replacement.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiSetRegistryPolicyActionV1")]
 pub struct MusubiSetRegistryPolicyActionV1 {
@@ -4792,12 +4466,18 @@ pub struct MusubiSetRegistryPolicyActionV1 {
     pub expected_revision: u64,
 }
 /// Closed Parliament-only Musubi recovery and policy-replacement action.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "kind", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiParliamentActionV1")]
 pub enum MusubiParliamentActionV1 {
@@ -4974,6 +4654,7 @@ include!("musubi/registry_policy_impl.rs");
 include!("musubi/query_models.rs");
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::topology::DataSpaceId;
     include!("musubi_tests.rs");
     include!("musubi/registry_query_tests.rs");
 }

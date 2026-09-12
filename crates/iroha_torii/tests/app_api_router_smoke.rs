@@ -10,7 +10,8 @@ use std::sync::Arc;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
 };
-use iroha_data_model::{ChainId, peer::PeerId};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use tower::ServiceExt as _; // for Router::oneshot
 // use iroha_primitives::addr::socket_addr; // unused in this smoke test
 #[path = "fixtures.rs"]
@@ -56,6 +57,7 @@ async fn app_api_router_smoke() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -468,6 +470,7 @@ async fn contract_routes_honor_api_token_requirement() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -552,3 +555,6 @@ async fn contract_routes_honor_api_token_requirement() {
     .await;
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

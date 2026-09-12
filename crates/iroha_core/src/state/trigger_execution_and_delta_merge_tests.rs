@@ -1512,6 +1512,13 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into(),
+        );
         let mut metadata = Metadata::default();
         metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
@@ -1590,6 +1597,13 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into(),
+        );
         for (trigger_id, flag_key, enabled_value) in [
             (
                 numeric_trigger_id.clone(),
@@ -1670,7 +1684,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     }
 }
 #[test]
-fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
+fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
     use iroha_data_model::prelude::DataEvent;
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -1689,6 +1703,13 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into(),
+        );
         let action = Action::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 ALICE_ID.clone(),
@@ -1706,22 +1727,14 @@ fn execute_data_triggers_dfs_prunes_depleted_trigger_without_mutating_state() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    {
-        let mut trigger_block = state.world.triggers.block();
-        let mut trigger_tx = trigger_block.transaction();
-        let updated = trigger_tx.inspect_by_id_mut(&trigger_id, |action| {
-            action.set_repeats(Repeats::Exactly(0));
-        });
-        assert!(
-            updated.is_some(),
-            "trigger should be present for depletion setup"
-        );
-        trigger_tx.apply();
-        trigger_block.commit();
-    }
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
+    stx.decrease_trigger_repeats_and_cleanup(&trigger_id);
+    assert!(
+        stx.world.triggers.ids().get(&trigger_id).is_none(),
+        "repeat depletion must remove the trigger before bounded event scanning"
+    );
     let event = data_pre::DomainEvent::Created(
         Domain::new(DomainId::try_new("alpha", "universal").unwrap()).build(&ALICE_ID),
     );
@@ -1819,6 +1832,13 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         Register::account(new_sample_account(&BOB_ID))
             .execute(&BOB_ID, &mut stx)
             .unwrap();
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: BOB_ID.clone(),
+            }
+            .into(),
+        );
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "rose",
@@ -1902,6 +1922,13 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into(),
+        );
         let action = Action::new(
             Executable::Ivm(bytecode),
             Repeats::Indefinitely,

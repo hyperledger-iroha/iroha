@@ -4,22 +4,20 @@ use crate::sorafs::capability_name;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use hex::ToHex;
 use iroha_core::state::{WorldReadOnly, WorldView};
-use iroha_data_model::{
-    metadata::Metadata,
-    name::Name,
-    sorafs::{
-        capacity::{
-            CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
-            CapacityDisputeRecord, CapacityDisputeStatus, CapacityFeeLedgerEntry, ProviderId,
-        },
-        pin_registry::{
-            ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
-            PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass,
-        },
-        pricing::ProviderCreditRecord,
+use iroha_data_model::sorafs::{
+    capacity::{
+        CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
+        CapacityDisputeRecord, CapacityDisputeStatus, CapacityFeeLedgerEntry, ProviderId,
     },
+    pin_registry::{
+        ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
+        PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
+        ReplicationOrderStatus, StorageClass,
+    },
+    pricing::ProviderCreditRecord,
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -2330,8 +2328,6 @@ mod tests {
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
         account::AccountId,
-        domain::DomainId,
-        metadata::Metadata,
         sorafs::{
             capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
             pin_registry::{
@@ -2344,6 +2340,8 @@ mod tests {
             pricing::ProviderCreditRecord,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use sorafs_manifest::{
         capacity::{
             CapacityDeclarationV1, ChunkerCommitmentV1, LaneCommitmentV1, PricingScheduleV1,

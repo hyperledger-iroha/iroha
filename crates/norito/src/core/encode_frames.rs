@@ -103,7 +103,11 @@ where
         .ok_or(Error::LengthMismatch)?;
     prefix(writer, frame_len)?;
 
-    let mut header = Header::new(T::schema_hash(), payload_len_u64, first_checksum);
+    let mut header = Header::new(
+        crate::schema::identity::frame_hash::<T>(),
+        payload_len_u64,
+        first_checksum,
+    );
     header.flags |= first_flags;
     header.write(&mut *writer)?;
     let mut padding = padding;
@@ -165,9 +169,10 @@ mod tests {
         write_len_header,
     };
 
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.encode_frames.Leaf")]
     struct Leaf<'a>(&'a Cell<usize>);
 
-    impl NoritoSerialize for Leaf<'_> {}
     impl SerializePayload for Leaf<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.0.set(self.0.get() + 1);
@@ -180,9 +185,10 @@ mod tests {
         }
     }
 
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.encode_frames.Framed")]
     struct Framed<T>(T);
 
-    impl<T: NoritoSerialize> NoritoSerialize for Framed<T> {}
     impl<T: NoritoSerialize> SerializePayload for Framed<T> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             write_frame_with_prefix(&self.0, writer, |writer, length| {
@@ -274,6 +280,8 @@ mod tests {
         assert_eq!(&bytes[bytes.len() - expected_frame.len()..], expected_frame);
     }
 
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.encode_frames.Changes")]
     struct Changes {
         visits: Cell<usize>,
         first: &'static [u8],
@@ -281,7 +289,6 @@ mod tests {
         flag_drift: bool,
     }
 
-    impl NoritoSerialize for Changes {}
     impl SerializePayload for Changes {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let first = self.visits.replace(self.visits.get() + 1) == 0;
@@ -341,8 +348,10 @@ mod tests {
 
     #[test]
     fn prefixed_frame_propagates_measurement_and_prefix_errors_without_replay() {
+        #[derive(crate::NoritoSchema)]
+        #[norito_schema(name = "norito.test.core.encode_frames.Fails")]
         struct Fails;
-        impl NoritoSerialize for Fails {}
+
         impl SerializePayload for Fails {
             fn serialize(&self, _writer: &mut Encoder<'_>) -> Result<(), Error> {
                 Err(Error::NonCanonicalEncoding)

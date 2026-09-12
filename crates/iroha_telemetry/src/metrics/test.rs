@@ -2,6 +2,16 @@
 use super::*;
 use norito::json::{self, Value};
 use std::time::Duration;
+fn assert_build_status_eq(actual: &BuildStatus, expected: &BuildStatus) {
+    assert_eq!(actual.version, expected.version);
+    assert_eq!(actual.git_commit_sha, expected.git_commit_sha);
+    assert_eq!(
+        actual.dpn_validator_release_commit,
+        expected.dpn_validator_release_commit
+    );
+    assert_eq!(actual.cargo_features, expected.cargo_features);
+    assert_eq!(actual.target_triple, expected.target_triple);
+}
 fn assert_float_metric_eq(actual: f64, expected: f64, context: &str) {
     assert!(
         (actual - expected).abs() < f64::EPSILON,
@@ -28,7 +38,7 @@ fn metrics_lifecycle() {
             .try_to_string()
             .expect("Should not fail for default")
     );
-    println!("{:?}", metrics.status_snapshot());
+    println!("{:?}", metrics.status_snapshot(&build_status_fixture()));
     println!("{:?}", Status::default());
 }
 #[test]
@@ -1929,7 +1939,7 @@ fn status_uses_one_complete_v1_binary_layout() {
     let expected_json = json::to_json(&status).expect("serialize status JSON");
     let bytes = norito::to_bytes(&status).expect("serialize status");
     let archived = norito::from_bytes::<Status>(&bytes).expect("deserialize status");
-    let decoded = <Status as norito::NoritoDeserialize>::deserialize(archived);
+    let decoded = <Status as norito::DeserializePayload>::deserialize(archived);
 
     assert_eq!(
         json::to_json(&decoded).expect("serialize decoded status JSON"),
@@ -1967,7 +1977,7 @@ fn sumeragi_status_v1_binary_roundtrip_preserves_every_field() {
     let bytes = norito::to_bytes(&status).expect("serialize consensus status");
     let archived = norito::from_bytes::<SumeragiConsensusStatus>(&bytes)
         .expect("deserialize consensus status");
-    let decoded = <SumeragiConsensusStatus as norito::NoritoDeserialize>::deserialize(archived);
+    let decoded = <SumeragiConsensusStatus as norito::DeserializePayload>::deserialize(archived);
 
     assert_eq!(
         json::to_json(&decoded).expect("serialize decoded consensus status JSON"),
@@ -2205,7 +2215,7 @@ fn status_snapshot_includes_queue_and_block_liveness() {
     metrics
         .last_non_empty_block_committed_at_ms
         .set(now.saturating_sub(500));
-    let status = metrics.status_snapshot();
+    let status = metrics.status_snapshot(&build_status_fixture());
     assert!(status.observed_at_ms >= now);
     assert_eq!(status.queue_size, 8);
     assert_eq!(status.queue_queued, 5);
@@ -2223,24 +2233,20 @@ fn status_snapshot_includes_queue_and_block_liveness() {
 fn status_snapshot_reports_node_build_and_crypto_capabilities() {
     let metrics = Metrics::default();
     metrics.sm_openssl_preview.set(1);
-    let status = metrics.status_snapshot();
-    assert_eq!(status.build.version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(
-        status.build.git_commit_sha,
-        option_env!("VERGEN_GIT_SHA").unwrap_or("unknown")
-    );
-    assert_eq!(
-        status.build.dpn_validator_release_commit,
-        option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT").unwrap_or("unknown")
-    );
-    assert_eq!(
-        status.build.cargo_features,
-        option_env!("VERGEN_CARGO_FEATURES").unwrap_or("unknown")
-    );
-    assert_eq!(
-        status.build.target_triple,
-        option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown")
-    );
+    let status = metrics.status_snapshot(&build_status_fixture());
+    let build = build_status_fixture();
+    assert_build_status_eq(&status.build, &build);
+    let wire = norito::to_bytes(&status).expect("encode executable status");
+    let archived = norito::from_bytes::<Status>(&wire).expect("decode executable status");
+    let decoded = <Status as norito::DeserializePayload>::deserialize(archived);
+    assert_build_status_eq(&decoded.build, &build);
+    let json = norito::json::to_json(&status).expect("encode executable status JSON");
+    let decoded: Status = norito::json::from_str(&json).expect("decode executable status JSON");
+    assert_build_status_eq(&decoded.build, &build);
+    let mut other = build.clone();
+    other.git_commit_sha = "3333333333333333333333333333333333333333".to_owned();
+    assert_build_status_eq(&metrics.status_snapshot(&other).build, &other);
+    assert_build_status_eq(&status.build, &build);
     assert_eq!(status.crypto.sm_helpers_available, cfg!(feature = "sm"));
     assert!(status.crypto.sm_openssl_preview_enabled);
 }

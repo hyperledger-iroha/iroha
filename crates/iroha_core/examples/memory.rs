@@ -65,6 +65,8 @@ mod util {
     use iroha_core::smartcontracts::Registrable;
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_SYNTHETIC_VALUE: AtomicU64 = AtomicU64::new(1);
     fn next_synthetic_value() -> u64 {

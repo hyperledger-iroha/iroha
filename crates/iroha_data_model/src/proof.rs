@@ -5,9 +5,9 @@
 //! identifier (`Ident`) and raw bytes produced by that backend. Norito serialization preserves both
 //! fields byte-for-byte to ensure stable hashing and compatibility across nodes.
 use crate::{confidential::ConfidentialStatus, zk::BackendTag};
-#[cfg(feature = "json")]
+
 use base64::Engine as _;
-#[cfg(feature = "json")]
+
 use base64::engine::general_purpose::STANDARD;
 use iroha_schema::{Ident, IntoSchema};
 use norito::{
@@ -50,14 +50,14 @@ fn take_len_prefixed_slice<'a>(
 /// Split the two fields shared by proof and verifier-key byte boxes without allocating.
 ///
 /// These boxes use a bounded custom decoder, so they must parse every advertised struct
-/// layout themselves instead of assuming the length-prefixed AoS layout. The returned byte
+/// layout themselves instead of assuming the length-prefixed `AoS` layout. The returned byte
 /// field includes its sequence-length header, allowing callers to reject oversized payloads
 /// before `Vec<u8>` allocates.
-fn take_byte_box_fields<'a>(
-    bytes: &'a [u8],
+fn take_byte_box_fields(
+    bytes: &[u8],
     max_byte_field_len: usize,
     max_payload_len: Option<usize>,
-) -> Result<(&'a [u8], &'a [u8], usize), ncore::Error> {
+) -> Result<(&[u8], &[u8], usize), ncore::Error> {
     if !ncore::use_packed_struct() {
         let mut offset = 0usize;
         let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
@@ -156,11 +156,8 @@ fn decode_byte_box_fields(
 ///   bytes according to `backend`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::proof::ProofBox")]
 pub struct ProofBox {
@@ -233,7 +230,8 @@ impl ProofBox {
         )
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for ProofBox {
+
+impl<'de> norito::DeserializePayload<'de> for ProofBox {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ProofBox deserialization must succeed for canonical archives")
@@ -285,11 +283,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofBox {
 /// Opaque verifying key bytes tagged with a backend identifier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::proof::VerifyingKeyBox")]
 pub struct VerifyingKeyBox {
     /// Identifier of the proof backend/format (must match associated proofs).
@@ -303,7 +297,8 @@ impl VerifyingKeyBox {
         Self { backend, bytes }
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for VerifyingKeyBox {
+
+impl<'de> norito::DeserializePayload<'de> for VerifyingKeyBox {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("VerifyingKeyBox deserialization must succeed for canonical archives")
@@ -344,11 +339,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
 /// Identifier for a registered verifying key in WSV.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::proof::VerifyingKeyId")]
 pub struct VerifyingKeyId {
@@ -401,11 +393,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyId {
 /// Registry record for a verifying key with governance versioning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::proof::VerifyingKeyRecord")]
 pub struct VerifyingKeyRecord {
     /// Monotonic version number managed by governance.
@@ -422,21 +410,15 @@ pub struct VerifyingKeyRecord {
     /// Curve name used by the backend (human readable; e.g., "pasta", "pallas").
     pub curve: String,
     /// Stable hash of the public input schema to detect witness layout changes.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes",
-            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes",
+        bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
     )]
     pub public_inputs_schema_hash: [u8; 32],
     /// 32-byte domain-separated commitment of the verifying key bytes and backend.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes",
-            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes",
+        bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
     )]
     pub commitment: [u8; 32],
     /// Length of the verifying key in bytes (if published off-ledger).
@@ -536,8 +518,9 @@ impl VerifyingKeyRecord {
 /// Proof attachments carry only a registry reference to the verifying key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
+#[norito(deny_unknown_fields)]
+#[derive(crate :: DeriveJsonSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofAttachment")]
 pub struct ProofAttachment {
     /// Identifier of the proof backend/format.
     pub backend: Ident,
@@ -547,24 +530,18 @@ pub struct ProofAttachment {
     pub vk_ref: VerifyingKeyId,
     /// Optional verifying key commitment (32-byte hash of VK bytes under backend).
     /// When present, it can be used for stateless deduplication with the proof hash.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes::option",
-            bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes::option",
+        bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
     )]
     #[norito(required)]
     pub vk_commitment: Option<[u8; 32]>,
     /// Optional hash of the verify envelope payload passed via pointer‑ABI TLV (e.g.,
     /// NoritoBytes(OpenVerifyEnvelope)). When present, it is used to bind the verification inputs
     /// to the transaction `call_hash` in emitted events and audit metadata.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes::option",
-            bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes::option",
+        bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
     )]
     #[norito(required)]
     pub envelope_hash: Option<[u8; 32]>,
@@ -653,9 +630,9 @@ impl ProofAttachment {
         }
     }
 }
-#[cfg(feature = "json")]
+
 const PROOF_ATTACHMENT_JSON_HASH_LITERAL_BYTES_V1: usize = 74;
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_invalid(
     field: &'static str,
     message: &'static str,
@@ -665,7 +642,7 @@ fn proof_attachment_json_value_invalid(
         message: message.into(),
     }
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_object<'a>(
     value: &'a norito::json::Value,
     field: &'static str,
@@ -674,7 +651,7 @@ fn proof_attachment_json_value_object<'a>(
         .as_object()
         .ok_or_else(|| proof_attachment_json_value_invalid(field, "expected object"))
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_exact_fields(
     object: &norito::json::Map,
     allowed: &[&str],
@@ -691,7 +668,7 @@ fn proof_attachment_json_value_exact_fields(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_required<'a>(
     object: &'a norito::json::Map,
     field: &'static str,
@@ -700,7 +677,7 @@ fn proof_attachment_json_value_required<'a>(
         .get(field)
         .ok_or_else(|| norito::json::Error::missing_field(field))
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_string<'a>(
     value: &'a norito::json::Value,
     field: &'static str,
@@ -717,7 +694,7 @@ fn proof_attachment_json_value_string<'a>(
     }
     Ok(value)
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_u64(
     value: &norito::json::Value,
     field: &'static str,
@@ -731,7 +708,7 @@ fn proof_attachment_json_value_u64(
         })?;
     Ok(value)
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_byte_array(
     value: &norito::json::Value,
     field: &'static str,
@@ -759,7 +736,7 @@ fn proof_attachment_json_value_byte_array(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_preflight_lane(
     value: &norito::json::Value,
 ) -> Result<(), norito::json::Error> {
@@ -850,7 +827,7 @@ fn proof_attachment_json_value_preflight_lane(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
     value: &norito::json::Value,
 ) -> Result<(), norito::json::Error> {
@@ -924,7 +901,7 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_mark_field(
     seen: &mut u8,
     field_bit: u8,
@@ -936,7 +913,7 @@ fn proof_attachment_json_mark_field(
     *seen |= field_bit;
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_unknown_field(field: &str, parent: &str) -> norito::json::Error {
     let qualified = if parent.is_empty() {
         field.to_owned()
@@ -959,9 +936,8 @@ fn proof_attachment_json_unknown_field(field: &str, parent: &str) -> norito::jso
     }
 }
 /// A string whose exact decoded UTF-8 length is bounded before an owned allocation is created.
-#[cfg(feature = "json")]
 struct ProofAttachmentJsonBoundedStringV1<const MAX: usize>(String);
-#[cfg(feature = "json")]
+
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonBoundedStringV1<MAX> {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -977,9 +953,9 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonBoun
         Ok(Self(value))
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonBytes32V1([u8; 32]);
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonBytes32V1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1007,11 +983,10 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonBytes32V1 {
 /// Streaming byte-array decoder used for proof payloads. The length check is
 /// performed before reserving or pushing the next byte, so an over-limit
 /// element can never grow the output allocation.
-#[cfg(feature = "json")]
 struct ProofAttachmentJsonBoundedBytesVisitorV1 {
     maximum: usize,
 }
-#[cfg(feature = "json")]
+
 impl ProofAttachmentJsonBoundedBytesVisitorV1 {
     fn expected_array() -> norito::json::Error {
         norito::json::Error::InvalidField {
@@ -1020,7 +995,7 @@ impl ProofAttachmentJsonBoundedBytesVisitorV1 {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl<'a> norito::json::Visitor<'a> for ProofAttachmentJsonBoundedBytesVisitorV1 {
     type Value = Vec<u8>;
     fn visit_null(self) -> Result<Self::Value, norito::json::Error> {
@@ -1082,12 +1057,12 @@ impl<'a> norito::json::Visitor<'a> for ProofAttachmentJsonBoundedBytesVisitorV1 
         Ok(bytes)
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonProofBoxV1<const MAX: usize> {
     backend: String,
     bytes: Vec<u8>,
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_json_probe_proof_backend(
     parser: &norito::json::Parser<'_>,
 ) -> Result<String, norito::json::Error> {
@@ -1116,7 +1091,7 @@ fn proof_attachment_json_probe_proof_backend(
     object.finish()?;
     backend.ok_or_else(|| norito::json::Error::missing_field("proof.backend"))
 }
-#[cfg(feature = "json")]
+
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonProofBoxV1<MAX> {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1174,12 +1149,12 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonProo
         Ok(Self { backend, bytes })
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonVerifyingKeyRefV1 {
     backend: String,
     name: String,
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonVerifyingKeyRefV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1224,9 +1199,9 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonVerifyingKeyRefV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonLaneCommitmentIdV1(u16);
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneCommitmentIdV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1249,9 +1224,9 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneCommitmentIdV1 {
         Ok(Self(commitment_id))
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonMerkleSiblingV1([u8; 32]);
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonMerkleSiblingV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1296,9 +1271,9 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonMerkleSiblingV1 {
         Ok(Self(bytes))
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonAuditPathV1<const MAX: usize>(Vec<[u8; 32]>);
-#[cfg(feature = "json")]
+
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonAuditPathV1<MAX> {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1327,12 +1302,12 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonAudi
         Ok(Self(path))
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonLaneMerkleProofV1 {
     leaf_index: u32,
     audit_path: ProofAttachmentJsonAuditPathV1<{ crate::nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 }>,
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerkleProofV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1374,12 +1349,12 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerkleProofV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonLaneMerklePayloadV1 {
     leaf: [u8; 32],
     proof: ProofAttachmentJsonLaneMerkleProofV1,
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerklePayloadV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1419,12 +1394,12 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerklePayloadV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonLaneWitnessV1 {
     kind: String,
     payload: ProofAttachmentJsonLaneMerklePayloadV1,
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneWitnessV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1467,12 +1442,12 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneWitnessV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 struct ProofAttachmentJsonLanePrivacyV1 {
     commitment_id: u16,
     witness: ProofAttachmentJsonLaneWitnessV1,
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLanePrivacyV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1511,7 +1486,7 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLanePrivacyV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl ProofAttachmentJsonLanePrivacyV1 {
     fn into_lane_privacy_proof(
         self,
@@ -1539,7 +1514,7 @@ impl ProofAttachmentJsonLanePrivacyV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachment {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1645,7 +1620,7 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         norito::json::from_str(&canonical_json)
     }
 }
-impl norito::NoritoSerialize for ProofAttachment {}
+
 impl norito::SerializePayload for ProofAttachment {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::write_len_prefixed(writer, &self.backend)?;
@@ -1704,7 +1679,8 @@ impl norito::SerializePayload for ProofAttachment {
         Some(total)
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for ProofAttachment {
+
+impl<'de> norito::DeserializePayload<'de> for ProofAttachment {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ProofAttachment deserialization must succeed for canonical archives")
@@ -1863,6 +1839,8 @@ pub enum ProofAttachmentListError {
 /// A list of proof attachments for a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::proof::ProofAttachmentList")]
 pub struct ProofAttachmentList(
     /// Ordered attachments that make up the proof payload.
     Vec<ProofAttachment>,
@@ -1998,7 +1976,7 @@ impl TryFrom<Vec<ProofAttachment>> for ProofAttachmentList {
         Ok(list)
     }
 }
-impl norito::NoritoSerialize for ProofAttachmentList {}
+
 impl norito::SerializePayload for ProofAttachmentList {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let field_len = norito::SerializePayload::encoded_len_exact(&self.0)
@@ -2017,7 +1995,8 @@ impl norito::SerializePayload for ProofAttachmentList {
         ncore::len_prefix_len(field_len).checked_add(field_len)
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for ProofAttachmentList {
+
+impl<'de> norito::DeserializePayload<'de> for ProofAttachmentList {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ProofAttachmentList deserialization requires a canonical bounded archive")
@@ -2073,14 +2052,14 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachmentList {
         Ok((list, offset))
     }
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_base64_encoded_len(decoded_len: usize) -> Option<usize> {
     decoded_len
         .checked_add(2)
         .and_then(|length| length.checked_div(3))
         .and_then(|length| length.checked_mul(4))
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_base64_sextet(byte: u8) -> Option<u8> {
     match byte {
         b'A'..=b'Z' => Some(byte - b'A'),
@@ -2091,14 +2070,14 @@ fn proof_attachment_list_base64_sextet(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_json_error(message: &'static str) -> norito::json::Error {
     norito::json::Error::InvalidField {
         field: "ProofAttachmentList".into(),
         message: message.into(),
     }
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_base64_decoded_len(
     encoded: &str,
     maximum_decoded_bytes: usize,
@@ -2161,7 +2140,7 @@ fn proof_attachment_list_base64_decoded_len(
     }
     Ok(decoded_len)
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_borrowed_base64_token<'a>(
     parser: &mut norito::json::Parser<'a>,
     maximum_decoded_bytes: usize,
@@ -2184,7 +2163,7 @@ fn proof_attachment_list_borrowed_base64_token<'a>(
     let decoded_len = proof_attachment_list_base64_decoded_len(encoded, maximum_decoded_bytes)?;
     Ok((encoded, decoded_len))
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_validate_limits(
     canonical_frame_bytes: usize,
     attachments: usize,
@@ -2208,7 +2187,7 @@ fn proof_attachment_list_validate_limits(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn proof_attachment_list_frame_attachment_count(
     canonical_frame: &[u8],
 ) -> Result<usize, norito::json::Error> {
@@ -2250,7 +2229,7 @@ fn proof_attachment_list_frame_attachment_count(
     })?;
     Ok(attachments)
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for ProofAttachmentList {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_canonical_base64_json(self, out);
@@ -2262,7 +2241,7 @@ impl norito::json::JsonSerialize for ProofAttachmentList {
         norito::json::write_canonical_base64_json_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofAttachmentList {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2318,12 +2297,9 @@ pub struct ProofId {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
     /// Stable 32-byte hash of the proof bytes (and optionally normalized inputs).
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes",
-            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes",
+        bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
     )]
     pub proof_hash: [u8; 32],
 }
@@ -2346,7 +2322,7 @@ impl core::fmt::Display for ProofId {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for ProofId {
     fn json_serialize(&self, out: &mut String) {
         let repr = self.to_string();
@@ -2423,7 +2399,7 @@ impl core::str::FromStr for ProofId {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2484,7 +2460,7 @@ pub enum ProofStatus {
     /// Proof failed to verify.
     Rejected,
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for ProofStatus {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -2506,7 +2482,7 @@ impl norito::json::JsonSerialize for ProofStatus {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ProofStatus {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2523,11 +2499,7 @@ impl norito::json::JsonDeserialize for ProofStatus {
 /// Stored record for a proof verification outcome.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::proof::ProofRecord")]
 pub struct ProofRecord {
     /// Proof identifier (backend + hash of proof bytes).
@@ -2535,12 +2507,9 @@ pub struct ProofRecord {
     /// Optional reference to a verifying key stored in WSV.
     pub vk_ref: Option<VerifyingKeyId>,
     /// Optional verifying key commitment (32-byte stable hash) used during verification.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes::option",
-            bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes::option",
+        bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
     )]
     pub vk_commitment: Option<[u8; 32]>,
     /// Resulting status of verification.
@@ -2589,7 +2558,7 @@ mod tests {
     fn proof_bytes_hash(bytes: &[u8]) -> [u8; 32] {
         iroha_crypto::Hash::new(bytes).into()
     }
-    #[cfg(feature = "json")]
+
     fn hash_json(hash: &[u8; 32]) -> String {
         let body = hash
             .iter()
@@ -2805,7 +2774,7 @@ mod tests {
                 .expect("exact-cap canonical frame must decode"),
             list
         );
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_json(&list).expect("encode exact-cap list JSON");
             assert_eq!(
@@ -2951,7 +2920,7 @@ mod tests {
         let p = ProofBox::new(backend, bytes.clone());
         let enc = norito::to_bytes(&p).expect("encode");
         let arch = norito::from_bytes::<ProofBox>(&enc).expect("archived");
-        let dec: ProofBox = norito::core::NoritoDeserialize::deserialize(arch);
+        let dec: ProofBox = norito::core::DeserializePayload::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, bytes);
     }
@@ -3055,7 +3024,7 @@ mod tests {
         let vk = VerifyingKeyBox::new(backend, vec![7, 7, 7]);
         let enc = norito::to_bytes(&vk).expect("encode");
         let arch = norito::from_bytes::<VerifyingKeyBox>(&enc).expect("archived");
-        let dec: VerifyingKeyBox = norito::core::NoritoDeserialize::deserialize(arch);
+        let dec: VerifyingKeyBox = norito::core::DeserializePayload::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, vec![7, 7, 7]);
     }
@@ -3167,7 +3136,7 @@ mod tests {
         };
         let enc = norito::to_bytes(&rec).expect("encode");
         let arch = norito::from_bytes::<VerifyingKeyRecord>(&enc).expect("archived");
-        let dec: VerifyingKeyRecord = norito::core::NoritoDeserialize::deserialize(arch);
+        let dec: VerifyingKeyRecord = norito::core::DeserializePayload::deserialize(arch);
         assert_eq!(dec.version, 1);
         assert_eq!(dec.commitment, [0x11; 32]);
         assert!(dec.key.is_some());
@@ -3216,7 +3185,7 @@ mod tests {
         let a = ProofAttachment::new_ref("halo2/ipa".into(), p.clone(), id);
         let enc = norito::to_bytes(&a).expect("encode");
         let arch = norito::from_bytes::<ProofAttachment>(&enc).expect("archived");
-        let dec: ProofAttachment = norito::core::NoritoDeserialize::deserialize(arch);
+        let dec: ProofAttachment = norito::core::DeserializePayload::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.vk_ref.name.as_str(), "vk_1");
     }
@@ -3647,7 +3616,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_rejects_backend_mismatch_inside_wire_payload() {
         use base64::Engine as _;
@@ -3662,7 +3631,7 @@ mod tests {
             .expect_err("base64 Norito list with backend mismatch must be rejected");
         assert!(err.to_string().contains("vk_ref.backend"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_rejects_single_attachment_wire_payload() {
         use base64::Engine as _;
@@ -3676,7 +3645,7 @@ mod tests {
         norito::json::from_str::<ProofAttachmentList>(&json)
             .expect_err("single ProofAttachment wire payload must not decode as a list");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_is_canonical_and_ambient_independent() {
         use base64::Engine as _;
@@ -3735,7 +3704,7 @@ mod tests {
                 .expect("canonical list Value must pass bounded preflight");
         assert_eq!(from_value, list);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_manual_json_writers_preserve_bytes_and_closed_limits() {
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
@@ -3782,7 +3751,7 @@ mod tests {
             assert_bounded(&status);
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_limit_helpers_use_closed_boundaries() {
         use base64::Engine as _;
@@ -3825,7 +3794,7 @@ mod tests {
         norito::json::from_str::<ProofAttachmentList>(&full_over_limit_json)
             .expect_err("full-size cap+1 JSON token must fail before base64 allocation");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_rejects_noncanonical_base64_before_decode() {
         for encoded in [
@@ -3849,7 +3818,7 @@ mod tests {
         norito::json::from_str::<ProofAttachmentList>(r#""\/w==""#)
             .expect_err("escaped base64 spelling must not alias its canonical wire spelling");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_rejects_over_limit_attachment_count() {
         use base64::Engine as _;
@@ -3874,7 +3843,7 @@ mod tests {
             .expect_err("canonical frame above the attachment-count limit must reject");
         assert!(error.to_string().contains("attachment count"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_list_json_rejects_forged_empty_frame() {
         use base64::Engine as _;
@@ -3887,7 +3856,7 @@ mod tests {
             .expect_err("empty attachment-list frame must reject");
         assert!(error.to_string().contains("must not be empty"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_primitives_json_reject_unknown_first_release_fields() {
         let proof = r#"{
@@ -3908,7 +3877,7 @@ mod tests {
             .expect_err("VerifyingKeyId must reject unknown first-release fields");
         assert!(error.to_string().contains("unknown"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_accepts_reference_only_payload() {
         let json = r#"{
@@ -3933,7 +3902,7 @@ mod tests {
         );
         assert!(attachment.envelope_hash.is_none());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_uses_canonical_proof_byte_array() {
         let json = r#"{
@@ -3961,7 +3930,7 @@ mod tests {
                 .expect("canonical Value must use the streaming acceptance language");
         assert_eq!(from_value, attachment);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_streaming_decoder_is_field_order_independent() {
         let json = r#"{
@@ -3978,7 +3947,7 @@ mod tests {
         assert_eq!(attachment.proof.bytes, [1, 2, 3]);
         assert_eq!(attachment.vk_ref.name, "vk_1");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_proof_bytes_are_bounded_while_streaming() {
         // The production decoder uses the multi-million-byte V1 ceiling. A
@@ -4017,7 +3986,7 @@ mod tests {
             .expect_err("borrowed Value preflight must reject the fifth byte");
         assert!(error.to_string().contains("proof.bytes"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_lane_path_is_bounded_while_streaming() {
         let sibling = norito::json::to_json(&canonical_lane_sibling(0x23))
@@ -4032,7 +4001,7 @@ mod tests {
             .expect("third sibling must be rejected before output growth");
         assert!(error.to_string().contains("2-sibling limit"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_requires_explicit_nullable_fields() {
         let canonical = r#"{
@@ -4107,7 +4076,7 @@ mod tests {
             assert!(error.to_string().contains(missing_field));
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_value_preflight_rejects_wrong_shapes() {
         for json in [
@@ -4150,7 +4119,7 @@ mod tests {
                 .expect_err("borrowed preflight must reject wrong first-release shapes");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_oversized_identifier_fields() {
         let oversized = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
@@ -4178,7 +4147,7 @@ mod tests {
                 .expect_err("borrowed Value preflight must reject oversized identifiers");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_trailing_commas() {
         for json in [
@@ -4209,7 +4178,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_noncanonical_proof_byte_encodings() {
         for proof_json in [
@@ -4229,7 +4198,7 @@ mod tests {
                 .expect_err("Value preflight or strict re-entry must reject proof shape");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_accepts_matching_envelope_hash() {
         let proof_bytes = [1u8, 2, 3];
@@ -4249,7 +4218,7 @@ mod tests {
             norito::json::from_str(&json).expect("matching envelope hash JSON");
         assert_eq!(attachment.envelope_hash, Some(envelope_hash));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_retired_inline_vk_fields() {
         for field in [
@@ -4274,7 +4243,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_unknown_members_at_every_declared_layer() {
         for json in [
@@ -4304,7 +4273,7 @@ mod tests {
             assert!(error.to_string().contains("unknown"));
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_requires_exact_structural_lane_privacy() {
         let sibling = canonical_lane_sibling(0x22);
@@ -4356,7 +4325,7 @@ mod tests {
                 .expect_err("Value preflight or strict re-entry must reject malformed lane data");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_duplicate_declared_members() {
         for json in [
@@ -4382,7 +4351,7 @@ mod tests {
             assert!(err.to_string().contains("duplicate field"));
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_malformed_fixed_hashes() {
         for (json, expected) in [
@@ -4413,7 +4382,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_invalid_fixed_hash_byte() {
         let json = r#"{
@@ -4426,7 +4395,7 @@ mod tests {
             .expect_err("out-of-range envelope_hash byte must be rejected");
         assert!(err.to_string().contains("not a valid u8"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_backend_mismatches() {
         let proof_backend_json = r#"{
@@ -4452,7 +4421,7 @@ mod tests {
             .expect_err("vk_ref backend mismatch must be rejected");
         assert!(err.to_string().contains("vk_ref.backend"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_nested_retired_inline_vk_fields() {
         let proof_shadow_json = r#"{
@@ -4472,7 +4441,7 @@ mod tests {
             .expect_err("retired vk_ref inline key must be rejected");
         assert!(err.to_string().contains("vk_ref.verifying_key_inline"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_blank_verifying_key_name() {
         let json = r#"{
@@ -4487,7 +4456,7 @@ mod tests {
             .expect_err("blank verifying key names must be rejected");
         assert!(err.to_string().contains("vk_ref.name"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_blank_backend_fields() {
         let cases = [
@@ -4534,7 +4503,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn proof_attachment_json_rejects_nonportable_refs_empty_proofs_and_zero_hashes() {
         let zero_hash = "[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]";
@@ -4679,7 +4648,7 @@ mod tests {
         );
         let enc = norito::to_bytes(&pct).expect("encode");
         let arch = norito::from_bytes::<ProofedCommittedTransaction>(&enc).expect("archived");
-        let dec: ProofedCommittedTransaction = norito::core::NoritoDeserialize::deserialize(arch);
+        let dec: ProofedCommittedTransaction = norito::core::DeserializePayload::deserialize(arch);
         assert!(dec.proof.is_some());
         let _ = tree; // silence unused
     }
@@ -4699,7 +4668,7 @@ mod tests {
         };
         let enc = norito::to_bytes(&rec).expect("encode");
         let arch = norito::from_bytes::<ProofRecord>(&enc).expect("archived");
-        let dec: ProofRecord = norito::core::NoritoDeserialize::deserialize(arch);
+        let dec: ProofRecord = norito::core::DeserializePayload::deserialize(arch);
         assert!(matches!(dec.status, ProofStatus::Verified));
         assert_eq!(dec.verified_at_height, Some(42));
     }

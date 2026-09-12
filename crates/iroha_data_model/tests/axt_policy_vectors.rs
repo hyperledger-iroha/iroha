@@ -6,14 +6,14 @@ use iroha_data_model::nexus::{
     AssetHandle, AxtAssetIncarnationV1, AxtBinding, AxtDescriptor, AxtHandleCounterRecord,
     AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyBinding,
     AxtPolicyEntry, AxtPolicySnapshot, AxtTouchFragment, AxtTouchSpec, AxtValidationError,
-    DataSpaceId, GroupBinding, HandleBudget, HandleSubject, LaneId, RemoteSpendIntent, SpendOp,
-    TouchManifest, UniversalAccountId, validate_descriptor,
+    GroupBinding, HandleBudget, HandleSubject, RemoteSpendIntent, SpendOp, TouchManifest,
+    UniversalAccountId, validate_descriptor,
 };
-use iroha_data_model::{
-    NetworkId, asset::id::AssetDefinitionId, block::BlockHeader, domain::DomainId,
-};
+use iroha_data_model::{NetworkId, asset::id::AssetDefinitionId, block::BlockHeader};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::Quantity;
-use ivm::axt;
+use ivm_abi::axt;
 fn assert_bytes_match(name: &str, actual: &[u8], expected: &[u8]) {
     assert_eq!(
         actual.len(),
@@ -99,7 +99,7 @@ fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
         issuer_manifest_root: [0x22; 32],
         code_root: Hash::new(b"axt-policy-vectors-code").into(),
         abi_version: 1,
-        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        abi_hash: ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1),
     }
 }
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
@@ -187,9 +187,13 @@ fn asset_handle_roundtrip_matches_golden() {
     let binding = sample_binding(&descriptor);
     let handle = sample_handle(binding);
     let bytes = norito::to_bytes(&handle).expect("encode handle");
-    assert_bytes_match("handle", &bytes, axt_golden::AXT_HANDLE);
     let decoded: AssetHandle =
         norito::decode_from_bytes(axt_golden::AXT_HANDLE).expect("decode handle fixture");
+    assert_eq!(
+        decoded.issuer_context.abi_hash, handle.issuer_context.abi_hash,
+        "AXT handle fixture must bind the current canonical ABI-v1 surface",
+    );
+    assert_bytes_match("handle", &bytes, axt_golden::AXT_HANDLE);
     assert_eq!(decoded, handle);
 }
 #[test]

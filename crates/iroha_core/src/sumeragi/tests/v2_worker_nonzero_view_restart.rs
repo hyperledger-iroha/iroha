@@ -72,7 +72,7 @@ fn assert_nonzero_view_proposal_raw_replay(
         EventTag::new(
             fixture.context.height,
             fixture.target_view,
-            Generation::new(fixture.context.height)
+            Generation::INITIAL
         )
     );
     // The observer must release the genuine WAL before the consuming recovery opens it.

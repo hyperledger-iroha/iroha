@@ -54,7 +54,8 @@ impl fmt::Display for IrohaRuntimeProviderCatalogErrorV1 {
     }
 }
 impl std::error::Error for IrohaRuntimeProviderCatalogErrorV1 {}
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1")]
 struct RuntimeProviderCatalogWireV1 {
     magic: [u8; 8],
     version: u16,
@@ -62,13 +63,15 @@ struct RuntimeProviderCatalogWireV1 {
     network_id: NetworkId,
     bindings: Vec<RuntimeProviderBindingWireV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::runtime_provider_registry::catalog::RuntimeProviderBindingWireV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct RuntimeProviderBindingWireV1 {
     slot: u16,
     handle: String,
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
-    stream_token_signer_public_key: Option<[u8; 32]>,
+    stream_token_hardware_binding: Option<StreamTokenHardwareRuntimeBindingV1>,
     stream_token_gateway_admission_qualification:
         Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
     stream_token_gateway_admission_max_pending: Option<u32>,
@@ -102,6 +105,10 @@ struct RuntimeProviderBindingWireV1 {
     moderation_panel_notification_archive_binding:
         Option<ModerationPanelNotificationArchiveBindingWireV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::GovernanceRequestIngressBindingWireV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct GovernanceRequestIngressBindingWireV1 {
     scope: u8,
@@ -150,6 +157,10 @@ impl GovernanceRequestIngressBindingWireV1 {
         .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::ModerationPanelNotificationArchiveBindingWireV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct ModerationPanelNotificationArchiveBindingWireV1 {
     archive_id: [u8; 32],
@@ -158,6 +169,10 @@ struct ModerationPanelNotificationArchiveBindingWireV1 {
     max_bytes: u64,
     max_records: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::AppealFinanceSignerBindingWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct AppealFinanceSignerBindingWireV1 {
     authority: iroha_data_model::account::AccountId,
@@ -165,10 +180,18 @@ struct AppealFinanceSignerBindingWireV1 {
     valid_from_block_height: u64,
     revoked_at_block_height: Option<u64>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::AppealFinanceCheckpointBindingWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct AppealFinanceCheckpointBindingWireV1 {
     public_key: iroha_crypto::PublicKey,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::PopCredentialRuntimeBindingWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PopCredentialRuntimeBindingWireV1 {
     issuer_policy_digest: [u8; 32],
@@ -181,11 +204,19 @@ struct PopCredentialRuntimeBindingWireV1 {
     wallet_recipient_public_key_digest: [u8; 32],
     wallet_wrapping_key_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::PorReplayArchiveProofLimitsWireV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct PorReplayArchiveProofLimitsWireV1 {
     max_successor_receipts: u32,
     max_successor_proof_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::PotrAdmissionPolicyBindingWireV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct PotrAdmissionPolicyBindingWireV1 {
     provider_id: [u8; 32],
@@ -196,6 +227,8 @@ struct PotrAdmissionPolicyBindingWireV1 {
     finalized_block_hash: [u8; 32],
     admission_envelope_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::runtime_provider_registry::catalog::PotrRuntimeBindingWireV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PotrRuntimeBindingWireV1 {
     gateway_handle: String,
@@ -212,18 +245,30 @@ struct PotrRuntimeBindingWireV1 {
     resolver_id: [u8; 32],
     baseline_admission_policy: PotrAdmissionPolicyBindingWireV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::NativeTransactionSignerBindingWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct NativeTransactionSignerBindingWireV1 {
     role: u8,
     authority: iroha_data_model::account::AccountId,
     public_key: iroha_crypto::PublicKey,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::EvidenceViewerWebAuthnBindingWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct EvidenceViewerWebAuthnBindingWireV1 {
     rp_id: String,
     allowed_origins: Vec<String>,
     challenge_ttl_ms: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::ProviderIngestSourceLimitsWireV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct ProviderIngestSourceLimitsWireV1 {
     operation_timeout_ms: u64,
@@ -231,6 +276,10 @@ struct ProviderIngestSourceLimitsWireV1 {
     max_source_providers: u32,
     max_concurrent_streams: u32,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::catalog::ProviderIngestSignerBindingWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct ProviderIngestSignerBindingWireV1 {
     runtime_handle: String,
@@ -353,7 +402,7 @@ impl RuntimeProviderCatalogWireV1 {
 }
 fn validate_chain_id(chain_id: &str) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
     let parsed = chain_id
-        .parse::<iroha_data_model::ChainId>()
+        .parse::<iroha_model_base::chain::ChainId>()
         .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidChainId)?;
     if parsed.to_string() != chain_id {
         return Err(IrohaRuntimeProviderCatalogErrorV1::InvalidChainId);
@@ -418,6 +467,13 @@ fn validate_catalog_relationships(
     catalog: &IrohaRuntimeProviderBindingsV1,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
     let find = |slot| catalog.iter().find(|binding| binding.slot() == slot);
+    if let Some(binding) = find(IrohaRuntimeProviderSlotV1::StreamTokenSigner) {
+        binding
+            .stream_token_hardware_binding()
+            .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?
+            .validate_network(catalog.chain_id(), catalog.network_id().as_bytes())
+            .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
+    }
     let appeal_signers = catalog
         .iter()
         .filter(|binding| {
@@ -646,7 +702,7 @@ impl RuntimeProviderBindingWireV1 {
             handle: binding.handle().to_owned(),
             revision: binding.revision(),
             policy_digest: binding.policy_digest(),
-            stream_token_signer_public_key: binding.stream_token_signer_public_key(),
+            stream_token_hardware_binding: binding.stream_token_hardware_binding().cloned(),
             stream_token_gateway_admission_qualification: binding
                 .stream_token_gateway_admission_qualification(),
             stream_token_gateway_admission_max_pending: binding
@@ -785,11 +841,8 @@ impl RuntimeProviderBindingWireV1 {
             }
             IrohaRuntimeProviderSlotV1::StreamTokenSigner => {
                 binding = IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
-                    self.handle.clone(),
-                    self.stream_token_signer_public_key
+                    self.stream_token_hardware_binding
                         .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
-                    revision,
-                    policy_digest,
                 )
                 .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
             }
@@ -1493,6 +1546,10 @@ const fn provider_ingest_algorithm_from_wire(wire: u8) -> Option<iroha_crypto::A
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "irohad::runtime_provider_registry::catalog::tests::RetiredRuntimeProviderCatalogWireV1"
+    )]
     #[derive(Encode)]
     struct RetiredRuntimeProviderCatalogWireV1 {
         magic: [u8; 8],
@@ -1787,6 +1844,13 @@ mod tests {
         let first = catalog
             .export_canonical_v1()
             .expect("export canonical catalog");
+        let wire: RuntimeProviderCatalogWireV1 =
+            norito::decode_canonical(&first).expect("catalog wire");
+        crate::frame_test_support::assert_current_frame(
+            &wire,
+            "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1",
+            "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1",
+        );
         let second = catalog
             .export_canonical_v1()
             .expect("repeat canonical export");
@@ -2307,7 +2371,22 @@ mod tests {
     }
     #[test]
     fn loader_rejects_retired_optional_network_catalog_schema() {
+        fn current_catalog_frame<T: norito::SerializePayload>(value: &T) -> Vec<u8> {
+            let _layout =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (payload, flags) = norito::codec::encode_with_header_flags(value);
+            norito::core::frame_bare_with_header_flags::<RuntimeProviderCatalogWireV1>(
+                &payload, flags,
+            )
+            .expect("frame payload under the current catalog owner")
+        }
         let wire = canonical_wire();
+        let healthy = current_catalog_frame(&wire);
+        assert_eq!(
+            healthy,
+            norito::encode_canonical(&wire).expect("canonical current catalog")
+        );
+        IrohaRuntimeProviderBindingsV1::load_canonical_v1(&healthy).expect("valid current catalog");
         for network_id in [None, Some(wire.network_id)] {
             let retired = RetiredRuntimeProviderCatalogWireV1 {
                 magic: wire.magic,
@@ -2316,7 +2395,12 @@ mod tests {
                 network_id,
                 bindings: wire.bindings.clone(),
             };
-            let bytes = norito::encode_canonical(&retired).expect("encode retired catalog fixture");
+            // The unsupported optional field remains payload-only. A genuine current
+            // header ensures rejection checks its body rather than a different owner.
+            let bytes = current_catalog_frame(&retired);
+            let error = norito::decode_canonical::<RuntimeProviderCatalogWireV1>(&bytes)
+                .expect_err("optional-network payload must fail under the current owner");
+            assert!(!matches!(error, norito::Error::SchemaMismatch));
             assert_eq!(
                 IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),
                 Err(IrohaRuntimeProviderCatalogErrorV1::NonCanonicalEncoding),
@@ -2393,7 +2477,8 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
         let mut substituted = canonical_wire();
-        substituted.bindings[0].stream_token_signer_public_key = Some([0x72; 32]);
+        substituted.bindings[0].stream_token_hardware_binding =
+            Some(super::super::stream_token_hardware_binding::tests::fixture());
         let bytes = norito::encode_canonical(&substituted).expect("encode substituted fixture");
         assert_eq!(
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),

@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::BlockHeader,
-    domain::DomainId,
     kagemusha::{
         KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1,
         KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
@@ -24,6 +23,7 @@ use iroha_data_model::{
         kagemusha_recipient_credential_commitment_v1,
     },
 };
+use iroha_model_base::domain::DomainId;
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use sha2::{Digest as _, Sha256};
 
@@ -169,7 +169,7 @@ pub(super) fn snapshot_enrollment_binding(
         ),
         runtime: iroha_data_model::kagemusha::KagemushaRetailEnrollmentRuntimeV1 {
             fi_id: "snapshot-fi".parse().unwrap(),
-            ledger_dataspace_id: iroha_data_model::nexus::DataSpaceId::new(10),
+            ledger_dataspace_id: iroha_model_base::topology::DataSpaceId::new(10),
             authentication_namespace: "snapshot-fi".parse().unwrap(),
             network_id: state.lane.network_id,
             asset: state.lane.asset.clone(),

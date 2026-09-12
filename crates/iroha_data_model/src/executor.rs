@@ -54,6 +54,8 @@ mod model {
     ///
     /// - Permission tokens (see [`crate::permission::Permission`])
     /// - Configuration parameters (see [`crate::parameter::Parameter`])
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ExecutorDataModel")]
     #[derive(
         Default,
         Debug,
@@ -68,23 +70,19 @@ mod model {
         Encode,
         IntoSchema,
         derive_more::Display,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[display("{self:?}")]
     #[getset(get = "pub")]
+
     pub struct ExecutorDataModel {
         /// Corresponds to the [`crate::parameter::Parameter::Custom`].
         /// Holds the initial value of the parameter
-        #[cfg_attr(
-            feature = "json",
-            norito(
-                with = "crate::parameter::custom::json_helpers",
-                bounded_with = "crate::parameter::custom::json_helpers::serialize_bounded"
-            )
+        #[norito(
+            with = "crate::parameter::custom::json_helpers",
+            bounded_with = "crate::parameter::custom::json_helpers::serialize_bounded"
         )]
         pub parameters: CustomParameters,
         /// Corresponds to instruction identifiers stored in [`crate::isi::InstructionBox`].
@@ -117,7 +115,8 @@ mod model {
     )]
     #[ignore_extra_doc_attributes]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-    #[derive(thiserror::Error)]
+    #[derive(thiserror::Error, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ValidationFail")]
     pub enum ValidationFail {
         /// Operation is not permitted: {0}
         NotPermitted(
@@ -149,7 +148,7 @@ mod model {
             /// Contained error message if its used internally. Empty for external users.
             /// Never serialized to not to expose internal errors to the end user.
             #[codec(skip)]
-            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::secret_string"))]
+            #[norito(json = "crate::json_helpers::secret_string")]
             #[skip_from]
             #[skip_try_from]
             String,
@@ -169,11 +168,10 @@ mod model {
         IntoSchema,
     )]
     #[display("Seiyaku {contract} rejected with {error_type}::{name} ({code})")]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ContractRejection")]
     pub struct ContractRejection {
         /// Canonical source-level contract identity embedded in the artifact.
         pub contract: String,
@@ -198,12 +196,10 @@ mod model {
         Decode,
         Encode,
         IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(tag = "kind", content = "content")
-    )]
+    #[norito(tag = "kind", content = "content")]
     #[repr(u32)]
     pub enum IvmAdmissionError {
         /// IVM bytecode omits a non-zero `max_cycles` header field
@@ -262,10 +258,18 @@ mod model {
         GenericSyscallNotAllowed(u32),
     }
     /// Unsupported IVM version details
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct UnsupportedVersionInfo {
         /// Major version
@@ -274,10 +278,18 @@ mod model {
         pub minor: u8,
     }
     /// Vector length limit violation details
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct VectorLengthTooLargeInfo {
         /// Provided vector length
@@ -286,10 +298,18 @@ mod model {
         pub max_allowed: u8,
     }
     /// Max cycles limit violation details
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct MaxCyclesExceedsUpperBoundInfo {
         /// Header `max_cycles` value
@@ -298,10 +318,18 @@ mod model {
         pub upper_bound: u64,
     }
     /// Fuel limit violation details
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct MaxCyclesExceedsFuelInfo {
         /// Header `max_cycles` value
@@ -310,10 +338,18 @@ mod model {
         pub fuel_limit: u64,
     }
     /// Decoded instruction count violation details
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct DecodedInstructionLimitInfo {
         /// Number of decoded instructions observed during admission
@@ -322,10 +358,18 @@ mod model {
         pub limit: u64,
     }
     /// Decoded byte length violation details
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct DecodedCodeSizeLimitInfo {
         /// Total decoded byte length observed during admission
@@ -334,10 +378,18 @@ mod model {
         pub limit: u64,
     }
     /// Manifest code hash mismatch (expected, actual)
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct ManifestCodeHashMismatchInfo {
         /// Expected `code_hash` (from manifest)
@@ -346,10 +398,18 @@ mod model {
         pub actual: Hash,
     }
     /// Manifest abi hash mismatch (expected, actual)
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct ManifestAbiHashMismatchInfo {
         /// Expected `abi_hash` (from manifest)
@@ -358,10 +418,18 @@ mod model {
         pub actual: Hash,
     }
     /// Artifact ABI hash mismatch (runtime descriptor, authenticated artifact binding).
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct ArtifactAbiHashMismatchInfo {
         /// ABI hash required by the executing runtime.
@@ -381,7 +449,7 @@ impl From<crate::query::error::FindError> for ValidationFail {
         ValidationFail::QueryFailed(crate::query::error::QueryExecutionFail::Find(e))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Executor {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.bytecode, out);
@@ -393,7 +461,7 @@ impl norito::json::FastJsonWrite for Executor {
         norito::json::JsonSerialize::json_serialize_to(&self.bytecode, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Executor {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -425,14 +493,15 @@ mod tests {
         let encoded = norito::encode_canonical(&rejection).unwrap();
         let decoded = norito::decode_canonical::<ContractRejection>(&encoded).unwrap();
         assert_eq!(decoded, rejection);
-        #[cfg(feature = "json")]
-        {
-            let json = norito::json::to_json(&rejection).unwrap();
-            let decoded: ContractRejection = norito::json::from_str(&json).unwrap();
-            assert_eq!(decoded, rejection);
-            assert!(json.contains("error_type") && json.contains("schema_hash"));
-            assert!(!json.contains("namespace"));
-        }
+        assert_eq!(
+            rejection.to_string(),
+            "Seiyaku 金庫 rejected with example/vault@1::金庫::拒否::不足 (1)"
+        );
+        let json = norito::json::to_json(&rejection).unwrap();
+        let decoded: ContractRejection = norito::json::from_str(&json).unwrap();
+        assert_eq!(decoded, rejection);
+        assert!(json.contains("error_type") && json.contains("schema_hash"));
+        assert!(!json.contains("namespace"));
     }
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {
@@ -440,7 +509,7 @@ mod tests {
         let executor = Executor::new(code.clone());
         assert_eq!(executor.bytecode().as_ref(), code.as_ref());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn executor_json_has_closed_output_bound() {
         let executor = Executor::new(IvmBytecode::from_compiled(vec![1, 2, 3, 4]));
@@ -455,14 +524,12 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn executor_data_model_json_has_closed_output_bound() {
-        use crate::{
-            name::Name,
-            parameter::{CustomParameter, CustomParameterId},
-        };
+        use crate::parameter::{CustomParameter, CustomParameterId};
         use core::str::FromStr as _;
+        use iroha_model_base::name::Name;
         use std::collections::{BTreeMap, BTreeSet};
         let id = CustomParameterId::new(Name::from_str("bounded").expect("valid name"));
         let parameter = CustomParameter::new(id.clone(), Json::new(vec![1_u64, 2, 3]));
@@ -472,6 +539,29 @@ mod tests {
             BTreeSet::from([String::from("permission")]),
             Json::new(norito::json!({"nested": [true, false]})),
         );
+        assert_eq!(
+            <ExecutorDataModel as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::executor::model::ExecutorDataModel",
+        );
+        let frame = norito::encode_canonical(&data_model).expect("executor model frame");
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<ExecutorDataModel>()
+        );
+        let decoded: ExecutorDataModel =
+            norito::decode_canonical(&frame).expect("executor model frame");
+        assert_eq!(decoded, data_model);
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ExecutorDataModel>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(norito::decode_canonical::<ExecutorDataModel>(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<ExecutorDataModel>(&trailing).is_err());
         let expected = norito::json::to_json(&data_model).expect("serialize data model JSON");
         assert_eq!(
             norito::json::to_json_bounded(&data_model, expected.len())
@@ -591,5 +681,17 @@ mod tests {
             IvmAdmissionError::decode_all(&mut unknown.as_slice()).is_err(),
             "unknown admission error tags must fail closed"
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::executor::model::ContractRejection,
+        >("iroha_data_model::executor::model::ContractRejection");
     }
 }

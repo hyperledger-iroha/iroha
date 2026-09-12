@@ -109,22 +109,50 @@ fn prepare_certified_bundle_reset_fixture(
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 513, 100, &signer);
     let fresh_payload = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 101, &signer);
     install_autonomous_lane_marker_for_kura(kura, lane_config, &fresh_payload);
-    let (old_slot_session, old_slot_pops) =
-        committed_lane_block_session_for_kura_proposal(&old_slot_payload.origin_proposal, &signer);
-    let old_slot = CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
-    kura.persist_committed_lane_block_session(&old_slot_session, &old_slot_pops)
-        .expect("persist occupied pre-reset certified slot");
-    let (old_tip_session, old_tip_pops) =
-        committed_lane_block_session_for_kura_proposal(&old_tip_payload.origin_proposal, &signer);
-    let old_tip = CertifiedLaneBlockArtifact::new(old_tip_session.clone(), old_tip_pops.clone());
-    kura.persist_committed_lane_block_session(&old_tip_session, &old_tip_pops)
-        .expect("persist high pre-reset certified frontier");
+    // Build the fresh READY evidence and old certified history in separate valid
+    // stores, then restore the exact old pairs at the reset validation boundary.
     let prepared = prepare_autonomous_certification_for_capacity_payload(
         kura,
         lane_config,
         &fresh_payload,
         &signer,
     );
+    let old_directory = TempDir::new().expect("old certified history root");
+    let old_config = kura_config_for_dir(&old_directory, BLOCKS_IN_MEMORY);
+    let (old_kura, _) = Kura::open_test_kura_with_configured_lane_config(&old_config, lane_config)
+        .expect("open old certified history store");
+    install_autonomous_lane_marker_for_kura(&old_kura, lane_config, &old_slot_payload);
+    let (old_slot_session, old_slot_pops) =
+        committed_lane_block_session_for_kura_proposal(&old_slot_payload.origin_proposal, &signer);
+    let old_slot = CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
+    old_kura
+        .persist_committed_lane_block_session(&old_slot_session, &old_slot_pops)
+        .expect("persist occupied pre-reset certified slot");
+    let (old_tip_session, old_tip_pops) =
+        committed_lane_block_session_for_kura_proposal(&old_tip_payload.origin_proposal, &signer);
+    let old_tip = CertifiedLaneBlockArtifact::new(old_tip_session.clone(), old_tip_pops.clone());
+    old_kura
+        .persist_committed_lane_block_session(&old_tip_session, &old_tip_pops)
+        .expect("persist high pre-reset certified frontier");
+    let (old_data, old_index) =
+        Kura::certified_lane_block_paths_for_entry(lane, old_directory.path());
+    let (restored_data, restored_index) =
+        Kura::certified_lane_block_paths_for_entry(lane, &kura.store_root);
+    fs::copy(old_data, restored_data).expect("restore canonical certified history data");
+    fs::copy(old_index, restored_index).expect("restore canonical certified history index");
+    let (old_frontier, old_build) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, old_directory.path());
+    let (restored_frontier, restored_build) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, &kura.store_root);
+    assert!(
+        !old_build.exists(),
+        "the old frontier publication completed"
+    );
+    assert!(
+        !restored_build.exists(),
+        "the READY fixture has no staged frontier"
+    );
+    fs::copy(old_frontier, restored_frontier).expect("restore canonical certified frontier");
     let descriptor = &fresh_payload.origin_proposal.descriptor;
     let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
         lane_id,
@@ -138,6 +166,38 @@ fn prepare_certified_bundle_reset_fixture(
         old_slot,
         old_tip,
     }
+}
+
+// Cold fixtures use the same signed bootstrap → payload → Prepared → Live
+// sequence as the producer. Direct payload persistence alone is not restart
+// custody and deliberately remains rejected by production inventory.
+fn cold_autonomous_capacity_payload_at(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    proposal_height: u64,
+    signer: &KeyPair,
+) -> LaneExecutablePayloadV1 {
+    historical_capacity_bound_payload_for_fixture(
+        &autonomous_capacity_payload_at(
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            proposal_height,
+            signer,
+        ),
+        signer,
+    )
+}
+fn prepare_cold_autonomous_certification_for_capacity_payload(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    payload: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) -> PreparedAutonomousCertification {
+    install_autonomous_lane_marker_for_kura(kura, lane_config, payload);
+    persist_historical_capacity_payload_fixture(kura, payload, signer);
+    prepare_autonomous_certification_for_capacity_payload(kura, lane_config, payload, signer)
 }
 
 #[test]
@@ -157,15 +217,16 @@ fn sequential_autonomous_certificates_advance_the_durable_frontier() {
     // fixture's Nexus projection is assembled independently.
     kura.replace_lane_storage_entries_for_test(&lane_config);
 
+    let mut completed = Vec::new();
     for lane_block_height in 1..=2 {
-        let payload = autonomous_capacity_payload_at(
+        let payload = cold_autonomous_capacity_payload_at(
             lane_id,
             lane.dataspace_id,
             lane_block_height,
             lane_block_height,
             &signer,
         );
-        let prepared = prepare_autonomous_certification_for_capacity_payload(
+        let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
             &lane_config,
             &payload,
@@ -192,6 +253,266 @@ fn sequential_autonomous_certificates_advance_the_durable_frontier() {
             )
             .expect("sequential certified bundle is durably readable"),
             expected,
+        );
+        completed.push((payload, prepared));
+    }
+    assert_eq!(
+        kura.certified_bundle_capacity_reserved_bytes()
+            .expect("completed sequential reservations"),
+        0,
+    );
+    drop(kura);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("cold reopen sequential certificates");
+    assert!(reopened.lane_storage_entry(lane_id).is_err());
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &completed[1].0)
+        .expect("restore completed history behind the latest autonomous frontier");
+    assert_eq!(
+        reopened.latest_certified_lane_block_frontier(lane_id),
+        Some(completed[1].1.source.bundle.certified.clone()),
+    );
+    for (payload, prepared) in completed {
+        assert_eq!(
+            reopened
+                .durable_autonomous_lane_merge_source(
+                    lane_id,
+                    payload.origin_proposal.descriptor.lane_block_height,
+                    prepared.network_id,
+                    prepared.epoch,
+                )
+                .expect("cold completed source remains exactly readable"),
+            prepared.source,
+        );
+    }
+    assert_eq!(
+        reopened
+            .certified_bundle_capacity_reserved_bytes()
+            .expect("cold completed history has no new publication obligation"),
+        0,
+    );
+}
+
+// Ordinary certificates carry no READY certificate. Use the same signed lane
+// descriptor fixture, but publish only its ordinary Prepare/Commit QCs; the
+// autonomous middle slot alone publishes executable input and a merge bundle.
+fn persist_ordinary_capacity_certificate(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    payload: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) -> CertifiedLaneBlockArtifact {
+    install_autonomous_lane_marker_for_kura(kura, lane_config, payload);
+    let (session, signer_pops) =
+        committed_lane_block_session_for_kura_proposal(&payload.origin_proposal, signer);
+    assert!(session.prepare_qc.payload_availability_qc.is_none());
+    kura.persist_committed_lane_block_session(&session, &signer_pops)
+        .expect("publish ordinary certified lane slot");
+    CertifiedLaneBlockArtifact::new(session, signer_pops)
+}
+
+#[test]
+fn mixed_ordinary_autonomous_certificates_cold_restore_preserves_completed_history() {
+    let temp_dir = TempDir::new().expect("mixed certificates temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane_id = LaneId::new(1);
+    let lane = lane_config.entry(lane_id).expect("mixed certificate lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("mixed certificate Kura");
+    let first = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
+    let first_artifact =
+        persist_ordinary_capacity_certificate(&kura, &lane_config, &first, &signer);
+    let middle = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
+    let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
+        &kura,
+        &lane_config,
+        &middle,
+        &signer,
+    );
+    kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
+        .expect("publish autonomous middle slot");
+    let last = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 3, 3, &signer);
+    let last_artifact = persist_ordinary_capacity_certificate(&kura, &lane_config, &last, &signer);
+    drop(kura);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("cold reopen mixed certificates");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &middle)
+        .expect("ordinary latest frontier must preserve completed autonomous history");
+    assert_eq!(
+        reopened.latest_certified_lane_block_frontier(lane_id),
+        Some(last_artifact.clone()),
+    );
+    for (height, artifact) in [
+        (1, first_artifact),
+        (2, prepared.source.bundle.certified.clone()),
+        (3, last_artifact),
+    ] {
+        assert_eq!(
+            reopened.read_certified_lane_block_artifact(lane_id, height),
+            Some(artifact)
+        );
+    }
+    assert_eq!(
+        reopened
+            .durable_autonomous_lane_merge_source(lane_id, 2, prepared.network_id, prepared.epoch,)
+            .expect("cold mixed source remains exactly readable"),
+        prepared.source,
+    );
+    assert_eq!(
+        reopened
+            .certified_bundle_capacity_reserved_bytes()
+            .expect("mixed complete history reservations"),
+        0,
+    );
+}
+
+#[test]
+fn certified_bundle_cold_restore_repairs_only_latest_partial_publication() {
+    for append_intent in [false, true] {
+        let temp_dir = TempDir::new().expect("partial successor temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane = lane_config.entry(lane_id).expect("partial successor lane");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("partial successor Kura");
+        let first = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
+        let completed = prepare_cold_autonomous_certification_for_capacity_payload(
+            &kura,
+            &lane_config,
+            &first,
+            &signer,
+        );
+        kura.persist_committed_lane_block_session(&completed.session, &completed.signer_pops)
+            .expect("publish completed historical slot");
+        let last = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
+        let partial = prepare_cold_autonomous_certification_for_capacity_payload(
+            &kura,
+            &lane_config,
+            &last,
+            &signer,
+        );
+        if append_intent {
+            fail_next_autonomous_merge_bundle_append_data_sync_for_tests();
+        } else {
+            fail_next_autonomous_merge_bundle_persistence_for_tests();
+        }
+        kura.persist_committed_lane_block_session(&partial.session, &partial.signer_pops)
+            .expect_err("crash after latest certified pair and before its bundle");
+        let (_, index_path) =
+            Kura::autonomous_lane_merge_bundle_paths_for_entry(lane, &kura.store_root);
+        let intent_path = Kura::bound_progress_append_intent_path(&index_path);
+        assert_eq!(intent_path.exists(), append_intent);
+        assert_eq!(
+            kura.certified_bundle_capacity_reserved_bytes()
+                .expect("partial reservation"),
+            certified_bundle_reserved_for(
+                &partial.plan,
+                [CertifiedBundleCapacityComponent::AutonomousBundlePair],
+            ),
+        );
+        assert!(
+            kura.certified_bundle_capacity_reserved_bytes()
+                .expect("nonzero obligation")
+                > 0
+        );
+        drop(kura);
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("cold reopen partial successor");
+        restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &last)
+            .expect("repair latest partial bundle without re-admitting completed history");
+        assert!(
+            !intent_path.exists(),
+            "cold repair must finish the exact append intent"
+        );
+        for (height, prepared) in [(1, completed), (2, partial)] {
+            assert_eq!(
+                reopened
+                    .durable_autonomous_lane_merge_source(
+                        lane_id,
+                        height,
+                        prepared.network_id,
+                        prepared.epoch,
+                    )
+                    .expect("cold repaired source remains exactly readable"),
+                prepared.source,
+            );
+        }
+        assert_eq!(
+            reopened
+                .certified_bundle_capacity_reserved_bytes()
+                .expect("repaired reservations"),
+            0,
+        );
+    }
+}
+
+#[test]
+fn certified_bundle_cold_restore_rejects_corrupt_or_missing_completed_history_without_mutation() {
+    for missing in [false, true] {
+        let temp_dir = TempDir::new().expect("invalid historical bundle temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::new(1);
+        let lane = lane_config.entry(lane_id).expect("invalid historical lane");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("invalid historical bundle Kura");
+        let first = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
+        let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
+            &kura,
+            &lane_config,
+            &first,
+            &signer,
+        );
+        kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
+            .expect("publish historical autonomous slot");
+        let last = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
+        let last_artifact =
+            persist_ordinary_capacity_certificate(&kura, &lane_config, &last, &signer);
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id),
+            Some(last_artifact)
+        );
+        let (data_path, index_path) =
+            Kura::autonomous_lane_merge_bundle_paths_for_entry(lane, &kura.store_root);
+        drop(kura);
+        if missing {
+            fs::remove_file(&data_path).expect("remove completed historical bundle data");
+            fs::remove_file(&index_path).expect("remove completed historical bundle index");
+        } else {
+            let mut bytes = fs::read(&data_path).expect("read historical bundle bytes");
+            assert!(!bytes.is_empty());
+            bytes[0] ^= 0xff;
+            fs::write(&data_path, bytes).expect("corrupt completed historical bundle");
+        }
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("cold open defers secondary lane evidence to authenticated geometry");
+        let tree_before = snapshot_regular_test_tree(temp_dir.path());
+        let reservations_before = reopened
+            .certified_bundle_capacity_reservations
+            .lock()
+            .clone();
+        let error = restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &first)
+            .expect_err(
+                "completed historical bundle corruption or absence is never repair authority",
+            );
+        let expected = if missing {
+            "non-frontier autonomous certificate lacks its durable bundle"
+        } else {
+            "autonomous merge bundle entry is not canonical framed Norito"
+        };
+        assert!(
+            error.to_string().contains(expected),
+            "wrong rejection boundary: {error}"
+        );
+        assert_eq!(snapshot_regular_test_tree(temp_dir.path()), tree_before);
+        assert_eq!(
+            *reopened.certified_bundle_capacity_reservations.lock(),
+            reservations_before,
+            "failed historical validation must not publish a replacement reservation map",
         );
     }
 }
@@ -441,6 +762,7 @@ fn certified_bundle_reserved_for(
 fn initial_certified_bundle_reserved(plan: &CertifiedBundleCapacityPlan) -> u64 {
     certified_bundle_reserved_for(plan, plan.component_bytes.keys().copied())
 }
+
 #[test]
 fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() {
     let temp_dir = TempDir::new().expect("missing transient-entry temp dir");
@@ -858,9 +1180,30 @@ fn certified_pair_crash_rebuilds_only_bundle_obligation() {
     let reservation_before = kura.certified_bundle_capacity_reservations.lock().clone();
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("rebuild bundle-only obligation");
+    let expected_rebuilt = reservation_before
+        .iter()
+        .map(|(identity, reservation)| {
+            let mut reservation = reservation.clone();
+            // Startup readback proves the certified pair needs no new allocation.
+            reservation
+                .plan
+                .component_bytes
+                .insert(CertifiedBundleCapacityComponent::CertifiedPair, 0);
+            reservation
+                .plan
+                .component_transient_bytes
+                .insert(CertifiedBundleCapacityComponent::CertifiedPair, 0);
+            (identity.clone(), reservation)
+        })
+        .collect::<BTreeMap<_, _>>();
     assert_eq!(
         *kura.certified_bundle_capacity_reservations.lock(),
-        reservation_before
+        expected_rebuilt.into()
+    );
+    assert_eq!(
+        kura.certified_bundle_capacity_reserved_bytes()
+            .expect("rebuilt bundle-only obligation"),
+        expected
     );
     kura.repair_autonomous_lane_merge_bundles_on_startup()
         .expect("repair missing autonomous bundle");
@@ -1322,4 +1665,155 @@ fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
         reservations_before,
         "a late rebuild error must not publish a partial replacement map"
     );
+}
+#[test]
+fn certified_bundle_guard_retry_tracks_partial_then_complete_consumption() {
+    use crate::kura::resident_inventory::ResidentOwner;
+
+    let temp_dir = TempDir::new().expect("guard retry temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("guard retry Kura");
+    let prepared =
+        prepare_autonomous_certification_for_capacity(&kura, &lane_config, LaneId::new(1));
+    let artifact =
+        CertifiedLaneBlockArtifact::new(prepared.session.clone(), prepared.signer_pops.clone());
+    let _prune_guard = kura.prune_lock.lock();
+    assert_eq!(
+        kura.ensure_certified_bundle_capacity_reservation_under_prune_guard(
+            &artifact,
+            &prepared.source,
+            None,
+        )
+        .expect("admit actual signed source through the capacity snapshot owner"),
+        initial_certified_bundle_reserved(&prepared.plan),
+    );
+    let all: BTreeSet<_> = prepared.plan.component_bytes.keys().copied().collect();
+    assert_eq!(all.len(), 3);
+    let consumed = BTreeSet::from([CertifiedBundleCapacityComponent::LatestCertifiedFrontier]);
+    let remaining: BTreeSet<_> = all.difference(&consumed).copied().collect();
+    assert_eq!(remaining.len(), 2);
+    // Existing-record retries do not consult admission snapshot arguments. The
+    // initial record above was admitted using the actual configured snapshot.
+    let partial = kura
+        .ensure_certified_bundle_capacity_plan_locked(prepared.plan.clone(), &consumed, 0, 0, 0, 0)
+        .expect("the exact existing record consumes only its attested frontier");
+    assert_eq!(
+        partial,
+        certified_bundle_reserved_for(&prepared.plan, remaining.iter().copied()),
+    );
+    {
+        let reservations = kura.certified_bundle_capacity_reservations.lock();
+        assert_eq!(reservations.len(), 1);
+        assert_eq!(
+            reservations[&prepared.plan.identity].outstanding_components,
+            remaining,
+        );
+        assert_eq!(
+            reservations
+                .resident_associations()
+                .expect("valid partial count"),
+            (1 + prepared.plan.component_bytes.len()
+                + prepared.plan.component_transient_bytes.len()
+                + remaining.len()) as u64,
+        );
+    }
+    assert_eq!(
+        kura.ensure_certified_bundle_capacity_plan_locked(prepared.plan.clone(), &all, 0, 0, 0, 0)
+            .expect("complete existing record ends its value guard before map removal"),
+        0,
+    );
+    {
+        let reservations = kura.certified_bundle_capacity_reservations.lock();
+        assert!(!reservations.contains_key(&prepared.plan.identity));
+        assert!(reservations.is_empty());
+        assert_eq!(
+            reservations
+                .resident_associations()
+                .expect("valid empty count"),
+            0
+        );
+    }
+    assert_eq!(kura.certified_bundle_capacity_reserved_bytes().unwrap(), 0);
+}
+
+#[test]
+fn certified_bundle_guard_retry_rejects_immutable_plan_and_consumed_component_loss() {
+    use crate::kura::resident_inventory::ResidentOwner;
+
+    let temp_dir = TempDir::new().expect("guard retry rejection temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("guard retry rejection Kura");
+    let prepared =
+        prepare_autonomous_certification_for_capacity(&kura, &lane_config, LaneId::new(1));
+    let artifact =
+        CertifiedLaneBlockArtifact::new(prepared.session.clone(), prepared.signer_pops.clone());
+    let _prune_guard = kura.prune_lock.lock();
+    kura.ensure_certified_bundle_capacity_reservation_under_prune_guard(
+        &artifact,
+        &prepared.source,
+        None,
+    )
+    .expect("admit actual signed source before negative retries");
+    let before = kura.certified_bundle_capacity_reservations.lock().clone();
+    assert_eq!(before.len(), 1);
+    let before_count = before
+        .resident_associations()
+        .expect("complete baseline count");
+    let all: BTreeSet<_> = prepared.plan.component_bytes.keys().copied().collect();
+    assert_eq!(all.len(), 3);
+    for changed_field in 0..3 {
+        let mut changed = prepared.plan.clone();
+        let slot = match changed_field {
+            0 => &mut changed.certified_bytes_hash,
+            1 => &mut changed.frontier_bytes_hash,
+            _ => &mut changed.bundle_bytes_hash,
+        };
+        let different = Hash::new(b"guard retry changed immutable byte plan");
+        assert_ne!(*slot, different);
+        *slot = different;
+        let error = kura
+            .ensure_certified_bundle_capacity_plan_locked(changed, &all, 0, 0, 0, 0)
+            .expect_err("all-consumed retry cannot bypass immutable-plan validation");
+        assert!(
+            error
+                .to_string()
+                .contains("retry changed its immutable byte plan")
+        );
+        let reservations = kura.certified_bundle_capacity_reservations.lock();
+        assert_eq!(*reservations, before);
+        assert_eq!(reservations.resident_associations().unwrap(), before_count);
+    }
+    let consumed = BTreeSet::from([CertifiedBundleCapacityComponent::LatestCertifiedFrontier]);
+    kura.ensure_certified_bundle_capacity_plan_locked(prepared.plan.clone(), &consumed, 0, 0, 0, 0)
+        .expect("establish actual partially consumed retry state");
+    let partial = kura.certified_bundle_capacity_reservations.lock().clone();
+    assert_eq!(
+        partial[&prepared.plan.identity]
+            .outstanding_components
+            .len(),
+        2
+    );
+    let partial_count = partial.resident_associations().unwrap();
+    let error = kura
+        .ensure_certified_bundle_capacity_plan_locked(
+            prepared.plan.clone(),
+            &BTreeSet::new(),
+            0,
+            0,
+            0,
+            0,
+        )
+        .expect_err("a previously consumed durable component cannot disappear");
+    assert!(
+        error
+            .to_string()
+            .contains("durability-attested certified/bundle component disappeared")
+    );
+    let reservations = kura.certified_bundle_capacity_reservations.lock();
+    assert_eq!(*reservations, partial);
+    assert_eq!(reservations.resident_associations().unwrap(), partial_count);
 }

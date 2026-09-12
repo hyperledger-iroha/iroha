@@ -2,7 +2,7 @@
 use iroha_data_model::prelude::Json;
 use norito::{
     Error as NoritoError,
-    core::{NoritoDeserialize, NoritoSerialize, SerializePayload},
+    core::{NoritoDeserialize, NoritoSerialize},
     json::{self, JsonDeserialize, JsonSerialize, Parser},
 };
 #[allow(unused_imports)]

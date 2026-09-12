@@ -13,7 +13,7 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
     let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_transaction = block.transaction();
-    let domain_id: iroha_data_model::domain::DomainId =
+    let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("cancel", "universal").unwrap();
     let owner_key = checked_keypair();
     let owner_id = new_account_id(&owner_key);

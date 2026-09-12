@@ -1119,7 +1119,6 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
         },
     };
     use iroha_data_model::{
-        ChainId,
         isi::sorafs::SorafsRepairTaskActionV1,
         sorafs::moderation_ledger::{
             REPAIR_LEDGER_TASK_VERSION_V1, RepairFinalizedCursorV1, RepairFinalizedTaskV1,
@@ -1127,6 +1126,7 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
             sorafs_repair_task_id_v1,
         },
     };
+    use iroha_model_base::chain::ChainId;
     let (cfg, _dir) = storage_config_with_temp_dir();
     let repair_actual = iroha_config::parameters::actual::SorafsRepair {
         enabled: true,

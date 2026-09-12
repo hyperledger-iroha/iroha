@@ -9,9 +9,9 @@ use iroha_data_model::{
         MergeLedgerEntry, MergeQuorumCertificate,
     },
     nexus::{LaneCatalog, LaneConfig},
-    peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
+use iroha_model_base::peer::PeerId;
 use iroha_zkp_halo2::poseidon;
 use norito::codec::{Decode, Encode};
 /// Domain separator applied to the merge-hint reduction payloads.
@@ -36,7 +36,8 @@ const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
 const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v3\0";
 /// Merge-ledger entry data required for signature payloads.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeLedgerCandidate")]
 #[norito(deny_unknown_fields)]
 pub struct MergeLedgerCandidate {
     /// Exact merge-entry layout this candidate will become.
@@ -174,6 +175,8 @@ pub fn merge_ledger_entry_reference_matches(
 ) -> bool {
     entry.canonical_encoded_len() == expected_encoded_len && entry.canonical_hash() == expected_hash
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeLedgerSignPayload")]
 #[derive(Encode)]
 struct MergeLedgerSignPayload {
     version: u8,
@@ -329,6 +332,8 @@ pub fn merge_execution_result_merkle_root(
         .collect::<MerkleTree<TransactionResult>>()
         .root()
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergePostStatePreimage")]
 #[derive(Encode)]
 struct MergePostStatePreimage {
     base_state_height: u64,
@@ -358,6 +363,8 @@ pub fn merge_expected_post_state_hash(
         encoded.as_slice(),
     ]))
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeExecutionBatchPreimage")]
 #[derive(Encode)]
 struct MergeExecutionBatchPreimage {
     version: u8,
@@ -393,6 +400,8 @@ pub fn merge_execution_batch_hash(batch: &MergeExecutionBatch) -> Hash {
     .encode();
     Hash::new_from_chunks(&[MERGE_EXECUTION_BATCH_DOMAIN_TAG, encoded.as_slice()])
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeExecutionIdentityPreimage")]
 #[derive(Encode)]
 struct MergeExecutionIdentityPreimage {
     version: u8,
@@ -485,10 +494,11 @@ mod tests {
             confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
         },
         nexus::{
-            DaManifestPolicy, DataSpaceId, LaneId, LaneLifecycleParameterV1, LaneSchedulerPolicy,
-            LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
+            DaManifestPolicy, LaneLifecycleParameterV1, LaneSchedulerPolicy,
+            LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility,
         },
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU32, NonZeroU64},
@@ -500,7 +510,7 @@ mod tests {
         LaneSettlementBufferPolicy::new(
             iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("settlement", "universal")
+                iroha_model_base::domain::DomainId::try_new("settlement", "universal")
                     .expect("settlement domain"),
                 "xor".parse().expect("asset name"),
             ),
@@ -708,9 +718,9 @@ mod tests {
             consensus::VALIDATOR_SET_HASH_VERSION_V1,
             merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
         };
-        let lane_id = iroha_data_model::nexus::LaneId::new(1);
+        let lane_id = iroha_model_base::topology::LaneId::new(1);
         let lane_incarnation = Hash::new(b"merge-test-lane-incarnation");
-        let dataspace_id = iroha_data_model::nexus::DataSpaceId::new(7);
+        let dataspace_id = iroha_model_base::topology::DataSpaceId::new(7);
         let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
             block_height: 9,
             lane_id,
@@ -766,6 +776,15 @@ mod tests {
         };
         let canonical_candidate_bytes = candidate.canonical_bytes();
         let canonical_candidate_hash = candidate.canonical_hash();
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &candidate,
+            "iroha_core::merge::MergeLedgerCandidate",
+        );
+        assert_eq!(
+            norito::decode_canonical::<MergeLedgerCandidate>(&canonical_candidate_bytes)
+                .expect("the signed candidate frame reconstructs every bound field"),
+            candidate
+        );
         {
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -789,9 +808,9 @@ mod tests {
         let digest_a = merge_qc_message_digest(&network_id, &candidate, 1, validator_set_hash);
         let digest_b = merge_qc_message_digest(&network_id, &candidate, 1, validator_set_hash);
         assert_eq!(digest_a, digest_b);
-        let shared_label_a: iroha_data_model::ChainId =
+        let shared_label_a: iroha_model_base::chain::ChainId =
             "shared-display-label".parse().expect("valid display label");
-        let shared_label_b: iroha_data_model::ChainId =
+        let shared_label_b: iroha_model_base::chain::ChainId =
             "shared-display-label".parse().expect("valid display label");
         assert_eq!(shared_label_a, shared_label_b);
         let foreign_network_id = NetworkId::from_genesis_hash(

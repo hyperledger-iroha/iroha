@@ -32,6 +32,8 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::governance::model::GovernanceEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::governance::model::GovernanceEvent")]
     pub enum GovernanceEvent {
         /// A governance proposal was submitted.
         ProposalSubmitted(GovernanceProposalSubmitted),
@@ -73,7 +75,19 @@ mod model {
 
     /// Public audit record for one QC-authorized threshold-key lifecycle action.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceThresholdKeyLifecycleAppliedV1"
     )]
     pub struct GovernanceThresholdKeyLifecycleAppliedV1 {
         /// Exact lifecycle action authenticated by the current validator roster.
@@ -87,7 +101,19 @@ mod model {
     }
     /// Proposal submitted payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceProposalSubmitted"
     )]
     pub struct GovernanceProposalSubmitted {
         /// Deterministic proposal id (blake2b‑32 of content fields)
@@ -99,7 +125,19 @@ mod model {
     }
     /// Lock created payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceLockCreated"
     )]
     pub struct GovernanceLockCreated {
         /// Referendum identifier
@@ -113,7 +151,19 @@ mod model {
     }
     /// Lock extended payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceLockExtended"
     )]
     pub struct GovernanceLockExtended {
         /// Referendum identifier
@@ -127,7 +177,19 @@ mod model {
     }
     /// Proposal enacted payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceProposalEnacted"
     )]
     pub struct GovernanceProposalEnacted {
         /// Deterministic proposal id
@@ -135,7 +197,19 @@ mod model {
     }
     /// Proposal rejected payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceProposalRejected"
     )]
     pub struct GovernanceProposalRejected {
         /// Deterministic proposal id
@@ -154,6 +228,10 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceBallotMode"
     )]
     pub enum GovernanceBallotMode {
         /// Zero-knowledge ballot (direction and owner hidden)
@@ -164,7 +242,19 @@ mod model {
     }
     /// Ballot accepted payload
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceBallotAccepted"
     )]
     pub struct GovernanceBallotAccepted {
         /// Referendum identifier
@@ -176,7 +266,19 @@ mod model {
     }
     /// Ballot rejected payload
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceBallotRejected"
     )]
     pub struct GovernanceBallotRejected {
         /// Referendum identifier
@@ -197,6 +299,10 @@ mod model {
         Decode,
         Encode,
         iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceSlashReason"
     )]
     pub enum GovernanceSlashReason {
         /// Duplicate/second ballot detected for the same referendum.
@@ -213,7 +319,19 @@ mod model {
     }
     /// Referendum opened payload
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceReferendumOpened"
     )]
     pub struct GovernanceReferendumOpened {
         /// Referendum identifier
@@ -225,7 +343,19 @@ mod model {
     }
     /// Referendum closed payload
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceReferendumClosed"
     )]
     pub struct GovernanceReferendumClosed {
         /// Referendum identifier
@@ -235,7 +365,19 @@ mod model {
     }
     /// Lock unlocked payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceLockUnlocked"
     )]
     pub struct GovernanceLockUnlocked {
         /// Referendum identifier
@@ -247,7 +389,19 @@ mod model {
     }
     /// Lock slashed payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceLockSlashed"
     )]
     pub struct GovernanceLockSlashed {
         /// Referendum identifier
@@ -265,7 +419,19 @@ mod model {
     }
     /// Lock restitution payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceLockRestituted"
     )]
     pub struct GovernanceLockRestituted {
         /// Referendum identifier
@@ -281,7 +447,19 @@ mod model {
     }
     /// Citizen registry entry created.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceCitizenRegistered"
     )]
     pub struct GovernanceCitizenRegistered {
         /// Account receiving citizenship.
@@ -291,7 +469,19 @@ mod model {
     }
     /// Citizen registry entry removed (bond returned).
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceCitizenRevoked"
     )]
     pub struct GovernanceCitizenRevoked {
         /// Account removed from the registry.
@@ -301,7 +491,19 @@ mod model {
     }
     /// Canonical creation of one retryable end-to-end Parliament attempt.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceParliamentAttemptCreated"
     )]
     pub struct GovernanceParliamentAttemptCreated {
         /// Immutable proposal content shared by every retry.
@@ -324,7 +526,19 @@ mod model {
     /// Bounded audit record for one accepted Parliament reducer command or
     /// consensus-derived certificate-execution outcome.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceParliamentLifecycleTransitionApplied"
     )]
     pub struct GovernanceParliamentLifecycleTransitionApplied {
         /// Immutable proposal content being processed.
@@ -349,7 +563,19 @@ mod model {
     }
     /// Exact decision for one standalone governance referendum.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::governance::model::GovernanceReferendumDecided"
     )]
     pub struct GovernanceReferendumDecided {
         /// Original standalone referendum selector, without normalization.
@@ -364,7 +590,7 @@ mod model {
         pub approved: bool,
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     GovernanceEvent,
     GovernanceProposalSubmitted,
@@ -416,11 +642,11 @@ mod tests {
         ParliamentLifecycleTransitionV1,
     };
 
-    fn assert_roundtrip(event: GovernanceEvent) {
-        let bytes = norito::to_bytes(&event).expect("encode canonical governance event");
+    fn assert_roundtrip(event: &GovernanceEvent) {
+        let bytes = norito::to_bytes(event).expect("encode canonical governance event");
         let decoded = norito::decode_from_bytes::<GovernanceEvent>(&bytes)
             .expect("decode canonical governance event");
-        assert_eq!(decoded, event);
+        assert_eq!(&decoded, event);
     }
 
     #[test]
@@ -437,14 +663,14 @@ mod tests {
             Some(17_u32.to_le_bytes().as_slice()),
             "the standalone decision event must use its canonical first-release enum tag"
         );
-        assert_roundtrip(event);
+        assert_roundtrip(&event);
     }
 
     #[test]
     fn parliament_v1_lifecycle_events_roundtrip() {
         let proposal_content_id = ProposalContentId::new([0x11; 32]);
         let governance_attempt_id = GovernanceAttemptId::new([0x12; 32]);
-        assert_roundtrip(GovernanceEvent::ParliamentAttemptCreated(
+        assert_roundtrip(&GovernanceEvent::ParliamentAttemptCreated(
             GovernanceParliamentAttemptCreated {
                 proposal_content_id,
                 governance_attempt_id,
@@ -458,7 +684,7 @@ mod tests {
                 at_height: 99,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -471,7 +697,7 @@ mod tests {
                 at_height: 100,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -483,7 +709,7 @@ mod tests {
                 at_height: 101,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -501,7 +727,7 @@ mod tests {
                 failure_root: [0x22; 32],
             },
         );
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -541,12 +767,12 @@ mod tests {
             encoded.len() < 512,
             "audit event must not duplicate evidence"
         );
-        assert_roundtrip(event);
+        assert_roundtrip(&event);
     }
 
     #[test]
     fn threshold_key_lifecycle_event_roundtrips() {
-        assert_roundtrip(GovernanceEvent::ThresholdKeyLifecycleApplied(
+        assert_roundtrip(&GovernanceEvent::ThresholdKeyLifecycleApplied(
             GovernanceThresholdKeyLifecycleAppliedV1 {
                 action: crate::isi::consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
                 session_id: [0x31; 32],
@@ -623,3 +849,6 @@ mod tests {
         }));
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

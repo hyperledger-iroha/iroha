@@ -342,7 +342,7 @@ mod compliance_tests {
             .as_secs();
         StreamTokenV1::sign(
             StreamTokenBodyV1 {
-                token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_string(),
+                token_id: "0123456789abcdef0123456789abcdef".to_string(),
                 manifest_cid: hex::decode(manifest_cid_hex).expect("cid hex"),
                 provider_id: {
                     let mut bytes = [0u8; 32];
@@ -362,7 +362,7 @@ mod compliance_tests {
         .expect("sign stream token")
     }
     fn encode_token_b64(token: &StreamTokenV1) -> String {
-        let bytes = norito::to_bytes(token).expect("encode token");
+        let bytes = norito::encode_canonical(token).expect("encode token");
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
     fn provider_id_hex() -> String {
@@ -395,9 +395,12 @@ mod compliance_tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let spec: ChunkFetchSpec = plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone();
         let manifest_id_hex = hex::encode(blake3::hash(&payload).as_bytes());
+        let manifest_cid_hex = hex::encode(sorafs_manifest::canonical_manifest_root_cid(
+            *blake3::hash(&payload).as_bytes(),
+        ));
         let provider_id = provider_id_hex();
         let chunker_handle = "sorafs.sf1@1.0.0".to_string();
-        let stream_token = sample_stream_token(&manifest_id_hex, &provider_id, &chunker_handle, 2);
+        let stream_token = sample_stream_token(&manifest_cid_hex, &provider_id, &chunker_handle, 2);
         let stream_token_b64 = encode_token_b64(&stream_token);
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -422,7 +425,7 @@ mod compliance_tests {
             chunker_handle: chunker_handle.clone(),
             manifest_envelope_b64: None,
             client_id: None,
-            expected_manifest_cid_hex: Some(manifest_id_hex.clone()),
+            expected_manifest_cid_hex: Some(manifest_cid_hex),
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,

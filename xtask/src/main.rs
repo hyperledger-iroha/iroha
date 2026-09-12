@@ -209,15 +209,15 @@ enum CommandKind {
         output: PathBuf,
     },
     SorafsAdoptionCheck {
-        options: sorafs::AdoptionCheckOptions,
+        options: sorafs::adoption::AdoptionCheckOptions,
         report: Option<PathBuf>,
     },
     SorafsScoreboardDiff {
-        options: sorafs::ScoreboardDiffOptions,
+        options: sorafs::adoption::ScoreboardDiffOptions,
         report: Option<PathBuf>,
     },
     SorafsBurnInCheck {
-        options: sorafs::BurnInCheckOptions,
+        options: sorafs::adoption::BurnInCheckOptions,
         output: Option<PathBuf>,
     },
     SorafsReserveMatrix {
@@ -1213,7 +1213,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             sorafs::write_pin_registry_fixture(output)?;
         }
         CommandKind::SorafsAdoptionCheck { options, report } => {
-            let adoption = sorafs::run_adoption_check(options)?;
+            let adoption = sorafs::adoption::run_adoption_check(options)?;
             let mut message = format!(
                 "sorafs adoption check: validated {} scoreboard(s) (min eligible per file = {})",
                 adoption.total_evaluated, adoption.min_providers_required
@@ -1229,8 +1229,8 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             }
         }
         CommandKind::SorafsScoreboardDiff { options, report } => {
-            let diff = sorafs::run_scoreboard_diff(options)?;
-            sorafs::print_scoreboard_diff(&diff);
+            let diff = sorafs::adoption::run_scoreboard_diff(options)?;
+            sorafs::adoption::print_scoreboard_diff(&diff);
             if let Some(path) = report {
                 let rendered = serde_json::to_string_pretty(&diff)?;
                 fs::write(&path, rendered)?;
@@ -1241,7 +1241,7 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             }
         }
         CommandKind::SorafsBurnInCheck { options, output } => {
-            let summary = sorafs::run_burn_in_check(options)?;
+            let summary = sorafs::adoption::run_burn_in_check(options)?;
             let rendered = serde_json::to_string_pretty(&summary)?;
             if let Some(path) = output {
                 fs::write(path, rendered)?;
@@ -3003,7 +3003,7 @@ where
                 );
             }
             Ok(CommandKind::SorafsAdoptionCheck {
-                options: sorafs::AdoptionCheckOptions {
+                options: sorafs::adoption::AdoptionCheckOptions {
                     scoreboard_paths,
                     summary_paths,
                     min_eligible_providers: min_providers,
@@ -3063,7 +3063,7 @@ where
             let current =
                 current.ok_or("sorafs-scoreboard-diff requires --current <scoreboard.json>")?;
             Ok(CommandKind::SorafsScoreboardDiff {
-                options: sorafs::ScoreboardDiffOptions {
+                options: sorafs::adoption::ScoreboardDiffOptions {
                     previous_scoreboard: previous,
                     current_scoreboard: current,
                     threshold_percent,
@@ -3289,7 +3289,7 @@ where
                 return Err("sorafs-burn-in-check requires at least one --log <path>".into());
             }
             Ok(CommandKind::SorafsBurnInCheck {
-                options: sorafs::BurnInCheckOptions {
+                options: sorafs::adoption::BurnInCheckOptions {
                     log_paths,
                     required_window_days: window_days,
                     min_pq_ratio,
@@ -13817,7 +13817,18 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            // This in-process schema fixture never owns a deployed node or release identity.
+            iroha_core::release_identity::BuildIdentity::from_compiled_parts(
+                env!("CARGO_PKG_VERSION"),
+                Some("local-fast-build"),
+                None,
+                None,
+                None,
+                None,
+            )?,
+            MaybeTelemetry::disabled(),
+        ),
     )?;
     let router_runtime = torii
         .api_router_for_tests()

@@ -344,11 +344,15 @@ def _validate_build_environment(root: Path, environment: object) -> None:
         raise ValidationError("artifact hermetic runner digest does not match source")
 
 
-def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
-    lockfile = root / "Cargo.lock"
-    _regular_file(lockfile, "selected root Cargo.lock")
+def _validate_root_identity(root: Path, payload: dict[str, object], lockfile: Path) -> None:
+    if payload["privacy_production_enabled"] is True and lockfile == root / "Cargo.lock":
+        raise ValidationError("privacy production artifacts require an explicit external canonical graph snapshot")
+    _regular_file(root / "Cargo.lock", "root source Cargo.lock")
+    _regular_file(lockfile, "selected build Cargo.lock")
+    if payload["privacy_production_enabled"] is True and lockfile.lstat().st_mode & 0o222:
+        raise ValidationError("privacy production selected Cargo lock must be read-only")
     if _sha256(lockfile) != payload["cargo_lock_sha256"]:
-        raise ValidationError("artifact Cargo.lock digest does not match source")
+        raise ValidationError("artifact Cargo.lock digest does not match selected build lock")
 
     header = root / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
     _regular_file(header, "authoritative NoritoBridge header")
@@ -385,7 +389,7 @@ def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
         raise ValidationError("authoritative privacy bridge ABI is not exact 23")
 
 
-def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
+def _load_manifest(manifest_path: Path, root: Path, lockfile: Path) -> dict[str, object]:
     _regular_file(manifest_path, "embedded artifact manifest")
     try:
         payload = json.loads(
@@ -441,7 +445,7 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
         raise ValidationError("artifact slice hash registry is not exact")
     if any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in hashes.values()):
         raise ValidationError("artifact slice hash is not canonical")
-    _validate_root_identity(root, payload)
+    _validate_root_identity(root, payload, lockfile)
     return payload
 
 
@@ -631,6 +635,7 @@ def _validate_tool_provenance(
 def _validate_repository_provenance(
     root: Path,
     payload: dict[str, object],
+    lockfile: Path,
 ) -> None:
     """Recompute the selected source closure for a standalone archive owner."""
 
@@ -644,12 +649,11 @@ def _validate_repository_provenance(
         "check_mobile_sdk_artifact_pin_commit.py",
         "norito_bridge_pin_commit_for_provenance_validation",
     )
-    lockfile = root / "Cargo.lock"
     try:
         _validate_tool_provenance(payload, source_seal)
-        inputs = source_seal.seal_inputs(root, "apple", lockfile)
-        actual_fingerprint = source_seal.fingerprint(root, inputs, lockfile)
-        actual_dirty = bool(source_seal.status(root, inputs, lockfile))
+        snapshot = source_seal.snapshot(root, "apple", lockfile)
+        actual_fingerprint = snapshot["source_fingerprint_sha256"]
+        actual_dirty = snapshot["source_tree_dirty"]
         relationship = pin_commit.validate_pin_relationship(
             root,
             payload["source_commit"],
@@ -691,6 +695,7 @@ def _validate_swift_pins(root: Path, loader: Path, hashes: dict[str, str]) -> No
 def validate(
     *,
     root: Path,
+    lockfile_path: Path,
     xcframework: Path,
     manifest_path: Path,
     manifest_link: Path,
@@ -704,12 +709,18 @@ def validate(
             "dirty-source allowance requires repository provenance verification"
         )
     root = root.resolve(strict=True)
+    source_seal = _load_swift_pin_owner(root)
+    try:
+        lockfile = source_seal.selected_lockfile_path(root, lockfile_path)
+        lock_identity = source_seal.lockfile_identity(lockfile)
+    except RuntimeError as error:
+        raise ValidationError(str(error)) from error
     if xcframework.is_symlink() or not xcframework.is_dir():
         raise ValidationError("XCFramework root is not a non-symbolic directory")
     if manifest_path != xcframework / MANIFEST_NAME:
         raise ValidationError("embedded artifact manifest has a non-canonical location")
     _reject_internal_symlinks(xcframework)
-    payload = _load_manifest(manifest_path, root)
+    payload = _load_manifest(manifest_path, root, lockfile)
 
     expected_top_level = {"Info.plist", MANIFEST_NAME, *EXPECTED_SLICES}
     if payload["privacy_production_enabled"] is True:
@@ -840,15 +851,21 @@ def validate(
     if swift_loader is not None:
         _validate_swift_pins(root, swift_loader, hashes)
     if verify_repository_provenance:
-        _validate_repository_provenance(root, payload)
+        _validate_repository_provenance(root, payload, lockfile)
         if payload["source_tree_dirty"] and not allow_dirty_source:
             raise ValidationError("release artifact must be built from a clean source tree")
+    try:
+        if source_seal.lockfile_identity(lockfile) != lock_identity:
+            raise ValidationError("selected Cargo lock changed during artifact validation")
+    except RuntimeError as error:
+        raise ValidationError(str(error)) from error
     return payload
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--lockfile-path", required=True, type=Path)
     parser.add_argument("--xcframework", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--manifest-link", required=True, type=Path)
@@ -864,6 +881,7 @@ def main() -> int:
     try:
         validate(
             root=arguments.root,
+            lockfile_path=arguments.lockfile_path,
             xcframework=arguments.xcframework,
             manifest_path=arguments.manifest,
             manifest_link=arguments.manifest_link,

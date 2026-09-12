@@ -71,6 +71,10 @@ const EP_PARITY_TAG: u8 = 1;
 ///
 /// The branch is an explicit range-constrained public cell. It is never hidden in unused bits of
 /// the semantic amount, so a finalized mint proof cannot be substituted for a roster carrier.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::mint_helper::KagemushaMintAuthorityStepV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u64)]
 pub enum KagemushaMintAuthorityStepV1 {

@@ -14,8 +14,6 @@ use iroha_core::da::{LaneEpoch, ReplayFingerprint};
 use iroha_data_model::{
     account::AccountId,
     da::prelude::*,
-    name::Name,
-    nexus::LaneId,
     sorafs::pin_registry::StorageClass,
     taikai::{
         SegmentDuration, SegmentTimestamp, TAIKAI_ANCHOR_RECEIPT_SCHEMA_V1,
@@ -30,6 +28,8 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::debug;
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::LaneId;
 use iroha_torii_shared::da::sampling::compute_sample_window;
 use norito::{
     decode_from_bytes,

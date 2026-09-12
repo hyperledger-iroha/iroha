@@ -4,7 +4,7 @@
 //! verifier metadata together with Pedersen and Poseidon parameter sets. These structures model the
 //! governance state transitions (publish → activate → deprecate → withdraw) and advertise the
 //! hashes that wallets and validators must verify before accepting an upgrade.
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer, json_helpers::fixed_bytes,
@@ -31,7 +31,7 @@ pub const CONFIDENTIAL_MEMO_ML_KEM_768_CIPHERTEXT_BYTES_V1: usize = 1_088;
 pub const CONFIDENTIAL_MEMO_ML_KEM_1024_CIPHERTEXT_BYTES_V1: usize = 1_568;
 /// Exact XChaCha20-Poly1305 nonce length.
 pub const CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1: usize = 24;
-/// Exact Poly1305 authentication-tag length appended to XChaCha ciphertexts.
+/// Exact Poly1305 authentication-tag length appended to `XChaCha` ciphertexts.
 pub const CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1: usize = 16;
 /// Exact wrapped 32-byte memo-key plus Poly1305-tag length.
 pub const CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1: usize = 48;
@@ -72,21 +72,26 @@ const _: () = {
 };
 
 /// Closed KEM/DEM suite used by one padded confidential-memo recipient slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "suite", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "suite", content = "value", deny_unknown_fields)]
 pub enum ConfidentialMemoSuiteV1 {
     /// ML-KEM-768 key encapsulation with XChaCha20-Poly1305 key wrapping.
-    #[cfg_attr(feature = "json", norito(rename = "ml-kem-768-xchacha20-poly1305-v1"))]
+    #[norito(rename = "ml-kem-768-xchacha20-poly1305-v1")]
     MlKem768XChaCha20Poly1305,
     /// ML-KEM-1024 key encapsulation with XChaCha20-Poly1305 key wrapping.
-    #[cfg_attr(feature = "json", norito(rename = "ml-kem-1024-xchacha20-poly1305-v1"))]
+    #[norito(rename = "ml-kem-1024-xchacha20-poly1305-v1")]
     MlKem1024XChaCha20Poly1305,
 }
 
@@ -160,22 +165,28 @@ impl ConfidentialMemoSuiteV1 {
 /// XChaCha20-Poly1305 wrap of the memo key. Wallets try their local secret keys
 /// against every slot; the wire carries no recipient identifier or real-slot
 /// count.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 pub struct ConfidentialMemoRecipientSlotV1 {
     suite: ConfidentialMemoSuiteV1,
     /// Exact suite-sized ML-KEM encapsulation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     encapsulation: Vec<u8>,
     /// XChaCha20-Poly1305 nonce for this slot's memo-key wrap.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     wrap_nonce: [u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
     /// Encrypted 32-byte memo key followed by its Poly1305 tag.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     wrapped_memo_key: [u8; CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
 }
 
@@ -214,7 +225,7 @@ impl ConfidentialMemoRecipientSlotV1 {
         &self.encapsulation
     }
 
-    /// Borrow the per-slot XChaCha nonce.
+    /// Borrow the per-slot `XChaCha` nonce.
     #[must_use]
     pub const fn wrap_nonce(&self) -> &[u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1] {
         &self.wrap_nonce
@@ -267,26 +278,16 @@ impl Default for ConfidentialMemoRecipientSlotV1 {
 
 /// The exact eight ordered recipient slots carried by a V1 confidential memo.
 ///
-/// JSON represents this fixed-cardinality value as the closed object
-/// `slot_0` through `slot_7`. A named object is intentional: Norito does not
-/// treat a variable-length JSON sequence as a candidate representation, so
-/// seven-slot, nine-slot, and unknown-field inputs all fail decoding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+/// Storage is a fixed array. JSON and schema expose the closed object `slot_0`
+/// through `slot_7`; missing, additional and duplicate keys are rejected.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, iroha_schema::TypeId)]
 pub struct ConfidentialMemoRecipientSlotsV1 {
-    slot_0: ConfidentialMemoRecipientSlotV1,
-    slot_1: ConfidentialMemoRecipientSlotV1,
-    slot_2: ConfidentialMemoRecipientSlotV1,
-    slot_3: ConfidentialMemoRecipientSlotV1,
-    slot_4: ConfidentialMemoRecipientSlotV1,
-    slot_5: ConfidentialMemoRecipientSlotV1,
-    slot_6: ConfidentialMemoRecipientSlotV1,
-    slot_7: ConfidentialMemoRecipientSlotV1,
+    slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
 }
+
+const MEMO_SLOT_KEYS: [&str; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] = [
+    "slot_0", "slot_1", "slot_2", "slot_3", "slot_4", "slot_5", "slot_6", "slot_7",
+];
 
 impl ConfidentialMemoRecipientSlotsV1 {
     /// Return the fixed V1 cardinality.
@@ -304,16 +305,10 @@ impl ConfidentialMemoRecipientSlotsV1 {
     /// Borrow the slot at `index`, if it is one of the exact eight positions.
     #[must_use]
     pub const fn get(&self, index: usize) -> Option<&ConfidentialMemoRecipientSlotV1> {
-        match index {
-            0 => Some(&self.slot_0),
-            1 => Some(&self.slot_1),
-            2 => Some(&self.slot_2),
-            3 => Some(&self.slot_3),
-            4 => Some(&self.slot_4),
-            5 => Some(&self.slot_5),
-            6 => Some(&self.slot_6),
-            7 => Some(&self.slot_7),
-            _ => None,
+        if index < self.slots.len() {
+            Some(&self.slots[index])
+        } else {
+            None
         }
     }
 
@@ -321,17 +316,7 @@ impl ConfidentialMemoRecipientSlotsV1 {
     pub fn iter(
         &self,
     ) -> impl ExactSizeIterator<Item = &ConfidentialMemoRecipientSlotV1> + DoubleEndedIterator {
-        [
-            &self.slot_0,
-            &self.slot_1,
-            &self.slot_2,
-            &self.slot_3,
-            &self.slot_4,
-            &self.slot_5,
-            &self.slot_6,
-            &self.slot_7,
-        ]
-        .into_iter()
+        self.slots.iter()
     }
 
     /// Consume the wrapper and recover the exact canonical slot array.
@@ -339,30 +324,11 @@ impl ConfidentialMemoRecipientSlotsV1 {
     pub fn into_array(
         self,
     ) -> [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] {
-        [
-            self.slot_0,
-            self.slot_1,
-            self.slot_2,
-            self.slot_3,
-            self.slot_4,
-            self.slot_5,
-            self.slot_6,
-            self.slot_7,
-        ]
+        self.slots
     }
 
     fn get_mut(&mut self, index: usize) -> Option<&mut ConfidentialMemoRecipientSlotV1> {
-        match index {
-            0 => Some(&mut self.slot_0),
-            1 => Some(&mut self.slot_1),
-            2 => Some(&mut self.slot_2),
-            3 => Some(&mut self.slot_3),
-            4 => Some(&mut self.slot_4),
-            5 => Some(&mut self.slot_5),
-            6 => Some(&mut self.slot_6),
-            7 => Some(&mut self.slot_7),
-            _ => None,
-        }
+        self.slots.get_mut(index)
     }
 }
 
@@ -372,26 +338,97 @@ impl From<[ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1
     fn from(
         slots: [ConfidentialMemoRecipientSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
     ) -> Self {
-        let [
-            slot_0,
-            slot_1,
-            slot_2,
-            slot_3,
-            slot_4,
-            slot_5,
-            slot_6,
-            slot_7,
-        ] = slots;
-        Self {
-            slot_0,
-            slot_1,
-            slot_2,
-            slot_3,
-            slot_4,
-            slot_5,
-            slot_6,
-            slot_7,
+        Self { slots }
+    }
+}
+
+impl IntoSchema for ConfidentialMemoRecipientSlotsV1 {
+    fn type_name() -> String {
+        "ConfidentialMemoRecipientSlotsV1".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if !map.contains_key::<Self>() {
+            map.insert::<Self>(iroha_schema::Metadata::Struct(
+                iroha_schema::NamedFieldsMeta {
+                    declarations: MEMO_SLOT_KEYS
+                        .into_iter()
+                        .map(|name| iroha_schema::Declaration {
+                            name: name.to_owned(),
+                            ty: core::any::TypeId::of::<ConfidentialMemoRecipientSlotV1>(),
+                        })
+                        .collect(),
+                },
+            ));
+            ConfidentialMemoRecipientSlotV1::update_schema_map(map);
         }
+    }
+}
+
+impl norito::json::FastJsonWrite for ConfidentialMemoRecipientSlotsV1 {
+    fn write_json(&self, output: &mut String) {
+        norito::json::write_json_unbounded(self, output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        output.begin_container()?;
+        output.push('{')?;
+        for (index, (key, slot)) in MEMO_SLOT_KEYS.iter().zip(&self.slots).enumerate() {
+            if index != 0 {
+                output.push(',')?;
+            }
+            output.push('"')?;
+            output.push_str(key)?;
+            output.push_str("\":")?;
+            slot.write_json_to(output)?;
+        }
+        output.push('}')?;
+        output.end_container();
+        Ok(())
+    }
+}
+
+impl norito::json::JsonDeserialize for ConfidentialMemoRecipientSlotsV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser.skip_ws();
+        parser.preflight_object_entries()?;
+        parser.expect(b'{')?;
+        parser.skip_ws();
+        let mut slots: [Option<ConfidentialMemoRecipientSlotV1>;
+            CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1] = core::array::from_fn(|_| None);
+        if !parser.try_consume_char(b'}')? {
+            loop {
+                parser.skip_ws();
+                let key = parser.parse_key()?;
+                let Some(index) = MEMO_SLOT_KEYS.iter().position(|name| *name == key.as_str())
+                else {
+                    return Err(norito::json::Error::unknown_field(key.as_str()));
+                };
+                if slots[index].is_some() {
+                    return Err(norito::json::Error::duplicate_field(MEMO_SLOT_KEYS[index]));
+                }
+                slots[index] = Some(ConfidentialMemoRecipientSlotV1::json_deserialize(parser)?);
+                parser.skip_ws();
+                if parser.try_consume_char(b',')? {
+                    continue;
+                }
+                parser.expect(b'}')?;
+                break;
+            }
+        }
+        for (key, slot) in MEMO_SLOT_KEYS.into_iter().zip(&slots) {
+            if slot.is_none() {
+                return Err(norito::json::Error::missing_field(key));
+            }
+        }
+        Ok(Self {
+            slots: slots.map(|slot| slot.expect("all eight memo slots were checked")),
+        })
     }
 }
 
@@ -422,19 +459,27 @@ impl Default for ConfidentialMemoRecipientSlotsV1 {
 /// The independent body key is wrapped into all eight slots. Unused slots are
 /// populated with fresh dummy ML-KEM keys and otherwise indistinguishable
 /// ciphertexts; a sender never transmits a recipient count or empty slot.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::ConfidentialMemoEnvelopeV1")]
 pub struct ConfidentialMemoEnvelopeV1 {
     slots: ConfidentialMemoRecipientSlotsV1,
     /// XChaCha20-Poly1305 nonce for the encrypted memo body.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     payload_nonce: [u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
     /// Encrypted memo body followed by its Poly1305 tag.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     ciphertext: Vec<u8>,
 }
 fn varint_len(len: usize) -> usize {
@@ -727,7 +772,6 @@ impl Default for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl norito::NoritoSerialize for ConfidentialMemoEnvelopeV1 {}
 impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         writer.write_all(&self.encode_wire()?)?;
@@ -743,7 +787,7 @@ impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl<'de> norito::NoritoDeserialize<'de> for ConfidentialMemoEnvelopeV1 {
+impl<'de> norito::DeserializePayload<'de> for ConfidentialMemoEnvelopeV1 {
     fn deserialize(archived: &'de norito_core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ConfidentialMemoEnvelopeV1 deserialization must succeed for valid archives")
@@ -893,7 +937,7 @@ impl<'a> DecodeFromSlice<'a> for ConfidentialStatus {
         ConfidentialStatus::from_u8(raw).map(|status| (status, used))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for ConfidentialStatus {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -915,7 +959,7 @@ impl norito::json::JsonSerialize for ConfidentialStatus {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ConfidentialStatus {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -932,15 +976,12 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
 /// Digest advertising the active confidential feature set (verifier keys, parameters, and policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct ConfidentialFeatureDigest {
     /// Optional hash summarizing the set of active verifying keys.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub vk_set_hash: Option<[u8; 32]>,
     /// Poseidon parameter set identifier expected by the node.
     pub poseidon_params_id: Option<u32>,
@@ -949,10 +990,7 @@ pub struct ConfidentialFeatureDigest {
     /// Version of the confidential ruleset encoded in manifests and policies.
     pub conf_rules_version: Option<u32>,
     /// Hash of the ZK consensus policy that affects proof admission and verification.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub zk_policy_hash: Option<[u8; 32]>,
 }
 impl ConfidentialFeatureDigest {
@@ -987,8 +1025,8 @@ impl ConfidentialFeatureDigest {
 pub const CONFIDENTIAL_RULES_VERSION: u32 = 1;
 /// Default genesis confidential-policy hash for bundled ZK defaults and the empty SCCP registry.
 pub const DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH: [u8; 32] = [
-    0xed, 0x13, 0xe7, 0xdb, 0x7c, 0xfb, 0xf0, 0x92, 0xc1, 0x9a, 0x26, 0xef, 0x4a, 0x03, 0x9d, 0x09,
-    0x1c, 0xb6, 0x6e, 0x04, 0xca, 0x78, 0x5e, 0xb8, 0xc3, 0xed, 0xa4, 0xb9, 0xa0, 0x27, 0xc5, 0x5c,
+    0x93, 0x76, 0x91, 0x34, 0xd0, 0xa3, 0x4d, 0x4c, 0x93, 0x7a, 0x95, 0xbb, 0xc3, 0x40, 0x05, 0x77,
+    0x1b, 0x9d, 0x82, 0xef, 0x0f, 0xcf, 0xdf, 0xf0, 0x69, 0x57, 0xf2, 0x07, 0xe2, 0x16, 0x89, 0x6f,
 ];
 /// Default digest advertising the v1 ruleset and canonical genesis confidential policy.
 pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
@@ -1000,9 +1038,22 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
         Some(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH),
     );
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSer,
+    DeriveJsonDe,
+    DeriveFast,
+)]
+#[norito(no_fast_from_json)]
 pub struct ConfidentialParamsId {
     value: u32,
 }
@@ -1036,16 +1087,18 @@ impl Display for ConfidentialParamsId {
 /// Descriptor for a Pedersen parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+#[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::PedersenParams")]
 pub struct PedersenParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
     /// Hash of the curve generators used by the Pedersen commitment scheme.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub generators_hash: [u8; 32],
     /// Hash of auxiliary constants (domain separators, blinding hints, etc.).
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub constants_hash: [u8; 32],
     /// Optional URI (CID) pointing to the canonical parameter bundle documentation.
     pub metadata_uri_cid: Option<String>,
@@ -1075,16 +1128,18 @@ impl PedersenParams {
 /// Descriptor for a Poseidon parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+#[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::PoseidonParams")]
 pub struct PoseidonParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
     /// Hash of the Poseidon round constants.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub round_constants_hash: [u8; 32],
     /// Hash of the Poseidon MDS matrix.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub mds_matrix_hash: [u8; 32],
     /// Optional URI (CID) pointing to the canonical parameter bundle documentation.
     pub metadata_uri_cid: Option<String>,
@@ -1129,6 +1184,7 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    mod memo_slots;
     use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};
     #[test]
@@ -1202,7 +1258,7 @@ mod tests {
     #[test]
     fn confidential_memo_roundtrips_with_exactly_eight_slots() {
         let payload = memo_envelope();
-        #[cfg(feature = "json")]
+
         {
             let ordinary = norito::json::to_json(&payload).expect("serialize payload JSON");
             assert_eq!(
@@ -1304,7 +1360,9 @@ mod tests {
         let mut legacy = vec![1];
         legacy.extend_from_slice(&[7; 32]);
         legacy.extend_from_slice(&[2; 24]);
-        legacy.push(CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1 as u8);
+        legacy.push(
+            u8::try_from(CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1).expect("fixture value fits u8"),
+        );
         legacy.extend_from_slice(&[3; CONFIDENTIAL_MEMO_XCHACHA_TAG_BYTES_V1]);
         let err = ConfidentialMemoEnvelopeV1::decode_from_slice(&legacy)
             .expect_err("legacy X25519 memo wire must fail the V1 magic");
@@ -1374,3 +1432,18 @@ mod tests {
 
 #[cfg(test)]
 mod captured_confidential_schema_tests;
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::confidential::PedersenParams,
+        >("iroha_data_model::confidential::PedersenParams");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::confidential::PoseidonParams,
+        >("iroha_data_model::confidential::PoseidonParams");
+    }
+}

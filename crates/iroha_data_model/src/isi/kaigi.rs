@@ -17,7 +17,7 @@ isi! {
         /// Merkle root the host used when generating the proof (privacy mode only).
         pub roster_root: Option<Hash>,
         /// Proof bytes attesting ownership of the commitment (privacy mode only).
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+        #[norito (json = "crate::json_helpers::base64_vec")]
         pub proof: Option<Vec<u8>>,
     }
 }
@@ -36,7 +36,7 @@ isi! {
     /// Merkle root the participant used when generating their proof (privacy mode only).
     pub roster_root: Option<Hash>,
     /// Proof bytes attesting ownership of the commitment (privacy mode only).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito (json = "crate::json_helpers::base64_vec")]
     pub proof: Option<Vec<u8>>,
     }
 }
@@ -58,7 +58,7 @@ isi! {
     /// Current roster root, required for private leave.
     pub roster_root: Option<Hash>,
     /// Canonical authorization proof, required for private leave.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito (json = "crate::json_helpers::base64_vec")]
     pub proof: Option<Vec<u8>>,
     }
 }
@@ -80,7 +80,7 @@ isi! {
         /// Merkle root the host used when generating the proof (privacy mode only).
         pub roster_root: Option<Hash>,
         /// Proof bytes attesting ownership of the commitment (privacy mode only).
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+        #[norito (json = "crate::json_helpers::base64_vec")]
         pub proof: Option<Vec<u8>>,
     }
 }
@@ -99,7 +99,7 @@ isi! {
     /// Proof binding the commitment to the supplied usage tuple (required in privacy mode).
     ///
     /// The V1 statement does not attest an encrypted-log payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito (json = "crate::json_helpers::base64_vec")]
     pub proof: Option<Vec<u8>>,
 }
 }
@@ -254,12 +254,10 @@ mod tests {
     use crate::isi::test_support::{
         assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
-    use crate::{
-        domain::DomainId,
-        kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy},
-        name::Name,
-    };
+    use crate::kaigi::{KaigiPrivacyMode, KaigiRelayHop, KaigiRoomPolicy};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -366,24 +364,24 @@ mod tests {
         let roster_root = Hash::new("kaigi-roster-root");
         assert_slice_roundtrip(CreateKaigi {
             call: new_kaigi(),
-            commitment: Some(commitment.clone()),
-            nullifier: Some(nullifier.clone()),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
             roster_root: Some(roster_root),
             proof: Some(vec![0x01, 0x02, 0x03]),
         });
         assert_slice_roundtrip(JoinKaigi {
             call_id: call_id.clone(),
             participant: account(5),
-            commitment: Some(commitment.clone()),
-            nullifier: Some(nullifier.clone()),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
             roster_root: Some(roster_root),
             proof: Some(vec![0x04, 0x05]),
         });
         assert_slice_roundtrip(LeaveKaigi {
             call_id: call_id.clone(),
             participant: account(5),
-            commitment: Some(commitment.clone()),
-            nullifier: Some(nullifier.clone()),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
             roster_root: Some(roster_root),
             proof: Some(vec![0x06, 0x07]),
         });

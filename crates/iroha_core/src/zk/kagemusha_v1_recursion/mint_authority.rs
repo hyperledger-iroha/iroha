@@ -83,6 +83,10 @@ const MINT_EQ_AUDIT_BOUND_U128_COUNT_V1: usize = MINT_PAIR_BOUND_U128_COUNT_V1 +
 ///
 /// Later rotation checkpoints are persisted in Kura. Every use re-verifies the paired proof and
 /// both carried histories, so a process-local cache can never replace durable authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::mint_authority::KagemushaMintAuthorityCheckpointV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaMintAuthorityCheckpointV1 {
     /// Bootstrap or rotation branch proved by this checkpoint.

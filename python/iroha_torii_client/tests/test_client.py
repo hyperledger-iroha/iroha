@@ -109,6 +109,21 @@ def _local_signing_context() -> ToriiLocalSigningContext:
     return ToriiLocalSigningContext(network_id=OFFLINE_NETWORK_ID)
 
 
+def _contract_auth(captured: Optional[List[bytes]] = None) -> ToriiCanonicalRequestAuth:
+    def signer(message: bytes) -> bytes:
+        if captured is not None:
+            captured.append(message)
+        return b"\x44" * 64
+
+    return ToriiCanonicalRequestAuth(
+        network_id=OFFLINE_NETWORK_ID,
+        account_id=CANONICAL_OWNER,
+        signer=signer,
+        timestamp_ms=4_102_444_801_000,
+        nonce="public-contract-prepare-test",
+    )
+
+
 def _multisig_draft_intent() -> MultisigDraftIntent:
     return MultisigDraftIntent(
         executable_b64=base64.b64encode(_MULTISIG_DRAFT_EXECUTABLE).decode("ascii"),
@@ -3278,6 +3293,7 @@ def test_call_contract_posts_selector_payload_and_parses_response(call_payload: 
     )
 
     result = client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
         authority=CANONICAL_OWNER,
         contract_alias="router::universal",
         entrypoint="ping",
@@ -3361,6 +3377,7 @@ def test_call_contract_rejects_ambiguous_payload_before_dispatch(
 
     with pytest.raises((TypeError, ValueError), match="contract payload"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3400,6 +3417,7 @@ def test_call_contract_rejects_untrusted_intent_before_dispatch(mismatch: str) -
 
     with pytest.raises(ValueError):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_address=request_address,
             contract_alias=request_alias,
@@ -3442,6 +3460,7 @@ def test_call_contract_rejects_rehashed_unsigned_payload_substitution(
 
     with pytest.raises(RuntimeError, match=f"caller-trusted {field}"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3510,6 +3529,7 @@ def test_call_contract_rejects_colluding_response_and_receipt_substitution(
 
     with pytest.raises(RuntimeError, match="exact pending draft binding"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3559,6 +3579,7 @@ def test_call_contract_rejects_tampered_operation_receipt(
 
     with pytest.raises(RuntimeError, match=expected_error):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3594,6 +3615,7 @@ def test_call_contract_unsigned_draft_requires_trusted_intent() -> None:
 
     with pytest.raises(ValueError, match="ContractCallDraftIntent"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal",
             entrypoint="ping",
@@ -3860,6 +3882,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
     )
 
     client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
         authority=boundary["authority"],
         contract_alias=boundary["contract_alias"],
         entrypoint=boundary["entrypoint"],
@@ -3900,6 +3923,7 @@ def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_spons
     )
 
     client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
         authority=CANONICAL_OWNER,
         contract_alias="router::is",
         entrypoint="ping",
@@ -3916,6 +3940,7 @@ def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_spons
     adversarial["value"]["program_id"]["sponsor"] = "bad sponsor"
     with pytest.raises(ValueError, match="prepare_contract_call.fee_payment.*sponsor"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::is",
             entrypoint="ping",
@@ -3934,6 +3959,7 @@ def test_call_contract_rejects_missing_entrypoint_and_non_positive_gas_before_di
     for entrypoint in ("", "   "):
         with pytest.raises(ValueError, match="prepare_contract_call.entrypoint"):
             client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
                 authority=CANONICAL_OWNER,
                 contract_alias="router::universal",
                 entrypoint=entrypoint,
@@ -3942,6 +3968,7 @@ def test_call_contract_rejects_missing_entrypoint_and_non_positive_gas_before_di
     for gas_limit in (None, 0, -1):
         with pytest.raises(ValueError, match="prepare_contract_call.fee_payment.*gas_limit"):
             client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
                 authority=CANONICAL_OWNER,
                 contract_alias="router::universal",
                 entrypoint="ping",
@@ -4568,6 +4595,7 @@ def test_call_contract_rejects_ambiguous_selector() -> None:
 
     with pytest.raises(ValueError, match="exactly one of contract_address or contract_alias"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_address="irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             contract_alias="router::universal",
@@ -4582,6 +4610,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
 
     with pytest.raises(ValueError, match="prepare_contract_call\\.contract_address must not contain surrounding whitespace"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_address=" irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
             entrypoint="ping",
@@ -4590,6 +4619,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
 
     with pytest.raises(ValueError, match="prepare_contract_call\\.contract_alias must not contain surrounding whitespace"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias="router::universal ",
             entrypoint="ping",
@@ -4611,6 +4641,7 @@ def test_call_contract_rejects_noncanonical_alias_before_dispatch(
 
     with pytest.raises(ValueError, match="contract_alias"):
         client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_alias=contract_alias,
             entrypoint="ping",
@@ -5627,6 +5658,7 @@ def test_contract_helpers_against_mock_server() -> None:
             local_signing_context=_local_signing_context(),
         )
         call = client.prepare_contract_call(
+            canonical_auth=_contract_auth(),
             authority=CANONICAL_OWNER,
             contract_address=contract_address,
             entrypoint="ping",
@@ -9214,3 +9246,105 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
     assert snapshot.status.consensus_caps is not None
     assert snapshot.status.consensus_caps.collectors_k == 2
     assert snapshot.status.consensus_caps.rbc_chunk_max_bytes == 1024
+
+
+def test_contract_prepare_rejects_ordinary_payload_before_returning_signable_draft() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=200, payload=_contract_call_draft(
+        fee_payment=_authority_fee_payment(5000), admission_intent=0,
+    )))
+    client = ToriiClient("https://node.test", session=session, local_signing_context=_local_signing_context())
+    with pytest.raises(RuntimeError, match="admission_intent"):
+        client.prepare_contract_call(
+            authority=CANONICAL_OWNER, contract_alias="router::universal", entrypoint="ping",
+            fee_payment=_authority_fee_payment(5000), draft_intent=_contract_draft_intent(),
+            canonical_auth=_contract_auth(),
+        )
+    assert len(session.calls) == 1
+
+
+def test_contract_prepare_signs_exact_public_request_and_requires_matching_authority() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(status_code=200, payload=_contract_call_draft(
+        fee_payment=_authority_fee_payment(5000),
+    )))
+    client = ToriiClient("https://node.test", session=session, local_signing_context=_local_signing_context())
+    captured: List[bytes] = []
+    auth = _contract_auth(captured)
+    client.prepare_contract_call(
+        authority=CANONICAL_OWNER, contract_alias="router::universal", entrypoint="ping",
+        fee_payment=_authority_fee_payment(5000), draft_intent=_contract_draft_intent(),
+        canonical_auth=auth,
+    )
+    assert len(captured) == 1
+    call = session.calls[0]
+    expected = client_module.build_canonical_request_headers(
+        account_id=auth.account_id, network_id=auth.network_id, method="POST",
+        path="/v1/contracts/call", body=call["data"], signer=lambda message: b"\x44" * 64,
+        timestamp_ms=auth.timestamp_ms, nonce=auth.nonce,
+    )
+    for field, value in expected.items():
+        assert call["headers"][field] == value
+    assert "private_key" not in json.loads(call["data"])
+    assert call["allow_redirects"] is False
+    with pytest.raises(ValueError, match="account_id must equal authority"):
+        client.prepare_contract_call(
+            authority=OTHER_CANONICAL_ACCOUNT, contract_alias="router::universal", entrypoint="ping",
+            fee_payment=_authority_fee_payment(5000), draft_intent=_contract_draft_intent(),
+            canonical_auth=auth,
+        )
+    assert len(session.calls) == 1
+
+
+def test_mock_contract_prepare_requires_explicit_exact_payload_fixture() -> None:
+    server = ToriiMockServer()
+    server.start()
+    try:
+        response = requests.post(
+            server.base_url + "/v1/contracts/call",
+            json={"authority": CANONICAL_OWNER, "entrypoint": "ping",
+                  "contract_alias": "router::universal", "fee_payment": _authority_fee_payment(5000)},
+            timeout=5.0,
+        )
+        assert response.status_code == 503
+        assert "QueuePlanSynced" in response.json()["error"]
+        assert "transaction_payload_b64" not in response.json()
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize("expected_intent,accepted_tag,rejected_tag", [
+    ("queue_plan_synced", 1, 0), ("ordinary", 0, 1),
+])
+def test_unsigned_admission_binding_is_specific_to_the_selected_api(
+    monkeypatch: pytest.MonkeyPatch, expected_intent: str, accepted_tag: int, rejected_tag: int,
+) -> None:
+    # This unit isolates the admission field comparison; native AccountId codec
+    # and authenticated HTTP boundaries are exercised by their separate tests.
+    authority_archive = bytes.fromhex("000000000100")
+    monkeypatch.setattr(client_module, "_multisig_account_id_archive", lambda _: authority_archive)
+    context = _local_signing_context()
+    fee_payment = _authority_fee_payment(5000)
+    field = client_module._multisig_norito_field
+    parts = [
+        client_module._network_transaction_domain_archive(context, "fixture"),
+        authority_archive, (42).to_bytes(8, "little"), _CONTRACT_DRAFT_EXECUTABLE,
+        b"\x01" + field((100_000).to_bytes(8, "little")), b"\x00",
+        client_module._multisig_fee_payment_archive(fee_payment),
+        accepted_tag.to_bytes(4, "little"), _CONTRACT_DRAFT_METADATA, b"\x00",
+    ]
+    kwargs = dict(signing_context=context, authority=CANONICAL_OWNER, creation_time_ms=42,
+                  fee_payment=fee_payment, executable_b64=base64.b64encode(_CONTRACT_DRAFT_EXECUTABLE).decode(),
+                  metadata_b64=base64.b64encode(_CONTRACT_DRAFT_METADATA).decode(),
+                  expected_admission_intent=expected_intent, context="fixture")
+    accepted = b"".join(field(value) for value in parts)
+    client_module._validate_exact_unsigned_transaction_intent(
+        client_module._transaction_payload_bindings(accepted), **kwargs,
+    )
+    parts[7] = rejected_tag.to_bytes(4, "little")
+    rejected = b"".join(field(value) for value in parts)
+    with pytest.raises(RuntimeError, match="admission_intent"):
+        client_module._validate_exact_unsigned_transaction_intent(
+            client_module._transaction_payload_bindings(rejected), **kwargs,
+        )
+    assert accepted != rejected

@@ -7,11 +7,11 @@ use iroha_data_model::{
     account::AccountId,
     alias_setup::{ALIAS_LEASE_YEAR_MS, AliasQuoteGuardV1, AliasTargetV1, ResolvedDomainV1},
     asset::AssetDefinitionId,
-    domain::DomainId,
     isi::alias_setup::RenewAliasLease,
-    nexus::DataSpaceId,
     sns::{NameRecordV1, NameStatus},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, soradns::derive_gateway_hosts};
 use iroha_test_network::{NetworkBuilder, domain_setup_instruction};
 use reqwest::{Client as HttpClient, Url};
@@ -44,7 +44,7 @@ async fn sns_registrar_round_trip() -> Result<()> {
     assert_eq!(response.selector.normalized_label(), literal);
     assert_same_owner_controller(
         &response.owner,
-        &client.client().account,
+        client.client().account(),
         "register response owner should match request owner controller",
     );
     assert!(
@@ -55,7 +55,7 @@ async fn sns_registrar_round_trip() -> Result<()> {
     assert_eq!(fetched.name_hash, response.name_hash);
     assert_same_owner_controller(
         &fetched.owner,
-        &client.client().account,
+        client.client().account(),
         "fetched owner should preserve request owner controller",
     );
     let policy = get_sns_policy(&client, response.selector.suffix_id).await?;
@@ -74,7 +74,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let metrics_endpoint = client.client().torii_url.join("metrics")?;
+    let metrics_endpoint = client.client().endpoint().join("metrics")?;
     let http = HttpClient::new();
     let metric_labels = [("result", "ok"), ("suffix", "domain")];
     let baseline = read_metric_sample(
@@ -179,7 +179,7 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
 }
 async fn setup_domain(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
     let domain = DomainId::parse_fully_qualified(&domain_literal(label))?;
-    let instruction = domain_setup_instruction(&domain, &client.client().account)?;
+    let instruction = domain_setup_instruction(&domain, client.client().account())?;
     let client = client.clone();
     let submit_client = client.clone();
     run_sns_client_call("ensure SNS domain", move || {

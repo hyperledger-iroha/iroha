@@ -1,11 +1,9 @@
 //! Capacity declaration tracking and replication order scheduling for the embedded SoraFS node.
-use iroha_data_model::{
-    metadata::Metadata,
-    sorafs::{
-        capacity::{CapacityDeclarationRecord, ProviderId},
-        pin_registry::{ReplicationOrderRecord, ReplicationOrderStatus},
-    },
+use iroha_data_model::sorafs::{
+    capacity::{CapacityDeclarationRecord, ProviderId},
+    pin_registry::{ReplicationOrderRecord, ReplicationOrderStatus},
 };
+use iroha_model_base::metadata::Metadata;
 use norito::{
     core::DecodeLimits,
     decode_from_bytes_with_limits,
@@ -620,6 +618,8 @@ struct ActiveCapacityCheckpointV1 {
     declaration_window: DeclarationWindow,
 }
 /// Canonical restart snapshot for capacity declarations and outstanding reservations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::capacity::CapacityRuntimeCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct CapacityRuntimeCheckpointV1 {
     finalized_cursor: Option<CapacityFinalizedCursorV1>,
@@ -1747,14 +1747,16 @@ mod tests {
             .expect("schedule order")
             .expect("targeted plan");
         let checkpoint = manager.checkpoint().expect("checkpoint");
-        let expected = norito::to_bytes(&checkpoint).expect("encode checkpoint");
+        // Capacity is embedded in the node checkpoint under the fixed V1 payload layout.
+        let expected = norito::codec::encode_adaptive(&checkpoint);
+        let decoded =
+            norito::codec::decode_adaptive(&expected).expect("capacity payload roundtrip");
         let restored = CapacityManager::with_entry_limit(8);
         restored
-            .restore_checkpoint(checkpoint.clone())
+            .restore_checkpoint(decoded)
             .expect("restore checkpoint");
         assert_eq!(
-            norito::to_bytes(&restored.checkpoint().expect("restored checkpoint"))
-                .expect("encode restored checkpoint"),
+            norito::codec::encode_adaptive(&restored.checkpoint().expect("restored checkpoint")),
             expected
         );
         assert_eq!(restored.usage_snapshot().allocated_total_gib, 100);

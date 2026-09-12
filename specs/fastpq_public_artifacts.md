@@ -1,9 +1,9 @@
 # FASTPQ public artifact boundary
 
-Updated 2026-09-06. The model codecs in
+Source contract updated 2026-09-08. The model codecs in
 `crates/iroha_data_model/src/fastpq/public_artifact.rs` describe unverified public
 transport data. They register no qualified compact profile. Production proof
-admission still uses the legacy replay verifier.
+admission still uses the raw replay verifier.
 
 ## Statement and identity
 
@@ -62,41 +62,41 @@ canonical layout; Torii retains its bounded two-pass encoding and existing
 per-batch and cumulative byte limits. These are serialization corrections,
 not new compact persistence or admission support.
 
-## Candidate verifier mapping
+## Offline verifier mapping
 
-A test-only adapter now connects the canonical model wrappers to the fixed SHAKE
-candidate bundle verifier. It derives the diagnostic profile ID from the fixed
-candidate identity, never accepts a proof-selected implementation, and compares
-all seven PublicIO fields to independently supplied expectations. The AXT entry
-point additionally compares the complete binding, exact original metadata,
-pre-proof mirrors and ordered remote preimages to the caller's context. The
-caller must still authenticate these expectations from authoritative state.
+The normal-library `fastpq_prover::offline_compact` facade connects canonical
+quantity model wrappers to the sole [six-lane V1 verifier](fastpq_compact_protocol_contract.md).
+It derives its metadata profile ID from the complete fixed
+`QuantityArtifactProfileV1` description, never accepts a proof-selected
+implementation, and compares all seven PublicIO fields with independently
+supplied expectations. The AXT entry point additionally compares the complete
+binding, original metadata, pre-proof mirrors and ordered remote preimages.
+The caller must authenticate those expectations from authoritative state.
 
-A single enclosing Norito budget accumulates the transport wrapper, inner carrier
-and every child proof decode; stricter outer scopes remain effective. Five focused
-regression groups, all 971 unit tests and both complete two-delta artifact cases
-pass in an isolated harness. Their canonical wrappers measure
-8,076,204 ordinary / 8,097,956 AXT bytes and verify with 750 AIR evaluations and
-two terminal checks. The reviewed source patches are applied after coordinated capture; their
-workspace build, full 971-test unit suite and both complete artifact cases pass.
-They do not register a qualified profile or enable production dispatch.
+One enclosing Norito budget accumulates transport, inner carrier and every child
+proof decode; stricter outer scopes remain effective. The verifier retains each
+complete AIR row commitment from the same bounded decode and publishes the
+ordered list only after every child verifies. Its private-field result recomputes
+canonical statement, wrapper and exact inner-bundle digests using Iroha `Hash`.
+The short profile ID is SHA-256 of a canonical metadata description that binds
+the catalog/protocol, compact geometry, lane parameters, tape schedule and complete
+quantity relation identities. These metadata/content hashes are distinct from
+the six-word commitments; none substitutes for the complete logical hash context.
 
-The applied identity patch retains each full AIR row commitment from the
-same bounded proof decode, publishes the ordered list only after every child
-verifies, and returns a private-field verified artifact result. Its identity
-recomputes canonical statement, complete wrapper and exact inner bundle digests
-with Iroha `Hash` (BLAKE2b-256 including the fixed hash marker). The profile ID
-remains SHA-256 of the fixed diagnostic identity. These meanings are distinct
-from the complete six-word AIR commitments. Statement hashing uses bounded
-canonical encoding before proof work; no identity is returned on failure.
-Four focused checks, all 974 unit tests and both complete artifact cases pass
-in isolation, including independently parsed full root vectors. The applied
-patch also passes its subsequent workspace build, 974-unit suite and both
-complete artifacts with all 100 focused input hashes unchanged. No new
-storage or admission path uses these identities yet; native content-hash security and
-authenticated caller integration remain separate qualification obligations.
+Old SHAKE/prototype carrier schemas are rejected. Production ingress still rejects
+compact artifacts, and no compact persistence/admission path uses the offline
+success result. The current complete-row DTO exceeds both production byte caps
+before framing; explicit diagnostic budgets do not widen production policy.
+Concrete security, witness privacy, authenticated caller integration and release
+hardware evidence remain separate obligations.
 
 ## Validation and remaining work
+
+The counts, artifacts and measurements below retain their original earlier source
+scope. They are not validation of the current six-lane compact transcript or its
+changed profile and wire identities. New evidence must bind the actual source,
+executable and complete proof bytes; compiler success alone is insufficient.
+
 
 The retained prover harness with `dev-tools,fastpq-gpu` passes 927 unit tests
 with ten explicitly ignored diagnostics; the final default-feature rebuild

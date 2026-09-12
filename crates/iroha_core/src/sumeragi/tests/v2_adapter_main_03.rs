@@ -1321,6 +1321,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     foreign_service_io.detach(&mut foreign_services);
     service_io.detach(&mut services);
 }
+include!("v2_adapter_control_continuation.rs");
 include!("v2_adapter_04_wal_recovery.rs");
 include!("v2_adapter_04b_lifecycle_startup.rs");
 include!("v2_adapter_05_direct_lifecycle.rs");

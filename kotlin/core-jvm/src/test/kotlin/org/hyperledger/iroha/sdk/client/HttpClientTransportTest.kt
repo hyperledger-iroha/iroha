@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.math.BigInteger
+import java.io.IOException
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -13,6 +14,8 @@ import java.util.Base64
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import kotlin.test.Test
@@ -848,6 +851,16 @@ class HttpClientTransportTest {
                 val bootstrap = mutableObj(operationVectors, "bootstrap_key")
                 mutableObj(bootstrap, "zero_refresh_components")["coefficient_count"] = 63L
             },
+            "rejected bootstrap refresh input digest drift" to { operationVectors ->
+                val rejected = mutableListOfMaps(operationVectors, "bootstrap_refresh_vectors")
+                    .first { it.containsKey("expected_error") }
+                rejected["expected_input_ciphertext_sha256"] = "0".repeat(64)
+            },
+            "rejected bootstrap refresh input slot drift" to { operationVectors ->
+                val rejected = mutableListOfMaps(operationVectors, "bootstrap_refresh_vectors")
+                    .first { it.containsKey("expected_error") }
+                rejected["input_plaintext_slots"] = listOf(-1L)
+            },
             "rotation key count drift" to { operationVectors ->
                 mutableObj(operationVectors, "evaluation_key_bundle")["rotation_key_count"] = 99L
             },
@@ -962,7 +975,12 @@ class HttpClientTransportTest {
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
         val networkId = TestNetworkIds.fromSeed(7L)
-        val authority = testAccountId(0x17)
+        val contractKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val encodedPublicKey = contractKey.public.encoded
+        val authority = AccountAddress.fromAccount(
+            encodedPublicKey.copyOfRange(encodedPublicKey.size - 32, encodedPublicKey.size),
+            "ed25519",
+        ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val contractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         val codeHash = ByteArray(32) { 0x44 }.also { it[it.lastIndex] = 0x45 }
@@ -994,6 +1012,7 @@ class HttpClientTransportTest {
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
         ).encodeTransaction(
             TransactionPayload(
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 networkId = networkId,
                 authority = authority,
                 creationTimeMs = creationTimeMs,
@@ -1057,6 +1076,12 @@ class HttpClientTransportTest {
             entrypoint = "contribute",
             payload = contractPayload,
             draftIntent = ContractCallDraftIntent(invocation, metadata),
+            canonicalAuth = ToriiCanonicalRequestAuth(
+                authority,
+                RequestSigner.ed25519(contractKey.private),
+                1_700_000_000_030L,
+                "contract-prepare-auth",
+            ),
         ).join()
 
         assertTrue(response.ok)
@@ -1076,12 +1101,30 @@ class HttpClientTransportTest {
 
         val request = executor.lastRequest
         assertNotNull(request)
+        assertCanonicalSignature(
+            request, contractKey.public, 1_700_000_000_030L, "contract-prepare-auth", networkId,
+        )
+        assertTrue(request.headers.containsKey(CanonicalRequestSigner.HEADER_ACCOUNT))
         assertEquals("POST", request.method)
         assertEquals("https://torii.example/api/v1/contracts/call", request.uri.toString())
         @Suppress("UNCHECKED_CAST")
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals(authority, payload["authority"])
         assertFalse(payload.containsKey("private_key"))
+        assertFalse(payload.containsKey("transaction_payload_b64"))
+        val dispatched = executor.requestCount
+        assertFailsWith<IllegalArgumentException> {
+            transport.prepareContractCall(
+                authority = authority,
+                feePayment = testFeePayment(5_000L),
+                contractAlias = "router::universal",
+                entrypoint = "contribute",
+                payload = contractPayload,
+                draftIntent = ContractCallDraftIntent(invocation, metadata),
+                canonicalAuth = applicationAuth(testAccountId(0x18)),
+            )
+        }
+        assertEquals(dispatched, executor.requestCount, "foreign HTTP authority must fail before dispatch")
         assertEquals("router::universal", payload["contract_alias"])
         assertFalse(payload.containsKey("contract_address"))
         assertEquals("contribute", payload["entrypoint"])
@@ -1111,6 +1154,7 @@ class HttpClientTransportTest {
         )
         val feePayment = testFeePayment(5_000L)
         val base = TransactionPayload(
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             networkId = networkId,
             authority = authority,
             creationTimeMs = 123_456L,
@@ -1160,6 +1204,7 @@ class HttpClientTransportTest {
                     contractAddress = contractAddress,
                     entrypoint = "ping",
                     draftIntent = ContractCallDraftIntent(invocation, metadata),
+                    canonicalAuth = applicationAuth(authority),
                 ).join()
             }
             assertNotNull(error.cause)
@@ -1188,6 +1233,7 @@ class HttpClientTransportTest {
         val invocation = ContractInvocation(contractAddress, codeHash, "ping")
         val intent = ContractCallDraftIntent(invocation, emptyMap())
         val payload = TransactionPayload(
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             networkId = networkId,
             authority = authority,
             creationTimeMs = 654_321L,
@@ -1306,6 +1352,7 @@ class HttpClientTransportTest {
                     contractAlias = "router::universal",
                     entrypoint = "ping",
                     draftIntent = intent,
+                    canonicalAuth = applicationAuth(authority),
                 ).join()
             }
             assertNotNull(error.cause)
@@ -1332,6 +1379,7 @@ class HttpClientTransportTest {
                 contractAddress = contractAddress,
                 entrypoint = "ping",
                 draftIntent = intent,
+                canonicalAuth = applicationAuth(authority),
             ).join()
         }
 
@@ -1350,6 +1398,7 @@ class HttpClientTransportTest {
                 contractAddress = otherAddress,
                 entrypoint = "ping",
                 draftIntent = intent,
+                canonicalAuth = applicationAuth(authority),
             )
         }
         assertEquals(0, preflightExecutor.requestCount)
@@ -1403,6 +1452,7 @@ class HttpClientTransportTest {
                 entrypoint = string(boundary, "entrypoint"),
                 payload = boundaryPayload,
                 draftIntent = ContractCallDraftIntent(trustedInvocation, emptyMap()),
+                canonicalAuth = applicationAuth(string(boundary, "authority")),
             ).join()
         }
 
@@ -1453,6 +1503,7 @@ class HttpClientTransportTest {
                     entrypoint = string(boundary, "entrypoint"),
                     payload = payload,
                     draftIntent = ContractCallDraftIntent(invocation, emptyMap()),
+                    canonicalAuth = applicationAuth(string(boundary, "authority")),
                 ).join()
             }
             val sent = JsonParser.parse(readBody(executor.lastRequest)) as Map<*, *>
@@ -2213,6 +2264,47 @@ class HttpClientTransportTest {
                 multisigResponse(canonical, evenMarker),
             )
         }
+    }
+
+    @Test
+    fun parserFailureCompletesHttpFuture() {
+        val body = ramLfeProgramPoliciesJson().replace(
+            "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+            "invalid-public-key",
+        )
+        val transport = HttpClientTransport(
+            executor = StubResponseExecutor(200, body.toByteArray(StandardCharsets.UTF_8)),
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        val error = assertFailsWith<ExecutionException> {
+            transport.listRamLfeProgramPolicies().get(2, TimeUnit.SECONDS)
+        }
+        assertIs<IllegalStateException>(error.cause)
+        transport.close()
+    }
+
+    @Test
+    fun checkedObserverFailureCompletesHttpFutureAndRetainsOriginalCause() {
+        val original = IOException("response observer failed")
+        val secondary = IllegalStateException("failure observer failed")
+        val transport = HttpClientTransport(
+            executor = StubResponseExecutor(200, "{\"total\":0,\"items\":[]}".toByteArray(StandardCharsets.UTF_8)),
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example"))
+                .addObserver(object : ClientObserver {
+                    override fun onResponse(request: TransportRequest, response: ClientResponse) {
+                        throw original
+                    }
+                    override fun onFailure(request: TransportRequest, error: Throwable) {
+                        throw secondary
+                    }
+                }).build(),
+        )
+        val error = assertFailsWith<ExecutionException> {
+            transport.listRamLfeProgramPolicies().get(2, TimeUnit.SECONDS)
+        }
+        assertTrue(error.cause === original)
+        assertTrue(original.suppressed.single() === secondary)
+        transport.close()
     }
 
     @Test
@@ -4818,11 +4910,12 @@ class HttpClientTransportTest {
         publicKey: java.security.PublicKey,
         timestampMs: Long,
         nonce: String,
+        networkId: NetworkId = verifyingKeyNetworkId,
     ) {
         val encodedSignature = assertNotNull(request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.first())
         val signature = Base64.getDecoder().decode(encodedSignature)
         val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            verifyingKeyNetworkId,
+            networkId,
             request.method,
             request.uri,
             request.body,
@@ -5371,7 +5464,7 @@ class HttpClientTransportTest {
     private data class AtomicOnboardingProofFixture(
         val request: AccountOnboardingPlanRequestV1,
         val receipt: AccountOnboardingPlanReceiptV1,
-        val binding: TairaPublicResetMutationBindingV1,
+        val binding: PreparedOperationBindingV1,
         val proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
         val authority: String,
         val accountId: String,
@@ -5418,13 +5511,11 @@ class HttpClientTransportTest {
             guard.validUntilMs,
         )
         val receipt = signedOnboardingReceipt(body, privateKey)
-        val binding = TairaPublicResetMutationBindingV1(
-            authorizationSha256 = "11".repeat(32),
-            authorizationNonce = "onboarding-fixture-nonce-0000001",
-            kind = TairaPublicResetMutationBindingV1.ONBOARDING,
-            phase = "onboarding",
-            idempotencyKey = "22".repeat(32),
-            executionExpiresAtUnixMs = 4_102_444_800_000L,
+        val binding = PreparedOperationBindingV1(
+            semanticHashHex = receipt.planHash.lowercase(),
+            kind = PreparedOperationBindingV1.ONBOARDING,
+            requestId = "22".repeat(32),
+            executionExpiresAtUnixMs = receipt.body.validUntilMs,
         )
         val unsigned = AccountOnboardingProofRequiredPrepareResponseV1(
             binding,
@@ -5584,13 +5675,19 @@ class HttpClientTransportTest {
             assertEquals(string(bootstrap, "key_id"), string(vector, "key_id"), "bootstrap refresh vector $name key id")
             val refreshRounds = long(vector, "refresh_rounds")
             assert(refreshRounds > 0) { "bootstrap refresh vector $name rounds must be positive" }
-            assert(refreshRounds <= long(bootstrap, "max_refresh_rounds")) { "bootstrap refresh vector $name exceeds key rounds" }
             val plaintextSlots = longList(vector, "input_plaintext_slots")
             assert(plaintextSlots.isNotEmpty()) { "bootstrap refresh vector $name plaintext slots must not be empty" }
             assert(plaintextSlots.all { it >= 0 }) { "bootstrap refresh vector $name plaintext slots must be non-negative" }
             assert(long(vector, "expected_input_ciphertext_bytes") > 0) { "bootstrap refresh vector $name input bytes must be positive" }
-            assert(long(vector, "expected_output_ciphertext_bytes") > 0) { "bootstrap refresh vector $name output bytes must be positive" }
             assertBfvUpperSha256("bootstrap refresh vector $name input", string(vector, "expected_input_ciphertext_sha256"))
+            if (vector.containsKey("expected_error")) {
+                assert(refreshRounds > long(bootstrap, "max_refresh_rounds"))
+                assertEquals("invalid BFV parameters: BFV bootstrap refresh rounds 2 exceeds bootstrap key max_refresh_rounds 1", string(vector, "expected_error"))
+                assert(!vector.containsKey("expected_output_ciphertext_sha256"))
+                continue
+            }
+            assert(refreshRounds <= long(bootstrap, "max_refresh_rounds")) { "bootstrap refresh vector $name exceeds key rounds" }
+            assert(long(vector, "expected_output_ciphertext_bytes") > 0) { "bootstrap refresh vector $name output bytes must be positive" }
             assertBfvUpperSha256("bootstrap refresh vector $name output", string(vector, "expected_output_ciphertext_sha256"))
             assertBfvUpperSha256("bootstrap refresh vector $name plaintext", string(vector, "expected_plaintext_sha256"))
             val components = obj(vector, "output_components")

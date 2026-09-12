@@ -29,6 +29,7 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         max_disk_usage_bytes: kura_defaults::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: kura_defaults::BLOCKS_IN_MEMORY,
         lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: kura_defaults::MERGE_LEDGER_CACHE_CAPACITY,
@@ -133,6 +134,8 @@ fn lane_reservation_key_current_layout_roundtrips() {
 
 #[test]
 fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::queue::tests::lane_reservation_key_rejects_pre_release_duplicate_identity_layout::PreReleaseLaneQueueReservationKeyV1")]
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     #[norito(deny_unknown_fields)]
     struct PreReleaseLaneQueueReservationKeyV1 {
@@ -169,11 +172,53 @@ fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
         reservation_owner_hash: key.reservation_owner_hash,
         proposal_identity_hash: key.proposal_identity_hash,
     };
+    // The adversarial shape remains payload-only. Use the real owner's header so
+    // rejection must inspect the duplicate field rather than an unrelated schema.
+    let (current_payload, current_flags, pre_release_payload, pre_release_flags) = {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (current_payload, current_flags) = norito::codec::encode_with_header_flags(&key);
+        let (pre_release_payload, pre_release_flags) =
+            norito::codec::encode_with_header_flags(&pre_release);
+        (
+            current_payload,
+            current_flags,
+            pre_release_payload,
+            pre_release_flags,
+        )
+    };
+    let current_framed = norito::core::frame_bare_with_header_flags::<LaneQueueReservationKeyV1>(
+        &current_payload,
+        current_flags,
+    )
+    .expect("frame current reservation payload");
+    assert_eq!(
+        current_framed,
+        norito::encode_canonical(&key).expect("encode canonical current reservation")
+    );
+    assert_eq!(
+        norito::decode_canonical::<LaneQueueReservationKeyV1>(&current_framed)
+            .expect("the same framing method accepts the current payload"),
+        key
+    );
     let pre_release_framed =
-        norito::encode_canonical(&pre_release).expect("encode pre-release reservation key");
+        norito::core::frame_bare_with_header_flags::<LaneQueueReservationKeyV1>(
+            &pre_release_payload,
+            pre_release_flags,
+        )
+        .expect("frame duplicate-identity payload under the current reservation owner");
+    let view = norito::core::from_bytes_view(&pre_release_framed)
+        .expect("adversarial frame has valid header, length, padding, and checksum");
+    assert_eq!(
+        view.schema(),
+        norito::schema::identity::frame_hash::<LaneQueueReservationKeyV1>()
+    );
+    assert_eq!(view.as_bytes(), pre_release_payload.as_slice());
+    let error = norito::decode_canonical::<LaneQueueReservationKeyV1>(&pre_release_framed)
+        .expect_err("the duplicate-identity payload must fail closed under the real owner");
     assert!(
-        norito::decode_canonical::<LaneQueueReservationKeyV1>(&pre_release_framed).is_err(),
-        "the duplicate-identity pre-release layout must fail closed"
+        !matches!(error, norito::Error::SchemaMismatch),
+        "the malformed payload must reach payload validation"
     );
 }
 fn install_test_reservation_journal(queue: &Queue, dir: &tempfile::TempDir) -> PathBuf {
@@ -302,6 +347,50 @@ fn reserve_two_canonical_cleanup_carrier_groups(
         lane_reservation_scope(state, b"cross-carrier-owner-b", b"cross-carrier-proposal-b");
     second_scope.lane_block_height = 2;
     [first, reserve_one(second_scope)]
+}
+/// Publish the canonical application state used by Queue replay/cleanup fixtures.
+/// Pending obligations and replay membership must describe the same block body.
+fn commit_queue_plan_transactions_for_test(
+    state: &State,
+    transactions: Vec<AcceptedTransaction<'static>>,
+) {
+    let entrypoint_hashes = transactions
+        .iter()
+        .map(AcceptedTransaction::hash_as_entrypoint)
+        .collect();
+    let (parent_height, parent_hash) = {
+        let view = state.view();
+        (
+            u64::try_from(view.height()).expect("fixture parent height fits u64"),
+            view.latest_block_hash(),
+        )
+    };
+    let builder = crate::block::BlockBuilder::new(transactions);
+    let builder = match parent_hash {
+        Some(parent_hash) => builder.chain_with_parent_hash(0, parent_height, parent_hash),
+        None => builder.chain(0, None),
+    };
+    let signer = checked_random_queue_keypair();
+    let block = builder.sign(signer.private_key()).unpack(|_| {});
+    let block: iroha_data_model::block::SignedBlock = block.into();
+    let height = NonZeroUsize::new(
+        usize::try_from(block.header().height().get()).expect("fixture height fits usize"),
+    )
+    .expect("fixture height is nonzero");
+    let mut state_block = state.block(block.header());
+    state_block
+        .resolve_queue_plan_pending_obligations_from_block(&block)
+        .expect("canonical application resolves exact QueuePlan obligations");
+    state_block
+        .finalize_axt_asset_incarnations()
+        .expect("finalize fixture assets before recording the first block hash");
+    state_block.block_hashes.push(block.hash());
+    state_block
+        .transactions
+        .insert_block(entrypoint_hashes, height);
+    state_block
+        .commit()
+        .expect("commit canonical QueuePlan application");
 }
 fn persist_unreconciled_commit_barrier(
     queue: &Queue,
@@ -467,6 +556,7 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     let dir = tempdir().expect("tempdir");
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
+    queue.complete_empty_startup_for_test(&state);
     let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash_as_entrypoint();
     register_accepted_tx_authority_for_queue_test(
@@ -503,7 +593,7 @@ fn ordinary_unbound_durable_claim_waits_for_global_admission_without_fault() {
     assert!(!queue.lane_reservation_durability_faulted());
 }
 #[test]
-fn reservation_append_does_not_convoy_unrelated_queue_removal() {
+fn reservation_append_releases_state_snapshot_without_losing_lifecycle_fences() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
     let dir = tempdir().expect("tempdir");
@@ -515,6 +605,10 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
     let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
     let unrelated_hash = unrelated.hash_as_entrypoint();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
+    // Every StateView owns this immutable configuration Arc. Observe its live
+    // ownership to catch a snapshot retained across storage independently of timing.
+    let crypto = state.crypto();
+    let crypto_owners_before_reservation = Arc::strong_count(&crypto);
     let reached = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
     queue
@@ -538,6 +632,26 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
             )
         });
         reached.wait();
+        let crypto_owners_during_append = Arc::strong_count(&crypto);
+        let reservation_transition_is_fenced =
+            queue.lane_reservation_transition_lock.try_lock().is_none();
+        let (lifecycle_started_tx, lifecycle_started_rx) = std::sync::mpsc::channel();
+        let (lifecycle_acquired_tx, lifecycle_acquired_rx) = std::sync::mpsc::channel();
+        let state_for_lifecycle = Arc::clone(&state);
+        let lifecycle = scope.spawn(move || {
+            lifecycle_started_tx
+                .send(())
+                .expect("report lifecycle contender");
+            let _guard = state_for_lifecycle.lock_lane_lifecycle_work_admission();
+            lifecycle_acquired_tx
+                .send(())
+                .expect("report lifecycle acquisition");
+        });
+        lifecycle_started_rx
+            .recv()
+            .expect("lifecycle contender started");
+        let lifecycle_during_append =
+            lifecycle_acquired_rx.recv_timeout(Duration::from_millis(100));
         assert!(queue.durability_transition_active(&selected_hash));
         assert!(
             queue.push_remove_lock.try_lock().is_some(),
@@ -560,6 +674,22 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
             .expect("reservation thread")
             .expect("durable reservation");
         removal.join().expect("removal thread");
+        lifecycle.join().expect("lifecycle thread");
+        assert_eq!(
+            crypto_owners_during_append, crypto_owners_before_reservation,
+            "reservation-journal I/O must not retain a StateView snapshot"
+        );
+        assert!(reservation_transition_is_fenced);
+        assert!(
+            matches!(
+                lifecycle_during_append,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the lane lifecycle must remain fenced until reservation publication"
+        );
+        lifecycle_acquired_rx
+            .recv()
+            .expect("lifecycle publication resumes after the reservation");
         assert_eq!(
             unrelated_result.expect("unrelated removal must complete during blocked fsync"),
             1

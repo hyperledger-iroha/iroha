@@ -843,8 +843,8 @@ mod tests {
             ParliamentTimedOvnCastingContextMembershipProofV1,
             ParliamentTimedOvnCastingSnapshotCommitmentV1, ParliamentTimedOvnCastingWitnessProofV1,
         },
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
     use iroha_torii_shared::parliament_api::{
         PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofResponseV1,
     };

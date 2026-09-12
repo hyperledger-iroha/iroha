@@ -47,7 +47,10 @@ pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1: u64 =
 /// Maximum age of a V1 orphan blob before authenticated collection is required.
 pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 /// Exact chain incarnation and provider whose journal consumes the clock.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_attestation_clock::MusubiProviderAttestationClockScopeV1"
+)]
 pub struct MusubiProviderAttestationClockScopeV1 {
     network_id: NetworkId,
     provider_id: ProviderId,
@@ -97,7 +100,10 @@ impl MusubiProviderAttestationClockScopeV1 {
     }
 }
 /// Exact deployment and journal-policy scope of one sealed checkpoint chain.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_attestation_clock::MusubiProviderAttestationJournalCheckpointScopeV1"
+)]
 pub struct MusubiProviderAttestationJournalCheckpointScopeV1 {
     network_id: NetworkId,
     provider_id: ProviderId,
@@ -223,7 +229,10 @@ impl MusubiProviderAttestationJournalCheckpointHeadV1 {
         Ok(())
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_attestation_clock::JournalCheckpointHeadRecordMaterialV1"
+)]
 struct JournalCheckpointHeadRecordMaterialV1 {
     version: u8,
     scope_digest: [u8; 32],
@@ -528,7 +537,8 @@ impl MusubiProviderAttestationClockSealBindingV1 {
         self.qualification
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_clock::ClockRecordMaterialV1")]
 struct ClockRecordMaterialV1 {
     version: u8,
     scope_digest: [u8; 32],
@@ -2432,6 +2442,61 @@ mod tests {
         .expect("checkpoint head")
     }
     #[test]
+    fn clock_and_checkpoint_digest_frames_have_exact_distinct_owners() {
+        fn roundtrip<T>(value: &T, name: &str)
+        where
+            T: norito::NoritoSerialize
+                + for<'de> norito::NoritoDeserialize<'de>
+                + PartialEq
+                + std::fmt::Debug,
+        {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            let bytes = norito::encode_canonical(value).expect("clock material frame");
+            let decoded: T = norito::decode_canonical(&bytes).expect("clock material roundtrip");
+            assert_eq!(&decoded, value);
+            let mut wrong_owner = bytes.clone();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+        }
+        let clock_scope = scope(9);
+        let journal_scope = checkpoint_scope(9);
+        let clock_digest = clock_scope.scope_digest().expect("clock scope digest");
+        let journal_digest = journal_scope.scope_digest().expect("journal scope digest");
+        assert_ne!(clock_digest, journal_digest);
+        let clock = MusubiProviderAttestationClockSealRecordV1::initial(clock_digest, 17)
+            .expect("clock initial record");
+        let head = MusubiProviderAttestationJournalCheckpointHeadRecordV1::initial(journal_digest)
+            .expect("journal H0");
+        roundtrip(
+            &clock_scope,
+            "sorafs_node::provider_attestation_clock::MusubiProviderAttestationClockScopeV1",
+        );
+        roundtrip(
+            &journal_scope,
+            "sorafs_node::provider_attestation_clock::MusubiProviderAttestationJournalCheckpointScopeV1",
+        );
+        roundtrip(
+            &clock.material,
+            "sorafs_node::provider_attestation_clock::ClockRecordMaterialV1",
+        );
+        roundtrip(
+            &head.material,
+            "sorafs_node::provider_attestation_clock::JournalCheckpointHeadRecordMaterialV1",
+        );
+        clock
+            .validate(clock_digest)
+            .expect("clock production validation");
+        head.validate(journal_digest)
+            .expect("H0 production validation");
+        assert!(clock.validate(journal_digest).is_err());
+        assert!(head.validate(clock_digest).is_err());
+    }
+    #[test]
     fn checkpoint_commitments_and_bytes_ignore_ambient_norito_flags() {
         let policy = MusubiProviderAttestationJournalPolicyV1::default();
         let checkpoint_scope = checkpoint_scope(0x30);
@@ -3253,6 +3318,61 @@ mod tests {
         assert!(
             matches!(error, norito::Error::Message(ref message) if message == "invalid hash lsb"),
             "{error:?}"
+        );
+    }
+
+    #[test]
+    fn clock_and_checkpoint_frames_keep_distinct_scopes_and_record_domains() {
+        use crate::schema_identity_test_support::assert_canonical_frame;
+        let clock_scope = scope(0x55);
+        let journal_scope = checkpoint_scope(0x55);
+        let clock = MusubiProviderAttestationClockSealRecordV1::initial(
+            clock_scope.scope_digest().unwrap(),
+            1_000,
+        )
+        .unwrap();
+        let journal = MusubiProviderAttestationJournalCheckpointHeadRecordV1::initial(
+            journal_scope.scope_digest().unwrap(),
+        )
+        .unwrap();
+        let clock_bytes = assert_canonical_frame(
+            &clock_scope,
+            "sorafs_node::provider_attestation_clock::MusubiProviderAttestationClockScopeV1",
+        );
+        let journal_bytes = assert_canonical_frame(
+            &journal_scope,
+            "sorafs_node::provider_attestation_clock::MusubiProviderAttestationJournalCheckpointScopeV1",
+        );
+        let clock_material = assert_canonical_frame(
+            &clock.material,
+            "sorafs_node::provider_attestation_clock::ClockRecordMaterialV1",
+        );
+        let journal_material = assert_canonical_frame(
+            &journal.material,
+            "sorafs_node::provider_attestation_clock::JournalCheckpointHeadRecordMaterialV1",
+        );
+        assert_ne!(clock_bytes, journal_bytes);
+        assert_ne!(clock_material, journal_material);
+        assert_ne!(
+            clock_scope.scope_digest().unwrap(),
+            journal_scope.scope_digest().unwrap()
+        );
+        assert!(matches!(
+            norito::decode_canonical::<MusubiProviderAttestationClockScopeV1>(&journal_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<JournalCheckpointHeadRecordMaterialV1>(&clock_material),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert_eq!(
+            domain_hash_norito(CLOCK_RECORD_DOMAIN_V1, &clock.material).unwrap(),
+            clock.record_digest()
+        );
+        assert_eq!(
+            domain_hash_norito(JOURNAL_CHECKPOINT_HEAD_RECORD_DOMAIN_V1, &journal.material)
+                .unwrap(),
+            journal.record_digest()
         );
     }
 }

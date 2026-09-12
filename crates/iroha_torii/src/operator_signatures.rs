@@ -44,7 +44,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
-use iroha_data_model::{NetworkId, peer::PeerId};
+use iroha_data_model::NetworkId;
+use iroha_model_base::peer::PeerId;
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,

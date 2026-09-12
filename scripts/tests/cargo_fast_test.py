@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import sys
 import re
 import subprocess
 import textwrap
@@ -17,6 +20,11 @@ CONTROLLED_ENV_VARS = (
     "CI",
     "CARGO_BUILD_JOBS",
     "CARGO_BUILD_TARGET",
+    "CARGO_BUILD_TARGET_DIR",
+    "CARGO_BUILD_BUILD_DIR",
+    "CARGO_HOME",
+    "CARGO_FAST_TEST_METADATA",
+    "CARGO_FAST_RESOLUTION_CAPTURE",
     "CARGO_ENCODED_RUSTFLAGS",
     "CARGO_FAST_TARGET_ROOT",
     "CARGO_FAST_TEST_WORKSPACE_MANIFEST",
@@ -42,6 +50,18 @@ CONTROLLED_ENV_VARS = (
     "SCCACHE_DIR",
     "VERGEN_GIT_SHA",
 )
+
+@pytest.fixture(autouse=True)
+def hermetic_wrapper_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    scripts.mkdir(parents=True)
+    for name in ("cargo_fast.sh", "check_cargo_target_owner.py"):
+        shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
+    (checkout / "Cargo.toml").write_text("[workspace]\nmembers = []\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", checkout)
+    monkeypatch.setattr(sys.modules[__name__], "SCRIPT", scripts / "cargo_fast.sh")
+
 
 INHERITED_SINGLE_WORKER_FINGERPRINT = {
     "CARGO_BUILD_JOBS": "1",
@@ -74,24 +94,37 @@ def _run_wrapper(
     capture = tmp_path / "cargo-capture.txt"
     _write_executable(
         fake_bin / "cargo",
-        """
-        #!/bin/sh
-        if [ "$1" = locate-project ]; then
-          while [ "$#" -gt 0 ]; do
-            if [ "$1" = --manifest-path ]; then
-              shift
-              printf '%s\\n' "${CARGO_FAST_TEST_WORKSPACE_MANIFEST:-$1}"
-              exit 0
-            fi
-            shift
-          done
-          exit 1
-        fi
-        {
-          env
-          printf '%s\n' __CARGO_FAST_ARGS__
-          printf '%s\n' "$@"
-        } > "$CARGO_FAST_CAPTURE"
+        r"""
+        #!/usr/bin/env python3
+        import json, os, pathlib, sys
+        args = sys.argv[1:]
+        if "locate-project" in args:
+            manifest = args[args.index("--manifest-path") + 1]
+            print(os.environ.get("CARGO_FAST_TEST_WORKSPACE_MANIFEST", manifest))
+        elif "metadata" in args:
+            if os.environ.get("CARGO_FAST_RESOLUTION_CAPTURE"):
+                pathlib.Path(os.environ["CARGO_FAST_RESOLUTION_CAPTURE"]).write_text(json.dumps(args))
+            manifest = args[args.index("--manifest-path") + 1]
+            root = pathlib.Path(os.environ.get("CARGO_FAST_TEST_WORKSPACE_MANIFEST", manifest)).parent
+            target = os.environ.get("CARGO_TARGET_DIR", os.environ.get("CARGO_BUILD_TARGET_DIR", str(root / "target")))
+            build = os.environ.get("CARGO_BUILD_BUILD_DIR")
+            for index, argument in enumerate(args):
+                if argument != "--config":
+                    continue
+                value = args[index + 1]
+                if value.startswith("build.target-dir="):
+                    target = json.loads(value.split("=", 1)[1])
+                elif value.startswith("build.build-dir="):
+                    build = json.loads(value.split("=", 1)[1])
+            target = str(pathlib.Path(target).absolute())
+            build = str(pathlib.Path(build).absolute()) if build else target
+            print(os.environ.get("CARGO_FAST_TEST_METADATA", json.dumps({"version": 1, "workspace_root": str(root), "target_directory": target, "build_directory": build})))
+        else:
+            with open(os.environ["CARGO_FAST_CAPTURE"], "w") as stream:
+                for name, value in os.environ.items():
+                    print(name + "=" + value, file=stream)
+                print("__CARGO_FAST_ARGS__", file=stream)
+                print("\n".join(args), file=stream)
         """,
     )
     for name, source in (binaries or {}).items():
@@ -157,7 +190,15 @@ def test_cargo_replaces_wrapper_process_and_preserves_its_exit(tmp_path: Path) -
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     pid_file = tmp_path / "cargo.pid"
-    _write_executable(fake_bin / "cargo", '#!/bin/sh\nprintf "%s\\n" "$$" > "$PID_FILE"\nexit 37\n')
+    metadata = json.dumps({"version": 1, "workspace_root": str(REPO_ROOT),
+                           "target_directory": str(REPO_ROOT / "target"),
+                           "build_directory": str(REPO_ROOT / "target")})
+    _write_executable(fake_bin / "cargo", f"""#!/bin/sh
+if [ "$1" = metadata ]; then printf '%s\\n' '{metadata}'; exit 0; fi
+if [ "$1" = locate-project ]; then printf '%s\\n' '{REPO_ROOT / "Cargo.toml"}'; exit 0; fi
+printf '%s\\n' "$$" > "$PID_FILE"
+exit 37
+""")
     environment = os.environ.copy()
     for name in CONTROLLED_ENV_VARS:
         environment.pop(name, None)
@@ -565,7 +606,7 @@ def test_explicit_jobs_override_replaces_inherited_limit(tmp_path: Path) -> None
     assert "serializes compilation" not in result.stderr
 
 
-def test_stable_metadata_only_sets_the_non_authoritative_sha(tmp_path: Path) -> None:
+def test_explicit_development_metadata_has_no_release_marker(tmp_path: Path) -> None:
     result, environment, _ = _run_wrapper(
         tmp_path,
         "--no-sccache",
@@ -577,7 +618,31 @@ def test_stable_metadata_only_sets_the_non_authoritative_sha(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     assert environment["VERGEN_GIT_SHA"] == "local-fast-build"
     assert "IROHA_GIT_COMMIT_HASH" not in environment
-    assert "IROHA_GIT_COMMIT_HASH" not in SCRIPT.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("sealed", ["a" * 40, "", "local-fast-build"])
+def test_local_metadata_rejects_a_sealed_marker_before_cargo(
+    tmp_path: Path, sealed: str
+) -> None:
+    result, environment, cargo_arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--stable-local-metadata", "--", "build",
+        extra_env={"IROHA_GIT_COMMIT_HASH": sealed},
+    )
+    assert result.returncode != 0
+    assert "conflicts with IROHA_GIT_COMMIT_HASH" in result.stderr
+    assert environment == {}
+    assert cargo_arguments == []
+
+
+def test_exact_build_preserves_both_source_markers(tmp_path: Path) -> None:
+    commit = "a" * 40
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--", "build",
+        extra_env={"IROHA_GIT_COMMIT_HASH": commit, "VERGEN_GIT_SHA": commit},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["IROHA_GIT_COMMIT_HASH"] == commit
+    assert environment["VERGEN_GIT_SHA"] == commit
 
 
 def test_default_linker_does_not_probe_installed_alternatives(tmp_path: Path) -> None:
@@ -681,3 +746,156 @@ def test_wrapper_stays_compatible_with_stock_macos_bash() -> None:
         re.compile(r"\$\{[^}\n]+(?:,,|\^\^)[^}\n]*\}"),
     ):
         assert pattern.search(source) is None, pattern.pattern
+
+
+@pytest.mark.parametrize("inherited", [False, True])
+def test_incremental_never_dispatches_sccache(tmp_path: Path, inherited: bool) -> None:
+    extra = {"RUSTC_WRAPPER": "/fixed/sccache", "CARGO_INCREMENTAL": "1"} if inherited else {}
+    result, environment, arguments = _run_wrapper(
+        tmp_path, *(() if inherited else ("--incremental",)), "--", "check", "-p", "iroha_core",
+        extra_env=extra, binaries={"sccache": "#!/bin/sh\nexit 99\n"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_INCREMENTAL"] == "1"
+    assert "RUSTC_WRAPPER" not in environment
+    assert arguments == ["check", "-p", "iroha_core"]
+
+
+def test_incremental_retains_unrelated_compiler_wrapper(tmp_path: Path) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--incremental", "--", "check", extra_env={"RUSTC_WRAPPER": "/fixed/instrument-rustc"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == "/fixed/instrument-rustc"
+
+
+def _lane_role(target: Path, role: str = "release", repo: Path | None = None) -> Path:
+    marker = target / ".taira-build-lane/role.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({"schema": "taira.cargo-lane.v1", "repo_root": str(repo or REPO_ROOT), "role": role}))
+    marker.chmod(0o600)
+    return marker
+
+
+@pytest.mark.parametrize("selection", ("default", "environment", "build-environment", "wrapper", "cargo", "cargo-equals", "config", "config-equals"))
+def test_authenticated_release_lane_rejected_before_build(tmp_path: Path, selection: str) -> None:
+    target = REPO_ROOT / "target" if selection == "default" else tmp_path / "release-target"
+    marker = _lane_role(target)
+    before = marker.read_bytes()
+    args = ["--no-sccache"]
+    environment = {}
+    if selection == "environment":
+        environment["CARGO_TARGET_DIR"] = str(target)
+    elif selection == "build-environment":
+        environment["CARGO_BUILD_TARGET_DIR"] = str(target)
+    elif selection == "wrapper":
+        args += ["--target-dir", str(target)]
+    args += ["--", "check"]
+    if selection == "cargo":
+        args += ["--target-dir", str(target)]
+    elif selection == "cargo-equals":
+        args += ["--target-dir=" + str(target)]
+    elif selection == "config":
+        args += ["--config", "build.target-dir=" + json.dumps(str(target))]
+    elif selection == "config-equals":
+        args += ["--config=build.target-dir=" + json.dumps(str(target))]
+    result, captured, _ = _run_wrapper(tmp_path, *args, extra_env=environment)
+    assert result.returncode != 0
+    assert "authenticated release lane" in result.stderr
+    assert "--target-slot <stable-name>" in result.stderr
+    assert not captured
+    assert marker.read_bytes() == before
+    assert not (target / "debug").exists()
+
+
+def test_named_child_development_lane_does_not_use_release_parent(tmp_path: Path) -> None:
+    _lane_role(REPO_ROOT / "target")
+    result, environment, _ = _run_wrapper(tmp_path, "--no-sccache", "--target-slot", "fee-check", "--", "check")
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_TARGET_DIR"] == str(REPO_ROOT / "target/cargo-fast/fee-check")
+    assert not (REPO_ROOT / "target/cargo-fast").exists()
+
+
+@pytest.mark.parametrize("role", ("unassigned", "development"))
+def test_external_stable_development_lane_preserves_jobserver(tmp_path: Path, role: str) -> None:
+    target = tmp_path / "stable-target"
+    if role == "development":
+        _lane_role(target, role)
+    result, environment, _ = _run_wrapper(tmp_path, "--no-sccache", "--target-dir", str(target), "--", "check")
+    assert result.returncode == 0, result.stderr
+    assert "CARGO_BUILD_JOBS" not in environment
+    assert environment["CARGO_TARGET_DIR"] == str(target)
+
+
+def test_cargo_resolves_config_file_and_independent_build_directory(tmp_path: Path) -> None:
+    protected = tmp_path / "release"
+    _lane_role(protected)
+    config = tmp_path / "extra-config.toml"
+    config.write_text("# Fake Cargo owns resolution; the guard does not parse this file.\n")
+    metadata = {"version": 1, "workspace_root": str(REPO_ROOT), "target_directory": str(tmp_path / "ordinary"), "build_directory": str(protected)}
+    result, captured, _ = _run_wrapper(tmp_path, "--no-sccache", "--", "check", "--config", str(config), extra_env={"CARGO_FAST_TEST_METADATA": json.dumps(metadata)})
+    assert result.returncode != 0
+    assert "authenticated release lane" in result.stderr
+    assert not captured
+
+
+def test_cli_target_wins_over_config_and_ambient_release_target(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    _lane_role(release)
+    ordinary = tmp_path / "ordinary"
+    result, _, args = _run_wrapper(tmp_path, "--no-sccache", "--", "check", "--target-dir", str(ordinary), "--config", "build.target-dir=" + json.dumps(str(release)), extra_env={"CARGO_TARGET_DIR": str(release)})
+    assert result.returncode == 0, result.stderr
+    assert args[-1] == "build.target-dir=" + json.dumps(str(release))
+    assert not ordinary.exists()
+
+
+@pytest.mark.parametrize("damage", ("malformed", "symlink", "wrong-mode", "foreign-development"))
+def test_invalid_or_foreign_lane_role_fails_closed(tmp_path: Path, damage: str) -> None:
+    target = tmp_path / "release"
+    marker = _lane_role(target)
+    if damage == "malformed":
+        marker.write_text("not-json")
+    elif damage == "symlink":
+        stored = marker.with_name("saved.json")
+        marker.rename(stored)
+        marker.symlink_to(stored)
+    elif damage == "wrong-mode":
+        marker.chmod(0o644)
+    else:
+        marker.write_text(json.dumps({"schema": "taira.cargo-lane.v1", "repo_root": str(tmp_path / "another-repo"), "role": "development"}))
+    result, captured, _ = _run_wrapper(tmp_path, "--no-sccache", "--target-dir", str(target), "--", "check")
+    assert result.returncode != 0 and "--target-slot <stable-name>" in result.stderr
+    assert not captured
+
+
+def test_missing_metadata_build_directory_does_not_guess(tmp_path: Path) -> None:
+    result, captured, _ = _run_wrapper(tmp_path, "--no-sccache", "--", "check", extra_env={"CARGO_FAST_TEST_METADATA": json.dumps({"version": 1, "workspace_root": str(REPO_ROOT), "target_directory": str(REPO_ROOT / "target")})})
+    assert result.returncode != 0 and "cannot resolve build_directory" in result.stderr
+    assert not captured
+
+
+def test_unexpanded_alias_is_rejected_before_build(tmp_path: Path) -> None:
+    result, captured, _ = _run_wrapper(tmp_path, "--no-sccache", "--", "hidden-target-alias")
+    assert result.returncode != 0 and "hidden in a Cargo alias" in result.stderr
+    assert not captured
+
+
+def test_program_config_argument_cannot_select_release_lane(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    _lane_role(release)
+    result, _, args = _run_wrapper(tmp_path, "--no-sccache", "--", "test", "--", "--config", "build.target-dir=" + json.dumps(str(release)))
+    assert result.returncode == 0, result.stderr
+    assert args[1:3] == ["--", "--config"]
+
+
+def test_metadata_preserves_toolchain_config_order_and_cli_priority(tmp_path: Path) -> None:
+    capture = tmp_path / "resolution.json"
+    target = tmp_path / "explicit-target"
+    first = "build.target-dir=" + json.dumps(str(tmp_path / "first"))
+    second = "build.target-dir=" + json.dumps(str(tmp_path / "second"))
+    result, _, _ = _run_wrapper(tmp_path, "--no-sccache", "--", "+1.93.1", "--config", first, "check", "--config=" + second, "--target-dir", str(target), extra_env={"CARGO_FAST_RESOLUTION_CAPTURE": str(capture)})
+    assert result.returncode == 0, result.stderr
+    query = json.loads(capture.read_text())
+    assert query[:7] == ["+1.93.1", "--config", first, "--config", second, "--config", "build.target-dir=" + json.dumps(str(target))]
+    assert query[7:12] == ["metadata", "--locked", "--offline", "--no-deps", "--format-version=1"]
+    assert not target.exists()

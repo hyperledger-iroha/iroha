@@ -209,6 +209,11 @@ pub(super) fn governance_request_ingress_binding_from_service(
             service.max_request_bytes.0,
         ),
     };
+    // IPFS framing adds bytes even to an empty logical body. It must not
+    // turn an invalid zero configured request limit into a valid binding.
+    if service.max_request_bytes.0 == 0 {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
+    }
     let endpoint = endpoint.ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
     let endpoint_binding =
         sorafs_node::governance_dag_request_ingress_endpoint_binding_v1(scope, endpoint)
@@ -416,28 +421,24 @@ fn collect_storage_security_bindings(
             IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
         ));
     }
-    match (
-        storage.stream_tokens.signer_handle.as_deref(),
-        storage.stream_tokens.signer_public_key,
-        storage.stream_tokens.signer_revision,
-        storage.stream_tokens.signer_policy_digest,
-    ) {
-        (Some(handle), Some(public_key), Some(revision), Some(policy_digest))
-            if storage.stream_tokens.enabled =>
-        {
-            bindings.push(IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
-                handle,
-                public_key,
-                revision,
-                policy_digest,
-            )?);
-        }
-        (None, None, None, None) if !storage.stream_tokens.enabled => {}
-        _ => {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                IrohaRuntimeProviderSlotV1::StreamTokenSigner,
-            ));
-        }
+    if let Some(pins) = iroha_torii::sorafs::StreamTokenHardwarePinsV1::from_config(
+        storage,
+        &config.common.chain.to_string(),
+        *NetworkId::from_genesis_hash(config.genesis.expected_hash).as_bytes(),
+    )
+    .map_err(|_| {
+        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
+            IrohaRuntimeProviderSlotV1::StreamTokenSigner,
+        )
+    })? {
+        let hardware = StreamTokenHardwareRuntimeBindingV1::new(
+            pins.binding().clone(),
+            pins.observer_handle().to_owned(),
+            pins.config_digest(),
+        )?;
+        bindings.push(IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
+            hardware,
+        )?);
     }
     match (
         storage.stream_tokens.admission_provider_handle.as_deref(),

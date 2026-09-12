@@ -14,7 +14,6 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{
         isi::contract_alias::SetContractAlias,
-        metadata::Metadata,
         prelude::*,
         transaction::{IvmBytecode, TransactionBuilder},
     },
@@ -24,6 +23,8 @@ use iroha_core::{
     smartcontracts::ivm::{cache::ProgramSummary, host::CoreHost},
 };
 use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::state_path::StatePath;
 use ivm::host::IVMHost;
 use ivm::kotodama::compiler::CompilerOptions as KotodamaCompilerOptions;
 use ivm::kotodama::driver::{
@@ -1046,13 +1047,13 @@ impl DevDoctorArgs {
         let effective_config = profile_config.as_ref().unwrap_or_else(|| context.config());
         let client = dev_client_from_profile(context, profile_config.as_ref())?;
         let default_gas_limit = profile.default_gas_limit;
-        let server_version = client.client().get_server_version().wrap_err_with(|| {
+        let server_version = client.status().version().wrap_err_with(|| {
             format!(
                 "failed to contact Torii for profile `{}` at {}",
                 self.manifest.profile, effective_config.torii_api_url
             )
         })?;
-        let status = client.client().get_status().wrap_err_with(|| {
+        let status = client.status().get().wrap_err_with(|| {
             format!(
                 "failed to fetch Torii status for profile `{}` at {}",
                 self.manifest.profile, effective_config.torii_api_url
@@ -1454,10 +1455,10 @@ fn dev_client_from_profile<C: RunContext>(
     context: &C,
     profile_config: Option<&Config>,
 ) -> Result<BlockingClient> {
-    let client = profile_config
-        .cloned()
-        .map(Client::new)
-        .unwrap_or_else(|| context.client_from_config());
+    let client = match profile_config {
+        Some(config) => Client::builder(config.clone()).build()?,
+        None => context.client_from_config()?,
+    };
     BlockingClient::from_client(client)
 }
 fn resolve_dev_contract_authority<C: RunContext>(
@@ -2036,7 +2037,7 @@ pub struct CodeBytesGetArgs {
 }
 impl Run for CodeBytesGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let code_hash = self.code_hash.trim_start_matches("0x");
         let bytes = client.client().get_contract_code_bytes(code_hash)?;
         std::fs::write(&self.out, &bytes)?;
@@ -2105,7 +2106,7 @@ impl Run for ContractAliasResolveArgs {
             .contract_alias
             .parse()
             .wrap_err("invalid contract alias")?;
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let response = client
             .post_contract_alias_resolve(&contract_alias)
             .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
@@ -2318,7 +2319,7 @@ pub struct CallArgs {
 }
 impl Run for CallArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let private_key = if self.simulate {
             None
@@ -2420,7 +2421,7 @@ pub struct ViewArgs {
 }
 impl Run for ViewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let target = resolve_contract_target(self.target)?;
         let payload = load_contract_payload_value(
@@ -2587,16 +2588,16 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
 fn resolve_contract_dataspace_id_hint(
     dataspace: &str,
     dataspace_id: Option<u64>,
-) -> Result<iroha::data_model::nexus::DataSpaceId> {
+) -> Result<iroha_model_base::topology::DataSpaceId> {
     if let Some(dataspace_id) = dataspace_id {
-        return Ok(iroha::data_model::nexus::DataSpaceId::new(dataspace_id));
+        return Ok(iroha_model_base::topology::DataSpaceId::new(dataspace_id));
     }
     let trimmed = dataspace.trim();
     if trimmed.is_empty() {
         return Err(eyre!("--dataspace must not be empty"));
     }
     if let Ok(raw) = trimmed.parse::<u64>() {
-        return Ok(iroha::data_model::nexus::DataSpaceId::new(raw));
+        return Ok(iroha_model_base::topology::DataSpaceId::new(raw));
     }
     let raw = match trimmed {
         "universal" => 0,
@@ -2608,7 +2609,7 @@ fn resolve_contract_dataspace_id_hint(
             ));
         }
     };
-    Ok(iroha::data_model::nexus::DataSpaceId::new(raw))
+    Ok(iroha_model_base::topology::DataSpaceId::new(raw))
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedContractTarget {
@@ -3626,6 +3627,9 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     use ivm::kotodama::session::{CompileRequest, CompilerSession};
     use std::fs;
     use tempfile::tempdir;
@@ -4199,7 +4203,7 @@ mod tests {
         fs::create_dir_all(dir.path().join("modules")).expect("create modules directory");
         fs::write(
             dir.path().join("contracts/app.ko"),
-            "seiyaku App { view fn run() -> int { return Math::value(1); } }",
+            "seiyaku App { view fn run() -> int { return Math::value(unused: 1); } }",
         )
         .expect("write project root");
         fs::write(
@@ -4233,6 +4237,17 @@ mod tests {
         )
         .expect("write developer manifest");
         let lint = dev_run_lints(&manifest_path, false).expect("lint locked project");
+        assert_eq!(
+            lint.pointer("/diagnostics/0/kind")
+                .and_then(norito::json::Value::as_str),
+            Some("lint"),
+            "the valid project must reach lint collection: {lint:?}"
+        );
+        assert_eq!(
+            lint.pointer("/diagnostics/0/diagnostics/0/code")
+                .and_then(norito::json::Value::as_str),
+            Some("K5003")
+        );
         assert_eq!(
             lint.pointer("/diagnostics/0/package")
                 .and_then(norito::json::Value::as_str),
@@ -5516,7 +5531,7 @@ mod tests {
     }
     #[test]
     fn debug_durable_state_fixture_enforces_canonical_state_path_boundaries() {
-        let maximum = "x".repeat(iroha::data_model::state_path::MAX_STATE_PATH_BYTES);
+        let maximum = "x".repeat(iroha_model_base::state_path::MAX_STATE_PATH_BYTES);
         let fixture = format!(r#"{{"{maximum}":"0x00"}}"#);
         let state = parse_debug_durable_state_fixture(&fixture).expect("maximum StatePath fixture");
         assert_eq!(
@@ -5622,7 +5637,7 @@ mod tests {
                 .expect("canonical test network id"),
             &authority,
             1,
-            iroha::data_model::nexus::DataSpaceId::new(0),
+            iroha_model_base::topology::DataSpaceId::new(0),
         )
         .expect("contract address");
         let resolved = resolve_contract_target(ContractTargetArgs {
@@ -5898,7 +5913,7 @@ pub struct ManifestArgs {
 }
 impl Run for ManifestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let code_hash = self.code_hash.trim_start_matches("0x");
         let v = client.get_contract_manifest_json(code_hash)?;
         if let Some(p) = self.out {

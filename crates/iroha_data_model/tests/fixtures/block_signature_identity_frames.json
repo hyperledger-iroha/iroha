@@ -1,0 +1,112 @@
+{
+  "default_encode_flags": 2,
+  "format_version": 1,
+  "purpose": "public BlockSignature pre-declaration capture",
+  "rows": [
+    {
+      "actual_type_name": "iroha_data_model::block::header::model::BlockSignature",
+      "alignment_padding_length": 0,
+      "bare_hex": "080000000000000000484000000000000000309cf211b95586375ca13590d41f480ecd0ec3696ed049eae0b8d08e17b6231972cc4fcc1271f4916aad2abc77e93272f3f1c78ff1b1d32f1623b9008fddee0e",
+      "case": "root_first",
+      "deserialize_schema_hash_hex": "fdaf1f2144c1776ab93df942f7c2429e",
+      "frame_hex": "4e5254300000fdaf1f2144c1776ab93df942f7c2429e005200000000000000884d111938ec557d02080000000000000000484000000000000000309cf211b95586375ca13590d41f480ecd0ec3696ed049eae0b8d08e17b6231972cc4fcc1271f4916aad2abc77e93272f3f1c78ff1b1d32f1623b9008fddee0e",
+      "header_flags": 2,
+      "header_schema_hash_hex": "fdaf1f2144c1776ab93df942f7c2429e",
+      "json": "{\"index\":0,\"signature\":\"309CF211B95586375CA13590D41F480ECD0EC3696ED049EAE0B8D08E17B6231972CC4FCC1271F4916AAD2ABC77E93272F3F1C78FF1B1D32F1623B9008FDDEE0E\"}",
+      "payload_length": 82,
+      "serialize_schema_hash_hex": "fdaf1f2144c1776ab93df942f7c2429e"
+    },
+    {
+      "actual_type_name": "iroha_data_model::block::header::model::BlockSignature",
+      "alignment_padding_length": 0,
+      "bare_hex": "082a000000000000004840000000000000000c0b2386e9143c2ce21e08d6d612d89c4cf0323b0c32be667eafd9f1f2d3501a86c0fbb71203ccd6171626ac4e50e06ce5325cc7ac0f144509f403b887f58306",
+      "case": "root_second",
+      "deserialize_schema_hash_hex": "fdaf1f2144c1776ab93df942f7c2429e",
+      "frame_hex": "4e5254300000fdaf1f2144c1776ab93df942f7c2429e005200000000000000a9785212a292767802082a000000000000004840000000000000000c0b2386e9143c2ce21e08d6d612d89c4cf0323b0c32be667eafd9f1f2d3501a86c0fbb71203ccd6171626ac4e50e06ce5325cc7ac0f144509f403b887f58306",
+      "header_flags": 2,
+      "header_schema_hash_hex": "fdaf1f2144c1776ab93df942f7c2429e",
+      "json": "{\"index\":42,\"signature\":\"0C0B2386E9143C2CE21E08D6D612D89C4CF0323B0C32BE667EAFD9F1F2D3501A86C0FBB71203CCD6171626AC4E50E06CE5325CC7AC0F144509F403B887F58306\"}",
+      "payload_length": 82,
+      "serialize_schema_hash_hex": "fdaf1f2144c1776ab93df942f7c2429e"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::block::header::model::BlockSignature>",
+      "alignment_padding_length": 0,
+      "bare_hex": "00",
+      "case": "option_none",
+      "deserialize_schema_hash_hex": "1e84ac0563445a065e06762c69190603",
+      "frame_hex": "4e52543000001e84ac0563445a065e06762c69190603000100000000000000593f676473a1ad1f0000",
+      "header_flags": 0,
+      "header_schema_hash_hex": "1e84ac0563445a065e06762c69190603",
+      "json": "null",
+      "payload_length": 1,
+      "serialize_schema_hash_hex": "1e84ac0563445a065e06762c69190603"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::block::header::model::BlockSignature>",
+      "alignment_padding_length": 0,
+      "bare_hex": "0152080000000000000000484000000000000000309cf211b95586375ca13590d41f480ecd0ec3696ed049eae0b8d08e17b6231972cc4fcc1271f4916aad2abc77e93272f3f1c78ff1b1d32f1623b9008fddee0e",
+      "case": "option_first",
+      "deserialize_schema_hash_hex": "1e84ac0563445a065e06762c69190603",
+      "frame_hex": "4e52543000001e84ac0563445a065e06762c6919060300540000000000000009424e8ef8d233d7020152080000000000000000484000000000000000309cf211b95586375ca13590d41f480ecd0ec3696ed049eae0b8d08e17b6231972cc4fcc1271f4916aad2abc77e93272f3f1c78ff1b1d32f1623b9008fddee0e",
+      "header_flags": 2,
+      "header_schema_hash_hex": "1e84ac0563445a065e06762c69190603",
+      "json": "{\"index\":0,\"signature\":\"309CF211B95586375CA13590D41F480ECD0EC3696ED049EAE0B8D08E17B6231972CC4FCC1271F4916AAD2ABC77E93272F3F1C78FF1B1D32F1623B9008FDDEE0E\"}",
+      "payload_length": 84,
+      "serialize_schema_hash_hex": "1e84ac0563445a065e06762c69190603"
+    },
+    {
+      "actual_type_name": "core::option::Option<iroha_data_model::block::header::model::BlockSignature>",
+      "alignment_padding_length": 0,
+      "bare_hex": "0152082a000000000000004840000000000000000c0b2386e9143c2ce21e08d6d612d89c4cf0323b0c32be667eafd9f1f2d3501a86c0fbb71203ccd6171626ac4e50e06ce5325cc7ac0f144509f403b887f58306",
+      "case": "option_second",
+      "deserialize_schema_hash_hex": "1e84ac0563445a065e06762c69190603",
+      "frame_hex": "4e52543000001e84ac0563445a065e06762c6919060300540000000000000028770d8562ac10d2020152082a000000000000004840000000000000000c0b2386e9143c2ce21e08d6d612d89c4cf0323b0c32be667eafd9f1f2d3501a86c0fbb71203ccd6171626ac4e50e06ce5325cc7ac0f144509f403b887f58306",
+      "header_flags": 2,
+      "header_schema_hash_hex": "1e84ac0563445a065e06762c69190603",
+      "json": "{\"index\":42,\"signature\":\"0C0B2386E9143C2CE21E08D6D612D89C4CF0323B0C32BE667EAFD9F1F2D3501A86C0FBB71203CCD6171626AC4E50E06CE5325CC7AC0F144509F403B887F58306\"}",
+      "payload_length": 84,
+      "serialize_schema_hash_hex": "1e84ac0563445a065e06762c69190603"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::block::header::model::BlockSignature>",
+      "alignment_padding_length": 0,
+      "bare_hex": "0000000000000000",
+      "case": "vec_empty",
+      "deserialize_schema_hash_hex": "a73e57b99731d544cea9d0c3b16b94f0",
+      "frame_hex": "4e5254300000a73e57b99731d544cea9d0c3b16b94f0000800000000000000c0ca824265736ab6000000000000000000",
+      "header_flags": 0,
+      "header_schema_hash_hex": "a73e57b99731d544cea9d0c3b16b94f0",
+      "json": "[]",
+      "payload_length": 8,
+      "serialize_schema_hash_hex": "a73e57b99731d544cea9d0c3b16b94f0"
+    },
+    {
+      "actual_type_name": "alloc::vec::Vec<iroha_data_model::block::header::model::BlockSignature>",
+      "alignment_padding_length": 0,
+      "bare_hex": "020000000000000052080000000000000000484000000000000000309cf211b95586375ca13590d41f480ecd0ec3696ed049eae0b8d08e17b6231972cc4fcc1271f4916aad2abc77e93272f3f1c78ff1b1d32f1623b9008fddee0e52082a000000000000004840000000000000000c0b2386e9143c2ce21e08d6d612d89c4cf0323b0c32be667eafd9f1f2d3501a86c0fbb71203ccd6171626ac4e50e06ce5325cc7ac0f144509f403b887f58306",
+      "case": "vec_two",
+      "deserialize_schema_hash_hex": "a73e57b99731d544cea9d0c3b16b94f0",
+      "frame_hex": "4e5254300000a73e57b99731d544cea9d0c3b16b94f000ae00000000000000edd94757c3c8e96c02020000000000000052080000000000000000484000000000000000309cf211b95586375ca13590d41f480ecd0ec3696ed049eae0b8d08e17b6231972cc4fcc1271f4916aad2abc77e93272f3f1c78ff1b1d32f1623b9008fddee0e52082a000000000000004840000000000000000c0b2386e9143c2ce21e08d6d612d89c4cf0323b0c32be667eafd9f1f2d3501a86c0fbb71203ccd6171626ac4e50e06ce5325cc7ac0f144509f403b887f58306",
+      "header_flags": 2,
+      "header_schema_hash_hex": "a73e57b99731d544cea9d0c3b16b94f0",
+      "json": "[{\"index\":0,\"signature\":\"309CF211B95586375CA13590D41F480ECD0EC3696ED049EAE0B8D08E17B6231972CC4FCC1271F4916AAD2ABC77E93272F3F1C78FF1B1D32F1623B9008FDDEE0E\"},{\"index\":42,\"signature\":\"0C0B2386E9143C2CE21E08D6D612D89C4CF0323B0C32BE667EAFD9F1F2D3501A86C0FBB71203CCD6171626AC4E50E06CE5325CC7AC0F144509F403B887F58306\"}]",
+      "payload_length": 174,
+      "serialize_schema_hash_hex": "a73e57b99731d544cea9d0c3b16b94f0"
+    }
+  ],
+  "signing_inputs": [
+    {
+      "header_json": "{\"height\":1,\"prev_block_hash\":null,\"merkle_root\":null,\"result_merkle_root\":null,\"da_proof_policies_hash\":null,\"da_commitments_hash\":null,\"da_pin_intents_hash\":null,\"npos_effects_hash\":null,\"sccp_commitment_root\":null,\"creation_time_ms\":0,\"view_change_index\":0,\"confidential_features\":{\"vk_set_hash\":null,\"poseidon_params_id\":null,\"pedersen_params_id\":null,\"conf_rules_version\":1,\"zk_policy_hash\":[237,19,231,219,124,251,240,146,193,154,38,239,74,3,157,9,28,182,110,4,202,120,94,184,195,237,164,185,160,39,197,92]},\"execution_context_hash\":null}",
+      "public_key": "ed01202F0A7B29F53652005CD4720A3FE7ACD08C85A4E29CD6F48D1905E276DAC6FFEF",
+      "public_seed_hex": "3939393939393939393939393939393939393939393939393939393939393939",
+      "validator_index": 0
+    },
+    {
+      "header_json": "{\"height\":2,\"prev_block_hash\":\"hash:44F5B6EBABF5B56CFA3507FB8DDE81DB2A43A067E0A836103065CA2780FF6E47#4184\",\"merkle_root\":null,\"result_merkle_root\":null,\"da_proof_policies_hash\":null,\"da_commitments_hash\":null,\"da_pin_intents_hash\":null,\"npos_effects_hash\":null,\"sccp_commitment_root\":null,\"creation_time_ms\":1700000000007,\"view_change_index\":3,\"confidential_features\":{\"vk_set_hash\":null,\"poseidon_params_id\":null,\"pedersen_params_id\":null,\"conf_rules_version\":1,\"zk_policy_hash\":[237,19,231,219,124,251,240,146,193,154,38,239,74,3,157,9,28,182,110,4,202,120,94,184,195,237,164,185,160,39,197,92]},\"execution_context_hash\":null}",
+      "public_key": "ed0120C84069FA2216C6EDC1D52CA83AA11C267DD5440AFA526090CA43EBD0CA86A9CF",
+      "public_seed_hex": "5757575757575757575757575757575757575757575757575757575757575757",
+      "validator_index": 42
+    }
+  ]
+}

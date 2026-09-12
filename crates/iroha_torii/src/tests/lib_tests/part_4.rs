@@ -1857,7 +1857,7 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
         vk_ref: vk_id,
         authority: authority.clone(),
         fee_payment: sample_ivm_fee_payment(),
-        metadata: iroha_data_model::metadata::Metadata::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
         bytecode: bytecode.clone(),
     };
     let body = norito::json::to_vec(&req).expect("json encode request");

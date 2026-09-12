@@ -9,7 +9,7 @@ Runs SoraFS reference SDK validator cookbook scenarios against committed
 fixtures and writes ValidationOutcomeV1 JSON files to the output directory.
 
 Environment:
-  SORAFS_VALIDATE_BIN                 Use a prebuilt sorafs-validate binary.
+  IROHA_CLI_BIN                 Use the canonical prebuilt iroha CLI.
   SORANET_TRUSTLESS_VERIFIER_BIN      Use a prebuilt trustless verifier binary.
 USAGE
 }
@@ -41,10 +41,10 @@ done
 
 mkdir -p "$out_dir"
 
-if [[ -n "${SORAFS_VALIDATE_BIN:-}" ]]; then
-  validate_cmd=("$SORAFS_VALIDATE_BIN")
+if [[ -n "${IROHA_CLI_BIN:-}" ]]; then
+  validate_cmd=("$IROHA_CLI_BIN" app sorafs toolkit)
 else
-  validate_cmd=(cargo run -q -p sorafs_manifest --bin sorafs-validate --)
+  validate_cmd=(cargo run -q -p iroha_cli --bin iroha -- app sorafs toolkit)
 fi
 
 if [[ -n "${SORANET_TRUSTLESS_VERIFIER_BIN:-}" ]]; then
@@ -85,34 +85,34 @@ run_json() {
 }
 
 run_json "advert" \
-  "${validate_cmd[@]}" advert \
+  "${validate_cmd[@]}" validate advert \
   --input fixtures/sorafs_manifest/provider_admission/advert_v1.to \
   --now "$advert_now" \
   --generated-at "$generated_at" \
   --format json
 
 run_json "admission" \
-  "${validate_cmd[@]}" admission \
+  "${validate_cmd[@]}" validate admission \
   --input fixtures/sorafs_manifest/provider_admission/envelope_v1.to \
   --generated-at "$generated_at" \
   --format json
 
 run_json "admission-renewal" \
-  "${validate_cmd[@]}" admission \
-  --envelope fixtures/sorafs_manifest/provider_admission/envelope_v1.to \
+  "${validate_cmd[@]}" validate admission \
+  --input fixtures/sorafs_manifest/provider_admission/envelope_v1.to \
   --renewal fixtures/sorafs_manifest/provider_admission/renewal_v1.to \
   --generated-at "$generated_at" \
   --format json
 
 run_json "admission-revocation" \
-  "${validate_cmd[@]}" admission \
-  --envelope fixtures/sorafs_manifest/provider_admission/envelope_v1.to \
+  "${validate_cmd[@]}" validate admission \
+  --input fixtures/sorafs_manifest/provider_admission/envelope_v1.to \
   --revocation fixtures/sorafs_manifest/provider_admission/revocation_v1.to \
   --generated-at "$generated_at" \
   --format json
 
 run_json "order" \
-  "${validate_cmd[@]}" order \
+  "${validate_cmd[@]}" validate order \
   --order fixtures/sorafs_manifest/replication_order/order_v1.to \
   --generated-at "$generated_at" \
   --format json
@@ -127,41 +127,41 @@ run_json "sign-order" \
   --format json
 
 run_json "signed-order" \
-  "${validate_cmd[@]}" order \
+  "${validate_cmd[@]}" validate order \
   --signed-order "$out_dir/signed-order.to" \
   --generated-at "$generated_at" \
   --format json
 
 run_json "orderbook-receipt" \
-  "${validate_cmd[@]}" orderbook \
-  --receipt fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to \
+  "${validate_cmd[@]}" validate orderbook \
+  --kind settlement-receipt --input fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to \
   --generated-at "$generated_at" \
   --format json
 
 run_json "por" \
-  "${validate_cmd[@]}" por \
+  "${validate_cmd[@]}" validate por \
   --challenge fixtures/sorafs_manifest/por/challenge_v1.to \
   --proof fixtures/sorafs_manifest/por/proof_v1.to \
   --generated-at "$generated_at" \
   --format json
 
 run_json "potr" \
-  "${validate_cmd[@]}" potr \
+  "${validate_cmd[@]}" validate potr \
   --receipt fixtures/sorafs_manifest/potr/receipt_v1.to \
   --profile hot \
   --generated-at "$generated_at" \
   --format json
 
 run_json "repair-task" \
-  "${validate_cmd[@]}" repair \
-  --task fixtures/sorafs_manifest/repair/task_v1.to \
+  "${validate_cmd[@]}" validate repair \
+  --kind task --input fixtures/sorafs_manifest/repair/task_v1.to \
   --generated-at "$generated_at" \
   --format json
 
 run_json "governance" \
-  "${validate_cmd[@]}" governance \
+  "${validate_cmd[@]}" validate governance \
   --node fixtures/sorafs_manifest/governance/node_v1.to \
-  --cid bafygovernancelognode \
+  --cid hex:22cc36bfe1ea242afc1680bed4ab5b707e34316cb8c24c3439db7668d968b3a2 \
   --generated-at "$generated_at" \
   --format json
 
@@ -176,7 +176,7 @@ run_json "sign-advert" \
   --format json
 
 run_json "signed-advert" \
-  "${validate_cmd[@]}" advert \
+  "${validate_cmd[@]}" validate advert \
   --input "$out_dir/signed-advert.to" \
   --now "$advert_now" \
   --generated-at "$generated_at" \
@@ -192,14 +192,14 @@ run_json "sign-governance" \
   --format json
 
 run_json "signed-governance" \
-  "${validate_cmd[@]}" governance \
+  "${validate_cmd[@]}" validate governance \
   --node "$out_dir/signed-governance-node.to" \
-  --cid bafygovernancelognode \
+  --cid hex:22cc36bfe1ea242afc1680bed4ab5b707e34316cb8c24c3439db7668d968b3a2 \
   --generated-at "$generated_at" \
   --format json
 
 run_json "bundle" \
-  "${validate_cmd[@]}" bundle \
+  "${validate_cmd[@]}" validate bundle \
   --bundle fixtures/sorafs_manifest \
   --now "$advert_now" \
   --generated-at "$generated_at" \

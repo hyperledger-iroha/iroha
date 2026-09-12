@@ -1050,31 +1050,31 @@ async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
 fn contract_call_admission_test_receipt() -> routing::ContractCallResponseDto {
     routing::ContractCallResponseDto {
         ok: true,
-        submitted: true,
+        submitted: false,
         dataspace: "universal".to_owned(),
         contract_address: None,
         code_hash_hex: "11".repeat(32),
         abi_hash_hex: "22".repeat(32),
         creation_time_ms: 42,
         transaction_ttl_ms: None,
-        tx_hash_hex: Some("33".repeat(32)),
+        tx_hash_hex: None,
         pipeline_status: None,
-        entrypoint_hash_hex: Some("44".repeat(32)),
-        transaction_payload_b64: None,
-        signing_message_b64: None,
+        entrypoint_hash_hex: None,
+        transaction_payload_b64: Some("prepared-payload".to_owned()),
+        signing_message_b64: Some("prepared-signing-message".to_owned()),
         entrypoint: Some("main".to_owned()),
         operation_receipt: routing::OperationReceiptDto {
             operation_kind: "contract_call".to_owned(),
-            status: "submitted".to_owned(),
+            status: "pending_signature".to_owned(),
             transport: "torii".to_owned(),
             dataspace: "universal".to_owned(),
             contract_alias: None,
             contract_address: None,
             code_hash_hex: Some("11".repeat(32)),
             abi_hash_hex: Some("22".repeat(32)),
-            tx_hash_hex: Some("33".repeat(32)),
+            tx_hash_hex: None,
             entrypoint: Some("main".to_owned()),
-            entrypoint_hash_hex: Some("44".repeat(32)),
+            entrypoint_hash_hex: None,
             gas_limit: Some(5_000),
             gas_used: None,
             fee_payment: Some(iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -1102,8 +1102,8 @@ async fn prepared_contract_call_requires_canonical_ingress_before_success() {
     .try_sign(key.private_key())
     .expect("sign exact ingress fixture");
     let queue_len = app.queue.active_len();
-    let prepared = routing::PreparedContractCallRequest::Signed {
-        transaction,
+    let prepared = routing::PreparedContractCallRequest {
+        transaction: Some(transaction),
         response: contract_call_admission_test_receipt(),
     };
     let error = submit_prepared_contract_call(app.clone(), HeaderMap::new(), prepared)
@@ -1112,17 +1112,14 @@ async fn prepared_contract_call_requires_canonical_ingress_before_success() {
     assert_unconfigured_api_token_error(error);
     assert_eq!(app.queue.active_len(), queue_len);
 
-    let mut draft = contract_call_admission_test_receipt();
-    draft.submitted = false;
-    draft.tx_hash_hex = None;
-    draft.entrypoint_hash_hex = None;
-    draft.operation_receipt.status = "pending_signature".to_owned();
-    draft.operation_receipt.tx_hash_hex = None;
-    draft.operation_receipt.entrypoint_hash_hex = None;
+    let draft = contract_call_admission_test_receipt();
     let unsigned = submit_prepared_contract_call(
         app.clone(),
         HeaderMap::new(),
-        routing::PreparedContractCallRequest::Unsigned(draft),
+        routing::PreparedContractCallRequest {
+            response: draft,
+            transaction: None,
+        },
     )
     .await
     .expect("unsigned preparation does not enter transaction ingress");
@@ -1153,6 +1150,8 @@ async fn contract_call_submission_preserves_rejected_and_ambiguous_responses() {
         let response = contract_call_response_after_admission(
             contract_call_admission_test_receipt(),
             admitted,
+            "33".repeat(32),
+            "44".repeat(32),
         );
         assert_eq!(response.status(), status);
         assert_eq!(response.headers(), &expected_headers);
@@ -1166,12 +1165,45 @@ async fn contract_call_submission_preserves_rejected_and_ambiguous_responses() {
 #[tokio::test]
 async fn contract_call_submission_emits_contract_receipt_after_accepted() {
     let receipt = contract_call_admission_test_receipt();
-    let expected = norito::json::to_value(&receipt).expect("exact contract receipt");
+    let mut expected = norito::json::to_value(&receipt).expect("exact prepared receipt");
+    let fields = expected.as_object_mut().expect("prepared response object");
+    fields.insert("submitted".to_owned(), norito::json::Value::Bool(true));
+    fields.insert(
+        "tx_hash_hex".to_owned(),
+        norito::json::Value::String("33".repeat(32)),
+    );
+    fields.insert(
+        "entrypoint_hash_hex".to_owned(),
+        norito::json::Value::String("44".repeat(32)),
+    );
+    fields.insert(
+        "transaction_payload_b64".to_owned(),
+        norito::json::Value::Null,
+    );
+    fields.insert("signing_message_b64".to_owned(), norito::json::Value::Null);
+    let receipt_fields = fields
+        .get_mut("operation_receipt")
+        .expect("receipt")
+        .as_object_mut()
+        .expect("receipt object");
+    receipt_fields.insert(
+        "status".to_owned(),
+        norito::json::Value::String("submitted".to_owned()),
+    );
+    receipt_fields.insert(
+        "tx_hash_hex".to_owned(),
+        norito::json::Value::String("33".repeat(32)),
+    );
+    receipt_fields.insert(
+        "entrypoint_hash_hex".to_owned(),
+        norito::json::Value::String("44".repeat(32)),
+    );
     let admitted = AxResponse::builder()
         .status(StatusCode::ACCEPTED)
         .body(Body::empty())
         .expect("accepted admission fixture");
-    let response = contract_call_response_after_admission(receipt, admitted);
+    let response =
+        contract_call_response_after_admission(receipt, admitted, "33".repeat(32), "44".repeat(32));
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(response.into_body(), 16_384)
         .await
@@ -1179,6 +1211,10 @@ async fn contract_call_submission_emits_contract_receipt_after_accepted() {
     let actual: norito::json::Value = norito::json::from_slice(&bytes).expect("decode receipt");
     assert_eq!(actual, expected);
     assert_eq!(actual["submitted"].as_bool(), Some(true));
+    assert!(
+        actual["pipeline_status"].is_null(),
+        "certified admission does not claim local queue presence"
+    );
     assert!(actual["transaction_payload_b64"].is_null());
     assert!(actual["signing_message_b64"].is_null());
 }

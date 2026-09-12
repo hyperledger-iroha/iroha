@@ -305,26 +305,33 @@ impl Kura {
                 }
             };
             let fsync_mode = self.sidecar_fsync_mode();
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
-            match sidecar.encode_framed() {
-                Ok(buf) => {
-                    Self::append_indexed_sidecar(
-                        &data_path,
-                        &index_path,
-                        sidecar.height,
-                        &buf,
-                        "pipeline sidecar",
-                        fsync_mode,
-                        None,
-                    );
-                }
+            let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(
+                Self::sidecar_physical_resource_paths(&data_path, &index_path),
+            );
+            let wrote = match sidecar.encode_framed() {
+                Ok(buf) => Self::append_indexed_sidecar(
+                    &data_path,
+                    &index_path,
+                    sidecar.height,
+                    &buf,
+                    "pipeline sidecar",
+                    fsync_mode,
+                    None,
+                ),
                 Err(err) => {
                     iroha_logger::warn!(
                         ?err,
                         height = sidecar.height,
                         "failed to encode pipeline metadata"
                     );
+                    false
                 }
+            };
+            if !wrote {
+                self.resource_inventory.invalidate(
+                    physical_resource_mask(),
+                    resource_inventory::Unavailable::Interrupted,
+                );
             }
             let mut accounting_complete = before_bytes.is_some();
             if let Some(before_bytes) = before_bytes {
@@ -382,7 +389,6 @@ impl Kura {
         }
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let Some(mut sidecar) = self.read_pipeline_sidecar(
             height,
             PIPELINE_SIDECARS_DATA_FILE,
@@ -430,6 +436,9 @@ impl Kura {
         if added == 0 {
             return FastpqProofWriteResult::Written;
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(
+            Self::sidecar_physical_resource_paths(&data_path, &index_path),
+        );
         let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -1188,6 +1197,19 @@ impl Kura {
             &namespace, data_path, index_path, kind,
         )
     }
+    /// A terminal rewrite can retire every indexed slot. Its empty image is
+    /// complete only with the full canonical V1 header and an empty data file;
+    /// a zero-byte or truncated index is never a rewrite commit marker.
+    fn bound_sidecar_rewrite_image_is_complete(
+        snapshot: &BoundSidecarIndexSnapshot,
+        data_len: u64,
+    ) -> bool {
+        let canonical_empty = data_len == 0
+            && snapshot.layout.entries_offset == INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+            && snapshot.layout.aligned_len == INDEXED_SIDECAR_BASE_HEADER_SIZE_U64;
+        (snapshot.layout.entry_count > 0 || canonical_empty) && snapshot.indexed_end == data_len
+    }
+
     fn recover_bound_progress_sidecar_artifacts_in_namespace(
         &self,
         namespace: &BoundProgressNamespace,
@@ -1370,7 +1392,7 @@ impl Kura {
             "rewrite temp",
         );
         let temp_is_complete = temp_snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
+            Self::bound_sidecar_rewrite_image_is_complete(snapshot, data_len)
         });
         if !temp_is_complete {
             if temp_data_was_present {
@@ -1583,7 +1605,7 @@ impl Kura {
                     "recovery classification rewrite temp",
                 )
                 .map(|snapshot| {
-                    snapshot.layout.entry_count > 0 && snapshot.indexed_end == data_len
+                    Self::bound_sidecar_rewrite_image_is_complete(&snapshot, data_len)
                 })?;
                 if temp_data.is_none() && !complete {
                     return Err(BoundProgressRecoveryFailure::InvalidData);
@@ -2059,8 +2081,7 @@ impl Kura {
         ) {
             warn!(
                 ?temp_index_path,
-                kind,
-                "refusing to promote a sidecar temp that omits required terminal evidence"
+                kind, "refusing to promote a sidecar temp that omits required terminal evidence"
             );
             return false;
         }
@@ -4116,13 +4137,18 @@ impl Kura {
         let entry_byte_limit =
             u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
         let recover = !self.emergency_fast_startup_enabled();
+        if recover
+            && !self.recover_indexed_sidecar_with_physical_resources(&data_path, &index_path, kind)
+        {
+            return None;
+        }
         Self::read_indexed_sidecar_from_paths_with_recovery_and_limit(
             height,
             &data_path,
             &index_path,
             decoder,
             kind,
-            recover,
+            false,
             entry_byte_limit,
         )
     }

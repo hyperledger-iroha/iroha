@@ -106,6 +106,8 @@ impl QueuePlanJournalLivePosition {
     }
 }
 /// One exact removal carried by an atomic queue-plan journal batch tombstone.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalRemovalV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanJournalRemovalV1 {
@@ -208,7 +210,8 @@ impl QueuePlanJournalLimits {
     }
 }
 /// Pending transaction routing-plan journal record.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalRecordV1")]
 pub struct QueuePlanJournalRecordV1 {
     /// Record format version.
     pub version: u16,
@@ -273,7 +276,8 @@ impl QueuePlanJournalRecordV1 {
     }
 }
 /// One append-only queue plan journal operation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalFrameV1")]
 enum QueuePlanJournalFrameV1 {
     /// Typed file-format marker atomically installed before any ownership operation.
     Bootstrap {
@@ -4017,7 +4021,7 @@ mod tests {
         .sign(keypair.private_key());
         let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
         let routing_plan = RoutingPlan::single(super::super::RoutingDecision::default());
-        let validators = vec![iroha_data_model::peer::PeerId::new(
+        let validators = vec![iroha_model_base::peer::PeerId::new(
             keypair.public_key().clone(),
         )];
         let admission_context = QueuePlanAdmissionContextV1 {
@@ -4051,8 +4055,8 @@ mod tests {
         dataspace_id: u32,
     ) -> QueuePlanJournalRecordV1 {
         let routing_plan = RoutingPlan::single(super::super::RoutingDecision::new(
-            iroha_data_model::nexus::LaneId::new(lane_id),
-            iroha_data_model::nexus::DataSpaceId::new(dataspace_id.into()),
+            iroha_model_base::topology::LaneId::new(lane_id),
+            iroha_model_base::topology::DataSpaceId::new(dataspace_id.into()),
         ));
         record.admission_context.routing_plan_digest = routing_plan.digest();
         record.admission_context.route_incarnations[0].leg = routing_plan.coordinator_leg();
@@ -4294,8 +4298,8 @@ mod tests {
         );
         let mut plan_drift = exact.clone();
         plan_drift.routing_plan = RoutingPlan::single(super::super::RoutingDecision::new(
-            iroha_data_model::nexus::LaneId::new(9),
-            iroha_data_model::nexus::DataSpaceId::new(12),
+            iroha_model_base::topology::LaneId::new(9),
+            iroha_model_base::topology::DataSpaceId::new(12),
         ));
         assert_ne!(
             plan_drift.claim_digest().expect("hash plan-drift record"),
@@ -4387,6 +4391,31 @@ mod tests {
     }
     fn raw_bootstrap_frame() -> Vec<u8> {
         raw_frame(&bootstrap_frame())
+    }
+    #[test]
+    fn queue_plan_record_and_operation_frames_reject_identity_substitution() {
+        let record = record("typed-frame-owner");
+        let operation = QueuePlanJournalFrameV1::Put(record.clone());
+        let record_bytes = norito::encode_canonical(&record).expect("encode record owner");
+        let operation_bytes = norito::encode_canonical(&operation).expect("encode operation owner");
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanJournalRecordV1>(&record_bytes)
+                .expect("decode record owner"),
+            record
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&operation_bytes)
+                .expect("decode operation owner"),
+            operation
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<QueuePlanJournalRecordV1>(&operation_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&record_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
     }
     #[test]
     fn durable_frames_and_claims_ignore_ambient_layout_and_survive_restart() {

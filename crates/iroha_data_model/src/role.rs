@@ -1,11 +1,12 @@
 //! Structures, traits and impls related to `Role`s.
 pub use self::model::*;
 use crate::{
-    Identifiable, Name, Registered, Registrable,
+    Identifiable, Registered, Registrable,
     account::AccountId,
     permission::{Permission, Permissions},
 };
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use std::{collections::BTreeMap, format, string::String, vec::Vec};
 #[model]
 mod model {
@@ -73,7 +74,7 @@ mod model {
         pub grant_to: AccountId,
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for RoleId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.name, out);
@@ -85,7 +86,7 @@ impl norito::json::FastJsonWrite for RoleId {
         norito::json::JsonSerialize::json_serialize_to(&self.name, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for RoleId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -94,7 +95,7 @@ impl norito::json::JsonDeserialize for RoleId {
         Ok(Self { name })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for NewRole {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -127,7 +128,7 @@ impl norito::json::FastJsonWrite for NewRole {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for NewRole {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -175,7 +176,7 @@ impl norito::json::JsonDeserialize for NewRole {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for Role {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -202,7 +203,7 @@ impl norito::json::JsonSerialize for Role {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Role {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -317,10 +318,11 @@ impl Registrable for NewRole {
         self.inner
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{domain::DomainId, permission::Permission};
+    use crate::permission::Permission;
+    use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
     #[test]
     fn role_json_roundtrip() {
@@ -396,7 +398,7 @@ mod tests {
         let name: Name = "auditor".parse().expect("role name");
         let id = RoleId::new(name);
         let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
-        let _domain: crate::domain::DomainId =
+        let _domain: iroha_model_base::domain::DomainId =
             DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("test fixture Ed25519 key generation should succeed");

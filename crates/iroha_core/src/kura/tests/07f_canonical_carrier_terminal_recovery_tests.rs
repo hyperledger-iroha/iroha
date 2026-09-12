@@ -573,6 +573,8 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
                 .is_err()
             );
         }
+        kura.refresh_disk_usage_bytes()
+            .expect("initialize disk caches before pending release outcome publication");
         let _ = kura
             .persist_autonomous_lifecycle_release_terminal_outcome_pending(
                 &retirement,
@@ -580,6 +582,19 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
                 epoch,
             )
             .expect("persist exact Pending release outcome");
+
+        {
+            // Inspect the raw caches before any refresh can hide a repeated delta.
+            let accounting = kura
+                .disk_usage_accounting_snapshot_for_tests()
+                .expect("read exact accounting after pending release outcome publication");
+            assert!(accounting.enforced_initialized && accounting.total_initialized);
+            assert_eq!(
+                accounting.cached_enforced_bytes,
+                accounting.exact_enforced_bytes
+            );
+            assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+        }
         let path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
             lane,
             temp_dir.path(),
@@ -791,6 +806,8 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             .contains("exact current source outcome")
     );
     fs::write(first_path, first_bytes).expect("restore exact Pending before completion");
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before fixed-width release outcome completion");
     kura.complete_autonomous_lifecycle_terminal_outcome(
         *first_group,
         first_terminal,
@@ -798,6 +815,19 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         expected_pending_hash,
     )
     .expect("complete exact Pending release outcome");
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after fixed-width release outcome completion");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     let complete_bytes = fs::read(first_path).expect("read Complete terminal outcome");
     assert_ne!(&complete_bytes, first_bytes);
     assert_eq!(

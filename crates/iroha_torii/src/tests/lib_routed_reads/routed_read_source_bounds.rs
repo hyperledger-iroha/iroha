@@ -1,5 +1,7 @@
 // Source-equivalence tests for application routed-read materialization.
 use iroha_data_model::Registrable as _;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RoutedReadSourceFixture")]
 #[derive(
     Debug,
     PartialEq,
@@ -8,6 +10,7 @@ use iroha_data_model::Registrable as _;
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
 )]
+
 struct RoutedReadSourceFixture {
     id: String,
     metadata: Vec<String>,
@@ -44,11 +47,25 @@ fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
         &owned.optional,
     ]);
     let _flags = DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let expected = norito::core::to_bytes_bounded(&owned, usize::MAX)
-        .expect("owned fixture has a canonical frame");
+    let expected = crate::frame_test_support::assert_current_frame(
+        &owned,
+        "iroha_torii::RoutedReadSourceFixture",
+    );
+    type Source = ToriiBorrowedRoutedReadStruct<'static, RoutedReadSourceFixture, 3>;
+    assert_eq!(
+        <Source as norito::NoritoSchema>::nominal_name(),
+        "iroha_torii::ToriiBorrowedRoutedReadStruct<'_, iroha_torii::RoutedReadSourceFixture, 3>",
+    );
+    assert_eq!(
+        <Source as norito::NoritoSchema>::frame_name(),
+        <RoutedReadSourceFixture as norito::NoritoSchema>::frame_name(),
+    );
     let actual = norito::core::to_bytes_bounded(&source, expected.len())
         .expect("borrowed fixture fits its exact canonical boundary");
     assert_eq!(actual, expected);
+    let decoded: RoutedReadSourceFixture = norito::decode_canonical(&actual)
+        .expect("borrowed source decodes through the actual owned target");
+    assert_eq!(decoded, owned);
     assert!(norito::core::to_bytes_bounded(&source, expected.len() - 1).is_err());
 }
 #[test]
@@ -86,7 +103,7 @@ fn asset_definition_borrowed_json_matches_legacy_projection_at_exact_cap() {
         "derive routed asset-definition source fixture",
     );
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("issuer", "universal").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("issuer", "universal").expect("domain id");
     let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id,
         "usd".parse().expect("asset name"),
@@ -201,7 +218,7 @@ fn contract_alias_borrowed_json_matches_owned_dto_at_exact_cap() {
             .expect("canonical network id"),
         &authority,
         0,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("contract address");
     let contract_alias: iroha_data_model::smart_contract::ContractAlias =
@@ -263,7 +280,7 @@ fn explorer_asset_definition_borrowed_json_matches_owned_dto_at_exact_cap() {
         "derive routed explorer asset-definition source fixture",
     );
     let domain_id =
-        iroha_data_model::domain::DomainId::try_new("issuer", "universal").expect("domain id");
+        iroha_model_base::domain::DomainId::try_new("issuer", "universal").expect("domain id");
     let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain_id,
         "eur".parse().expect("asset name"),

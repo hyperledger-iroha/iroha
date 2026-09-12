@@ -31,6 +31,15 @@ MANIFEST_PARITY = importlib.util.module_from_spec(parity_spec)
 sys.modules[parity_spec.name] = MANIFEST_PARITY
 parity_spec.loader.exec_module(MANIFEST_PARITY)
 
+witness_spec = importlib.util.spec_from_file_location(
+    "privacy_retired_witness_guard", root / "scripts/check_privacy_retired_witness_boundary.py"
+)
+if witness_spec is None or witness_spec.loader is None:
+    raise RuntimeError("retired witness boundary guard is unavailable")
+RETIRED_WITNESS = importlib.util.module_from_spec(witness_spec)
+sys.modules[witness_spec.name] = RETIRED_WITNESS
+witness_spec.loader.exec_module(RETIRED_WITNESS)
+
 MATRIX_RELATIVE = "fixtures/privacy/exact12_v1.tsv"
 MATRIX_BYTES = (root / MATRIX_RELATIVE).read_bytes()
 MATRIX_TEXT = MATRIX_BYTES.decode("utf-8", errors="strict")
@@ -919,10 +928,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "6ffb6eb5a14697eb1e75f0d64fb30958ec04c2df018b4811f208853952090f77",
+        "privacy_swift_sdk_parse": "5f29706d10a2b7b77a2e5f594545b34637a6a1215b0a1dc0d1a6095b8917861f",
         "privacy_jvm_sdk_tests": "16847be930e1e9bd7dfbe3ba69677cabcce248f74eaf446ba984727bcdc468a5",
-        "privacy_csharp_sdk_tests": "124f324f0f1b4bc8eb57a14343d3cef5c4c51b639d034f1ae3ab387905ff9a8f",
-        "privacy_javascript_sdk_tests": "a5c385c0182d4322d032032309f24fc60070b53de6b890125385b5c6bdea8d6a",
+        "privacy_csharp_sdk_tests": "3efb52755b193e46bc3637cee5e98cf01b87437c1f76f42993bb508d61da4562",
+        "privacy_javascript_sdk_tests": "a205f483e32756f463d193dc7a3653a100eece5a6117e32b6a6c55365335a6e3",
     }
 
     require(
@@ -1193,6 +1202,39 @@ def _check_cargo_workflow(
         )
         expected_cargo_step_indices[job_name] = set(ordered_indices)
 
+    # These additional source-owner imports are authenticated by the exact
+    # complete job digests above. They do not open a general Cargo-policy lane.
+    canonical_graph_steps = {
+        "privacy_javascript_sdk_tests": ("Authenticate canonical privacy graph snapshot",),
+        "privacy_csharp_sdk_tests": ("Authenticate exact ABI23 C# privacy input",),
+        "privacy_swift_sdk_parse": (
+            "Authenticate canonical privacy graph snapshot",
+            "Revalidate frozen Swift inputs and ABI23 artifacts",
+        ),
+    }
+    for job_name, step_names in canonical_graph_steps.items():
+        job = workflow.jobs.get(job_name)
+        if job is None:
+            continue  # The required full-job check above already rejects it.
+        for step_name in step_names:
+            matches = _steps_with_field(job, "name", step_name)
+            run = matches[0][1].fields.get("run") if len(matches) == 1 else None
+            lines = run.splitlines() if isinstance(run, str) else []
+            owner_line = "source ci/privacy_sdk_cargo_lockfile.sh"
+            pin_uses = [
+                index for index, line in enumerate(lines)
+                if "PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256" in line
+            ]
+            require(
+                lines.count(owner_line) == 1
+                and bool(pin_uses)
+                and lines.index(owner_line) < min(pin_uses),
+                f"{job_name} must source the sole graph owner before every pin use in {step_name}",
+                errors,
+            )
+            if len(matches) == 1:
+                expected_cargo_step_indices.setdefault(job_name, set()).add(matches[0][0])
+
     semantic_python_path_run_count = sum(
         step.fields["run"].count(setup_python_path)
         for _, _, step in all_steps
@@ -1259,8 +1301,8 @@ def _check_cargo_workflow(
             unexpected_cargo_steps.append(f"{job_name}[{step_index}]")
     require(
         not rogue_cargo_jobs,
-        "Cargo policy commands may appear only in the six authenticated "
-        "privacy Cargo jobs; rogue jobs: "
+        "Cargo and graph-authentication commands may appear only in the reviewed "
+        "privacy jobs; rogue jobs: "
         + ", ".join(sorted(rogue_cargo_jobs)),
         errors,
     )
@@ -1271,6 +1313,70 @@ def _check_cargo_workflow(
         errors,
     )
     return workflow
+
+
+JVM_NATIVE_TEST_SELECTIONS = (
+    "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
+    "org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureCodecV1Test",
+    "org.hyperledger.iroha.sdk.privacy.PrivacyExact12FixtureJavaConsumerTest",
+    "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest",
+    "org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachmentTest",
+    "org.hyperledger.iroha.sdk.address.AccountAddressNativeTest",
+    "org.hyperledger.iroha.sdk.address.AccountAddressNativeUnavailableTest",
+    "org.hyperledger.iroha.sdk.address.AccountAddressTest",
+    "org.hyperledger.iroha.sdk.address.AccountIdLiteralTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.CanonicalMultisigWireParityTest",
+    "org.hyperledger.iroha.sdk.core.model.instructions.KaigiWirePayloadV1Test",
+    "org.hyperledger.iroha.sdk.core.model.instructions.KaigiInstructionValidationTest",
+    "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeJavaConsumerTest",
+    "org.hyperledger.iroha.sdk.privacy.ConfidentialNoteJavaConsumerTest",
+    "org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathJavaConsumerTest",
+    "org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest",
+)
+
+
+def _check_jvm_native_test_selection(gate: str, errors: list[str]) -> None:
+    marker = "./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test"
+    expected = marker + " \\\n" + "\n".join(
+        "  --tests " + name + (" \\" if index + 1 < len(JVM_NATIVE_TEST_SELECTIONS) else "")
+        for index, name in enumerate(JVM_NATIVE_TEST_SELECTIONS)
+    ) + "\n"
+    require(
+        gate.count(marker) == 1
+        and re.search("^" + re.escape(expected), gate, re.MULTILINE) is not None,
+        "privacy JVM native gate must execute every reviewed Exact12, canonical account and Kaigi test selection",
+        errors,
+    )
+
+
+
+def _check_jvm_java_owner_and_toolchain(gate: str, consumer: str, errors: list[str]) -> None:
+    require(
+        'export PATH="${JAVA_HOME}/bin:${PATH}"' not in gate
+        and re.search(r"(?m)^\s*(?:export\s+)?PATH=", gate) is None
+        and '\n"${JAVA_HOME}/bin/java" -version\n' in gate
+        and ('\n\"${JAVA_HOME}/bin/javac\" ' + chr(92) + '\n') in gate
+        and '\n"${JAVA_HOME}/bin/java" -ea ' in gate
+        and re.search(r"(?m)^\s*(?:java|javac)\s", gate) is None,
+        "privacy JVM tests must use explicit JDK executables without changing authenticated Cargo PATH",
+        errors,
+    )
+    require(
+        "package org.hyperledger.iroha.sdk.privacy;" in consumer
+        and "org.hyperledger.iroha.android.privacy" not in consumer
+        and "new PrivacyNativeBridge" not in consumer
+        and "java.lang.reflect" not in consumer
+        and "requireCompiledProfileCatalog(" not in consumer
+        and "requireExact12FixtureBundle(" not in consumer
+        and ('\n"${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/check_privacy_jvm_class_contract.py" ' + chr(92) + '\n') in gate
+        and '  --classes "${ROOT_DIR}/kotlin/core-jvm/build/classes/kotlin/main"\n' in gate
+        and "PrivacyNativeBridgeJavaConsumerTest" in gate
+        and "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest" not in gate,
+        "privacy JVM Java native consumer must call the canonical Kotlin V1 owner",
+        errors,
+    )
 
 
 def _check_workflow_trigger_paths(
@@ -1380,10 +1486,53 @@ def _mutate_workflow_meta_negative_control(source: str, mode: str) -> str:
     return mutated
 
 
+RETIRED_JAVA_PRIVACY_OWNERS = (
+    "ConfidentialNoteNullifier",
+    "ConfidentialNoteOpening",
+    "ConfidentialNoteEncryption",
+    "ToriiZkAssetMerklePathProvider",
+    "ConfidentialNoteCrypto",
+    "ConfidentialNoteTags",
+    "LocalZkAssetMerklePathProvider",
+    "ZkAssetMerklePathProvider",
+    "ConfidentialNoteCommitment",
+    "ConfidentialOwnerTag",
+    "ZkAssetMerklePath",
+    "ConfidentialNoteDecryption",
+    "ConfidentialNoteScalars",
+    "PrivacyNativeBridge",
+    "PrivacyProtocolIdV1",
+    "PrivacyProofSystemIdV1",
+    "PrivacyEngineIdV1",
+    "PrivacyConfidentialWitness",
+)
+
+
+def _check_jvm_confidential_owner_closure(root_dir, consumers, errors) -> None:
+    """Keep the retired Java owners absent and the migrated consumers canonical."""
+    for name in RETIRED_JAVA_PRIVACY_OWNERS:
+        require(
+            not (root_dir / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy" / (name + ".java")).exists(),
+            f"retired duplicate Java privacy owner must remain absent: {name}",
+            errors,
+        )
+    for name, count in (("ConfidentialNote", 5), ("ZkAssetMerklePath", 8), ("PrivacyRetiredWitnessBoundary", 2)):
+        consumer = consumers[name]
+        require(
+            "package org.hyperledger.iroha.sdk.privacy;" in consumer
+            and "org.hyperledger.iroha.android" not in consumer
+            and "java.lang.reflect" not in consumer
+            and consumer.count("@Test") == count,
+            f"original {name} Java assertions must use canonical Kotlin capabilities",
+            errors,
+        )
+
+
 def check(overrides: dict[str, str] | None = None) -> None:
     overrides = overrides or {}
     errors: list[str] = []
     check_exact12_feature_boundary(overrides)
+    errors.extend(RETIRED_WITNESS.check(root))
 
     version_rows = matrix_rows("matrix-version")
     registry_rows = matrix_rows("registry-sha256")
@@ -1562,10 +1711,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
     for relative, marker in (
         (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "REQUIRED_BRIDGE_ABI_VERSION = 23",
-        ),
-        (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
             "REQUIRED_BRIDGE_ABI_VERSION: Int = 23",
         ),
@@ -1646,10 +1791,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
             )
 
     mobile_capability_files = (
-        (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyProtocolIdV1.java",
-        ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyIdsV1.kt",
@@ -1752,10 +1893,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "privacy_validate_compiled_profile_catalog_v1",
         ),
         (
-            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "nativeValidateCompiledProfileCatalog",
-        ),
-        (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
             "nativeValidateCompiledProfileCatalog",
         ),
@@ -1856,9 +1993,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "crates/connect_norito_bridge/src/lib.rs",
         "crates/connect_norito_bridge/include/connect_norito_bridge.h",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
-        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
-        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyConfidentialWitness.kt",
-        "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
         "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
     )
     for relative in capability_only_native_files:
@@ -1982,7 +2116,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "javascript/iroha_js/test/privacyCatalogParity.test.js",
         "python/iroha_python/tests/privacy_catalog_test.py",
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeJavaConsumerTest.java",
         "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
     )
@@ -2020,6 +2154,30 @@ def check(overrides: dict[str, str] | None = None) -> None:
     python_pyproject_source = read("python/iroha_python/pyproject.toml", overrides)
     python_native_pyproject_source = read("python/iroha_native/pyproject.toml", overrides)
     workflow = _check_cargo_workflow(workflow_source, errors)
+    _check_jvm_native_test_selection(read("ci/check_privacy_jvm_sdk.sh", overrides), errors)
+    _check_jvm_java_owner_and_toolchain(
+        read("ci/check_privacy_jvm_sdk.sh", overrides),
+        read("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeJavaConsumerTest.java", overrides),
+        errors,
+    )
+    _check_jvm_confidential_owner_closure(
+        root,
+        {
+            name: read("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/" + name + "JavaConsumerTest.java", overrides)
+            for name in ("ConfidentialNote", "ZkAssetMerklePath", "PrivacyRetiredWitnessBoundary")
+        },
+        errors,
+    )
+    kotlin_privacy_tests = read("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt", overrides)
+    require(
+        "PrivacyNativeBridge.requireCompiledProfileCatalog(truncated)" in kotlin_privacy_tests
+        and "PrivacyNativeBridge.requireExact12FixtureBundle(truncated)" in kotlin_privacy_tests
+        and kotlin_privacy_tests.count("canonical.copyOfRange(0, canonical.size - 1)") == 2
+        and kotlin_privacy_tests.count("canonical.copyOfRange(1, canonical.size)") == 2
+        and kotlin_privacy_tests.count("canonical.copyOfRange(0, canonical.size / 2)") == 2,
+        "original Java internal archive rejection assertions must remain in selected Kotlin friend tests",
+        errors,
+    )
     required_workflow_paths = (
         ".gitignore",
         ".cargo/config",
@@ -2082,8 +2240,20 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "ci/check_privacy_swift_sdk.sh",
         "scripts/check_native_sdk_abi23_artifact.py",
         "scripts/check_privacy_python_witness_boundary.py",
+        "scripts/check_privacy_retired_witness_boundary.py",
+        "scripts/tests/check_privacy_retired_witness_boundary_test.py",
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/fixtures/RetiredPrivacyConfidentialWitnessFixture.kt",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyRetiredWitnessBoundaryJavaConsumerTest.java",
+        "IrohaSwift/Tests/IrohaSwiftTests/RetiredPrivacyConfidentialWitnessFixture.swift",
         "scripts/compute_workspace_source_manifest.py",
+        "scripts/tests/check_privacy_cargo_materialization_test.py",
         "scripts/tests/check_privacy_jvm_native_gate_test.py",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteJavaConsumerTest.java",
+        "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathJavaConsumerTest.java",
+        "scripts/check_privacy_jvm_class_contract.py",
+        "scripts/check_kotlin_jni.py",
+        "scripts/jvm_classfile.py",
+        "scripts/tests/check_kotlin_jni_test.py",
         "scripts/tests/check_privacy_python_witness_boundary_test.py",
         "javascript/iroha_js/test/privacyNative.integration.test.js",
         "python/iroha_python/tests/privacy_native_integration_test.py",
@@ -2105,7 +2275,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
     require(
         'RUSTC_BOOTSTRAP=1 \\' in lock_helper_source
-        and '"${real_cargo}" -Z unstable-options generate-lockfile'
+        and '"${real_cargo}" -Z unstable-options metadata --locked --format-version 1'
         in lock_helper_source
         and 'CARGO_HOME="${private_cargo_home}"' in lock_helper_source
         and "CARGO_NET_OFFLINE=false" in lock_helper_source
@@ -2117,9 +2287,9 @@ def check(overrides: dict[str, str] | None = None) -> None:
         and "IROHA_PRIVACY_AUTHENTICATED_CARGO_CONFIG_SEAL"
         in lock_helper_source
         and "IROHA_PRIVACY_AUTHENTICATED_CARGO_HOME" in lock_helper_source
-        and "PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256"
+        and "PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256"
         in lock_helper_source
-        and "PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256"
+        and "privacy_sdk_materialize_canonical_cargo_lock"
         in lock_helper_source
         and '"CARGO",' in lock_helper_source
         and "privacy SDK CI Cargo selector must be absent before wrapper selection"
@@ -2135,7 +2305,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
             "printf '%s\\n' \"${cargo_wrapper_directory}\""
         )
         == 1,
-        "privacy SDK CI helper must preserve the tracked root, authenticate the distinct external release lock, and install toolchain/wrapper PATH ordering",
+        "privacy SDK CI helper must preserve the tracked root, authenticate the canonical graph at an independent external path, and install toolchain/wrapper PATH ordering",
         errors,
     )
     require(
@@ -2487,10 +2657,10 @@ if mode:
             raise SystemExit(f"negative control cannot find workflow job: {job}")
         block = match.group(0).replace("provision-ci", "bypassed-provision", 1)
         overrides[path] = source[: match.start()] + block + source[match.end() :]
-    elif mode == "--negative-control-cargo-lock-helper-generation":
+    elif mode == "--negative-control-cargo-lock-helper-compatibility":
         path = "ci/privacy_sdk_cargo_lockfile.sh"
         overrides[path] = read(path, {}).replace(
-            "generate-lockfile", "generate-workspace-lockfile", 1
+            "metadata --locked --format-version 1", "metadata --format-version 1", 1
         )
     elif mode == "--negative-control-cargo-config-workflow-path":
         path = ".github/workflows/pr_privacy_sdk_guard.yml"
@@ -2685,6 +2855,8 @@ print("privacy SDK canonical cutover guard passed")
 PY
 
 if [[ -z "${MODE}" ]]; then
+  "${PYTHON_BIN}" -I -B \
+    "${ROOT_DIR}/scripts/tests/check_privacy_retired_witness_boundary_test.py"
   "${PYTHON_BIN}" -I -S \
     "${ROOT_DIR}/scripts/check_privacy_exact12_sdk_manifest_parity.py" \
     --require-ready

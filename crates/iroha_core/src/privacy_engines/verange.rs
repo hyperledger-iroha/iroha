@@ -443,6 +443,8 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
     }
 }
 /// Canonical opaque payload for a VeRange Type-1 proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::verange::VeRangeType1ProofV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -536,6 +538,8 @@ impl VeRangeType1ProofV1 {
     }
 }
 /// Canonical ordered wrapper of independent Type-1 proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::verange::VeRangeType1BatchProofV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -1546,7 +1550,7 @@ mod tests {
                 "3d79fe744741f956cb589f45774f922b849cf93833e6a9ebdedf1f815f1b7b44".to_owned(),
                 "50115a3ba086b8d50a2d3f834b22b3a2e81dee1be85cb1fa4c3d6d25a4807c23".to_owned(),
                 "7a5a99665e13b111b38f13348de65e66664aa832cdab0183ad468cab0736be21".to_owned(),
-                "1c2827ba9eec7309c48e9833ecc3f3af195ab864f98922a988088a2adabc2804".to_owned(),
+                "a994999cfa5caba42aa623dd8ac74cf4bc72349e85ad3aec8ddace0e2e013f2b".to_owned(),
             )
         );
     }
@@ -1721,7 +1725,10 @@ mod tests {
         changed_bindings.push(changed);
         let mut changed = statement.transcript_binding;
         changed.genesis_hash[0] ^= 1;
-        changed_bindings.push(changed);
+        assert!(
+            VeRangeType1StatementV1::new(statement.profile, statement.commitment, changed).is_err(),
+            "network/genesis disagreement must reject before proof evaluation"
+        );
         let mut changed = statement.transcript_binding;
         changed.action_index += 1;
         changed_bindings.push(changed);

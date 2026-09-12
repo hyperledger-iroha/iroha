@@ -1,13 +1,14 @@
 //! Module for client-related configuration and structs
 use crate::{
     crypto::KeyPair,
-    data_model::{ChainId, NetworkId, prelude::*},
+    data_model::{NetworkId, prelude::*},
 };
 use core::str::FromStr;
 use derive_more::Display;
 use error_stack::{Report, ResultExt};
 use eyre::Result;
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
+use iroha_model_base::chain::ChainId;
 use iroha_primitives::small::SmallStr;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;
@@ -17,7 +18,7 @@ use url::Url;
 mod user;
 use crate::secrecy::SecretString;
 pub use user::{
-    MusubiFetch as MusubiFetchConfig,
+    AliasCache, MusubiFetch as MusubiFetchConfig,
     MusubiFetchProviderGateway as MusubiFetchProviderGatewayConfig,
     MusubiPublication as MusubiPublicationConfig,
     MusubiPublicationProviderGateway as MusubiPublicationProviderGatewayConfig, ParseError,

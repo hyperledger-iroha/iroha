@@ -401,7 +401,8 @@
               },
               "payout_account": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "lifecycle": {
-                "state": "staged"
+                "state": "staged",
+                "value": null
               }
             }
           }
@@ -415,13 +416,15 @@
               },
               "revision": 1,
               "eligibility": {
-                "mode": "enrolled_or_route_default"
+                "mode": "enrolled_or_route_default",
+                "value": null
               },
               "rules": [
                 {
                   "id": "taira_writes",
                   "effect": {
-                    "effect": "allow"
+                    "effect": "allow",
+                    "value": null
                   },
                   "selectors": [
                     {

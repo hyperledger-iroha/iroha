@@ -110,7 +110,6 @@ secp256k1 = { version = "0.31.1", optional = true, features = ["rand"] }
 
 
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
-arrayref = { version = "=0.3.9", default-features = false }
 
 aead = { version = "0.6.0-rc.3", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core", "zeroize"] }
@@ -131,12 +130,14 @@ pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
 pqcrypto-mldsa = { version = "0.1.2", optional = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["compression"] }
 num-bigint = "0.4.6"
 lazy_static = "1.5.0"
-tempfile = "3.23.0"
 
 [[bin]]
 name = "gost_perf_check"
@@ -180,3 +181,8 @@ required-features = ["bls"]
 [[test]]
 name = "iroha_crypto_group_01"
 path = "tests/grouped/group_01.rs"
+
+# Scalar identity fixtures qualify minimal and optional crypto features independently.
+[[test]]
+name = "manual_scalar_identity"
+path = "tests/manual_scalar_identity.rs"

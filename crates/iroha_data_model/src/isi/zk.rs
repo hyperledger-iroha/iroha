@@ -30,10 +30,7 @@ isi! {
     /// When `backend` is `None`, all backends are considered; otherwise only
     /// the matching backend is pruned. Retention limits (cap/grace/batch) come
     /// from the `zk` configuration, keeping pruning deterministic.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::PruneProofs")]
     pub struct PruneProofs {
         /// Optional backend label to restrict pruning scope (e.g., `halo2/ipa`).
@@ -50,10 +47,7 @@ impl PruneProofs {
 // --- ZK Assets ---
 isi! {
     /// Register a ZK-capable asset definition with policy and verifying keys.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::RegisterZkAsset")]
     pub struct RegisterZkAsset {
         /// Asset definition id.
@@ -95,10 +89,7 @@ impl RegisterZkAsset {
 }
 isi! {
     /// Schedule a confidential policy transition for an asset definition.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition")]
     pub struct ScheduleConfidentialPolicyTransition {
         /// Asset definition id.
@@ -134,10 +125,7 @@ impl ScheduleConfidentialPolicyTransition {
 }
 isi! {
     /// Cancel a pending confidential policy transition for an asset definition.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition")]
     pub struct CancelConfidentialPolicyTransition {
         /// Asset definition id.
@@ -232,10 +220,7 @@ pub fn validate_election_tally_v1(
 }
 isi! {
     /// Create an anonymous election.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::CreateElection")]
     pub struct CreateElection {
         /// Unique canonical V1 governance selector.
@@ -246,7 +231,7 @@ isi! {
         /// Number of options (K).
         pub options: u32,
         /// Merkle root of eligible voters.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub eligible_root: [u8; 32],
         /// Start timestamp (ms since epoch).
         pub start_ts: u64,
@@ -263,10 +248,7 @@ isi! {
 impl crate::seal::Instruction for CreateElection {}
 isi! {
     /// Submit a private ballot for an election.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::SubmitBallot")]
     pub struct SubmitBallot {
         /// Canonical V1 election selector.
@@ -276,17 +258,14 @@ isi! {
         /// ZK proof of eligibility and well-formed vote.
         pub ballot_proof: crate::proof::ProofAttachment,
         /// Unique ballot nullifier to prevent double-voting.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub nullifier: [u8; 32],
     }
 }
 impl crate::seal::Instruction for SubmitBallot {}
 isi! {
     /// Finalize an election by verifying the tally proof and recording the result.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::FinalizeElection")]
     pub struct FinalizeElection {
         /// Canonical V1 election selector.
@@ -430,11 +409,9 @@ mod tests {
             })
         );
     }
-    use crate::{
-        domain::DomainId,
-        name::Name,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-    };
+    use crate::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),

@@ -15,13 +15,13 @@ use iroha_data_model::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
     parameter::{CustomParameterId, Parameters},
-    prelude::{Name, ValidationFail},
+    prelude::ValidationFail,
     smart_contract::manifest::{ContractManifest, EntryPointKind},
     smart_contract::{
         ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
     },
-    state_path::StatePath,
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -30,6 +30,8 @@ use thiserror::Error;
 /// Bindings are retained after deactivation so every historical contract subject remains
 /// permanently non-signing. The first-release format has one hash-to-point derivation and no
 /// legacy version or migration metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::code::ContractSubjectBinding")]
 #[derive(
     Clone,
     Debug,
@@ -383,6 +385,8 @@ pub fn protected_contract_namespaces(
 pub(crate) const CONTRACT_LIFECYCLE_STATE_PREFIX: &str = "lc";
 const CONTRACT_LIFECYCLE_RECORD_MAGIC: [u8; 4] = *b"KLC1";
 /// Consensus-bound lifecycle transition awaiting its branded hook.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::code::PendingContractLifecycle")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::codec::Decode, norito::codec::Encode)]
 pub(crate) enum PendingContractLifecycle {
     /// A newly activated instance must execute its `hajimari`/`始まり` hook once.
@@ -403,7 +407,17 @@ pub(crate) enum PendingContractLifecycle {
         code_hash: Hash,
     },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::codec::Decode, norito::codec::Encode)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::codec::Decode,
+    norito::codec::Encode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::smartcontracts::code::ContractLifecycleRecordV1")]
 struct ContractLifecycleRecordV1 {
     domain: [u8; 4],
     pending: PendingContractLifecycle,
@@ -980,13 +994,14 @@ mod tests {
             error::{InstructionExecutionError, InvalidParameterError},
             smart_contract_code::DeactivateContractInstance,
         },
-        nexus::DataSpaceId,
         parameter::custom::{CustomParameter, CustomParameterId},
         permission,
         prelude::*,
         smart_contract::manifest::{EntryPointKind, EntrypointDescriptor},
     };
     use iroha_executor_data_model::permission::parameter::CanSetParameters;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::topology::DataSpaceId;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("smart contract code fixture key generation should succeed")
     }
@@ -1656,6 +1671,51 @@ seiyaku LifecycleAba {
             transition_id: Hash::new(b"noncanonical-lifecycle-transition"),
             code_hash: Hash::new(b"noncanonical-lifecycle-record"),
         };
+        let record = ContractLifecycleRecordV1 {
+            domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
+            pending,
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::smartcontracts::code::ContractLifecycleRecordV1",
+        );
+        let frame = pending.encode();
+        assert_eq!(
+            frame,
+            norito::encode_canonical(&record).expect("lifecycle owner frame")
+        );
+        transaction.world.smart_contract_state.insert(
+            contract_lifecycle_state_key(&contract_address),
+            frame.clone(),
+        );
+        assert_eq!(
+            pending_contract_lifecycle(&transaction.world, &contract_address)
+                .expect("valid persisted lifecycle owner"),
+            Some(pending),
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<Hash>());
+        for malformed in [wrong_owner, frame[..frame.len() - 1].to_vec()] {
+            transaction
+                .world
+                .smart_contract_state
+                .insert(contract_lifecycle_state_key(&contract_address), malformed);
+            assert!(matches!(
+                pending_contract_lifecycle(&transaction.world, &contract_address),
+                Err(ValidationFail::InternalError(message))
+                    if message.contains("not canonical Norito")
+            ));
+        }
+        let invalid_domain = ContractLifecycleRecordV1 {
+            domain: *b"BAD!",
+            pending,
+        };
+        assert_eq!(
+            PendingContractLifecycle::decode(
+                &norito::encode_canonical(&invalid_domain).expect("correct owner, invalid domain"),
+            ),
+            Err("lifecycle record has an invalid domain tag"),
+        );
         let bare = norito::codec::Encode::encode(&ContractLifecycleRecordV1 {
             domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
             pending,

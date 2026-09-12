@@ -1,5 +1,91 @@
 # Lexically loaded by check_sumeragi_v2_multilane_models.py.
 
+def _validate_inflight_binding_inventory(contract: Any, errors: list[str]) -> None:
+    """Compare exact current declarations without substituting owner names or tokens."""
+
+    production_symbols = contract.get("production_symbols")
+    actual_bindings: list[tuple[str, str, str, tuple[str, ...]]] = []
+    if not isinstance(production_symbols, list):
+        errors.append("in-flight production_symbols must be an array")
+    else:
+        for binding in production_symbols:
+            if not isinstance(binding, dict) or set(binding) != {
+                "path",
+                "kind",
+                "symbol",
+                "required_tokens",
+            }:
+                errors.append(
+                    "each in-flight production binding must contain only path, "
+                    "kind, symbol, and required_tokens"
+                )
+                continue
+            relative = binding.get("path")
+            kind = binding.get("kind")
+            symbol = binding.get("symbol")
+            tokens = binding.get("required_tokens")
+            if (
+                not _nonempty_string(relative)
+                or kind not in RUST_BINDING_KINDS
+                or not _nonempty_string(symbol)
+                or not isinstance(tokens, list)
+                or not tokens
+                or not all(_nonempty_string(token) for token in tokens)
+                or len(tokens) != len(set(tokens))
+            ):
+                errors.append(f"malformed in-flight production binding {binding!r}")
+                continue
+            actual_bindings.append(
+                (relative, kind, symbol, tuple(tokens))
+            )
+    if tuple(actual_bindings) != INFLIGHT_LAYOUT_PRODUCTION_BINDINGS:
+        errors.append(
+            "in-flight production bindings differ from the exact reviewed "
+            "payload/queue/Kura/replay-state layout contract"
+        )
+
+    ordered_source_checks = contract.get("ordered_source_checks")
+    actual_ordered: list[tuple[str, str, str, tuple[str, ...]]] = []
+    if not isinstance(ordered_source_checks, list):
+        errors.append("in-flight ordered_source_checks must be an array")
+    else:
+        for check in ordered_source_checks:
+            if not isinstance(check, dict) or set(check) != {
+                "path",
+                "kind",
+                "symbol",
+                "tokens",
+            }:
+                errors.append(
+                    "each ordered in-flight source check must contain only path, "
+                    "kind, symbol, and tokens"
+                )
+                continue
+            relative = check.get("path")
+            kind = check.get("kind")
+            symbol = check.get("symbol")
+            tokens = check.get("tokens")
+            if (
+                not _nonempty_string(relative)
+                or kind not in RUST_BINDING_KINDS
+                or not _nonempty_string(symbol)
+                or not isinstance(tokens, list)
+                or not tokens
+                or not all(_nonempty_string(token) for token in tokens)
+                or len(tokens) != len(set(tokens))
+            ):
+                errors.append(f"malformed ordered in-flight source check {check!r}")
+                continue
+            actual_ordered.append(
+                (relative, kind, symbol, tuple(tokens))
+            )
+    if tuple(actual_ordered) != INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS:
+        errors.append(
+            "in-flight ordered source checks differ from the exact reviewed "
+            "validation/durability/publication order contract"
+        )
+
+
 def _validate_inflight_layout_contract(
     root: Path,
     formal_dir: Path,
@@ -92,92 +178,7 @@ def _validate_inflight_layout_contract(
             "twenty-five-control corpus"
         )
 
-    production_symbols = contract.get("production_symbols")
-    actual_bindings: list[tuple[str, str, str, tuple[str, ...]]] = []
-    if not isinstance(production_symbols, list):
-        errors.append("in-flight production_symbols must be an array")
-    else:
-        for binding in production_symbols:
-            if not isinstance(binding, dict) or set(binding) != {
-                "path",
-                "kind",
-                "symbol",
-                "required_tokens",
-            }:
-                errors.append(
-                    "each in-flight production binding must contain only path, "
-                    "kind, symbol, and required_tokens"
-                )
-                continue
-            relative = binding.get("path")
-            kind = binding.get("kind")
-            symbol = binding.get("symbol")
-            tokens = binding.get("required_tokens")
-            if (
-                not _nonempty_string(relative)
-                or kind not in RUST_BINDING_KINDS
-                or not _nonempty_string(symbol)
-                or not isinstance(tokens, list)
-                or not tokens
-                or not all(_nonempty_string(token) for token in tokens)
-                or len(tokens) != len(set(tokens))
-            ):
-                errors.append(f"malformed in-flight production binding {binding!r}")
-                continue
-            actual_bindings.append(
-                _current_inflight_production_binding(
-                    (relative, kind, symbol, tuple(tokens))
-                )
-            )
-    if tuple(actual_bindings) != INFLIGHT_LAYOUT_PRODUCTION_BINDINGS:
-        errors.append(
-            "in-flight production bindings differ from the exact reviewed "
-            "payload/queue/Kura/replay-state layout contract"
-        )
-
-    ordered_source_checks = contract.get("ordered_source_checks")
-    actual_ordered: list[tuple[str, str, str, tuple[str, ...]]] = []
-    if not isinstance(ordered_source_checks, list):
-        errors.append("in-flight ordered_source_checks must be an array")
-    else:
-        for check in ordered_source_checks:
-            if not isinstance(check, dict) or set(check) != {
-                "path",
-                "kind",
-                "symbol",
-                "tokens",
-            }:
-                errors.append(
-                    "each ordered in-flight source check must contain only path, "
-                    "kind, symbol, and tokens"
-                )
-                continue
-            relative = check.get("path")
-            kind = check.get("kind")
-            symbol = check.get("symbol")
-            tokens = check.get("tokens")
-            if (
-                not _nonempty_string(relative)
-                or kind not in RUST_BINDING_KINDS
-                or not _nonempty_string(symbol)
-                or not isinstance(tokens, list)
-                or not tokens
-                or not all(_nonempty_string(token) for token in tokens)
-                or len(tokens) != len(set(tokens))
-            ):
-                errors.append(f"malformed ordered in-flight source check {check!r}")
-                continue
-            actual_ordered.append(
-                _INFLIGHT_CURRENT_ORDERED_BINDINGS.get(
-                    (relative, symbol),
-                    (relative, kind, symbol, tuple(tokens)),
-                )
-            )
-    if tuple(actual_ordered) != INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS:
-        errors.append(
-            "in-flight ordered source checks differ from the exact reviewed "
-            "validation/durability/publication order contract"
-        )
+    _validate_inflight_binding_inventory(contract, errors)
 
     forbidden_source_checks = contract.get("forbidden_source_checks")
     actual_forbidden_source_checks: list[

@@ -1643,30 +1643,42 @@ impl PopCredentialToriiRuntimeV1 {
         self.provider_registry.finish(result)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopCanonicalPayloadRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope carrying one exact canonical native-Norito payload.
+
 pub struct PopCanonicalPayloadRequestV1 {
     /// Canonical native-Norito bytes encoded as unpadded URL-safe base64.
     pub canonical_payload_base64url: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopRequestIdRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope selecting one durable PoP enrollment by identifier.
+
 pub struct PopRequestIdRequestV1 {
     /// Non-zero 32-byte request id as lowercase hex.
     pub request_id_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopCredentialCommitmentRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope selecting one wallet credential commitment.
+
 pub struct PopCredentialCommitmentRequestV1 {
     /// Non-zero credential commitment as lowercase hex.
     pub credential_commitment_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopMembershipRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope for local membership-proof generation.
+
 pub struct PopMembershipRequestV1 {
     /// Non-zero credential commitment as lowercase hex.
     pub credential_commitment_hex: String,
@@ -1677,9 +1689,12 @@ pub struct PopMembershipRequestV1 {
     /// Non-zero recipient or action binding as lowercase hex, independent of the nullifier domain.
     pub presentation_binding_digest_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopVerifyMembershipRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope for verification and exactly-once nullifier consumption.
+
 pub struct PopVerifyMembershipRequestV1 {
     /// Canonical native-Norito proof encoded as unpadded URL-safe base64.
     pub canonical_proof_base64url: String,
@@ -1690,9 +1705,12 @@ pub struct PopVerifyMembershipRequestV1 {
     /// Non-zero recipient or action binding as lowercase hex, independent of the nullifier domain.
     pub presentation_binding_digest_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopEmptyRequestV1")]
 #[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Strict empty-object request used by bounded worker and projection endpoints.
+
 pub struct PopEmptyRequestV1;
 impl norito::json::FastJsonWrite for PopEmptyRequestV1 {
     fn write_json(&self, out: &mut String) {
@@ -4307,7 +4325,10 @@ mod tests {
         for malformed in [r#"{"unexpected":true}"#, "[]", "null", ""] {
             assert!(norito::json::from_json::<PopEmptyRequestV1>(malformed).is_err());
         }
-        let encoded = norito::to_bytes(&PopEmptyRequestV1).expect("encode empty request");
+        let encoded = crate::frame_test_support::assert_current_frame(
+            &PopEmptyRequestV1,
+            "iroha_torii::sorafs::pop_api::PopEmptyRequestV1",
+        );
         assert_eq!(encoded.len(), norito::core::Header::SIZE);
         let decoded = norito::decode_from_bytes::<PopEmptyRequestV1>(&encoded)
             .expect("native Norito must preserve the exact empty request shape");
@@ -4422,6 +4443,42 @@ mod tests {
             *probe.lock().expect("drop probe"),
             vec![0_u8; sentinel.len()]
         );
+    }
+    #[test]
+    fn public_request_frames_preserve_canonical_payload_and_distinct_selectors() {
+        let payload = vec![0x42_u8, 0x43];
+        let request = PopCanonicalPayloadRequestV1 {
+            canonical_payload_base64url: URL_SAFE_NO_PAD
+                .encode(norito::encode_canonical(&payload).expect("nested frame")),
+        };
+        crate::frame_test_support::assert_current_frame(
+            &request,
+            "iroha_torii::sorafs::pop_api::PopCanonicalPayloadRequestV1",
+        );
+        assert_eq!(
+            decode_canonical::<Vec<u8>>(&request.canonical_payload_base64url, 4096)
+                .expect("exact nested frame"),
+            payload
+        );
+        let by_request = PopRequestIdRequestV1 {
+            request_id_hex: "42".repeat(32),
+        };
+        let by_credential = PopCredentialCommitmentRequestV1 {
+            credential_commitment_hex: "42".repeat(32),
+        };
+        let request_bytes = crate::frame_test_support::assert_current_frame(
+            &by_request,
+            "iroha_torii::sorafs::pop_api::PopRequestIdRequestV1",
+        );
+        let credential_bytes = crate::frame_test_support::assert_current_frame(
+            &by_credential,
+            "iroha_torii::sorafs::pop_api::PopCredentialCommitmentRequestV1",
+        );
+        assert_ne!(&request_bytes[6..22], &credential_bytes[6..22]);
+        assert!(matches!(
+            norito::decode_canonical::<PopCredentialCommitmentRequestV1>(&request_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
     }
     #[test]
     fn canonical_payload_rejects_padding_malformed_and_oversized_data() {

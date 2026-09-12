@@ -1,6 +1,8 @@
 use super::*;
 use crate::{account::NewAccount, domain::NewDomain};
-#[cfg(feature = "json")]
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
+
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::fmt::Display;
 isi! {
@@ -78,12 +80,22 @@ impl_into_box! {
 => RegisterBox
 }
 /// Register a peer for consensus participation with a BLS Proof-of-Possession.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::register::RegisterPeerWithPop")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 pub struct RegisterPeerWithPop {
     /// Peer to register
     pub peer: PeerId,
@@ -130,12 +142,22 @@ impl RegisterPeerWithPop {
 /// This instruction stores a live, unbounded [`ConsensusKeyRole::Committee`]
 /// key for the peer. It is intentionally not a [`RegisterBox`] variant:
 /// genesis global-voter extraction recognizes only [`RegisterPeerWithPop`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::register::RegisterCommitteePeerWithPop")]
 pub struct RegisterCommitteePeerWithPop {
     /// Peer identity to register outside the global voting roster.
     pub peer: PeerId,
@@ -237,7 +259,7 @@ impl Unregister<Trigger> {
         Self { object: trigger_id }
     }
 }
-#[cfg(feature = "json")]
+
 impl<O> FastJsonWrite for Register<O>
 where
     O: Registered,
@@ -261,7 +283,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<O> FastJsonWrite for Unregister<O>
 where
     O: Identifiable,
@@ -443,7 +465,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterCommitteePeerWithPop {
 impl<'a, O> norito::core::DecodeFromSlice<'a> for Register<O>
 where
     O: Registered,
-    O::With: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    O::With: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
     Self: norito::codec::Decode,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -467,7 +489,7 @@ where
 impl<'a, O> norito::core::DecodeFromSlice<'a> for Unregister<O>
 where
     O: Identifiable,
-    O::Id: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+    O::Id: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
     Self: norito::codec::Decode,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -614,8 +636,9 @@ impl UnregisterBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::peer::PeerId;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::peer::PeerId;
     use norito::{
         codec::{Decode, Encode},
         core::DecodeFromSlice,
@@ -640,7 +663,7 @@ mod tests {
     fn role_id() -> RoleId {
         "auditor".parse().expect("role id")
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -652,7 +675,7 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn register_and_unregister_json_match_legacy_bytes_at_exact_bounds() {
         assert_exact_json(&Register::domain(Domain::new(domain_id())));
@@ -718,7 +741,7 @@ mod tests {
             .expect("committee-peer registration has a canonical wire id");
         assert_registry_decodes(&registry, wire_id, isi);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn register_peer_with_pop_json_rejects_unknown_fields() {
         let isi = register_peer_with_pop();
@@ -785,5 +808,17 @@ mod tests {
         for value in unregister_cases {
             assert_registry_decodes(&registry, UnregisterBox::WIRE_ID, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            super::RegisterCommitteePeerWithPop,
+        >("iroha_data_model::isi::register::RegisterCommitteePeerWithPop");
     }
 }

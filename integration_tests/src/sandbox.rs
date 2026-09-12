@@ -1,4 +1,4 @@
-use crate::sync::get_status_with_retry_at_least;
+use crate::sync::{get_status_with_retry_at_least, get_status_with_retry_at_least_async};
 use eyre::{Report, Result, WrapErr};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use std::{
@@ -651,15 +651,10 @@ pub async fn start_network_async_or_skip(
                 .ensure_blocks(1)
                 .await
                 .wrap_err("network startup applied-height barrier failed while reaching block 1")?;
-            let client = network.client();
-            // Tokio blocking-pool workers retain a runtime handle, which synchronous
-            // SDK reads reject. Keep the authoritative poll on the existing read owner.
-            let status_result = iroha_test_network::read_on_dedicated_thread(move || {
-                Ok(get_status_with_retry_at_least(&client, 1))
-            })
-            .await
-            .wrap_err("network startup authoritative status-height task failed")?;
-            status_result.wrap_err("network startup authoritative status-height barrier failed")?;
+            let peer = network.peers().first().expect("there is at least one peer");
+            get_status_with_retry_at_least_async(&peer.torii_url(), 1, || peer.status())
+                .await
+                .wrap_err("network startup authoritative status-height barrier failed")?;
             Ok::<(), Report>(())
         }
         .await;
@@ -744,6 +739,18 @@ fn sandbox_error(err: Report, context: &str) -> Report {
 }
 fn detect_sandbox_reason(err: &Report) -> Option<String> {
     for cause in err.chain() {
+        if matches!(
+            cause.downcast_ref::<iroha::Error>(),
+            Some(iroha::Error::Transport {
+                kind: iroha::TransportErrorKind::Io(std::io::ErrorKind::PermissionDenied),
+                ..
+            })
+        ) || cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+        {
+            return Some(format!("permission denied: {cause}"));
+        }
         let text = cause.to_string();
         if is_sandbox_message(&text) {
             return Some(text);
@@ -904,6 +911,48 @@ mod tests {
                     false
                 }
             }
+        }
+    }
+    #[test]
+    fn detects_structured_permission_denials_without_message_inference() {
+        for report in [
+            Report::from(iroha::Error::Transport {
+                operation: "diagnostic.status",
+                kind: iroha::TransportErrorKind::Io(std::io::ErrorKind::PermissionDenied),
+                details: "opaque diagnostic".to_owned(),
+            }),
+            Report::from(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "opaque diagnostic",
+            )),
+        ] {
+            assert!(sandbox_reason(&report).is_some());
+            let nested =
+                report.wrap_err("network startup authoritative status-height barrier failed");
+            assert!(sandbox_reason(&nested).is_some());
+            assert!(!is_retryable_network_startup_error(&nested));
+            let propagated = handle_result::<()>(Err(nested), "typed status probe")
+                .expect_err("permission denial must fail rather than skip the scenario");
+            assert!(
+                propagated
+                    .to_string()
+                    .contains("sandboxed network restriction detected")
+            );
+        }
+        for kind in [
+            iroha::TransportErrorKind::Io(std::io::ErrorKind::ConnectionRefused),
+            iroha::TransportErrorKind::Other,
+        ] {
+            let report = Report::from(iroha::Error::Transport {
+                operation: "diagnostic.status",
+                kind,
+                details: "opaque diagnostic".to_owned(),
+            });
+            assert!(sandbox_reason(&report).is_none());
+            let nested =
+                report.wrap_err("network startup authoritative status-height barrier failed");
+            assert!(sandbox_reason(&nested).is_none());
+            assert!(is_retryable_network_startup_error(&nested));
         }
     }
     #[test]
@@ -1305,6 +1354,9 @@ mod tests {
             wait_for_network_permits_to_drain(
                 "serialized_network_drop_completes_on_current_thread_runtime",
             );
+            // Report completion only after runtime destruction, while the parent
+            // still holds its environment guards and bounded completion wait.
+            drop(rt);
             let _ = tx.send(());
         });
         assert!(

@@ -204,9 +204,9 @@ fn qc_validation_rejects_context_replay_and_missing_pop() {
 }
 #[test]
 fn vote_signature_rejects_same_label_foreign_genesis_network() {
-    let shared_label_a: iroha_data_model::ChainId =
+    let shared_label_a: iroha_model_base::chain::ChainId =
         "shared-display-label".parse().expect("valid display label");
-    let shared_label_b: iroha_data_model::ChainId =
+    let shared_label_b: iroha_model_base::chain::ChainId =
         "shared-display-label".parse().expect("valid display label");
     assert_eq!(shared_label_a, shared_label_b);
     let keypair = checked_bls_keypair(0xE7);

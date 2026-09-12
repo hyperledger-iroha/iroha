@@ -25,6 +25,11 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance,
     smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use reqwest::StatusCode;
 use std::time::{Duration, Instant};
@@ -313,6 +318,7 @@ async fn submit_contract_probe_detached(
         "authority": (iroha_test_samples::ALICE_ID.clone()),
         "public_key_hex": (hex::encode(iroha_test_samples::ALICE_KEYPAIR.public_key().to_bytes().1)),
         "signature_b64": (base64::engine::general_purpose::STANDARD.encode(transaction_signature.payload())),
+        "transaction_payload_b64": payload_b64,
         "contract_alias": (contract_alias.clone()),
         "entrypoint": "verify",
         "creation_time_ms": (builder.payload().creation_time_ms),
@@ -322,7 +328,7 @@ async fn submit_contract_probe_detached(
     assert!(request.get("private_key").is_none());
     let body = norito::json::to_vec(&request)?;
     let bound_client = client.client();
-    let url = bound_client.torii_url.join("v1/contracts/call")?;
+    let url = bound_client.endpoint().join("v1/contracts/call")?;
     let uri: iroha_torii::Uri = match url.query() {
         Some(query) => format!("{}?{query}", url.path()).parse()?,
         None => url.path().parse()?,
@@ -336,7 +342,7 @@ async fn submit_contract_probe_detached(
         NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     let request_message = canonical_network_request_signature_message(
-        &bound_client.network_id,
+        bound_client.network_id(),
         &iroha_torii::Method::POST,
         &uri,
         &body,
@@ -344,7 +350,7 @@ async fn submit_contract_probe_detached(
         &nonce,
     )?;
     let request_signature =
-        iroha_crypto::Signature::try_new(bound_client.key_pair.private_key(), &request_message)?;
+        iroha_crypto::Signature::try_new(bound_client.key_pair().private_key(), &request_message)?;
     // Keep the existing integration HTTP timeout. Disable redirect/retry so this
     // signed POST cannot become an unobserved second submission.
     let http = reqwest::Client::builder()
@@ -356,7 +362,7 @@ async fn submit_contract_probe_detached(
         .post(url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .header(HEADER_ACCOUNT, bound_client.account.to_canonical_hex()?)
+        .header(HEADER_ACCOUNT, bound_client.account().to_canonical_hex()?)
         .header(
             HEADER_SIGNATURE,
             signature_header_value(&request_signature)?,
@@ -441,18 +447,7 @@ async fn submit_contract_probe_detached(
         norito::json::Value::Null,
     );
     object.insert("signing_message_b64".to_owned(), norito::json::Value::Null);
-    object.insert(
-        "pipeline_status".to_owned(),
-        norito::json::to_value(&iroha_torii_shared::PipelineTransactionStatusResponse::new(
-            tx_hash_hex.clone(),
-            iroha_torii_shared::PipelineTransactionStatus {
-                kind: "Queued".to_owned(),
-                block_height: None,
-            },
-            "local".to_owned(),
-            "queue".to_owned(),
-        ))?,
-    );
+    object.insert("pipeline_status".to_owned(), norito::json::Value::Null);
     let receipt = object
         .get_mut("operation_receipt")
         .and_then(norito::json::Value::as_object_mut)
@@ -519,7 +514,7 @@ fn contract_probe_alias_management_permission() -> CanManageAccountAlias {
                 "contract_state_probe@universal"
                     .parse()
                     .expect("canonical contract probe alias permission"),
-                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
         ),
     }
@@ -558,7 +553,7 @@ fn contract_v1_deployment_grants_only_the_exact_hajimari_invocation() {
             &network,
             &iroha_test_samples::ALICE_ID,
             nonce,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("derive exact fixture address")
     };
@@ -645,7 +640,7 @@ fn contract_v1_alias_permission_is_exact() {
     assert_eq!(alias.canonical_text(), "contract_state_probe@universal");
     assert_eq!(
         alias.dataspace_id,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
     );
 }
 
@@ -715,7 +710,7 @@ fn contract_v1_four_validator_probe_compiles_final_syntax() {
         ))),
         &iroha_test_samples::ALICE_ID,
         0,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("derive probe address");
     let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -1448,11 +1443,15 @@ async fn stream_contract_rbc_prefix(
     let receive_deadline = deadline - close_reserve;
     let mut stream = tokio::time::timeout_at(
         tokio::time::Instant::from_std(receive_deadline),
-        client.listen_for_blocks(NonZeroU64::new(2).expect("nonzero replay start")),
+        client
+            .account_client()?
+            .blocks()
+            .subscribe(NonZeroU64::new(2).expect("nonzero replay start")),
     )
     .await
     .map_err(|_| eyre!("canonical RBC replay connection timed out"))??;
-    let result = receive_contract_rbc_prefix(&mut stream, end, receive_deadline, |block| {
+    let mut decoded = futures_util::TryStreamExt::map_err(&mut stream, eyre::Report::from);
+    let result = receive_contract_rbc_prefix(&mut decoded, end, receive_deadline, |block| {
         (
             block.header().height().get(),
             block.hash(),
@@ -1465,16 +1464,20 @@ async fn stream_contract_rbc_prefix(
 
 async fn finish_contract_rbc_replay<T>(
     result: Result<Vec<T>>,
-    close: impl std::future::Future<Output = ()>,
+    close: impl std::future::Future<Output = iroha::Result<()>>,
     deadline: Instant,
 ) -> Result<Vec<T>> {
     let close = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), close).await;
     match (result, close) {
-        (Ok(blocks), Ok(())) => {
+        (Ok(blocks), Ok(Ok(()))) => {
             contract_rbc_remaining(deadline)?;
             Ok(blocks)
         }
-        (Err(error), Ok(())) => Err(error),
+        (Err(error), Ok(Ok(()))) => Err(error),
+        (Ok(_), Ok(Err(error))) => Err(error.into()),
+        (Err(error), Ok(Err(close_error))) => Err(eyre!(
+            "{error:#}; canonical RBC replay close failed: {close_error}"
+        )),
         (Ok(_), Err(_)) => Err(eyre!("canonical RBC replay close timed out")),
         (Err(error), Err(_)) => Err(eyre!("{error:#}; canonical RBC replay close timed out")),
     }
@@ -1485,12 +1488,10 @@ async fn replay_canonical_contract_rbc_bindings(
     deadline: Instant,
     required_height: Option<u64>,
 ) -> Result<Vec<CanonicalContractRbcBinding>> {
-    let mut client = client.clone();
-    client.torii_request_timeout = contract_rbc_remaining(deadline)?;
-    let status_client = client.clone();
-    let head = read_on_dedicated_thread(move || status_client.get_status())
-        .await?
-        .blocks;
+    let mut builder = client.to_builder();
+    builder.torii_request_timeout = contract_rbc_remaining(deadline)?;
+    let client = builder.build()?;
+    let head = client.status().get().await?.blocks;
     contract_rbc_remaining(deadline)?;
     let end = contract_rbc_replay_end(head, required_height)?;
     let blocks = stream_contract_rbc_prefix(&client, end, deadline).await?;
@@ -1520,7 +1521,7 @@ async fn replay_canonical_contract_rbc_bindings(
             bindings.push(canonical_autonomous_contract_binding(
                 envelope,
                 height,
-                client.network_id,
+                *client.network_id(),
             )?);
             contract_rbc_remaining(deadline)?;
         }
@@ -1655,7 +1656,7 @@ async fn wait_for_cross_peer_rbc_diagnostics(
             .iter()
             .enumerate()
             .map(|(index, peer)| {
-                let mut client = peer.client().client().clone();
+                let mut builder = peer.client().client().to_builder();
                 let can_query = canonical[index].can_query();
                 let baseline = after.cloned();
                 let validators = expected_validator_set.clone();
@@ -1663,7 +1664,8 @@ async fn wait_for_cross_peer_rbc_diagnostics(
                 tokio::spawn(async move {
                     let attempt_deadline =
                         deadline.min(Instant::now() + CONTRACT_RBC_REPLAY_ATTEMPT_TIMEOUT);
-                    client.torii_request_timeout = contract_rbc_remaining(attempt_deadline)?;
+                    builder.torii_request_timeout = contract_rbc_remaining(attempt_deadline)?;
+                    let client = builder.build()?;
                     let diagnostics_client = client.clone();
                     let diagnostics = read_on_dedicated_thread(move || {
                         diagnostics_client.get_sumeragi_diagnostics()
@@ -1816,10 +1818,8 @@ fn contract_rbc_autonomous_join_fixture() -> (
     Hash,
 ) {
     use iroha_core::lane_consensus::LaneExecutablePayloadV1;
-    use iroha_data_model::{
-        block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
-        nexus::{DataSpaceId, LaneId},
-    };
+    use iroha_data_model::block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1};
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     let mut validators = (1..=4)
         .map(|seed| {
             PeerId::new(
@@ -2344,7 +2344,7 @@ async fn contract_v1_rbc_stream_close_is_bounded_and_retains_the_read_failure() 
     assert_eq!(
         finish_contract_rbc_replay(
             Ok(vec![row]),
-            async {},
+            async { Ok(()) },
             Instant::now() + Duration::from_secs(10)
         )
         .await
@@ -2355,6 +2355,38 @@ async fn contract_v1_rbc_stream_close_is_bounded_and_retains_the_read_failure() 
         .await
         .unwrap_err();
     assert!(error.to_string().contains("close timed out"));
+}
+
+#[tokio::test]
+async fn contract_v1_rbc_stream_close_failure_retains_the_read_failure() {
+    let close = || async {
+        Err(iroha::Error::Timeout {
+            operation: "blocks.close",
+        })
+    };
+    let error = finish_contract_rbc_replay::<ContractRbcReplayRow>(
+        Err(eyre!("original replay failure")),
+        close(),
+        Instant::now() + Duration::from_secs(10),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("original replay failure"));
+    assert!(error.to_string().contains("close failed"));
+    assert!(error.to_string().contains("blocks.close"));
+    let error = finish_contract_rbc_replay(
+        Ok(vec![contract_rbc_fake_replay_row(2)]),
+        close(),
+        Instant::now() + Duration::from_secs(10),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<iroha::Error>(),
+        Some(iroha::Error::Timeout {
+            operation: "blocks.close"
+        })
+    ));
 }
 
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
@@ -2427,39 +2459,6 @@ fn dynamic_counter_call_intent(
         },
         metadata,
     }
-}
-async fn wait_for_approved_txs(
-    client: &iroha::blocking::Client,
-    baseline: u64,
-    timeout: Duration,
-    stage: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_status = None;
-    let mut last_error = None;
-    while Instant::now() < deadline {
-        match read_on_dedicated_thread({
-            let client = client.clone();
-            move || client.client().get_status()
-        })
-        .await
-        {
-            Ok(status) => {
-                if status.txs_approved > baseline {
-                    return Ok(());
-                }
-                last_status = Some(status);
-                last_error = None;
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    Err(eyre!(
-        "{stage}: timed out waiting for txs_approved to advance beyond {baseline}; last_status={last_status:?}; last_error={last_error:?}"
-    ))
 }
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload
@@ -2596,7 +2595,7 @@ fn deploy_contract_locally_signed_with_registration(
         .map_err(|error| eyre!("verify contract artifact: {error}"))?;
     let authority: Account = client
         .client()
-        .query_single(FindAccountById::new(client.client().account.clone()))?;
+        .query_single(FindAccountById::new(client.client().account().clone()))?;
     let nonce_key =
         Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)?;
     let deploy_nonce = authority
@@ -2610,10 +2609,10 @@ fn deploy_contract_locally_signed_with_registration(
         .transpose()?
         .unwrap_or(0);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &client.client().network_id,
-        &client.client().account,
+        client.client().network_id(),
+        client.client().account(),
         deploy_nonce,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .map_err(|error| eyre!("derive contract address: {error}"))?;
     let mut metadata = Metadata::default();
@@ -2626,7 +2625,7 @@ fn deploy_contract_locally_signed_with_registration(
     if !registered_in_genesis {
         let manifest = verified
             .manifest
-            .try_signed(&client.client().key_pair)
+            .try_signed(client.client().key_pair())
             .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
         let total_size = u64::try_from(artifact.len())?;
         let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
@@ -2705,7 +2704,7 @@ async fn deploy_contract_artifact(
     .await?;
     let deployment_block_height = wait_for_tx_applied(
         http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &hex::encode(deployment_tx_hash.as_ref()),
         Duration::from_secs(60),
         stage,
@@ -3333,12 +3332,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     let mut status = None;
     let mut last_status_error: Option<String> = None;
     while Instant::now() < deadline {
-        match read_on_dedicated_thread({
-            let client = client.clone();
-            move || client.client().get_status()
-        })
-        .await
-        {
+        match client.client().status().get().await {
             Ok(current) => {
                 let non_empty = current.blocks_non_empty;
                 status = Some(current);
@@ -3376,7 +3370,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     // GET by code hash
     let get_url = client
         .client()
-        .torii_url
+        .endpoint()
         .join(&format!("/v1/contracts/code/{code_hash_hex}"))
         .unwrap();
     let get_deadline = Instant::now() + std::time::Duration::from_secs(120);
@@ -3567,14 +3561,14 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     let (alice_block_height, bob_block_height) = tokio::try_join!(
         wait_for_tx_applied(
             &http,
-            &alice_client.client().torii_url,
+            alice_client.client().endpoint(),
             &alice_tx_hash,
             Duration::from_secs(60),
             "direct dynamic bump",
         ),
         wait_for_tx_applied(
             &http,
-            &bob_client.client().torii_url,
+            bob_client.client().endpoint(),
             &bob_tx_hash,
             Duration::from_secs(60),
             "helper-hidden dynamic bump",
@@ -3591,7 +3585,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         peer_values.push(
             contract_state_json_value(
                 &http,
-                &peer_client.client().torii_url,
+                peer_client.client().endpoint(),
                 &contract_address,
                 "Counters/7",
             )
@@ -3990,7 +3984,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             let mut peer_rejections = Vec::with_capacity(network.peers().len());
             for peer in network.peers() {
                 let peer_client = peer.client();
-                let torii_url = peer_client.client().torii_url.clone();
+                let torii_url = peer_client.client().endpoint().clone();
                 let (status, body) = post_typed_core_query_page(
                     &http,
                     &torii_url,
@@ -4300,7 +4294,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
     // carriers. Keep its wait outside the signed-cadence round budget.
     let deployment_height = wait_for_tx_applied(
         &http,
-        &client.client().torii_url,
+        client.client().endpoint(),
         &hex::encode(deployment_tx_hash.as_ref()),
         network.da_commit_quorum_timeout(),
         "contract V1 deployment",
@@ -4382,7 +4376,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         );
         verification_height = wait_for_tx_applied(
             &http,
-            &client.client().torii_url,
+            client.client().endpoint(),
             tx_hash,
             network.da_commit_quorum_timeout(),
             entrypoint,
@@ -4403,7 +4397,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
         );
         let stored = contract_state_json_value(
             &http,
-            &peer.client().client().torii_url,
+            peer.client().client().endpoint(),
             &contract_address,
             "probe_readback",
         )
@@ -4424,22 +4418,14 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
     let restart_index = network.peers().len() - 1;
     let restart_peer = network.peers()[restart_index].clone();
     let config_layers = network.config_layers().collect::<Vec<_>>();
-    let healthy_clients = network
-        .peers()
-        .iter()
-        .take(restart_index)
-        .map(|peer| peer.client())
-        .collect::<Vec<_>>();
-    let recovery_height = read_on_dedicated_thread(move || {
-        healthy_clients
-            .iter()
-            .map(|client| client.client().get_status().map(|status| status.blocks))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .ok_or_else(|| eyre!("contract V1 restart gate has no healthy peer height"))
-    })
-    .await?;
+    let mut healthy_heights = Vec::with_capacity(restart_index);
+    for peer in network.peers().iter().take(restart_index) {
+        healthy_heights.push(peer.status().await?.blocks);
+    }
+    let recovery_height = healthy_heights
+        .into_iter()
+        .max()
+        .ok_or_else(|| eyre!("contract V1 restart gate has no healthy peer height"))?;
     assert!(
         restart_peer.shutdown_if_started().await,
         "selected contract V1 peer was not running before restart"
@@ -4473,7 +4459,7 @@ async fn contract_v1_four_peer_da_rbc_restart_impl(
     );
     let restarted_state = contract_state_json_value(
         &http,
-        &restart_peer.client().client().torii_url,
+        restart_peer.client().client().endpoint(),
         &contract_address,
         "probe_readback",
     )

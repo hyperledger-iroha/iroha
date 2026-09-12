@@ -4,8 +4,10 @@ use eyre::{OptionExt, Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     crypto::{Algorithm, KeyPair, bls_normal_pop_prove},
-    data_model::{isi::register::RegisterPeerWithPop, peer::PeerId, prelude::*},
+    data_model::{isi::register::RegisterPeerWithPop, prelude::*},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::{Duration, Instant};
@@ -124,14 +126,8 @@ async fn check_status(network: &Network, expected_peers: u64) -> Result<()> {
     loop {
         let mut all_ok = true;
         for peer in network.peers() {
-            let client = peer.client();
-            let status = match spawn_blocking(move || client.client().get_status()).await {
-                Ok(Ok(status)) => status,
-                Ok(Err(err)) => {
-                    last_err = Some(err);
-                    all_ok = false;
-                    continue;
-                }
+            let status = match peer.status().await {
+                Ok(status) => status,
                 Err(err) => {
                     last_err = Some(err.into());
                     all_ok = false;

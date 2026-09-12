@@ -21,10 +21,10 @@ use iroha_data_model::{
         SccpSoraFinalityAnchorV1, sccp_sora_taira_chain_id_hash_v1,
     },
     isi::InstructionBox,
-    name::Name,
-    peer::PeerId,
     transaction::{Executable, ExecutableBatchItem, TransactionEntrypoint, TransactionResult},
 };
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use iroha_sccp::{
     SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, SccpReplayArchiveV1,
     TairaBridgeFinalityProofV1, TairaSccpMessageProofV1,
@@ -2410,7 +2410,6 @@ mod tests {
         account::AccountId,
         block::{BlockSignature, SignedBlock},
         isi::InstructionBox,
-        nexus::DataSpaceId,
         prelude::TransactionBuilder,
         smart_contract::ContractAddress,
         transaction::{
@@ -2420,6 +2419,7 @@ mod tests {
         },
         trigger::{TimeTriggerEntrypoint, TriggerId},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::{borrow::Cow, num::NonZeroU64};
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("bridge fixture key generation should succeed")

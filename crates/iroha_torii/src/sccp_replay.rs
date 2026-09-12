@@ -222,6 +222,8 @@ const fn boundary_path_name(boundary: SccpReplayBoundaryV1) -> &'static str {
 }
 
 /// One complete signed checkpoint and its exact canonical snapshot bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SccpReplayReplicaCheckpointEntryV1 {
     /// Exactly-three-signature checkpoint statement.
@@ -231,7 +233,8 @@ pub struct SccpReplayReplicaCheckpointEntryV1 {
 }
 
 /// Exact checkpoint set returned independently by all three replicas.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1")]
 pub struct SccpReplayReplicaCheckpointSetV1 {
     /// Schema version; final V1 accepts exactly one.
     pub version: u8,
@@ -651,6 +654,8 @@ impl From<SccpReplayArchiveProviderErrorV1> for ToriiSccpReplayEndpointErrorV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayHeadEntryV1 {
     accumulator_id: SccpReplayAccumulatorIdV1,
@@ -659,6 +664,8 @@ struct PersistedReplayHeadEntryV1 {
     checkpoint_sha256: [u8; 32],
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayGenerationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayGenerationV1 {
     checkpoint_set_sha256: [u8; 32],
@@ -667,7 +674,8 @@ struct PersistedReplayGenerationV1 {
     entries: Vec<PersistedReplayHeadEntryV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadV1")]
 struct PersistedReplayHeadV1 {
     version: u8,
     // The atomic manifest carries both generations so a crash cannot expose a
@@ -1186,13 +1194,13 @@ fn fetch_exact_three(
         .map(|_| store.create_anonymous_fetch_file())
         .collect::<Result<Vec<_>, _>>()?;
     let fetched = std::thread::scope(|scope| {
-        config
+        let workers = config
             .replicas
             .iter()
             .zip(files)
             .map(|replica| {
                 let (replica, mut file) = replica;
-                scope.spawn(move || {
+                std::thread::Builder::new().spawn_scoped(scope, move || {
                     let length = iroha_core::panic_hook::catch_unwind_suppressed(|| {
                         source.fetch_to(
                             replica,
@@ -1203,22 +1211,18 @@ fn fetch_exact_three(
                     })
                     .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
                     .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?;
+                    // Enforce the owner bound even when an injected adapter violates its contract.
+                    if length == 0 || length > config.max_response_bytes {
+                        return Err(ToriiSccpReplayStartupErrorV1::Transport);
+                    }
                     file.flush()
                         .map_err(|_| ToriiSccpReplayStartupErrorV1::Persistence)?;
                     validate_anonymous_fetch_file(&file, length)?;
                     Ok((file, length))
                 })
             })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|worker| {
-                worker
-                    .join()
-                    .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Vec<_>>();
+        join_replica_fetch_workers(workers)
     })?;
 
     let mut fetched = fetched.into_iter();
@@ -1271,6 +1275,35 @@ fn fetch_exact_three(
         }
     }
     Ok(agreed)
+}
+
+/// Settle every started replica worker before returning any creation or fetch failure.
+#[expect(
+    single_use_lifetimes,
+    reason = "a scoped handle inside impl Trait's associated type requires a named lifetime"
+)]
+fn join_replica_fetch_workers<'scope>(
+    workers: impl IntoIterator<
+        Item = std::io::Result<
+            std::thread::ScopedJoinHandle<
+                'scope,
+                Result<(File, usize), ToriiSccpReplayStartupErrorV1>,
+            >,
+        >,
+    >,
+) -> Result<Vec<(File, usize)>, ToriiSccpReplayStartupErrorV1> {
+    // Collect outcomes first: Result collection must not drop handles after an earlier error.
+    workers
+        .into_iter()
+        .map(|worker| {
+            worker
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
+                .join()
+                .map_err(|_| ToriiSccpReplayStartupErrorV1::Transport)?
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn validate_candidate(
@@ -3512,6 +3545,16 @@ mod tests {
 
         let fixture = Fixture::new();
         let service = fixture.bootstrap().expect("valid exact-three bootstrap");
+        let checkpoint_set: SccpReplayReplicaCheckpointSetV1 =
+            norito::decode_canonical(&fixture.first_bytes).expect("fixture set");
+        crate::frame_test_support::assert_current_frame(
+            &checkpoint_set,
+            "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &loaded_head(&service).head,
+            "iroha_torii::sccp_replay::PersistedReplayHeadV1",
+        );
         let (served_domain, forest) = service
             .forest(&fixture.accumulator_id)
             .expect("verified forest is served");
@@ -4515,4 +4558,9 @@ mod tests {
         );
         assert_eq!(service.checkpoint_set_sha256(), Ok(before));
     }
+
+    #[cfg(feature = "app_api")]
+    include!("sccp_replay/worker_boundary_tests.rs");
+
+    include!("sccp_replay/replica_fetch_boundary_tests.rs");
 }

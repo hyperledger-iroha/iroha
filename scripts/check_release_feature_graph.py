@@ -60,6 +60,22 @@ NATIVE_ARTIFACT_WORKFLOWS = (
     Path(".github/workflows/mobile_sdk_artifacts.yml"),
     Path(".github/workflows/sorafs-orchestrator-sdk.yml"),
 )
+# This exact build produces a test subprocess used by core-jvm's
+# FixtureGeneratorRunner through IROHA_KOTLIN_FIXTURE_GEN_BIN. The reviewed
+# workflow uploads the native ABI manifest and test reports, not this binary.
+# Keep this classification scoped to the sealed consumer declaration and exact
+# Cargo command; selecting the same package anywhere else remains shipping and
+# therefore fails the positive shipping policy below.
+NONSHIPPING_WORKFLOW_BUILD_COMMANDS = {
+    Path(".github/workflows/sorafs-orchestrator-sdk.yml"): frozenset({
+        (
+            "cargo", "build", "--locked", "--offline", "--release",
+            "-p", "kotlin-fixture-gen", "--features", "dev-tools",
+            "--bin", "kotlin-fixture-gen", "--target", "$target",
+            "--target-dir", "$native_root/cargo-target",
+        ),
+    }),
+}
 NATIVE_BRIDGE_BUILD_SCRIPT = Path("scripts/build_norito_xcframework.sh")
 NATIVE_BRIDGE_CALLER_WORKFLOWS = (
     Path(".github/workflows/mobile_sdk_artifacts.yml"),
@@ -112,7 +128,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "cfd9ab48a51191a916381e74c092eee075dcfd4ffbacd9ef656c0e616e153a2f"
+    "803b6cb43a720c0834a5855df38bcda9b48f0b16df616cdb8ad3747407db3eec"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -210,7 +226,6 @@ SHIPPING_ROOT_FEATURE_ALLOWLIST = {
     ),
     "ivm": frozenset(),
     "sorafs_car": frozenset({"cli", "default", "manifest"}),
-    "sorafs_manifest": frozenset({"default", "pqc"}),
     "sorafs_orchestrator": frozenset({"cli-orchestrator", "default"}),
 }
 REQUIRED_FEATURES = {
@@ -2277,6 +2292,8 @@ def cargo_shipping_targets(
     source = (repo / relative).read_text(encoding="utf-8")
     targets: list[ShippingTarget] = []
     for command in _workflow_build_commands(source):
+        if command in NONSHIPPING_WORKFLOW_BUILD_COMMANDS.get(relative, ()):
+            continue
         packages = _option_values(command, "-p", "--package")
         binaries = _option_values(command, "--bin")
         if len(packages) != 1:

@@ -166,29 +166,23 @@ public sealed record class ToriiAccountOnboardingPlanReceipt
     public string Signature { get; init; } = string.Empty;
 }
 
-/// <summary>Exact public-reset mutation identity committed by a prepared transaction.</summary>
+/// <summary>Exact public operation identity committed by a prepared transaction.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record class ToriiTairaPublicResetMutationBindingV1
+public sealed record class ToriiPreparedOperationBindingV1
 {
-    public const string SchemaV1 = "iroha.taira.public-reset.mutation-binding.v1";
+    public const string SchemaV1 = "iroha.prepared-operation.binding.v1";
 
     [JsonRequired, JsonPropertyName("schema")]
     public string Schema { get; init; } = SchemaV1;
 
-    [JsonRequired, JsonPropertyName("authorization_sha256")]
-    public string AuthorizationSha256 { get; init; } = string.Empty;
-
-    [JsonRequired, JsonPropertyName("authorization_nonce")]
-    public string AuthorizationNonce { get; init; } = string.Empty;
+    [JsonRequired, JsonPropertyName("semantic_hash_hex")]
+    public string SemanticHashHex { get; init; } = string.Empty;
 
     [JsonRequired, JsonPropertyName("kind")]
     public string Kind { get; init; } = string.Empty;
 
-    [JsonRequired, JsonPropertyName("phase")]
-    public string Phase { get; init; } = string.Empty;
-
-    [JsonRequired, JsonPropertyName("idempotency_key")]
-    public string IdempotencyKey { get; init; } = string.Empty;
+    [JsonRequired, JsonPropertyName("request_id")]
+    public string RequestId { get; init; } = string.Empty;
 
     [JsonRequired, JsonPropertyName("execution_expires_at_unix_ms")]
     public ulong ExecutionExpiresAtUnixMilliseconds { get; init; }
@@ -201,7 +195,7 @@ public sealed record class ToriiAccountOnboardingPrepareRequestV1
     public const string SchemaV1 = "iroha.accounts.onboard.prepare.v1";
 
     public ToriiAccountOnboardingPrepareRequestV1(
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         ToriiAccountOnboardingPlanReceipt receipt,
         FeePaymentIntent feePayment)
         : this(SchemaV1, binding, receipt, feePayment)
@@ -211,7 +205,7 @@ public sealed record class ToriiAccountOnboardingPrepareRequestV1
     [JsonConstructor]
     public ToriiAccountOnboardingPrepareRequestV1(
         string schema,
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         ToriiAccountOnboardingPlanReceipt receipt,
         FeePaymentIntent feePayment)
     {
@@ -232,7 +226,7 @@ public sealed record class ToriiAccountOnboardingPrepareRequestV1
     public string Schema { get; init; }
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; }
+    public ToriiPreparedOperationBindingV1 Binding { get; init; }
 
     [JsonRequired, JsonPropertyName("receipt")]
     public ToriiAccountOnboardingPlanReceipt Receipt { get; init; }
@@ -256,14 +250,14 @@ public sealed record class ToriiAccountOnboardingDisposition
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountOnboardingPreparedTransactionV1
 {
-    public const string SchemaV1 = "iroha.taira.prepared-transaction.v1";
+    public const string SchemaV1 = "iroha.prepared-transaction.v1";
     public const string OperationV1 = "onboarding";
 
     [JsonRequired, JsonPropertyName("schema")]
     public string Schema { get; init; } = SchemaV1;
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+    public ToriiPreparedOperationBindingV1 Binding { get; init; } = new();
 
     [JsonRequired, JsonPropertyName("operation")]
     public string Operation { get; init; } = OperationV1;
@@ -314,7 +308,7 @@ public sealed record class ToriiAccountOnboardingProofRequiredPrepareResponseV1
     public string Schema { get; init; } = SchemaV1;
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+    public ToriiPreparedOperationBindingV1 Binding { get; init; } = new();
 
     [JsonRequired, JsonPropertyName("operation")]
     public string Operation { get; init; } = OperationV1;
@@ -553,7 +547,7 @@ public sealed record class ToriiAccountFaucetPrepareRequestV1
     public const string SchemaV1 = "iroha.accounts.faucet.prepare.v1";
 
     public ToriiAccountFaucetPrepareRequestV1(
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         ToriiAccountFaucetClaimV1 claim,
         FeePaymentIntent feePayment)
         : this(SchemaV1, binding, claim, feePayment)
@@ -563,7 +557,7 @@ public sealed record class ToriiAccountFaucetPrepareRequestV1
     [JsonConstructor]
     public ToriiAccountFaucetPrepareRequestV1(
         string schema,
-        ToriiTairaPublicResetMutationBindingV1 binding,
+        ToriiPreparedOperationBindingV1 binding,
         ToriiAccountFaucetClaimV1 claim,
         FeePaymentIntent feePayment)
     {
@@ -584,7 +578,7 @@ public sealed record class ToriiAccountFaucetPrepareRequestV1
     public string Schema { get; init; }
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; }
+    public ToriiPreparedOperationBindingV1 Binding { get; init; }
 
     [JsonRequired, JsonPropertyName("claim")]
     public ToriiAccountFaucetClaimV1 Claim { get; init; }
@@ -597,14 +591,14 @@ public sealed record class ToriiAccountFaucetPrepareRequestV1
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountFaucetPreparedTransactionV1
 {
-    public const string SchemaV1 = "iroha.taira.prepared-transaction.v1";
+    public const string SchemaV1 = "iroha.prepared-transaction.v1";
     public const string OperationV1 = "faucet";
 
     [JsonRequired, JsonPropertyName("schema")]
     public string Schema { get; init; } = SchemaV1;
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+    public ToriiPreparedOperationBindingV1 Binding { get; init; } = new();
 
     [JsonRequired, JsonPropertyName("operation")]
     public string Operation { get; init; } = OperationV1;
@@ -647,13 +641,13 @@ public sealed record class ToriiAccountFaucetPreparedTransactionV1
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiPreparedTransactionSubmitResponseV1
 {
-    public const string SchemaV1 = "iroha.taira.prepared-transaction-submit.v1";
+    public const string SchemaV1 = "iroha.prepared-transaction-submit.v1";
 
     [JsonRequired, JsonPropertyName("schema")]
     public string Schema { get; init; } = SchemaV1;
 
     [JsonRequired, JsonPropertyName("binding")]
-    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+    public ToriiPreparedOperationBindingV1 Binding { get; init; } = new();
 
     [JsonRequired, JsonPropertyName("operation")]
     public string Operation { get; init; } = string.Empty;
@@ -6128,14 +6122,15 @@ public sealed record class ToriiContractCallRequest
     [JsonPropertyName("authority")]
     public string Authority { get; init; } = string.Empty;
 
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
 
     [JsonPropertyName("signature_b64")]
     public string? SignatureBase64 { get; init; }
+
+    /// <summary>Exact retained canonical transaction payload authorized by the detached signature.</summary>
+    [JsonPropertyName("transaction_payload_b64")]
+    public string? TransactionPayloadBase64 { get; init; }
 
     [JsonPropertyName("contract_address")]
     public string? ContractAddress { get; init; }

@@ -28,7 +28,6 @@ use iroha_core::privacy_engines::atomic_private_settlement::{
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    metadata::Metadata,
     nexus::{
         AtomicPrivateSettlementV1, PrivateSettlementAuditCapsuleV1, PrivateSettlementAuditPolicyV1,
         PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
@@ -37,6 +36,7 @@ use iroha_data_model::{
     privacy::PrivacyProtocolIdV1,
     transaction::FeePaymentIntent,
 };
+use iroha_model_base::metadata::Metadata;
 use rand_core_06::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use std::{

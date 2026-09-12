@@ -7,6 +7,7 @@
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
     compiler::validate_exact_registry_interfaces_v1,
+    compiler_identity::{local_package, registry_release},
     graph::collect_local_members,
     local_file::read_bounded_single_link_regular_file_v1,
     lockfile::{LockedRootV1, LockfileV1},
@@ -219,7 +220,12 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
         .map_err(|error| WorkspaceTestErrorV1::Workspace(error.to_string()))?;
     let local_identities = local_members
         .iter()
-        .map(|member| (member.manifest_path.clone(), local_identity(member)))
+        .map(|member| {
+            (
+                member.manifest_path.clone(),
+                local_package(&member.package.selector, &member.package.version),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     if local_identities.len() != local_members.len() {
         return Err(WorkspaceTestErrorV1::Workspace(
@@ -251,7 +257,7 @@ fn execute_workspace_tests_with_source<S: AuthenticatedTestRegistryV1>(
             )));
         }
         let package = source.load(node)?;
-        if package.identity != node.release.to_string() {
+        if package.identity != registry_release(&node.release) {
             return Err(WorkspaceTestErrorV1::Cache(format!(
                 "release `{}` loaded under package identity `{}`",
                 node.release, package.identity
@@ -465,12 +471,6 @@ fn registry_requirement(
         ))),
     }
 }
-fn local_identity(member: &WorkspaceMember) -> String {
-    format!(
-        "local:{}@{}",
-        member.package.selector, member.package.version
-    )
-}
 fn test_root_imports(
     member: &WorkspaceMember,
     root: &LockedRootV1,
@@ -542,7 +542,7 @@ fn dependency_import_identity(
             dependency.alias
         )));
     }
-    Ok(edge.selected.to_string())
+    Ok(registry_release(&edge.selected))
 }
 fn local_source_package(
     member: &WorkspaceMember,
@@ -579,7 +579,7 @@ fn local_source_package(
             .then_with(|| left.package.cmp(&right.package))
     });
     Ok(Some(SourcePackageUnit {
-        identity: local_identity(member),
+        identity: local_package(&member.package.selector, &member.package.version),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
         imports,
@@ -667,7 +667,7 @@ fn cached_source_package(
         )));
     }
     Ok(SourcePackageUnit {
-        identity: node.release.to_string(),
+        identity: registry_release(&node.release),
         modules,
         exports,
         imports: node
@@ -675,14 +675,14 @@ fn cached_source_package(
             .iter()
             .map(|edge| ImportBinding {
                 alias: edge.alias.to_string(),
-                package: edge.selected.to_string(),
+                package: registry_release(&edge.selected),
             })
             .collect(),
     })
 }
 fn validate_cached_manifest_edges(
     node: &MusubiVerificationNodeV1,
-    dependencies: &BTreeMap<iroha_data_model::name::Name, DependencySpec>,
+    dependencies: &BTreeMap<iroha_model_base::name::Name, DependencySpec>,
 ) -> Result<(), WorkspaceTestErrorV1> {
     if dependencies.len() != node.dependencies.len() {
         return Err(WorkspaceTestErrorV1::Cache(format!(
@@ -1173,14 +1173,12 @@ mod tests {
         lockfile::LockedRootV1,
         workspace::{Workspace, load_workspace},
     };
-    use iroha_data_model::{
-        musubi::{
-            ArchiveId, MusubiAbiBindingV1, MusubiContentDigestV1, MusubiPackageIdV1,
-            MusubiPackageScopeV1, MusubiRegistrySnapshotV1, MusubiReleaseDigestV1,
-            MusubiReleaseIdV1, MusubiVerificationNodeV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        ArchiveId, MusubiAbiBindingV1, MusubiContentDigestV1, MusubiPackageIdV1,
+        MusubiPackageScopeV1, MusubiRegistrySnapshotV1, MusubiReleaseDigestV1, MusubiReleaseIdV1,
+        MusubiVerificationNodeV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use ivm::kotodama::{
         linker::{ModuleBuildGraph, SourcePackageGraphRequest},
         session::CompilerSession,
@@ -1211,7 +1209,7 @@ mod tests {
         ) -> Result<SourcePackageUnit, WorkspaceTestErrorV1> {
             self.releases.borrow_mut().push(node.release.to_string());
             self.packages
-                .get(&node.release.to_string())
+                .get(&registry_release(&node.release))
                 .cloned()
                 .ok_or_else(|| {
                     WorkspaceTestErrorV1::Cache(format!(
@@ -1308,7 +1306,7 @@ path = "tests/unit.ko"
         imports: Vec<ImportBinding>,
     ) -> SourcePackageUnit {
         SourcePackageUnit {
-            identity: release.to_string(),
+            identity: registry_release(release),
             modules: vec![SourceModuleUnit {
                 source_name: "src/lib.ko".to_owned(),
                 source: source.to_owned(),
@@ -1478,7 +1476,7 @@ default-members = ["app"]
             &["truth"],
             vec![ImportBinding {
                 alias: "leaf".to_owned(),
-                package: leaf_release.to_string(),
+                package: registry_release(&leaf_release),
             }],
         );
         let package_units = vec![dep_unit.clone(), leaf_unit.clone()];

@@ -1,5 +1,6 @@
 #[derive(Clone)]
 struct BrokerServerStateV1 {
+    decode_pool: Arc<DecodeResourcePoolV1>,
     chain_id: String,
     network_id: NetworkId,
     catalog: Vec<ProviderBindingWireV1>,
@@ -337,36 +338,24 @@ fn make_server_observation(
             }
         }
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
-            let signer = server_backend!(backends, stream_token_signer);
-            let expected_key = binding
-                .stream_token_signer_public_key
+            // This is immutable routing metadata only. Torii separately authenticates fresh
+            // signed custody observations against its independent approved anchor and Core state.
+            let hardware = binding
+                .stream_token_hardware_binding
+                .as_ref()
                 .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            let public_key = signer.public_key();
-            let qualification = signer
-                .qualification()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            qualification
-                .validate()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            if signer.handle() != binding.handle
-                || !iroha_config::parameters::is_production_runtime_handle(signer.handle())
-                || public_key != expected_key
-                || binding.revision != Some(qualification.revision())
-                || binding.policy_digest != Some(qualification.policy_digest())
-            {
-                return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
-            }
-            let qualification_after = signer
-                .qualification()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            qualification_after
-                .validate()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            if signer.handle() != binding.handle
-                || signer.public_key() != public_key
-                || qualification_after != qualification
-            {
-                return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+            let client = server_backend!(backends, stream_token_hardware_client);
+            let observer = server_backend!(backends, stream_token_state_observer);
+            for _ in 0..2 {
+                let client_handle = client.handle();
+                let observer_handle = observer.handle();
+                if hardware.validate().is_err()
+                    || client_handle != hardware.custody().runtime_handle
+                    || observer_handle != hardware.observer_handle()
+                    || client_handle == observer_handle
+                {
+                    return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                }
             }
         }
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() => {
@@ -1497,7 +1486,9 @@ fn validate_exact_backend_set(
             && requested(IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore)
                 == backends.governance_dag_checkpoint_store.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
-                == backends.stream_token_signer.is_some()
+                == backends.stream_token_hardware_client.is_some()
+            && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
+                == backends.stream_token_state_observer.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission)
                 == backends.stream_token_gateway_admission.is_some()
             && requested(IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint)
@@ -1592,6 +1583,7 @@ fn validate_exact_backend_set(
 fn prepare_server_state(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<BrokerServerStateV1, RuntimeProviderBrokerServerErrorV1> {
     let catalog = bindings
         .iter()
@@ -1604,6 +1596,7 @@ fn prepare_server_state(
         .map(|binding| make_server_observation(binding, &backends))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BrokerServerStateV1 {
+        decode_pool,
         chain_id: bindings.chain_id().to_owned(),
         network_id: *bindings.network_id(),
         catalog,
@@ -1620,6 +1613,7 @@ fn prepare_server_state_for_lifecycle(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: &Arc<RuntimeProviderBrokerLifecycleV1>,
+    decode_pool: Arc<DecodeResourcePoolV1>,
 ) -> Result<BrokerServerStateV1, StartupQualificationErrorV1> {
     let catalog = bindings
         .iter()
@@ -1639,6 +1633,7 @@ fn prepare_server_state_for_lifecycle(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BrokerServerStateV1 {
+        decode_pool,
         chain_id: bindings.chain_id().to_owned(),
         network_id: *bindings.network_id(),
         catalog,
@@ -1757,14 +1752,33 @@ fn verify_peer_uid(observed_uid: u32, expected_uid: u32) -> Result<(), BrokerErr
     }
     Ok(())
 }
+#[cfg(test)]
 fn connect_verified(policy: &EndpointPolicy) -> Result<UnixStream, BrokerError> {
+    connect_verified_before(policy, BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?)
+}
+fn connect_verified_before(
+    policy: &EndpointPolicy,
+    deadline: BrokerDeadlineV1,
+) -> Result<UnixStream, BrokerError> {
+    deadline.remaining()?;
     let before = endpoint_identity(policy)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
+        .enable_time()
         .build()
         .map_err(|_| BrokerError::Unavailable)?;
+    deadline.remaining()?;
+    // Callers must enter this synchronous transport from a blocking worker. Connection backlog,
+    // peer credentials and the later handshake all consume the original exchange deadline.
     let asynchronous = runtime
-        .block_on(tokio::net::UnixStream::connect(&policy.path))
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline.expires_at()),
+                tokio::net::UnixStream::connect(&policy.path),
+            )
+            .await
+        })
+        .map_err(|_| BrokerError::Unavailable)?
         .map_err(|_| BrokerError::Unavailable)?;
     let peer_credentials = asynchronous
         .peer_cred()
@@ -1780,14 +1794,16 @@ fn connect_verified(policy: &EndpointPolicy) -> Result<UnixStream, BrokerError> 
     stream
         .set_nonblocking(false)
         .map_err(|_| BrokerError::Unavailable)?;
+    let remaining = deadline.remaining()?;
     stream
-        .set_read_timeout(Some(BROKER_IO_TIMEOUT_V1))
+        .set_read_timeout(Some(remaining))
         .map_err(|_| BrokerError::Unavailable)?;
     stream
-        .set_write_timeout(Some(BROKER_IO_TIMEOUT_V1))
+        .set_write_timeout(Some(remaining))
         .map_err(|_| BrokerError::Unavailable)?;
     Ok(stream)
 }
+
 fn configured_observation<'state>(
     state: &'state BrokerServerStateV1,
     binding: &ProviderBindingWireV1,

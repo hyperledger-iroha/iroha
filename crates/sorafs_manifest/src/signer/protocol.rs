@@ -6,6 +6,8 @@ use std::{fmt, str::FromStr};
 const SIGNER_MAX_ID_BYTES_V1: usize = 128;
 
 /// Signature algorithms admitted by the external signer V1 protocol.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerKeyAlgorithmV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
 pub enum SignerKeyAlgorithmV1 {
@@ -62,6 +64,8 @@ impl fmt::Display for SignerKeyAlgorithmV1 {
     }
 }
 /// Least-privilege signing domains served by the canonical hardware signer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerRoleV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
 pub enum SignerRoleV1 {
@@ -181,6 +185,8 @@ impl fmt::Display for SignerRoleV1 {
 /// The signer service validates this value itself, so an authenticated client
 /// cannot bypass the deployment adapter by submitting a structurally valid
 /// payload for a substituted publisher, provider, or issuer identity.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerPurposeBindingV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum SignerPurposeBindingV1 {
     /// Native transaction and promotion roles carry their authority in the
@@ -215,8 +221,11 @@ pub enum SignerPurposeBindingV1 {
     },
     /// Evidence-viewer authority is the binding handle and Ed25519 key.
     EvidenceViewer,
-    /// Stream-token authority is the binding handle and Ed25519 key.
-    StreamToken,
+    /// Exact provider whose stream tokens this hardware custody may sign.
+    StreamToken {
+        /// Nonzero provider identity authorized for the token body.
+        provider_id: [u8; 32],
+    },
     /// Exact governed `PoP` issuer identity.
     PopCredentials {
         /// Stable public `PoP` credential issuer identity.
@@ -236,8 +245,10 @@ impl SignerPurposeBindingV1 {
                 | SignerRoleV1::Promotion,
                 Self::NativeOrPromotion,
             )
-            | (SignerRoleV1::EvidenceViewer, Self::EvidenceViewer)
-            | (SignerRoleV1::StreamToken, Self::StreamToken) => true,
+            | (SignerRoleV1::EvidenceViewer, Self::EvidenceViewer) => true,
+            (SignerRoleV1::StreamToken, Self::StreamToken { provider_id }) => {
+                *provider_id != [0; 32]
+            }
             (SignerRoleV1::ReleaseManifest, Self::ReleaseManifest { deployment_id }) => {
                 valid_identity(deployment_id)
             }
@@ -297,6 +308,8 @@ const INTENT_DOMAIN: &[u8] = b"iroha.sorafs.signer.operation.intent.v1";
 /// Ordinary service actions admitted by the operation boundary.
 ///
 /// Terminal administrative transitions are deliberately not ordinary active-key operations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationActionV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum SignerOperationActionV1 {
     /// One role-authorized payload signature and its audit/provenance/response.
@@ -312,6 +325,8 @@ pub enum SignerOperationActionV1 {
 }
 
 /// Exactly one ordered sub-signature within an aggregate reserved action.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerKeyOperationPurposeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum SignerKeyOperationPurposeV1 {
     /// Validated exact role-specific signing bytes.
@@ -325,6 +340,8 @@ pub enum SignerKeyOperationPurposeV1 {
 }
 
 /// Independently expected audit predecessor or successor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationAuditHeadV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationAuditHeadV1 {
     /// Monotonic audit record sequence; zero only before genesis.
@@ -344,6 +361,8 @@ impl SignerOperationAuditHeadV1 {
 }
 
 /// Exact service action admitted before any provider I/O.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationIntentV1")]
 #[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationIntentV1 {
     /// Exact aggregate action, determining the required sub-signature sequence.
@@ -384,6 +403,8 @@ impl fmt::Debug for SignerOperationIntentV1 {
 ///
 /// Possession of this value does not authorize signing: all provider requests are privately
 /// constructed and the source must authenticate its exact ownership on every reserved observation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationReservationV1")]
 #[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationReservationV1 {
     /// Unique nonzero durable reservation id.
@@ -403,6 +424,8 @@ impl fmt::Debug for SignerOperationReservationV1 {
 }
 
 /// Public commitments prepared internally by the service before authoritative completion CAS.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationCommitmentV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationCommitmentV1 {
     /// The exact next immutable audit record, persisted before completion can be acknowledged.
@@ -416,6 +439,8 @@ pub struct SignerOperationCommitmentV1 {
 /// The complete record digest commits chain, network, role, key, opaque handle and key/policy
 /// generations. The control-state digest additionally fences changes that preserve the same
 /// record. These are public claims until compared with an independently verified observation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationCustodyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationCustodyV1 {
     /// Exact independently qualified record used by the original operation.
@@ -448,6 +473,8 @@ impl SignerOperationCommitmentV1 {
 pub const SIGNER_RELEASE_MANIFEST_MAX_BYTES_V1: usize = 1024 * 1024;
 
 /// Exact released sub-signature, bound to its ordered semantic purpose and message digest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::protocol::SignerOperationSignatureV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerOperationSignatureV1 {
     /// Position-specific signing purpose.
@@ -587,3 +614,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "protocol/stream_token_purpose_tests.rs"]
+mod stream_token_purpose_tests;
+
+#[cfg(test)]
+include!("protocol/captured_owner_identity_tests.rs");

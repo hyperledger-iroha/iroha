@@ -959,6 +959,29 @@ fn run_lifecycle_active_height(
                             directive.tag(),
                             directive.decided_subject(),
                         )?;
+                        if let Some(_permit) = producer_claim
+                            .decided_validate_sidecar_recovery_permit(
+                                directive.decided_subject().is_some(),
+                            )
+                        {
+                            // The registered Validate owns the stored body and
+                            // its missing sidecar. Drain one exact decided
+                            // ingress occurrence without releasing that owner:
+                            // queued replica adverts and redundant body traffic
+                            // otherwise retain receive capacity needed by the
+                            // sidecar reply itself. The drain rechecks Decision
+                            // and preserves durable ingress terminal ownership.
+                            drain_decided_lane_recovery_ingress(
+                                receiver,
+                                executor,
+                                services,
+                                &mut lane_work,
+                                directive.tag().view(),
+                                kura.as_ref(),
+                                block_sync_server,
+                                DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+                            )?;
+                        }
                     }
                     if producer_claim.permits_decided_lane_recovery_ingress() {
                         let permit =
@@ -1439,9 +1462,7 @@ fn run_lifecycle_active_height(
             return Err(V2RunnerError::RestartRequired);
         }
 
-        if !terminal_planning_fenced
-            && pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)
-        {
+        if !terminal_planning_fenced {
             let active_view = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, _services, _local_proposal| {
@@ -1450,8 +1471,12 @@ fn run_lifecycle_active_height(
                         .map(|directive| directive.tag().view())
                 },
             )?;
-            if !lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)? {
-                pending_queue_plan_admission_dirty.store(true, Ordering::Release);
+            if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)
+                || lane_work.queue_plan_admission_handoffs_need_refresh(active_view)?
+            {
+                // Pending capacity and a changed view are explicit handoff
+                // states. A coalesced arrival is only an inventory wakeup.
+                lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)?;
             }
         }
 
@@ -1611,8 +1636,8 @@ fn run_lifecycle_active_height(
             };
             // Completion can publish a fresh exact-output source after the
             // top-of-loop sample. Recheck after preflight and immediately
-            // before closure so transient backpressure cannot enter the
-            // restart-closed finalized-output drain.
+            // before closure. Independently durable output can release capacity
+            // here; remaining lane-owned output crosses the final handoff.
             let _ = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
@@ -1679,7 +1704,7 @@ fn run_lifecycle_active_height(
             let cut = terminal_finalization_cut
                 .as_ref()
                 .expect("rollover-ready closure authenticated the terminal cut above");
-            let terminal_exact_output_pending = activated.with_runner_runtime(
+            let _ = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
                     reconcile_terminal_lane_output_handoffs(
@@ -1690,10 +1715,11 @@ fn run_lifecycle_active_height(
                     )
                 },
             )?;
-            if terminal_exact_output_pending {
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
-                continue;
-            }
+            // The finite ingress prefix must drain, but delivery to every peer
+            // is not a finality condition. The consuming rollover below owns
+            // exact output until its receipt- and lane-authenticated durable
+            // reconstruction handoff succeeds. Waiting for the network here
+            // would prevent that handoff when a validator is offline.
             if drained_terminal_ingress || drained_terminal_relay {
                 continue;
             }
@@ -1863,6 +1889,7 @@ fn run_lifecycle_active_height(
 /// authority here after finalization.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn run_non_pending_lifecycle_loop(
+    build_identity: crate::release_identity::BuildIdentity,
     config: iroha_config::parameters::actual::Sumeragi,
     common_config: iroha_config::parameters::actual::Common,
     events_sender: crate::EventsSender,
@@ -1940,7 +1967,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             .map_err(ingress_capacity_error)?;
         super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
         let shared_config = config.v2_config(block_cadence, context.mode)?;
-        let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
+        let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
         let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
         let body_queue_capacity = usize::try_from(shared_config.limits.body_queue_capacity)?;
         let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;

@@ -43,7 +43,6 @@ use iroha_data_model::{
         pin_intent::DaPinIntent,
         prelude::*,
     },
-    nexus::LaneId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{ManifestDigest, StorageClass},
@@ -51,6 +50,7 @@ use iroha_data_model::{
     taikai::TaikaiSegmentWindow,
 };
 use iroha_logger::{error, warn};
+use iroha_model_base::topology::LaneId;
 use iroha_torii_shared::da::sampling::compute_sample_window;
 #[cfg(feature = "ipa-commitment")]
 use iroha_zkp_halo2::pallas::{
@@ -3923,7 +3923,8 @@ fn with_status(mut response: Response, status: StatusCode) -> Response {
     *response.status_mut() = status;
     response
 }
-#[derive(JsonSerialize, norito::derive::NoritoSerialize)]
+#[derive(JsonSerialize, norito::derive::NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::ingest::DaIngestResponse")]
 struct DaIngestResponse {
     status: &'static str,
     duplicate: bool,

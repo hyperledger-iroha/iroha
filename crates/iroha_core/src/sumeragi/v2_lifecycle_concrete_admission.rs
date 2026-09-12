@@ -3,9 +3,8 @@
 use super::work_registry::{ConcreteLifecycleWork, RegistryPublicationError};
 use super::{
     AdmissionDecision, AdmissionRequest, CandidateAdmission, CoordinatorFault,
-    LifecycleCoordinator, LifecycleDigest, LifecyclePhase, LifecycleStageKind, LifecycleState,
-    LifecycleWorkClass, PredecessorScope, ProductionLifecycleOwnerV1, TurnLease, TurnOutcome,
-    WaitSource, WaitToken,
+    LifecycleCoordinator, LifecycleDigest, LifecycleStageKind, LifecycleState, LifecycleWorkClass,
+    PredecessorScope, ProductionLifecycleOwnerV1, TurnLease, TurnOutcome, WaitSource, WaitToken,
     body_pipeline_transition::durable_validate_payload_is_exact,
     projection::AdapterEffectAdmissionError,
     schema::AttestedReadyValidateDemand,
@@ -491,8 +490,8 @@ pub(in crate::sumeragi) enum LifecycleOutputRegistryFailureV1 {
     InitialJoin,
     /// Fresh direct-output admission returned an impossible decision class.
     DirectAdmissionDecision,
-    /// Fresh direct-output admission returned an impossible retained-owner decision.
-    DirectAdmissionReturned,
+    /// Fresh direct-output admission returned this exact retained-owner decision.
+    DirectAdmissionReturned(AdmissionDecision),
     /// Fresh direct-output registration rejected the exact prepared owner.
     DirectAdmissionRegistry,
     /// The newly admitted or pre-existing Ready row did not rejoin exactly.
@@ -742,7 +741,7 @@ impl LifecycleCoordinator {
             || self.active_lease.is_some()
             || record.ordinal != ordinal
             || record.work_class != LifecycleWorkClass::Validate
-            || record.key.phase() != LifecyclePhase::Validate
+            || !record.key.phase().is_validate()
             || record.stage.kind() != LifecycleStageKind::ValidateBody
             || record.stage.predecessor_scope() != PredecessorScope::Independent
             || record.physical_slots.len() != 1
@@ -1485,7 +1484,9 @@ impl ProductionLifecycleOwnerV1 {
                             | AdmissionDecision::FailClosed(_) => {
                                 ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                                     failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
-                                        LifecycleOutputRegistryFailureV1::DirectAdmissionReturned,
+                                        LifecycleOutputRegistryFailureV1::DirectAdmissionReturned(
+                                            decision,
+                                        ),
                                     ),
                                     pending,
                                 }
@@ -1612,23 +1613,6 @@ impl ProductionLifecycleOwnerV1 {
             )
     }
 
-    /// Authenticate whether one pending CommitQC output is immediately before
-    /// or after the exact Ready live Apply.
-    #[allow(single_use_lifetimes)]
-    pub(in crate::sumeragi) fn classify_lifecycle_decision_apply_pending_output_census<'a>(
-        &self,
-        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
-    ) -> Option<LifecycleDecisionApplyPendingOutputCensusV1> {
-        self.registry
-            .registry()
-            .classify_lifecycle_decision_apply_pending_output_census(
-                &self.coordinator,
-                authority,
-                pending_outputs,
-            )
-    }
-
     /// Authenticate one pending CommitQC output and retain a structural failure category.
     #[allow(single_use_lifetimes)]
     pub(in crate::sumeragi) fn try_classify_lifecycle_decision_apply_pending_output_census<'a>(
@@ -1724,7 +1708,7 @@ fn waiting_durable_validate_record_is_exact(
         && record.owner == authority.owner()
         && record.key == authority.lifecycle_key()
         && record.work_class == LifecycleWorkClass::Validate
-        && record.key.phase() == LifecyclePhase::Validate
+        && record.key.phase().is_validate()
         && record.stage == authority.lifecycle_stage()
         && record.stage.kind() == LifecycleStageKind::ValidateBody
         && record.stage.predecessor_scope() == PredecessorScope::Independent
@@ -1854,7 +1838,7 @@ fn claimed_durable_validate_record_is_exact(
         && record.key == lease.key()
         && record.work_class == LifecycleWorkClass::Validate
         && record.work_class == lease.work_class()
-        && record.key.phase() == LifecyclePhase::Validate
+        && record.key.phase().is_validate()
         && record.stage == lease.stage()
         && record.stage.kind() == LifecycleStageKind::ValidateBody
         && record.stage.predecessor_scope() == PredecessorScope::Independent
@@ -2013,10 +1997,8 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
-    use iroha_data_model::{
-        block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire},
-        peer::PeerId,
-    };
+    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock, consensus_v2 as wire};
+    use iroha_model_base::peer::PeerId;
     use std::{cell::Cell, num::NonZeroU64};
     use tempfile::TempDir;
     struct Fixture {
@@ -3103,6 +3085,219 @@ mod tests {
                 format!("{:?}", owner.registry.registry()),
                 terminal_registry
             );
+        });
+    }
+
+    #[test]
+    fn terminal_signed_outputs_rejoin_after_durable_restart() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let AdapterEffect::Broadcast(message) = fixture.effect(0xE1) else {
+                unreachable!("fixture emits a Broadcast")
+            };
+            let wire::ConsensusMessageV2Payload::Vote(vote) = message.payload else {
+                unreachable!("fixture emits a Vote")
+            };
+            let outputs = [
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(fixture.quorum_certificate(
+                        wire::GlobalPhase::Prepare,
+                        vote.subject,
+                        0xE1,
+                    )),
+                )),
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(fixture.quorum_certificate(
+                        wire::GlobalPhase::Commit,
+                        vote.subject,
+                        0xE1,
+                    )),
+                )),
+                fixture.timeout_certificate_effect(vec![0, 1, 2]),
+            ];
+            for effect in outputs {
+                let AdapterEffect::Broadcast(message) = &effect else {
+                    unreachable!("all fixtures are signed Broadcasts")
+                };
+                fixture
+                    .verified
+                    .verify_consensus_message(message)
+                    .expect("the complete replay source is roster authenticated");
+                let root = TempDir::new().expect("temporary cold terminal output ledger");
+                let mut owner = fixture.production_owner(64);
+                owner
+                    .coordinator
+                    .attach_empty_test_ledger(root.path())
+                    .expect("attach the initial durable ledger");
+                owner
+                    .coordinator
+                    .bind_test_lifecycle_ordinal_authority()
+                    .expect("bind the initial scheduler ordinal owner");
+                assert!(matches!(
+                    owner.settle_lifecycle_output_admission(
+                        fixture.output_pending(effect.clone(), 0xE1),
+                        |_, _| Ok::<_, &'static str>(LifecycleOutputServiceDispositionV1::Accepted),
+                    ),
+                    ProductionLifecycleOutputAdmissionSettlementV1::Completed
+                ));
+                let authority = owner.coordinator.episode_authority.clone();
+                let ledger_path = root.path().join("lifecycle-ledger-v1.norito");
+                let terminal_bytes =
+                    std::fs::read(&ledger_path).expect("read the fsynced terminal frame");
+                drop(owner);
+
+                let stores = TempDir::new().expect("temporary cold recovery stores");
+                let body_store =
+                    V2BodyStore::open(stores.path().join("body"), fixture.context.clone())
+                        .expect("open the real empty body store");
+                let (mut payload_store, payloads) = crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                    &stores.path().join("payload"), &fixture.context,
+                ).expect("open the real empty payload store");
+                let payloads = payloads
+                    .authenticate(&fixture.verified, &fixture.keys[0], &body_store)
+                    .expect("authenticate the empty payload recovery cut");
+                let recovery = super::super::open::AuthenticatedLifecycleRecoveryCut::open_empty_for_recovered_wal_test(
+                    &fixture.verified, root.path(), payloads,
+                ).expect("decode the exact durable terminal frame");
+                let mut recovered = LifecycleCoordinator::open_with_authority(
+                    authority,
+                    root.path(),
+                    &mut payload_store,
+                    recovery,
+                )
+                .expect("run the production coordinator restart reconstruction");
+                recovered
+                    .bind_test_lifecycle_ordinal_authority()
+                    .expect("bind the recovered scheduler ordinal owner");
+                assert_eq!(recovered.records.len(), 1);
+                let record = &recovered.records[&1];
+                assert_eq!(
+                    record.state,
+                    LifecycleState::Terminal(super::super::TerminalOutcome::Advanced)
+                );
+                assert!(record.physical_slots.is_empty());
+                assert!(record.episode.slot_universe.is_empty());
+                assert!(record.episode.consumed_slots.is_empty());
+                let mut owner = fixture.production_owner(64);
+                owner.coordinator = recovered;
+                assert!(matches!(
+                    owner.settle_lifecycle_output_admission(
+                        fixture.output_pending(effect.clone(), 0xE2),
+                        |_, _| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
+                            panic!(
+                                "an ordinary cold terminal duplicate must not repeat service I/O"
+                            )
+                        },
+                    ),
+                    ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+                ));
+                let calls = Cell::new(0);
+                assert!(matches!(
+                    owner.settle_lifecycle_output_admission(
+                        fixture.periodic_retransmit_output_pending(effect.clone(), 0xE3),
+                        |observed, ownership| {
+                            assert_eq!(observed, &effect);
+                            assert!(
+                                ownership.exactly_binds_periodic_retransmit_broadcast(observed)
+                            );
+                            calls.set(calls.get() + 1);
+                            Ok::<_, &'static str>(LifecycleOutputServiceDispositionV1::Accepted)
+                        },
+                    ),
+                    ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+                ));
+                assert_eq!(calls.get(), 1);
+                assert_eq!(owner.coordinator.high_water(), 1);
+                assert!(owner.registry.registry().is_empty());
+                assert_eq!(std::fs::read(&ledger_path).unwrap(), terminal_bytes);
+
+                let slot = PhysicalSlotId::for_capacity(super::super::CapacityClass::Effect, 0);
+                owner
+                    .coordinator
+                    .records
+                    .get_mut(&1)
+                    .unwrap()
+                    .episode
+                    .slot_universe
+                    .insert(slot);
+                for (pending, periodic) in [
+                    (fixture.output_pending(effect.clone(), 0xE4), false),
+                    (
+                        fixture.periodic_retransmit_output_pending(effect.clone(), 0xE5),
+                        true,
+                    ),
+                ] {
+                    let execution = pending.into_existing_execution();
+                    assert!(matches!(
+                        owner
+                            .registry
+                            .join_lifecycle_output(&owner.coordinator, &execution),
+                        Ok(LifecycleOutputRegistryJoinV1::Missing)
+                    ));
+                    // Invalid physical geometry grants no output-service authority.
+                    // An ordinary fixture keeps the original causal root and
+                    // terminal-stutters; the periodic root is foreign to that row.
+                    let settlement = owner.settle_lifecycle_output_admission(
+                        execution.into_pending(),
+                        |_, _| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
+                            panic!("partial terminal geometry cannot authorize service")
+                        },
+                    );
+                    let expected = if periodic {
+                        matches!(
+                            &settlement,
+                            ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                                failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                                    LifecycleOutputRegistryFailureV1::DirectAdmissionReturned(
+                                        AdmissionDecision::Rejected(
+                                            super::super::AdmissionRejection::ForeignOwner
+                                        )
+                                    )
+                                ),
+                                ..
+                            }
+                        )
+                    } else {
+                        matches!(
+                            &settlement,
+                            ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+                        )
+                    };
+                    assert!(
+                        expected,
+                        "unexpected partial-geometry result, periodic={periodic}: {settlement:?}"
+                    );
+                    assert_eq!(calls.get(), 1);
+                    assert!(owner.registry.registry().is_empty());
+                    assert_eq!(owner.coordinator.high_water(), 1);
+                    assert_eq!(std::fs::read(&ledger_path).unwrap(), terminal_bytes);
+                }
+                owner
+                    .coordinator
+                    .records
+                    .get_mut(&1)
+                    .unwrap()
+                    .episode
+                    .slot_universe
+                    .clear();
+                if let AdapterEffect::Broadcast(mut message) = effect
+                    && let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+                        &mut message.payload
+                {
+                    certificate.aggregate_signature.push(0xFF);
+                    assert!(matches!(
+                        owner.settle_lifecycle_output_admission(
+                            fixture.output_pending(AdapterEffect::Broadcast(message), 0xE6),
+                            |_, _| -> Result<LifecycleOutputServiceDispositionV1, &'static str> {
+                                panic!("changed signed source cannot rejoin a terminal row")
+                            },
+                        ),
+                        ProductionLifecycleOutputAdmissionSettlementV1::Failed { .. }
+                    ));
+                }
+                assert_eq!(std::fs::read(&ledger_path).unwrap(), terminal_bytes);
+                assert_eq!(owner.coordinator.high_water(), 1);
+            }
         });
     }
 

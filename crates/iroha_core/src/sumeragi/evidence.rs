@@ -20,8 +20,8 @@ use iroha_data_model::{
     },
     consensus::NposPenaltyAction,
     nexus::PublicLaneValidatorRecord,
-    prelude::PeerId,
 };
+use iroha_model_base::peer::PeerId;
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
 /// Maximum exact Sumeragi v2 equivocation proofs admitted by one block.
@@ -1312,9 +1312,10 @@ mod tests {
         NetworkId,
         block::BlockHeader,
         parameter::{Parameter, Parameters, system::SumeragiNposParameters},
-        peer::PeerId,
-        prelude::{AccountId, ChainId},
+        prelude::AccountId,
     };
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::peer::PeerId;
     use mv::cell::Cell;
     fn test_network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1821,7 +1822,7 @@ mod tests {
     fn add_v2_penalty_validator(state: &State, peer: &PeerId) {
         super::super::penalties::seed_penalty_validator_for_tests(
             state,
-            iroha_data_model::nexus::LaneId::SINGLE,
+            iroha_model_base::topology::LaneId::SINGLE,
             peer,
             iroha_primitives::numeric::Quantity::from(100_u64),
         );
@@ -1849,7 +1850,7 @@ mod tests {
         evidence_records.commit();
 
         let validator = AccountId::new(offender.public_key().clone());
-        let validator_key = (iroha_data_model::nexus::LaneId::SINGLE, validator);
+        let validator_key = (iroha_model_base::topology::LaneId::SINGLE, validator);
         let mut validators = state.world.public_lane_validators.block();
         let mut malformed = validators
             .get(&validator_key)
@@ -3008,7 +3009,7 @@ mod tests {
                 evidence_key: key,
                 signer: 1,
                 peer_id: peer.clone(),
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                lane_id: iroha_model_base::topology::LaneId::SINGLE,
                 validator: iroha_data_model::account::AccountId::new(peer.public_key().clone()),
                 slash_id: key,
                 amount: iroha_primitives::numeric::Quantity::from(1_u64),

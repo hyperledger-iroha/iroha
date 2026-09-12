@@ -1,5 +1,6 @@
 use super::*;
 include!("moderation_canonical_quarantine_tests.rs");
+include!("moderation/quarantine_plaintext_tests.rs");
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
     MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -977,10 +978,10 @@ fn moderation_quarantine_wrap_and_unwrap_discard_outputs_on_provider_drift() {
         test_key_wrapper(0x85, "software://sorafs/moderation/drifting-unwrap"),
         QualificationDriftTrigger::Unwrap,
     );
-    assert_eq!(
+    assert!(matches!(
         open_moderation_quarantine_object(&envelope, &record, &binding, &unwrapping),
         Err(ModerationQuarantineObjectError::KeyWrapperUnqualified)
-    );
+    ));
 }
 #[test]
 fn moderation_quarantine_discards_wrap_output_when_active_key_changes() {
@@ -1128,7 +1129,7 @@ fn moderation_quarantine_object_seal_open_preserves_object_id() {
     assert_eq!(envelope.object_id, expected_object_id);
     let opened = open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper)
         .expect("open object");
-    assert_eq!(opened, payload);
+    assert_eq!(opened.as_slice(), payload);
 }
 #[test]
 fn moderation_quarantine_key_operation_errors_are_stable_and_payload_free() {
@@ -1363,8 +1364,8 @@ fn moderation_quarantine_object_authenticates_ranges_and_chunk_order() {
         open_moderation_quarantine_object_range(&envelope, &record, &binding, &wrapper, start..end)
             .expect("open authenticated cross-chunk range");
     assert_eq!(
-        opened,
-        payload[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()]
+        opened.as_slice(),
+        &payload[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()]
     );
     let mut reordered = envelope.clone();
     reordered.chunks.swap(0, 1);
@@ -1493,7 +1494,8 @@ fn moderation_quarantine_object_rewrap_keeps_ciphertext_and_identity_stable() {
             &binding,
             &replacement_wrapper,
         )
-        .expect("open rewrapped object"),
+        .expect("open rewrapped object")
+        .as_slice(),
         payload
     );
     assert!(matches!(
@@ -1543,6 +1545,10 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         })
         .expect("restore registry at boundary");
     let registry_before = registry.snapshot();
+    crate::frame_test_support::assert_current_frame(
+        &registry_before,
+        "sorafs_node::moderation::ModerationModelRegistrySnapshot",
+    );
     let mut second_repro = repro.clone();
     second_repro.manifest_id = [4; 16];
     assert!(matches!(
@@ -1574,6 +1580,10 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         ModerationQuarantineObjectError::ResourceExhausted { .. }
     ));
     let objects_before = objects.snapshot();
+    crate::frame_test_support::assert_current_frame(
+        &objects_before,
+        "sorafs_node::moderation::ModerationQuarantineObjectSnapshot",
+    );
     assert!(matches!(
         objects
             .restore_snapshot(ModerationQuarantineObjectSnapshot {
@@ -1613,6 +1623,33 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         ModerationEvidenceViewerError::ResourceExhausted { .. }
     ));
     let viewer_before = viewer.snapshot();
+    let report = moderation_evidence_viewer_audit_report_from_snapshot(
+        ModerationEvidenceViewerAuditReportInput {
+            report_scope: "local-frame-boundary".to_owned(),
+            window_start_unix: 1_800_000_000,
+            window_end_unix: 1_800_000_300,
+            generated_at_unix: 1_800_000_301,
+            policy_digest: Some([0xA9; 32]),
+            raw_evidence_included: false,
+            raw_access_logs_included: false,
+            viewer_accounts_included: false,
+            signed_urls_included: false,
+            session_tokens_included: false,
+            response_bodies_included: false,
+        },
+        &viewer_before,
+    )
+    .expect("aggregate audit report from actual accepted session and access");
+    report.validate().expect("current report semantics");
+    assert_eq!(report.access_event_count, 1);
+    crate::frame_test_support::assert_current_frame(
+        &report,
+        "sorafs_node::moderation::ModerationEvidenceViewerAuditReport",
+    );
+    crate::frame_test_support::assert_current_frame(
+        &viewer_before,
+        "sorafs_node::moderation::ModerationEvidenceViewerSnapshot",
+    );
     let mut extra_session = viewer_before.sessions[0].clone();
     extra_session.session_id = [9; 16];
     let mut over_limit_viewer = viewer_before.clone();
@@ -1643,6 +1680,10 @@ fn authoritative_moderation_collections_refuse_over_limit_without_replacement() 
         ModerationScreeningError::ResourceExhausted { .. }
     ));
     let screening_before = screening.snapshot();
+    crate::frame_test_support::assert_current_frame(
+        &screening_before,
+        "sorafs_node::moderation::ModerationScreeningSnapshot",
+    );
     let mut extra_screening = screening_before.screening_records[0].clone();
     extra_screening.record_id = [8; 16];
     let mut over_limit_screening = screening_before.clone();
@@ -1736,3 +1777,5 @@ fn moderation_read_views_bound_clones_before_response_materialization() {
             .is_some()
     );
 }
+
+include!("moderation/schema_identity_tests.rs");

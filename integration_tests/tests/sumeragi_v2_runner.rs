@@ -24,7 +24,6 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
-        peer::PeerId,
         prelude::FindAccountById,
         query::{
             block::prelude::FindBlocks,
@@ -34,6 +33,7 @@ use iroha::{
         transaction::Executable,
     },
 };
+use iroha_model_base::peer::PeerId;
 use iroha_test_network::{
     ConsensusMessageControlAck, ConsensusMessageControlAction, ConsensusMessageControlKind,
     ConsensusMessageControlRule, NetworkBuilder, NetworkPeer, ObserverP2pBootstrap,
@@ -813,6 +813,7 @@ fn distinct_prepare_qc_receiver_rules(
 }
 #[cfg(test)]
 mod prepare_qc_split_tests {
+    use iroha_model_base::peer::PeerId;
     include!("sumeragi_v2_runner/prepare_qc_split_tests.rs");
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1072,7 +1073,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             validate_applied_successor_witness(snapshot, LOCKED_REPROPOSAL_HEIGHT)?;
         }
         let proof = fetch_bridge_finality_proof(&validators[0], LOCKED_REPROPOSAL_HEIGHT).await?;
-        verify_bridge_finality_proof(&proof, &network.client().client().network_id)
+        verify_bridge_finality_proof(&proof, network.client().client().network_id())
             .wrap_err("recovered block finality proof failed cryptographic validation")?;
         let committed_hashes = try_join_all(all_participants.iter().map(|peer| {
             committed_hash_at_height(peer, LOCKED_REPROPOSAL_HEIGHT)
@@ -2806,7 +2807,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
             validate_exact_finality_proof(
                 peer,
                 proof,
-                &client.client().network_id,
+                client.client().network_id(),
                 height,
                 second_view,
                 &second_reference,
@@ -3287,11 +3288,11 @@ async fn fetch_bridge_finality_proof(
     let client = peer.client();
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join(&format!("v1/bridge/finality/{height}"))
         .wrap_err("construct bridge-finality URL")?;
     let response = reqwest::Client::builder()
-        .timeout(client.client().torii_request_timeout)
+        .timeout(client.client().torii_request_timeout())
         .build()
         .wrap_err("build bridge-finality HTTP client")?
         .get(url)

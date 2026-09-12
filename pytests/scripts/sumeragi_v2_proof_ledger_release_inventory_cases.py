@@ -2322,3 +2322,61 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
         errors = provider_errors(mutated_sources)
         assert len(errors) == 1
         assert name in errors[0] and SCRIPT.name in errors[0], errors
+
+
+def test_reviewed_rust_include_manifests_are_static_and_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_checker()
+    observed = {
+        Path(parent): tuple(Path(component) for component in components)
+        for parent, components in module._REVIEWED_RUST_INCLUDE_MANIFESTS.items()
+    }
+    assert observed == REVIEWED_RUST_INCLUDE_MANIFESTS
+    assert module._reviewed_rust_include_manifest_errors() == []
+
+    helper = module._RECURSIVE_REVIEWED_RUST_SOURCE
+    errors: list[str] = []
+    helper._validate_reviewed_rust_include_manifest(ROOT_DIR, errors)
+    assert errors == []
+
+    manifest_relative = helper.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE
+    canonical_path = ROOT_DIR / manifest_relative
+    canonical_pin = helper.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256
+    corrupted_pin = ("0" if canonical_pin[0] != "0" else "1") + canonical_pin[1:]
+    assert corrupted_pin != canonical_pin
+    with monkeypatch.context() as patch:
+        patch.setattr(helper, "REVIEWED_RUST_INCLUDE_MANIFEST_SHA256", corrupted_pin)
+        errors = []
+        helper._validate_reviewed_rust_include_manifest(ROOT_DIR, errors)
+        assert errors == [
+            f"{canonical_path}: reviewed Rust include manifest digest must equal "
+            f"{corrupted_pin}; found {canonical_pin}"
+        ]
+
+    source = canonical_path.read_text(encoding="utf-8")
+    component = "consensus_v2/messages.rs"
+    removed = f"        '{component}',\n"
+    assert source.count(removed) == 1
+    changed = source.replace(removed, "", 1)
+    assert changed != source
+    mutant_path = tmp_path / manifest_relative
+    mutant_path.parent.mkdir(parents=True, exist_ok=True)
+    mutant_path.write_text(changed, encoding="utf-8")
+    changed_manifest = dict(helper._REVIEWED_RUST_INCLUDE_MANIFESTS)
+    parent = "crates/iroha_data_model/src/block/consensus_v2.rs"
+    changed_manifest[parent] = tuple(
+        child for child in changed_manifest[parent] if child != component
+    )
+    changed_digest = hashlib.sha256(
+        json.dumps(
+            changed_manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+    ).hexdigest()
+    assert changed_digest != canonical_pin
+    errors = []
+    helper._validate_reviewed_rust_include_manifest(tmp_path, errors)
+    assert errors == [
+        f"{mutant_path}: reviewed Rust include manifest digest must equal "
+        f"{canonical_pin}; found {changed_digest}"
+    ]

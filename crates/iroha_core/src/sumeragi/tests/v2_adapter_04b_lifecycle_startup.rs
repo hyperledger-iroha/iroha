@@ -823,7 +823,13 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
     assert!(ingress_state.leader_wire_lifecycle_gate.is_none());
     drop(ingress_state);
     assert!(!output_guard.restart_required());
-    assert!(crate::sumeragi::status::v2_status().is_some());
+    assert_eq!(
+        crate::sumeragi::status::v2_status()
+            .expect("recovered startup publishes status")
+            .build_fingerprint,
+        fingerprints().build,
+        "recovery preserves the executable build identity"
+    );
     crate::sumeragi::status::clear_v2_status();
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
@@ -1230,7 +1236,13 @@ fn exercise_pending_kura_production_lifecycle(
         .unwrap_or_else(|error| panic!("activate exact pending Kura no-clock lifecycle: {error}"));
     assert!(ingress_ready.load(Ordering::Acquire));
     assert!(leader_wire_ingress.state.lock().open);
-    assert!(crate::sumeragi::status::v2_status().is_some());
+    assert_eq!(
+        crate::sumeragi::status::v2_status()
+            .expect("recovered startup publishes status")
+            .build_fingerprint,
+        fingerprints().build,
+        "recovery preserves the executable build identity"
+    );
     let mut active_runner =
         super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
     activated.with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
@@ -2655,7 +2667,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 assert!(!ingress_ready.load(Ordering::Acquire));
                 assert!(!leader_wire_ingress.state.lock().open);
                 assert!(!output_guard.restart_required());
-                assert!(crate::sumeragi::status::v2_status().is_some());
+                assert_eq!(
+                    crate::sumeragi::status::v2_status()
+                        .expect("recovered startup publishes status")
+                        .build_fingerprint,
+                    fingerprints().build,
+                    "recovery preserves the executable build identity"
+                );
                 crate::sumeragi::status::clear_v2_status();
                 continue;
             }

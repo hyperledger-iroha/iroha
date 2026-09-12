@@ -513,15 +513,14 @@ fn run_pending_active_height(
                 .map_err(V2RunnerError::LaneWork)
             },
         )?;
-        let terminal_exact_output_pending = reconcile_pending_kura_terminal_lane_output_handoffs(
+        let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
             &mut activated,
             &mut active_runner,
             control_queue_capacity,
         )?;
-        if terminal_exact_output_pending {
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
-            continue;
-        }
+        // Activation proves local Apply is complete. Retained network output
+        // must not block the recovery/preflight that authenticates its durable
+        // reconstruction owner; exact actor capacity still bounds admission.
         match activated
             .settle_recovered_lifecycle_output_for_no_clock_recovery(&mut active_runner)?
         {
@@ -544,7 +543,7 @@ fn run_pending_active_height(
                 }
             };
 
-        let (ready_to_finish, terminal_exact_output_pending) = match activated.with_runner_runtime(
+        let ready_to_finish = match activated.with_runner_runtime(
             &mut active_runner,
             |executor, services, lane_work| -> Result<_, V2RunnerError> {
                 retry_recovered_decision_fetch_if_due(
@@ -598,13 +597,12 @@ fn run_pending_active_height(
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
                 dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-                let terminal_exact_output_pending =
-                    retry_exact_output_and_apply_sidecar_admissions(
-                        lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
-                Ok((executor.ready_to_finish(), terminal_exact_output_pending))
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    lane_work,
+                    services,
+                    control_queue_capacity,
+                )?;
+                Ok(executor.ready_to_finish())
             },
         ) {
             Ok(readiness) => readiness,
@@ -614,9 +612,7 @@ fn run_pending_active_height(
                 return Err(error);
             }
         };
-        let ready = ready_to_finish
-            && !terminal_exact_output_pending
-            && !block_sync_server.has_pending_historical_body_serve();
+        let ready = ready_to_finish && !block_sync_server.has_pending_historical_body_serve();
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
@@ -701,16 +697,14 @@ fn run_pending_active_height(
                     dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
                     Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
                 })?;
-            let terminal_exact_output_pending =
-                reconcile_pending_kura_terminal_lane_output_handoffs(
-                    &mut activated,
-                    &mut active_runner,
-                    control_queue_capacity,
-                )?;
-            if terminal_exact_output_pending {
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
-                continue;
-            }
+            let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
+                &mut activated,
+                &mut active_runner,
+                control_queue_capacity,
+            )?;
+            // Rollover authenticates and hands off this exact retained output.
+            // Waiting for every remote recipient here would deadlock the local
+            // durable boundary after the finite ingress prefix has emptied.
             if block_sync_server.has_pending_historical_body_serve() {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;
@@ -865,6 +859,7 @@ fn run_pending_active_height(
 /// Recover one interrupted Kura tip without clocks, then enter the ordinary lifecycle loop.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn run_pending_kura_lifecycle_height(
+    build_identity: crate::release_identity::BuildIdentity,
     config: iroha_config::parameters::actual::Sumeragi,
     common_config: iroha_config::parameters::actual::Common,
     events_sender: crate::EventsSender,
@@ -949,7 +944,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         .map_err(ingress_capacity_error)?;
     super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
     let shared_config = config.v2_config(block_cadence, context.mode)?;
-    let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
+    let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
     let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
     let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;
     let certified_request_capacity =
@@ -1186,6 +1181,20 @@ pub(super) fn run_pending_kura_lifecycle_height(
         pending.into_clean_shutdown(activation)?;
         return Ok(());
     }
+    // Strict pending-tip recovery has consumed the exact Queue startup
+    // receipt before activating this height. Its successor must inherit that
+    // completed phase, rather than reconcile the same open Queue again.
+    // Emergency Fast never consumes that receipt and retains its quarantine.
+    let reservation_reconciliation_pending = if emergency_fast {
+        reservation_reconciliation_pending
+    } else {
+        if queue.lane_reservation_startup_reconciliation_pending() {
+            return Err(V2RunnerError::Service(
+                "pending Kura startup returned without completing Queue reconciliation".to_owned(),
+            ));
+        }
+        false
+    };
     let mut prepared = pending.prepare_lane_recovery(
         &mut setup_runner,
         &queue,
@@ -1268,6 +1277,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     };
 
     super::lifecycle_run_inner::run_non_pending_lifecycle_loop(
+        build_identity,
         config,
         common_config,
         events_sender,

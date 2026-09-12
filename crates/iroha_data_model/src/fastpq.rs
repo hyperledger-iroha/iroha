@@ -228,9 +228,8 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1")]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::fastpq::FastpqTransitionBatch",
     frame = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1"
@@ -389,7 +388,9 @@ pub struct TransferTranscriptBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, asset::id::AssetDefinitionId, domain::DomainId, name::Name};
+    use crate::{account::AccountId, asset::id::AssetDefinitionId};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use iroha_primitives::{bigint::BigInt, numeric::Numeric};
     use norito::codec::{Decode, Encode};
     use std::str::FromStr;
@@ -419,14 +420,14 @@ mod tests {
             permission_id: [0x22; 32],
             epoch: 9,
         };
-        let grant = FastpqOperationKind::RoleGrant(delta.clone()).encode();
-        let revoke = FastpqOperationKind::RoleRevoke(delta.clone()).encode();
+        let grant = FastpqOperationKind::RoleGrant(delta).encode();
+        let revoke = FastpqOperationKind::RoleRevoke(delta).encode();
         assert_eq!(&grant[..4], 35_u32.to_le_bytes().as_slice());
         assert_eq!(&revoke[..4], 36_u32.to_le_bytes().as_slice());
         assert_eq!(FastpqOperationKind::MetaSet.encode(), 37_u32.to_le_bytes());
         assert_eq!(
             FastpqOperationKind::decode(&mut grant.as_slice()).expect("decode role grant"),
-            FastpqOperationKind::RoleGrant(delta.clone())
+            FastpqOperationKind::RoleGrant(delta)
         );
         assert_eq!(
             FastpqOperationKind::decode(&mut revoke.as_slice()).expect("decode role revoke"),
@@ -487,11 +488,11 @@ mod tests {
             expected
         );
         assert_eq!(
-            <FastpqTransitionBatch as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<FastpqTransitionBatch>(),
             expected
         );
         assert_eq!(
-            <FastpqTransitionBatch as norito::NoritoDeserialize<'static>>::schema_hash(),
+            norito::schema::identity::frame_hash::<FastpqTransitionBatch>(),
             expected
         );
         let batch = FastpqTransitionBatch {

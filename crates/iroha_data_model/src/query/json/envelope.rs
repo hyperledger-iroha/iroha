@@ -3,15 +3,13 @@
 //! These structures mirror the payloads accepted by Torii query endpoints. The helpers convert
 //! between Norito JSON values and strongly-typed query objects, ensuring field ordering stays
 //! deterministic and validation errors surface with precise context.
-use crate::{
-    name::Name,
-    query::{
-        ItemKindTag, QueryRequest, QueryWithParams, SingularQueryBox,
-        dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
-        json::predicate::{PredicateJson, PredicateParseError},
-        parameters::{FetchSize, Pagination, QueryParams, Sorting},
-    },
+use crate::query::{
+    ItemKindTag, QueryRequest, QueryWithParams, SingularQueryBox,
+    dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
+    json::predicate::{PredicateJson, PredicateParseError},
+    parameters::{FetchSize, Pagination, QueryParams, Sorting},
 };
+use iroha_model_base::name::Name;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use std::{
     format,
@@ -362,8 +360,10 @@ impl SingularQueryJson {
             .transpose()
             .map(Option::unwrap_or_default)
     }
-    fn decode_domain_id(domain_id: &str) -> Result<crate::domain::DomainId, QueryJsonError> {
-        crate::domain::DomainId::parse_fully_qualified(domain_id)
+    fn decode_domain_id(
+        domain_id: &str,
+    ) -> Result<iroha_model_base::domain::DomainId, QueryJsonError> {
+        iroha_model_base::domain::DomainId::parse_fully_qualified(domain_id)
             .map_err(|_| QueryJsonError::InvalidField("payload", "domain_id"))
     }
     fn decode_nft_id(nft_id: &str) -> Result<crate::nft::NftId, QueryJsonError> {
@@ -673,7 +673,7 @@ impl SingularQueryJson {
             }
             SingularQueryJson::FindFxCorridorPolicyById { policy_id } => {
                 let policy_id = policy_id
-                    .parse::<crate::name::Name>()
+                    .parse::<iroha_model_base::name::Name>()
                     .map_err(|_| QueryJsonError::InvalidField("payload", "policy_id"))?;
                 Ok(SingularQueryBox::FindFxCorridorPolicyById(
                     crate::query::settlement::prelude::FindFxCorridorPolicyById::new(policy_id),
@@ -808,7 +808,7 @@ impl IterableQueryJson {
         let params = self.params.clone().into_query_params()?;
         match self.kind {
             IterableQueryKind::FindPeers => {
-                type Item = crate::peer::PeerId;
+                type Item = iroha_model_base::peer::PeerId;
                 self.build_for_kind::<Item, _, _>(params.clone(), || {
                     crate::query::peer::prelude::FindPeers
                 })
@@ -1348,7 +1348,7 @@ mod tests {
         }
         let alias = crate::account::AccountAlias::domainless(
             "alice".parse().expect("alias label"),
-            crate::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         );
         let singular = SingularQueryJson::FindAccountByAlias {
             alias: alias.clone(),
@@ -1405,8 +1405,8 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
-        let domain_id =
-            crate::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain_id = iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
+            .expect("domain id");
         let singular = SingularQueryJson::FindDomainById {
             domain_id: domain_id.to_string(),
         };
@@ -1428,8 +1428,11 @@ mod tests {
     #[test]
     fn find_asset_queries_roundtrip_with_public_selectors() {
         let definition_id = crate::asset::AssetDefinitionId::derive_from_components(
-            crate::domain::DomainId::try_new("wonderland", "universal").expect("valid domain id"),
-            "rose".parse::<crate::Name>().expect("valid asset name"),
+            iroha_model_base::domain::DomainId::try_new("wonderland", "universal")
+                .expect("valid domain id"),
+            "rose"
+                .parse::<iroha_model_base::name::Name>()
+                .expect("valid asset name"),
         );
         let keypair = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -1565,7 +1568,7 @@ mod tests {
         let program_id = crate::nexus::FeeSponsorProgramId::new(
             sponsor.clone(),
             "retail_transfers"
-                .parse::<crate::Name>()
+                .parse::<iroha_model_base::name::Name>()
                 .expect("valid program name"),
         );
         let singular = SingularQueryJson::FindFeeSponsorProgramById {

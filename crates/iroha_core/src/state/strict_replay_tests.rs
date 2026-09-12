@@ -16,7 +16,7 @@ use crate::{
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, HasMetadata, Registrable,
+    HasMetadata, Registrable,
     account::{Account, AccountId},
     block::{
         BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
@@ -25,8 +25,9 @@ use iroha_data_model::{
     bridge::SccpOutboundMessageContextV1,
     domain::Domain,
     parameter::{Parameter, system::SumeragiParameter},
-    peer::PeerId,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::time::TimeSource;
 use norito::codec::Encode;
 use std::{
@@ -38,6 +39,8 @@ use std::{
 };
 const HEIGHT: u64 = 1;
 /// Test-only mirror of Kura's private retained SCCP message layout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::strict_replay_tests::CorruptedKuraRetainedSccpMessage")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
 struct CorruptedKuraRetainedSccpMessage {
@@ -46,6 +49,8 @@ struct CorruptedKuraRetainedSccpMessage {
     payload_bytes: Vec<u8>,
 }
 /// Test-only mirror used to install a disk-corrupted retained record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::strict_replay_tests::CorruptedKuraRetainedBlockRecord")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
 struct CorruptedKuraRetainedBlockRecord {
@@ -60,6 +65,8 @@ struct CorruptedKuraRetainedBlockRecord {
     sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
 }
 /// Test-only mirror used to install a disk-corrupted v2 finality envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::strict_replay_tests::CorruptedKuraV2FinalityRecord")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
 struct CorruptedKuraV2FinalityRecord {
@@ -394,15 +401,15 @@ impl StrictReplayFixture {
                         AssetId::of(definition.clone(), validator.clone()),
                     ))
                     .append_instruction(RegisterPublicLaneValidator::new(
-                        iroha_data_model::nexus::LaneId::SINGLE,
+                        iroha_model_base::topology::LaneId::SINGLE,
                         validator.clone(),
                         entry.validator.clone(),
                         validator.clone(),
                         iroha_primitives::numeric::Quantity::from(1_000_u64),
-                        iroha_data_model::metadata::Metadata::default(),
+                        iroha_model_base::metadata::Metadata::default(),
                     ))
                     .append_instruction(ActivatePublicLaneValidator::new(
-                        iroha_data_model::nexus::LaneId::SINGLE,
+                        iroha_model_base::topology::LaneId::SINGLE,
                         validator,
                     ));
             }
@@ -679,7 +686,7 @@ impl StrictReplayFixture {
         )])
         .sign(self.genesis_key.private_key());
         let applied = self.append_transaction_at_view(transaction, view);
-        let effect_key: iroha_data_model::name::Name =
+        let effect_key: iroha_model_base::name::Name =
             "strict_replay_effect".parse().expect("effect key");
         assert_eq!(
             self.materialized_state
@@ -1008,6 +1015,7 @@ impl StrictReplayFixture {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -1065,7 +1073,7 @@ impl StrictReplayFixture {
         }
         if options.seed_space_directory {
             super::replay_validation_tests::seed_space_directory_manifest_for_retired_checkpoint_test(
-                &state, iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                &state, iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             );
         }
         let nexus = state.nexus_snapshot();
@@ -1079,7 +1087,7 @@ impl StrictReplayFixture {
             .lane_catalog
             .lanes()
             .iter()
-            .find(|lane| lane.id == iroha_data_model::nexus::LaneId::SINGLE)
+            .find(|lane| lane.id == iroha_model_base::topology::LaneId::SINGLE)
             .expect("strict replay fixture has the primary lane");
         let validators = roster
             .iter()

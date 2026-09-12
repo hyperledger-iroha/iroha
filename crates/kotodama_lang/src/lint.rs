@@ -494,7 +494,7 @@ fn is_literal_domain_expr(expr: &Expr) -> bool {
         && args.len() == 1
         && args.first().is_some_and(|argument| {
             matches!(argument.kind(), Expr::String(raw)
-                if iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok())
+                if iroha_model_base::domain::DomainId::parse_fully_qualified(raw).is_ok())
         })
 }
 fn is_account_access_hint_expr(expr: &Expr) -> bool {
@@ -2366,7 +2366,7 @@ mod tests {
         );
     }
     use crate::{i18n::Language, parser::parse_test_fragment as parse};
-    use iroha_data_model::DomainId;
+    use iroha_model_base::domain::DomainId;
 
     #[test]
     fn public_lint_handoffs_from_a_small_caller() {
@@ -2850,7 +2850,7 @@ fn main() { subscription_bill(); }"#,
             asset::AssetDefinitionId,
             isi::{InstructionBox, escrow::OpenAssetEscrow},
         };
-        let escrow_name: iroha_data_model::name::Name = "aitai_offer".parse().expect("escrow name");
+        let escrow_name: iroha_model_base::name::Name = "aitai_offer".parse().expect("escrow name");
         let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
         let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
             .parse()

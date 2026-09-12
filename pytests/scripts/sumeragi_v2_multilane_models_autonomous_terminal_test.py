@@ -70,6 +70,30 @@ def test_autonomous_terminal_recovery_contract_accepts_current_production(
     ) == ()
 
 
+def test_autonomous_terminal_recovery_rejects_empty_replay_quarantine_bypass(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    for symbol, snapshot in (
+        ("reconcile_pending_autonomous_lifecycle_terminal_outcomes", "initial_snapshot"),
+        ("reconcile_autonomous_lifecycle_startup", "snapshot"),
+    ):
+        fixture = tmp_path / symbol
+        models = copy_autonomous_terminal_recovery_fixture(fixture, module)
+        path = fixture / "crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs"
+        replace_once_after(
+            path,
+            f"pub(crate) fn {symbol}(",
+            "if !initial_queue_quarantine {",
+            f"if !{snapshot}.is_empty() && !initial_queue_quarantine {{",
+        )
+        errors = validate_autonomous_terminal_recovery_fixture(fixture, module, models)
+        assert any(
+            symbol in error and "if !initial_queue_quarantine" in error
+            for error in errors
+        ), errors
+
+
 def test_autonomous_terminal_recovery_rejects_prime_unchanged_vacuity(
     tmp_path: Path,
 ) -> None:

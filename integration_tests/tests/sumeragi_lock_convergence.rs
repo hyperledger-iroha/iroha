@@ -35,7 +35,7 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let status = client.client().get_status()?;
+    let status = client.client().status().get().await?;
     for idx in status.blocks..3 {
         client.submit(
             Log::new(Level::INFO, format!("lock convergence seed {idx}")),
@@ -190,7 +190,7 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let status = client.client().get_status()?;
+    let status = client.client().status().get().await?;
     for idx in status.blocks..3 {
         client.submit(
             Log::new(Level::INFO, format!("lock convergence restart seed {idx}")),
@@ -356,10 +356,11 @@ async fn wait_for_height(client: &Client, target_height: u64, timeout: Duration)
     }
 }
 async fn fetch_status(client: &Client) -> Result<Status> {
-    let client = client.clone();
-    task::spawn_blocking(move || client.client().get_status())
+    client
+        .client()
+        .status()
+        .get()
         .await
-        .wrap_err("join status fetch task")?
         .wrap_err("fetch status")
 }
 fn parse_qc_snapshot(value: &Value) -> Result<QcSnapshot> {
@@ -401,7 +402,7 @@ fn resolve_permissioned_leader_peer(
         .cloned()
         .ok_or_else(|| eyre!("leader peer id not found in network peers"))
 }
-fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
+fn chain_epoch_seed(chain_id: &iroha_model_base::chain::ChainId) -> [u8; 32] {
     let chain = chain_id.clone().into_inner();
     let hash = iroha_crypto::Hash::new(chain.as_bytes());
     <[u8; 32]>::from(hash)

@@ -3,7 +3,8 @@ use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
 use core::num::NonZeroU64;
 use iroha_crypto::Hash;
-use iroha_data_model::{asset::AssetDefinitionId, prelude::ChainId};
+use iroha_data_model::asset::AssetDefinitionId;
+use iroha_model_base::chain::ChainId;
 /// Canonical I105 discriminant for the public Taira testnet.
 pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 /// Canonical I105 discriminant for the public Nexus mainnet.

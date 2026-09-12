@@ -599,7 +599,7 @@ impl Run for TxCommand {
 }
 impl Run for QueryCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         match self {
             Self::Feeds => {
                 let feeds = client.query(oracle_query::FindOracleFeeds).execute_all()?;
@@ -1277,7 +1277,7 @@ mod tests {
         fn config(&self) -> &iroha::config::Config {
             &self.config
         }
-        fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
+        fn transaction_metadata(&self) -> Option<&iroha_model_base::metadata::Metadata> {
             None
         }
         fn input_instructions(&self) -> bool {

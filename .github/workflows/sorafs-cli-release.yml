@@ -105,7 +105,7 @@ on:
       - "scripts/examples/sorafs_production_readiness*.args.example"
       - "scripts/requirements.txt"
       - "scripts/package_sorafs_cli_candidate.py"
-      - "scripts/package_sorafs_validate_release.sh"
+      - "scripts/package_iroha_cli_release.sh"
       - "scripts/release_sorafs_cli.sh"
       - "scripts/tests/check_sorafs_release_version_map_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
@@ -159,7 +159,7 @@ on:
       - "scripts/tests/sorafs_topology_qualification_test.py"
       - "scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py"
       - "scripts/tests/package_sorafs_cli_candidate_test.py"
-      - "scripts/tests/package_sorafs_validate_release_test.py"
+      - "scripts/tests/package_iroha_cli_release_test.py"
       - "scripts/tests/build_release_bundle_test.py"
       - "scripts/tests/build_release_image_test.py"
       - "scripts/tests/release_feature_graph_test.py"
@@ -222,6 +222,7 @@ on:
       - "crates/iroha/src/http_default.rs"
       - "crates/iroha_cli/src/commands/sorafs.rs"
       - "xtask/src/sorafs.rs"
+      - "xtask/src/sorafs/**"
       - "CHANGELOG.md"
       - "LICENSE"
       - "crates/sorafs_car/**"
@@ -385,15 +386,15 @@ jobs:
           fi
           cargo build --locked --release -p sorafs_orchestrator --bin sorafs_cli --target "$target"
           cargo build --locked --release -p sorafs_car --features cli --bin sorafs_fetch --target "$target"
-          cargo build --locked --release -p sorafs_manifest --bin sorafs-validate --target "$target"
+          cargo build --locked --release -p iroha_cli --bin iroha --target "$target"
           mkdir -p artifacts/sorafs-cli
           suffix="${{ matrix.binary_suffix }}"
           cp "target/${target}/release/sorafs_cli${suffix}" "artifacts/sorafs-cli/sorafs_cli${suffix}"
           cp "target/${target}/release/sorafs_fetch${suffix}" "artifacts/sorafs-cli/sorafs_fetch${suffix}"
-          cp "target/${target}/release/sorafs-validate${suffix}" "artifacts/sorafs-cli/sorafs-validate${suffix}"
+          cp "target/${target}/release/iroha${suffix}" "artifacts/sorafs-cli/iroha${suffix}"
           "artifacts/sorafs-cli/sorafs_cli${suffix}" --help > artifacts/sorafs-cli/sorafs_cli.help.txt
           "artifacts/sorafs-cli/sorafs_fetch${suffix}" --help > artifacts/sorafs-cli/sorafs_fetch.help.txt
-          "artifacts/sorafs-cli/sorafs-validate${suffix}" --help > artifacts/sorafs-cli/sorafs-validate.help.txt
+          "artifacts/sorafs-cli/iroha${suffix}" app sorafs toolkit --help > artifacts/sorafs-cli/iroha.help.txt
           cp release/version-map.toml artifacts/sorafs-cli/version-map.toml
           cp specs/sorafs/runbooks/release_rollback_yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md
           cp CHANGELOG.md LICENSE artifacts/sorafs-cli/
@@ -441,7 +442,7 @@ jobs:
             fi
           fi
 
-      - name: Package reference validator and FFI header reproducibly
+      - name: Package Iroha CLI and SoraFS FFI header reproducibly
         shell: bash
         run: |
           version="${{ needs.release-gate.outputs.version }}"
@@ -449,23 +450,23 @@ jobs:
           suffix="${{ matrix.binary_suffix }}"
           source_commit="${GITHUB_SHA}"
           source_date_epoch="$(git show -s --format=%ct "$source_commit")"
-          first_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-first.XXXXXX")"
-          replay_out="$(mktemp -d "${RUNNER_TEMP}/sorafs-validate-replay.XXXXXX")"
-          bash scripts/package_sorafs_validate_release.sh \
+          first_out="$(mktemp -d "${RUNNER_TEMP}/iroha-first.XXXXXX")"
+          replay_out="$(mktemp -d "${RUNNER_TEMP}/iroha-replay.XXXXXX")"
+          bash scripts/package_iroha_cli_release.sh \
             --version "$version" \
             --target "${{ matrix.target }}" \
             --source-commit "$source_commit" \
             --source-date-epoch "$source_date_epoch" \
-            --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
+            --binary "artifacts/sorafs-cli/iroha${suffix}" \
             --out-dir "$first_out"
-          bash scripts/package_sorafs_validate_release.sh \
+          bash scripts/package_iroha_cli_release.sh \
             --version "$version" \
             --target "$target" \
             --source-commit "$source_commit" \
             --source-date-epoch "$source_date_epoch" \
-            --binary "artifacts/sorafs-cli/sorafs-validate${suffix}" \
+            --binary "artifacts/sorafs-cli/iroha${suffix}" \
             --out-dir "$replay_out"
-          package_name="sorafs-validate-${version}-${target}"
+          package_name="iroha-${version}-${target}"
           for relative in \
             "${package_name}.tar.gz" \
             "${package_name}.tar.gz.sha256" \
@@ -474,8 +475,8 @@ jobs:
             "${package_name}.sha256"; do
             cmp "${first_out}/${relative}" "${replay_out}/${relative}"
           done
-          mkdir -p artifacts/sorafs-cli/reference-validator
-          cp -R "${first_out}/." artifacts/sorafs-cli/reference-validator/
+          mkdir -p artifacts/sorafs-cli/iroha-cli
+          cp -R "${first_out}/." artifacts/sorafs-cli/iroha-cli/
       - name: Rebuild deterministic platform archive and run clean-consumer smoke
         shell: bash
         run: |

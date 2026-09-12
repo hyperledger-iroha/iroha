@@ -357,6 +357,9 @@ fn prepare_canonical_autonomous_batch_with_instructions(
     sort_by_signed_transaction_hash: bool,
     mut after_enqueue: impl FnMut(&crate::torii_proxy::QueuePlanAdmissionBindingV1),
 ) -> PreparedCanonicalAutonomousBatch {
+    if queue.lane_reservation_startup_reconciliation_pending() {
+        queue.complete_empty_startup_for_test(fixture.state.as_ref());
+    }
     assert_eq!(
         &context.network_id,
         fixture.state.network_id_ref(),

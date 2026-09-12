@@ -17,11 +17,13 @@ use iroha_data_model::{
     asset::AssetDefinition,
     block::{BlockHeader, SignedBlock},
     fraud::types::{AssessmentDecision, FraudAssessment, FraudAssessmentParts},
-    metadata::Metadata,
-    name::Name,
     prelude::*,
     transaction::error::TransactionRejectionReason,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 use norito::codec::Encode;

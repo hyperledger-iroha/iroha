@@ -9,7 +9,7 @@ use super::{
     KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
     KagemushaHardwareProfileV1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -135,6 +135,10 @@ pub fn kagemusha_device_response_signing_bytes_v1(
     {
         return Err(KagemushaDeviceResponseErrorV1::Binding);
     }
+    let reply_len = u32::try_from(canonical_reply.len())
+        .map_err(|_| KagemushaDeviceResponseErrorV1::Binding)?;
+    let signature_len = u32::try_from(KAGEMUSHA_DEVICE_RESPONSE_SIGNATURE_BYTES_V1)
+        .map_err(|_| KagemushaDeviceResponseErrorV1::Binding)?;
     let mut transcript = Vec::with_capacity(RESPONSE_DOMAIN.len() + 1 + 84 + 32 + 64);
     transcript.extend_from_slice(RESPONSE_DOMAIN);
     transcript.push(0);
@@ -143,9 +147,8 @@ pub fn kagemusha_device_response_signing_bytes_v1(
     transcript.push(operation);
     transcript.push(0);
     transcript.extend_from_slice(&request_id);
-    transcript.extend_from_slice(&(canonical_reply.len() as u32).to_le_bytes());
-    transcript
-        .extend_from_slice(&(KAGEMUSHA_DEVICE_RESPONSE_SIGNATURE_BYTES_V1 as u32).to_le_bytes());
+    transcript.extend_from_slice(&reply_len.to_le_bytes());
+    transcript.extend_from_slice(&signature_len.to_le_bytes());
     transcript.extend_from_slice(&Sha256::digest(canonical_reply));
     transcript.extend_from_slice(&Sha256::digest(canonical_command));
     transcript.extend_from_slice(&hardware_policy_id);
@@ -186,9 +189,23 @@ pub fn kagemusha_verify_device_response_v1<'a>(
 }
 
 /// Existing exact operation-1 command; it has no account or enrollment fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-active-hardware-credential-command")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceReadCredentialCommandV1",
+    frame = "iroha.kagemusha.device.v1.read-active-hardware-credential-command"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaDeviceReadCredentialCommandV1 {
     /// Sole command body version, 1.
@@ -211,9 +228,22 @@ impl KagemushaDeviceReadCredentialCommandV1 {
 }
 
 /// Existing operation-1 body; signature/catalog/freshness authority are separate checks.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.device.v1.active-hardware-credential-reply")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceQualificationReplyV1",
+    frame = "iroha.kagemusha.device.v1.active-hardware-credential-reply"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaDeviceQualificationReplyV1 {
     /// Sole reply version, 1.
@@ -260,3 +290,35 @@ impl KagemushaDeviceQualificationReplyV1 {
         Ok(reply)
     }
 }
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaDeviceReadCredentialCommandV1>(
+            "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceReadCredentialCommandV1",
+            "iroha.kagemusha.device.v1.read-active-hardware-credential-command",
+            "e120abca2729a4eeb3be9832cee509db",
+        );
+        check::<super::KagemushaDeviceQualificationReplyV1>(
+            "iroha_data_model::kagemusha::kagemusha_device_response_v1::KagemushaDeviceQualificationReplyV1",
+            "iroha.kagemusha.device.v1.active-hardware-credential-reply",
+            "f4af747f418c6bd25a4b4c9a599805c9",
+        );
+    }
+}
+
+#[cfg(test)]
+mod transcript_tests;

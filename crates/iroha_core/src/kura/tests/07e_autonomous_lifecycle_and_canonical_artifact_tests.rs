@@ -106,6 +106,7 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, first) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let first = historical_capacity_bound_payload_for_fixture(&first, &signer);
     let successor = repropose_autonomous_lane_payload_for_kura(
         &first,
         first
@@ -118,8 +119,7 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-    kura.persist_lane_executable_payload(&first, network_id, epoch)
-        .expect("persist active first attempt");
+    persist_historical_capacity_payload_fixture(&kura, &first, &signer);
     {
         let _prune_guard = kura.prune_lock.lock();
         kura.ensure_prune_recovery_not_required()
@@ -143,8 +143,9 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
         .expect("stage a crash-orphaned successor attempt");
     }
     drop(kura);
-    assert!(
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("defer secondary artifact recovery until geometry is authenticated");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &first).expect_err(
         "startup must not select a successor until the prior attempt is durably retired",
     );
 }
@@ -154,8 +155,7 @@ fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
     drop(kura);
@@ -179,7 +179,7 @@ fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
             .expect("extend sparse autonomous view");
     }
     assert!(
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+        reopen_test_kura_with_default_lane_geometry(&config, &lane_config).is_err(),
         "startup must reject a namespace whose individually bounded files exceed the aggregate byte budget",
     );
 }
@@ -192,6 +192,7 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, first) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let first = historical_capacity_bound_payload_for_fixture(&first, &signer);
     let successor = repropose_autonomous_lane_payload_for_kura(
         &first,
         first
@@ -201,11 +202,11 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
             .saturating_add(1),
         &signer,
     );
+    let successor = historical_capacity_bound_payload_for_fixture(&successor, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-    kura.persist_lane_executable_payload(&first, network_id, epoch)
-        .expect("persist first attempt");
+    persist_historical_capacity_payload_fixture(&kura, &first, &signer);
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("retire first attempt");
@@ -214,8 +215,7 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
         .expect("exact Queue release barrier");
     kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("finalize first attempt release");
-    kura.persist_lane_executable_payload(&successor, network_id, epoch)
-        .expect("persist successor at the same lane-local height");
+    persist_historical_capacity_payload_fixture(&kura, &successor, &signer);
     assert_eq!(
         kura.current_autonomous_lane_payload(lane.lane_id, 1, network_id, epoch)
             .expect("successor is current")
@@ -240,6 +240,8 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
         .expect("model restart with a missing derived route-latest index");
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &successor)
+        .expect("restore exact secondary-lane lifecycle authority");
     assert!(
         route_latest_path.is_file(),
         "startup must explicitly reconstruct the missing route-latest index",
@@ -536,6 +538,7 @@ fn old_reservation_retirement_remains_exactly_addressable_after_same_height_repr
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, first) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let first = historical_capacity_bound_payload_for_fixture(&first, &signer);
     let successor = repropose_autonomous_lane_payload_for_kura(
         &first,
         first
@@ -545,11 +548,11 @@ fn old_reservation_retirement_remains_exactly_addressable_after_same_height_repr
             .saturating_add(1),
         &signer,
     );
+    let successor = historical_capacity_bound_payload_for_fixture(&successor, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-    kura.persist_lane_executable_payload(&first, network_id, epoch)
-        .expect("persist first attempt");
+    persist_historical_capacity_payload_fixture(&kura, &first, &signer);
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&first);
     kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("retire first attempt");
@@ -558,8 +561,7 @@ fn old_reservation_retirement_remains_exactly_addressable_after_same_height_repr
         .expect("exact Queue release barrier");
     kura.finalize_autonomous_lane_slot_release(&retirement, &barrier, network_id, epoch)
         .expect("finalize first attempt release");
-    kura.persist_lane_executable_payload(&successor, network_id, epoch)
-        .expect("persist successor attempt");
+    persist_historical_capacity_payload_fixture(&kura, &successor, &signer);
     assert_eq!(
         kura.autonomous_lane_retirement_matching_reservation(
             &first.reservation_keys[0],
@@ -582,6 +584,8 @@ fn old_reservation_retirement_remains_exactly_addressable_after_same_height_repr
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &successor)
+        .expect("restore exact secondary-lane lifecycle authority");
     assert_eq!(
         reopened
             .autonomous_lane_retirement_matching_reservation(
@@ -686,6 +690,7 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_one.lane_id, lane_one.dataspace_id, 1, &signer);
+    let payload = historical_capacity_bound_payload_for_fixture(&payload, &signer);
     let cross_lane = rebind_autonomous_lane_payload_for_kura(
         &payload,
         lane_zero.lane_id,
@@ -713,8 +718,7 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, network_id, epoch)
-        .expect("persist payload");
+    persist_historical_capacity_payload_fixture(&kura, &payload, &signer);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("exact payload retry is idempotent");
     for replay in [&cross_lane, &later_height, &recreated_incarnation] {
@@ -733,6 +737,8 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &payload)
+        .expect("restore the fixture's authoritative secondary lane");
     for replay in [&cross_lane, &later_height, &recreated_incarnation] {
         assert!(
             reopened
@@ -745,7 +751,17 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     fs::rename(&claim_path, &claim_temp).expect("simulate claim promotion crash");
     drop(reopened);
     let (recovered, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("startup promotes the exact durable owner");
+        .expect("open the staged-claim crash boundary");
+    assert!(
+        !claim_path.exists(),
+        "unrestored geometry cannot promote a staged owner"
+    );
+    assert!(
+        claim_temp.exists(),
+        "the exact staged claim must survive deferred recovery"
+    );
+    restore_autonomous_lane_fixture_geometry(&recovered, &lane_config, &payload)
+        .expect("recover the exact durable owner after geometry restoration");
     assert!(claim_path.is_file());
     assert!(!claim_temp.exists());
     assert!(
@@ -771,7 +787,17 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     .expect("stage claim whose payload never became durable");
     drop(recovered);
     let (recovered, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("startup discards an unpublished claim temp");
+        .expect("open an unpublished claim temp");
+    assert!(
+        !orphan_path.exists(),
+        "unknown geometry must not mint a permanent orphan owner"
+    );
+    assert!(
+        orphan_temp.exists(),
+        "orphan removal awaits authoritative geometry"
+    );
+    restore_autonomous_lane_fixture_geometry(&recovered, &lane_config, &payload)
+        .expect("discard the proven orphan after geometry restoration");
     assert!(!orphan_path.exists());
     assert!(!orphan_temp.exists());
     fs::write(&claim_path, [0xFF, 0x00, 0xAA]).expect("corrupt claim");
@@ -843,7 +869,7 @@ fn autonomous_claim_startup_rejects_symlinks_and_multiple_links_without_followin
     }
 }
 #[test]
-fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
+fn autonomous_payload_marker_substitution_keeps_execution_evidence_fail_closed() {
     let temp_dir = TempDir::new().expect("temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -935,36 +961,35 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
     let recreated_execution_input = kura
         .recover_autonomous_lane_block_payload(&recreated.origin_proposal, network_id, epoch)
         .expect("recover recreated marker-bound execution input");
+    let before = snapshot_regular_test_tree(temp_dir.path());
     kura.persist_lane_block_execution_input(&recreated_execution_input)
-        .expect("replace the retired execution input under the fresh marker");
+        .expect_err("a marker replacement alone cannot retire occupied execution evidence");
     let (recreated_session, recreated_signer_pops) =
         committed_lane_block_session_for_kura_proposal(&recreated.origin_proposal, &signer);
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
     kura.persist_committed_lane_block_session(&recreated_session, &recreated_signer_pops)
-        .expect("replace the retired certified session under the fresh marker");
-    let recreated_input = kura
-        .read_lane_block_execution_input(lane_entry.lane_id, 1)
-        .expect("read recreated execution input for preflight");
+        .expect("a valid certificate is independently bound to the active incarnation");
+    let recreated_certified =
+        CertifiedLaneBlockArtifact::new(recreated_session, recreated_signer_pops);
+    let before = snapshot_regular_test_tree(temp_dir.path());
     kura.persist_lane_block_execution_preflight(
-        &recreated_input,
+        &LaneBlockExecutionInputArtifact::new(recreated_execution_input),
         8,
         application_state_hash,
         vec![application_result],
     )
-    .expect("replace the retired preflight under the fresh marker");
+    .expect_err("a marker replacement alone cannot retire occupied preflight evidence");
     assert!(
         kura.persist_lane_executable_payload(&first, network_id, epoch)
-            .is_err(),
-        "a delayed first-incarnation replay must not replace the recreated lane slot"
+            .is_err()
     );
     assert!(
         kura.persist_committed_lane_block_session(&first_session, &first_signer_pops)
-            .is_err(),
-        "a delayed certified-session replay must not replace the recreated lane slot",
+            .is_err()
     );
     assert!(
         kura.persist_lane_block_execution_input(&first_execution_input)
-            .is_err(),
-        "a delayed execution-input replay must not replace the recreated lane slot",
+            .is_err()
     );
     assert!(
         kura.persist_lane_block_execution_preflight(
@@ -973,71 +998,29 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
             application_state_hash,
             first_preflight.results.clone(),
         )
-        .is_err(),
-        "a delayed preflight replay must not replace the recreated lane slot",
+        .is_err()
     );
-    assert_eq!(
-        kura.read_autonomous_lane_block_artifact(lane_entry.lane_id, 1, network_id, epoch,)
-            .expect("read recreated marker-bound payload")
-            .executable_payload,
-        recreated
-    );
-    assert_eq!(
-        kura.read_lane_block_execution_input(lane_entry.lane_id, 1)
-            .expect("read recreated marker-bound execution input")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    assert_eq!(
-        kura.read_certified_lane_block_artifact(lane_entry.lane_id, 1)
-            .expect("read recreated certified session")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    assert_eq!(
-        kura.read_lane_block_execution_preflight(lane_entry.lane_id, 1)
-            .expect("read recreated preflight")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("reopen Kura");
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
     assert!(
-        reopened
-            .persist_lane_executable_payload(&first, network_id, epoch)
-            .is_err(),
-        "restart must retain the fresh incarnation marker against ABA replay"
+        kura.read_lane_block_execution_input(lane_entry.lane_id, 1)
+            .is_none()
     );
     assert_eq!(
-        reopened
-            .read_autonomous_lane_block_artifact(lane_entry.lane_id, 1, network_id, epoch,)
-            .expect("restart recovers recreated payload")
+        kura.read_certified_lane_block_artifact(lane_entry.lane_id, 1),
+        Some(recreated_certified)
+    );
+    assert!(
+        kura.read_lane_block_execution_preflight(lane_entry.lane_id, 1)
+            .is_none()
+    );
+    assert_eq!(
+        kura.read_autonomous_lane_block_artifact(lane_entry.lane_id, 1, network_id, epoch)
+            .expect("the separately owned payload is bound to the fresh marker")
             .executable_payload,
-        recreated
-    );
-    assert_eq!(
-        reopened
-            .read_lane_block_execution_input(lane_entry.lane_id, 1)
-            .expect("restart recovers recreated execution input")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    assert_eq!(
-        reopened
-            .read_certified_lane_block_artifact(lane_entry.lane_id, 1)
-            .expect("restart recovers recreated certified session")
-            .proposal,
-        recreated.origin_proposal,
-    );
-    assert_eq!(
-        reopened
-            .read_lane_block_execution_preflight(lane_entry.lane_id, 1)
-            .expect("restart recovers recreated preflight")
-            .proposal,
-        recreated.origin_proposal,
+        recreated,
     );
 }
+
 fn assert_lane_artifact_files_absent_or_empty(
     lane_entry: &LaneConfigEntry,
     store_root: &std::path::Path,

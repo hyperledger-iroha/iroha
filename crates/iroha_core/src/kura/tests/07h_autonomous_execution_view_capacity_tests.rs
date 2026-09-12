@@ -46,7 +46,7 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
     let payload_bytes = artifact.encode_framed().expect("encode execution input");
     let descriptor = &payload.origin_proposal.descriptor;
     let (data_path, index_path) =
-        Kura::lane_block_execution_input_paths_for_entry(lane, temp_dir.path());
+        Kura::lane_block_execution_input_paths_for_entry(lane, &kura.store_root());
     let additional_peak = {
         let _prune_guard = kura.prune_lock.lock();
         kura.ensure_prune_recovery_not_required()
@@ -161,7 +161,7 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     let descriptor = &payload.origin_proposal.descriptor;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane,
-        temp_dir.path(),
+        &kura.store_root(),
         descriptor.lane_block_height,
         descriptor.proposal_height,
     );
@@ -276,7 +276,7 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     let descriptor = &payload.origin_proposal.descriptor;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane,
-        temp_dir.path(),
+        &kura.store_root(),
         descriptor.lane_block_height,
         descriptor.proposal_height,
     );

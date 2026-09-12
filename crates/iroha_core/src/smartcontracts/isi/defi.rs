@@ -13,6 +13,7 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 fn invalid(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvariantViolation(message.into().into())

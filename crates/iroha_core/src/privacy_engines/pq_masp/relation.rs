@@ -809,8 +809,6 @@ pub(crate) mod tests {
     use super::*;
     use iroha_data_model::{
         asset::AssetDefinitionId,
-        domain::DomainId,
-        name::Name,
         privacy::{
             PqMaspStarkStatementV1, PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1,
             PrivacyEncryptedOutputV1, PrivacyEngineManifestDigestV1,
@@ -821,6 +819,8 @@ pub(crate) mod tests {
             PrivacyVerifierDigestV1,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn raw(byte: u8) -> [u8; 32] {
         [byte; 32]

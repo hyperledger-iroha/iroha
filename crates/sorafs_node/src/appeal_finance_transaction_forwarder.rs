@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::numeric::{Quantity, XorQuantity};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     escrow::{AssetEscrowKind, AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     isi::{
@@ -22,6 +22,7 @@ use iroha_data_model::{
     },
     transaction::{Executable, SignedTransaction},
 };
+use iroha_model_base::chain::ChainId;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use std::{
     collections::BTreeSet,
@@ -199,7 +200,10 @@ pub enum AppealFinanceCheckpointExternalError {
     Ambiguous,
 }
 /// Exact sealed recovery record for one authenticated local checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceSealedCheckpointRecordV1"
+)]
 pub struct AppealFinanceSealedCheckpointRecordV1 {
     /// Schema version.
     pub version: u8,
@@ -715,7 +719,8 @@ struct StoredDeadLetterV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::appeal_finance_transaction_forwarder::CheckpointBodyV1")]
 struct CheckpointBodyV1 {
     next_sequence: u64,
     pending: Vec<StoredPendingV1>,
@@ -732,7 +737,10 @@ impl Default for CheckpointBodyV1 {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::appeal_finance_transaction_forwarder::AuthenticatedCheckpointV1"
+)]
 struct AuthenticatedCheckpointV1 {
     version: u8,
     checkpoint_sequence: u64,
@@ -1563,7 +1571,10 @@ struct PreparedOperation {
     expected_record: Option<AssetEscrowRecord>,
     reconciliation_context: Vec<u8>,
 }
-#[derive(Debug, Clone, NoritoSerialize)]
+#[derive(Debug, Clone, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::appeal_finance_transaction_forwarder::PreparedOperationMaterialV1"
+)]
 struct PreparedOperationMaterialV1 {
     network_id: NetworkId,
     chain_id: ChainId,
@@ -1572,7 +1583,10 @@ struct PreparedOperationMaterialV1 {
     expected_record: Option<AssetEscrowRecord>,
     reconciliation_context: Vec<u8>,
 }
-#[derive(Debug, Clone, NoritoSerialize)]
+#[derive(Debug, Clone, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::appeal_finance_transaction_forwarder::DrawdownIdentityMaterialV1"
+)]
 struct DrawdownIdentityMaterialV1 {
     escrow_id: EscrowId,
     amount: Quantity,
@@ -2687,6 +2701,7 @@ impl From<AppealFinanceCheckpointExternalError> for AppealFinanceTransactionForw
 }
 #[cfg(test)]
 mod tests {
+    include!("appeal_finance_transaction_forwarder/schema_identity_tests.rs");
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::numeric::Quantity;
@@ -3143,7 +3158,7 @@ mod tests {
 
         // This frame is canonical and authorized; only the configured byte limit rejects it.
         let padding = "x".repeat(limited_policy.max_transaction_bytes);
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        let mut metadata = iroha_model_base::metadata::Metadata::default();
         metadata.insert("padding".parse().unwrap(), padding.as_str());
         let oversized = TransactionBuilder::new(
             test_network_id(),
@@ -3570,6 +3585,35 @@ mod tests {
             )
             .unwrap(),
             record
+        );
+        assert_eq!(
+            crate::frame_test_support::assert_current_frame(
+                &record,
+                "sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceSealedCheckpointRecordV1"
+            ),
+            bytes
+        );
+        let authenticated = decode_authenticated_checkpoint(
+            &record.checkpoint_bytes,
+            policy(),
+            &runtime.authentication_policy(),
+        )
+        .expect("production authenticated checkpoint");
+        crate::frame_test_support::assert_current_frame(
+            &authenticated,
+            "sorafs_node::appeal_finance_transaction_forwarder::AuthenticatedCheckpointV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &authenticated.body,
+            "sorafs_node::appeal_finance_transaction_forwarder::CheckpointBodyV1",
+        );
+        assert_eq!(
+            <PreparedOperationMaterialV1 as norito::NoritoSchema>::frame_name(),
+            "sorafs_node::appeal_finance_transaction_forwarder::PreparedOperationMaterialV1"
+        );
+        assert_eq!(
+            <DrawdownIdentityMaterialV1 as norito::NoritoSchema>::frame_name(),
+            "sorafs_node::appeal_finance_transaction_forwarder::DrawdownIdentityMaterialV1"
         );
         let mut substituted = record;
         substituted.revision[0] ^= 0x80;

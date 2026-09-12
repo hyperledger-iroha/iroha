@@ -1836,6 +1836,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_torii_shared",
  "iroha_version",
@@ -3158,6 +3159,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_zkp_halo2",
@@ -4685,6 +4687,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_genesis",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
  "iroha_service_model",
@@ -4739,6 +4742,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_service_model",
@@ -4777,6 +4781,7 @@ name = "iroha_cli"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "aes-gcm",
+ "assert_cmd",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -4800,6 +4805,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_i18n",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_sccp",
  "iroha_service_model",
@@ -4842,10 +4848,12 @@ dependencies = [
  "blake2",
  "error-stack",
  "expect-test",
+ "fastpq_isi",
  "hex",
  "iroha_config_base",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_torii_shared",
@@ -4920,6 +4928,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_logger",
  "iroha_macro",
+ "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
  "iroha_sccp",
@@ -4972,7 +4981,6 @@ dependencies = [
  "aead 0.6.0-rc.10",
  "amcl",
  "argon2",
- "arrayref",
  "base64 0.22.1",
  "blake2",
  "blake3",
@@ -5014,6 +5022,7 @@ dependencies = [
  "rand_core 0.9.5",
  "rayon",
  "rfc6979",
+ "rustix 1.1.4",
  "secp256k1",
  "sha2",
  "sha3",
@@ -5053,17 +5062,16 @@ dependencies = [
  "getset",
  "hex",
  "hex-literal",
- "icu_normalizer",
- "idna",
  "iroha_crypto",
  "iroha_data_model_derive",
  "iroha_ffi",
  "iroha_macro",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "iroha_version",
  "iroha_zkp_halo2",
- "ivm",
+ "ivm_abi",
  "mv",
  "nonzero_ext",
  "norito",
@@ -5134,6 +5142,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_executor_derive",
+ "iroha_model_base",
  "iroha_schema",
  "iroha_smart_contract",
  "iroha_smart_contract_codec",
@@ -5149,6 +5158,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model_derive",
+ "iroha_model_base",
  "iroha_schema",
  "norito",
 ]
@@ -5159,6 +5169,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_schema",
  "manyhow",
  "norito",
@@ -5244,6 +5255,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "iroha_test_samples",
@@ -5260,6 +5272,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_js_codec"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_model_base",
+ "iroha_primitives",
+ "norito",
+]
+
+[[package]]
+name = "iroha_js_codec_wasm"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "iroha_js_codec",
+ "norito",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "iroha_js_host"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5272,6 +5309,8 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_js_codec",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "iroha_service_model",
@@ -5314,6 +5353,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "iroha_schema_gen",
@@ -5339,7 +5379,7 @@ dependencies = [
  "console-subscriber",
  "derive_more",
  "iroha_config",
- "iroha_data_model",
+ "iroha_model_base",
  "norito",
  "thiserror 2.0.18",
  "tokio",
@@ -5356,6 +5396,26 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_derive",
  "norito",
+]
+
+[[package]]
+name = "iroha_model_base"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "derive_more",
+ "getset",
+ "hex",
+ "icu_normalizer",
+ "idna",
+ "iroha_crypto",
+ "iroha_data_model_derive",
+ "iroha_ffi",
+ "iroha_primitives",
+ "iroha_schema",
+ "mv",
+ "norito",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5383,6 +5443,7 @@ dependencies = [
  "iroha",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_telemetry",
@@ -5411,6 +5472,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_futures",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_telemetry",
  "norito",
@@ -5478,6 +5540,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "iroha_service_model",
@@ -5514,6 +5577,7 @@ dependencies = [
  "halo2curves",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "norito",
  "sha2",
  "tiny-keccak",
@@ -5615,6 +5679,7 @@ dependencies = [
  "iroha",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "norito",
@@ -5641,6 +5706,7 @@ dependencies = [
  "iroha_config",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "nonzero_ext",
  "norito",
@@ -5655,7 +5721,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "async-trait",
  "blake3",
- "build-support",
  "chrono",
  "expect-test",
  "eyre",
@@ -5706,6 +5771,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_futures",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -5720,7 +5786,6 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
- "unique_port",
  "url",
 ]
 
@@ -5730,6 +5795,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -5741,7 +5807,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "blake3",
- "build-support",
  "ciborium",
  "criterion",
  "dashmap",
@@ -5767,6 +5832,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_futures",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
  "iroha_sccp",
@@ -5832,6 +5898,7 @@ dependencies = [
  "hkdf",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "norito",
@@ -5931,6 +5998,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
  "iroha_telemetry",
@@ -6058,6 +6126,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_i18n",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_telemetry",
  "iroha_zkp_halo2",
@@ -6092,6 +6161,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "norito",
 ]
 
@@ -6106,6 +6176,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "ivm_abi",
  "kotodama_lang",
  "norito",
@@ -6127,6 +6198,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_test_network",
  "iroha_test_samples",
@@ -6350,6 +6422,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "norito",
 ]
 
@@ -6363,6 +6436,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_i18n",
+ "iroha_model_base",
  "iroha_primitives",
  "ivm_abi",
  "norito",
@@ -6764,12 +6838,14 @@ dependencies = [
  "color-eyre",
  "futures",
  "httpmock",
+ "iroha",
  "iroha_config",
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -6794,13 +6870,16 @@ name = "mochi-integration"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "color-eyre",
  "eyre",
+ "iroha",
  "iroha_config",
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_torii_shared",
  "mochi-core",
  "norito",
@@ -6819,6 +6898,7 @@ dependencies = [
  "hex",
  "iroha_data_model",
  "iroha_executor_data_model",
+ "iroha_model_base",
  "iroha_test_samples",
  "iroha_torii_shared",
  "mochi-core",
@@ -6855,6 +6935,7 @@ dependencies = [
  "hex",
  "iroha",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_musubi_service",
  "iroha_primitives",
  "iroha_storage_client",
@@ -7113,6 +7194,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
  "norito",
@@ -8415,24 +8497,18 @@ dependencies = [
 [[package]]
 name = "pqcrypto-internals"
 version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4a326caf27cbf2ac291ca7fd56300497ba9e76a8cc6a7d95b7a18b57f22b61d"
 dependencies = [
  "cc",
  "dunce",
  "getrandom 0.3.4",
- "libc",
 ]
 
 [[package]]
 name = "pqcrypto-mldsa"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f812cd126a2582599478a434fea75937b4b05d234c64a49e0cea129e130528"
 dependencies = [
  "cc",
  "glob",
- "libc",
  "paste",
  "pqcrypto-internals",
  "pqcrypto-traits",
@@ -8441,12 +8517,9 @@ dependencies = [
 [[package]]
 name = "pqcrypto-mlkem"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb14d207f3749e8a59a026c22ceaa72d70fff931cfbf4c8d9b08f3fc56dc6e60"
 dependencies = [
  "cc",
  "glob",
- "libc",
  "pqcrypto-internals",
  "pqcrypto-traits",
 ]
@@ -10185,11 +10258,13 @@ dependencies = [
  "httpmock",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "norito",
  "rand 0.9.4",
  "reqwest",
+ "rustix 1.1.4",
  "sorafs_chunker",
  "sorafs_manifest",
  "sorafs_orchestrator",
@@ -10223,17 +10298,14 @@ dependencies = [
  "ed25519-dalek",
  "halo2-axiom",
  "hex",
- "http",
  "iroha_crypto",
  "iroha_primitives",
  "iroha_schema",
  "norito",
- "norito_derive",
  "poseidon-primitives",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
  "rand_core 0.6.4",
- "sha3",
  "sorafs_chunker",
  "soranet_pq",
  "tempfile",
@@ -10256,11 +10328,13 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_telemetry",
  "norito",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
  "reqwest",
+ "rustix 1.1.4",
  "sorafs_car",
  "sorafs_chunker",
  "sorafs_manifest",
@@ -10287,6 +10361,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_logger",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_telemetry",
@@ -10298,6 +10373,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rust_decimal",
+ "rustix 1.1.4",
  "sha2",
  "sha3",
  "sorafs_car",
@@ -10369,6 +10445,7 @@ dependencies = [
  "hex",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "norito",
  "quinn",
@@ -10393,6 +10470,7 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "iroha_primitives",
  "thiserror 2.0.18",
 ]
@@ -11709,15 +11787,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unique_port"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3f903132efabcb4242e0bbf16aedb2c3867526e42126b6ed3cb1b0bc4577708"
-dependencies = [
- "once_cell",
-]
 
 [[package]]
 name = "universal-hash"
@@ -13041,6 +13110,7 @@ dependencies = [
  "iroha_crypto",
  "iroha_data_model",
  "iroha_genesis",
+ "iroha_model_base",
  "iroha_primitives",
  "iroha_service_model",
  "iroha_storage_client",
@@ -13351,6 +13421,7 @@ dependencies = [
  "iroha_core",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_model_base",
  "norito",
 ]
 

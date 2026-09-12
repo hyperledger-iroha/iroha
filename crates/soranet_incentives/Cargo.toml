@@ -10,10 +10,11 @@ description = "Deterministic SoraNet relay rewards and payout accounting"
 workspace = true
 
 [dependencies]
-iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
+iroha_model_base = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true, features = ["json"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
-iroha_data_model = { workspace = true, default-features = false, features = ["json", "test-fixtures", "transparent_api"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }

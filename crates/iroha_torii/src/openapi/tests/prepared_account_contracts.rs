@@ -77,14 +77,12 @@ fn prepared_account_transaction_schemas_are_closed_and_exactly_typed() {
             ][..],
         ),
         (
-            "TairaPublicResetMutationBinding",
+            "PreparedOperationBinding",
             &[
                 "schema",
-                "authorization_sha256",
-                "authorization_nonce",
+                "semantic_hash_hex",
                 "kind",
-                "phase",
-                "idempotency_key",
+                "request_id",
                 "execution_expires_at_unix_ms",
             ][..],
         ),
@@ -194,7 +192,7 @@ fn prepared_account_transaction_schemas_are_closed_and_exactly_typed() {
         (
             "AccountOnboardingPrepareRequest",
             "binding",
-            "TairaPublicResetOnboardingMutationBinding",
+            "PreparedOnboardingOperationBinding",
         ),
         (
             "AccountOnboardingPrepareRequest",
@@ -229,7 +227,7 @@ fn prepared_account_transaction_schemas_are_closed_and_exactly_typed() {
         (
             "AccountFaucetPrepareRequest",
             "binding",
-            "TairaPublicResetFaucetMutationBinding",
+            "PreparedFaucetOperationBinding",
         ),
         (
             "AccountFaucetPrepareRequest",
@@ -291,27 +289,22 @@ fn prepared_account_transaction_schemas_are_closed_and_exactly_typed() {
             "{owner} wire must be nonempty byte-aligned lowercase hex"
         );
     }
-    assert_eq!(
-            component_properties(schemas, "TairaPublicResetMutationBinding")["authorization_nonce"]
-                ["pattern"]
-                .as_str(),
-            Some("^[a-z0-9_-]{32}$")
+    for field in ["semantic_hash_hex", "request_id"] {
+        assert_eq!(
+            component_properties(schemas, "PreparedOperationBinding")[field]["pattern"].as_str(),
+            Some("^[0-9a-f]{64}$")
         );
-    assert_eq!(
-        component_properties(schemas, "TairaPublicResetMutationBinding")["phase"]["pattern"]
-            .as_str(),
-        Some("^[a-z0-9_-]+$")
-    );
+    }
     for (name, kind) in [
-        ("TairaPublicResetOnboardingMutationBinding", "onboarding"),
-        ("TairaPublicResetFaucetMutationBinding", "faucet"),
+        ("PreparedOnboardingOperationBinding", "onboarding"),
+        ("PreparedFaucetOperationBinding", "faucet"),
     ] {
         let variants = schemas[name]["allOf"]
             .as_array()
             .unwrap_or_else(|| panic!("{name} allOf"));
         assert_eq!(
             variants[0].get("$ref").and_then(Value::as_str),
-            Some("#/components/schemas/TairaPublicResetMutationBinding")
+            Some("#/components/schemas/PreparedOperationBinding")
         );
         assert_eq!(
             variants[1]["properties"]["kind"]

@@ -1,0 +1,176 @@
+{
+  "recorded_utc": "2026-09-08T04:53:48.718397+00:00",
+  "scope": "Frozen private collector projection descriptor for parent sampler implementation; not shipped schema or runtime evidence",
+  "source_sha256": "f0502157ce906cb58ec4638b3057ba782b5f777020264cfc93736cec606fad2b",
+  "prefix": "iroha_kura_resource_",
+  "metric_families": [
+    {
+      "name": "iroha_kura_resource_available",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Whether one complete Kura resource observation can be exposed exactly."
+    },
+    {
+      "name": "iroha_kura_resource_status",
+      "type": "gauge",
+      "label_names": [
+        "reason"
+      ],
+      "help": "Current Kura resource export status; exactly one fixed reason is present."
+    },
+    {
+      "name": "iroha_kura_resource_generation",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Generation of this complete resource observation in the current process."
+    },
+    {
+      "name": "iroha_kura_resource_fault_count",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Accounting publication faults recorded in the current process."
+    },
+    {
+      "name": "iroha_kura_resource_resident_associations",
+      "type": "gauge",
+      "label_names": [
+        "family"
+      ],
+      "help": "Stored resident lookup associations by fixed owner family."
+    },
+    {
+      "name": "iroha_kura_resource_persisted_entries",
+      "type": "gauge",
+      "label_names": [
+        "family"
+      ],
+      "help": "Physical index slots and standalone index records by fixed owner family."
+    },
+    {
+      "name": "iroha_kura_resource_index_bytes",
+      "type": "gauge",
+      "label_names": [
+        "family"
+      ],
+      "help": "Stable index file logical bytes by fixed owner family."
+    },
+    {
+      "name": "iroha_kura_resource_temporary_index_bytes",
+      "type": "gauge",
+      "label_names": [
+        "family"
+      ],
+      "help": "Present temporary index file logical bytes by fixed owner family."
+    },
+    {
+      "name": "iroha_kura_resource_storage_bytes",
+      "type": "gauge",
+      "label_names": [
+        "family"
+      ],
+      "help": "Logical file bytes in the declared Kura storage scope by fixed owner family."
+    },
+    {
+      "name": "iroha_kura_resource_resident_associations_sum",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Checked sum of all resident lookup associations."
+    },
+    {
+      "name": "iroha_kura_resource_persisted_entries_sum",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Checked sum of all physical index slots and standalone records."
+    },
+    {
+      "name": "iroha_kura_resource_index_bytes_sum",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Checked sum of stable index file logical bytes."
+    },
+    {
+      "name": "iroha_kura_resource_temporary_index_bytes_sum",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Checked sum of present temporary index file logical bytes."
+    },
+    {
+      "name": "iroha_kura_resource_storage_bytes_sum",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Checked logical bytes in the complete declared Kura storage scope."
+    },
+    {
+      "name": "iroha_kura_resource_represented_entries",
+      "type": "gauge",
+      "label_names": [],
+      "help": "Checked resident-association plus persisted-entry count; not RSS or transaction count."
+    }
+  ],
+  "family_labels": [
+    "resident_canonical",
+    "resident_transaction",
+    "resident_merge",
+    "resident_carrier",
+    "resident_replica",
+    "resident_verification",
+    "resident_frontier",
+    "resident_queue",
+    "canonical_index",
+    "canonical_hashes",
+    "pipeline_index",
+    "ownership_index",
+    "certified_index",
+    "execution_input_index",
+    "execution_preflight_index",
+    "application_receipt_index",
+    "merge_bundle_index",
+    "canonical_replica_index",
+    "merge_carrier_record",
+    "native_latest_record",
+    "query_marker_records",
+    "evidence_key_records",
+    "storage_bytes"
+  ],
+  "available": {
+    "available": 1,
+    "status_reason": "available",
+    "status_value": 1,
+    "sample_rows": 125,
+    "all_vectors_required": true
+  },
+  "unavailable": {
+    "available": 0,
+    "status_value": 1,
+    "sample_rows": 2,
+    "only_metrics": [
+      "iroha_kura_resource_available",
+      "iroha_kura_resource_status"
+    ],
+    "reason_labels": [
+      "owner_unavailable",
+      "unregistered",
+      "busy",
+      "interrupted",
+      "arithmetic",
+      "generation_changed",
+      "owner_mismatch",
+      "invalid_inventory",
+      "numeric_range"
+    ]
+  },
+  "integer_range": {
+    "minimum": 0,
+    "maximum": 9007199254740992,
+    "parse_decimal_exactly": true,
+    "numeric_range_failure_omits_entire_numeric_projection": true
+  },
+  "represented_entries": "resident_associations_sum + persisted_entries_sum; checked, non-saturating",
+  "scope_boundaries": {
+    "index": "represented resident associations plus persisted slots/standalone index records over all 23 families",
+    "storage": "exact Kura-managed nine trees, eleven root files and bounded process-generation quarantine; no delegated Sumeragi WAL/body/certserve or .kura.lock",
+    "rss": "not provided; must be observed by external process owner",
+    "queue": "ResidentQueue is pipeline/FASTPQ associations, not active transaction queue depth"
+  },
+  "timing": "one Kura snapshot per collector call; caller supplies request start/end using transaction collector Clock; full /metrics latency and size remain independently bounded"
+}

@@ -1,3 +1,45 @@
+/// Closed ledger origin for one invalid-body Report. A released terminal is
+/// inert; its actual rejection must still be selected by the body-store catalog.
+#[derive(Clone, Copy)]
+pub(super) enum RecoveredInvalidBodyValidateOriginV1<'ledger> {
+    Linked(&'ledger LifecycleReplayAuthorityV1, DurablePayloadReference),
+    Resolved(super::TerminalValidateNoSuccessorClaim),
+}
+
+#[derive(Clone)]
+struct RecoveredInvalidBodySourceV1 {
+    source: InvalidBodyReplaySourceV1,
+    terminal: Option<super::TerminalValidateNoSuccessorClaim>,
+}
+
+impl LifecycleReplayAuthorityV1 {
+    /// Compare only the closed origin relation; cryptography and the actual
+    /// durable outcome remain mandatory in the subsequent open transaction.
+    pub(super) fn matches_invalid_body_validate_origin(
+        &self,
+        context: LifecycleContext,
+        origin: RecoveredInvalidBodyValidateOriginV1<'_>,
+    ) -> bool {
+        let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &self.source else {
+            return false;
+        };
+        match origin {
+            RecoveredInvalidBodyValidateOriginV1::Linked(authority, payload) => {
+                source.exactly_descends_from_validate(context, authority, payload)
+            }
+            RecoveredInvalidBodyValidateOriginV1::Resolved(claim) => claim
+                .matches_reported_body_frame(
+                    context,
+                    source.outcome.manifest.round,
+                    source.outcome.manifest.subject,
+                    DurablePayloadReference::BodyFrame(
+                        source.origin_body_frame(context).durable_reference(),
+                    ),
+                ),
+        }
+    }
+}
+
 /// Authenticated cold execution authority for one exact live lifecycle output row.
 ///
 /// The complete effect, reconstructed ordinal-free pending binding, canonical
@@ -11,7 +53,7 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredLifecycleOutputV1 {
     candidate: CandidateAdmission,
     owner: OwnerId,
     ordinal: u128,
-    invalid_body: Option<InvalidBodyReplaySourceV1>,
+    invalid_body: Option<RecoveredInvalidBodySourceV1>,
 }
 
 impl core::fmt::Debug for AuthenticatedRecoveredLifecycleOutputV1 {
@@ -56,9 +98,14 @@ impl AuthenticatedRecoveredLifecycleOutputV1 {
         &self,
         outcome: &DurableBodyValidationOutcome,
     ) -> bool {
-        self.invalid_body
-            .as_ref()
-            .is_some_and(|source| source.exactly_matches_rejected_body_outcome(outcome))
+        self.invalid_body.as_ref().is_some_and(|binding| {
+            binding
+                .source
+                .exactly_matches_rejected_body_outcome(outcome)
+                && binding
+                    .terminal
+                    .is_none_or(|claim| claim.matches_outcome(outcome))
+        })
     }
 
     /// Recheck the complete cold source immediately before external output I/O.
@@ -89,8 +136,8 @@ impl AuthenticatedRecoveredLifecycleOutputV1 {
                 certificate.subject == *subject
                     && verified.verify_quorum_certificate(certificate).is_ok()
                     && self.invalid_body.as_ref().is_some_and(|source| {
-                        source.certificate == *certificate
-                            && source.cryptographically_authenticates(verified)
+                        source.source.certificate == *certificate
+                            && source.source.cryptographically_authenticates(verified)
                     })
             }
             AdapterEffect::Sign { .. }
@@ -183,12 +230,27 @@ impl InvalidBodyReplaySourceV1 {
     }
 }
 
+/// Authenticate an already owned Report against the actual retained rejection.
+/// The caller still checks its exact ledger row and canonical terminal relation.
+pub(super) fn authenticates_resolved_invalid_body_report(
+    authority: &LifecycleReplayAuthorityV1,
+    verified: &VerifiedHeightContext,
+    terminal: &super::ResolvedLifecycleValidateOutcomeV1,
+) -> bool {
+    let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &authority.source else {
+        return false;
+    };
+    source.cryptographically_authenticates(verified)
+        && terminal
+            .rejected_body_outcome()
+            .is_some_and(|outcome| source.exactly_matches_rejected_body_outcome(outcome))
+}
+
 /// Re-authenticate one exact output row from its canonical V1 replay source.
 ///
-/// `invalid_parent` is present only for `Validate -> InvalidBodyReport` and is
-/// already required to be a same-owner forward predecessor by LedgerV1.
-/// Complete replay-family equality and body-frame identity are still checked
-/// here before a report carrier is returned.
+/// `invalid_parent` is either the exact linked Validate predecessor or an
+/// older inert NoSuccessor terminal from the same ledger. The latter still
+/// requires the catalog to join its actual rejection with this current Report.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn authenticate_durable_lifecycle_output(
     verified: &VerifiedHeightContext,
@@ -203,7 +265,7 @@ pub(super) fn authenticate_durable_lifecycle_output(
     payload: DurablePayloadReference,
     continuation: super::schema::DurableContinuation,
     authority: &LifecycleReplayAuthorityV1,
-    invalid_parent: Option<(&LifecycleReplayAuthorityV1, DurablePayloadReference)>,
+    invalid_parent: Option<RecoveredInvalidBodyValidateOriginV1<'_>>,
 ) -> Option<AuthenticatedRecoveredLifecycleOutputV1> {
     if terminal.is_some()
         || payload != DurablePayloadReference::None
@@ -242,9 +304,20 @@ pub(super) fn authenticate_durable_lifecycle_output(
         LifecycleReplaySourceV1::InvalidCertifiedBody(source)
             if work_class == LifecycleWorkClass::InvalidBodyReport =>
         {
-            let (parent_authority, parent_payload) = invalid_parent?;
+            let origin = invalid_parent?;
             if !source.cryptographically_authenticates(verified)
-                || !source.exactly_descends_from_validate(context, parent_authority, parent_payload)
+                || !authority.matches_invalid_body_validate_origin(context, origin)
+            {
+                return None;
+            }
+            if let RecoveredInvalidBodyValidateOriginV1::Resolved(claim) = origin
+                && resolved_invalid_body_report_causal_key(
+                    claim.causal_root(),
+                    claim.ordinal(),
+                    authority,
+                )?
+                .as_ref()
+                    != owner.causal_root().digest().as_bytes()
             {
                 return None;
             }
@@ -253,7 +326,13 @@ pub(super) fn authenticate_durable_lifecycle_output(
                     subject: source.certificate.subject,
                     certificate: source.certificate.clone(),
                 },
-                Some(source.clone()),
+                Some(RecoveredInvalidBodySourceV1 {
+                    source: source.clone(),
+                    terminal: match origin {
+                        RecoveredInvalidBodyValidateOriginV1::Linked(_, _) => None,
+                        RecoveredInvalidBodyValidateOriginV1::Resolved(claim) => Some(claim),
+                    },
+                }),
             )
         }
         LifecycleReplaySourceV1::Wal(_)

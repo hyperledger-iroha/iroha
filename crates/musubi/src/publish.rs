@@ -29,7 +29,6 @@ use iroha_data_model::{
         InstructionBox,
         musubi::{AddMusubiArchiveLocationV1, PublishMusubiReleaseV1, RegisterMusubiArchiveV1},
     },
-    metadata::Metadata,
     musubi::{
         ArchiveId, MUSUBI_MAX_CAR_BYTES_V1, MUSUBI_MAX_LOCATION_PROVIDERS_V1,
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1,
@@ -53,6 +52,7 @@ use iroha_data_model::{
         TransactionSignature, signed::MultisigSignatures,
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_musubi_service::{
     MUSUBI_MAX_SEED_INGRESS_PLAN_BYTES_V1, MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1,
     MusubiSeedIngressCarPlanV1,
@@ -1583,6 +1583,8 @@ impl PublicationReleasePreparationFloorV1 {
 ///
 /// Immutable request fields and the sole publish instruction are deliberately not duplicated.
 /// Metadata is always empty and proof attachments are always absent in V1.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationReleaseSignedEnvelopeV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSignedEnvelopeV1 {
     /// Exact signature-bound creation time in Unix milliseconds.
@@ -1671,6 +1673,8 @@ impl PublicationReleaseSignedEnvelopeV1 {
     }
 }
 /// Durable compact intent for one exact fee-quoted release transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationReleaseSubmissionIntentV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSubmissionIntentV1 {
     /// Stable publication operation that owns this intent.
@@ -1865,6 +1869,8 @@ pub enum PublicationReleaseSubmissionTerminalReasonV1 {
     },
 }
 /// Terminal evidence appended before a successor release signature may be persisted.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationReleaseSubmissionTerminalV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSubmissionTerminalV1 {
     /// Iroha transaction identity of the exact terminal attempt.
@@ -1991,6 +1997,8 @@ impl PublicationReleaseSubmissionTerminalV1 {
     }
 }
 /// Append-only authoritative outcome of one exact release transaction generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationReleaseSubmissionOutcomeV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[allow(
     clippy::large_enum_variant,
@@ -2070,6 +2078,8 @@ impl PublicationReleaseSubmissionOutcomeV1 {
     }
 }
 /// One bounded append-only release transaction generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationReleaseSubmissionAttemptV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationReleaseSubmissionAttemptV1 {
     /// One-based contiguous generation number.
@@ -2176,6 +2186,8 @@ fn release_signed_transaction_wire_v1(
         })
 }
 /// Idempotent Native AMX submission and authoritative application evidence.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationAmxSubmissionV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationAmxSubmissionV1 {
     /// Operation identifier passed to the backend idempotency boundary.
@@ -2229,6 +2241,8 @@ impl PublicationAmxSubmissionV1 {
     }
 }
 /// Exact finalized home-dataspace and universal-index publication result.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationFinalEvidenceV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationFinalEvidenceV1 {
     /// Exact genesis-derived network identity returned with the universal-index row.
@@ -2310,6 +2324,8 @@ impl PublicationFinalEvidenceV1 {
 /// The checkpoint binds the immutable request and canonical projection digests, but its public
 /// self-digest is not an authenticated finalized-query receipt. Completed resume therefore relies
 /// on the publication journal's trusted private-storage boundary.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationFinalCheckpointV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationFinalCheckpointV1 {
     /// Stable request-derived operation identity, including the public anti-replay nonce.
@@ -2434,6 +2450,8 @@ pub struct PublicationResultV1 {
     pub final_checkpoint: PublicationFinalCheckpointV1,
 }
 /// Durable, secret-free operation journal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publish::PublicationJournalV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationJournalV1 {
     /// Fixed schema marker.
@@ -4697,3 +4715,7 @@ mod unsupported_platform_tests {
         assert!(!requested.exists());
     }
 }
+
+#[cfg(test)]
+#[path = "publish/frame_identity_tests.rs"]
+mod frame_identity_tests;

@@ -31,6 +31,18 @@ impl DetachedDurableValidateExecution {
         if outcome.durable_body() != &self.durable_receipt {
             return Err((V2BodyStoreError::ReceiptMismatch, self));
         }
+        // Keep the validator's diagnosis before a later CommitQC/rejection
+        // contradiction closes the reducer. The durable marker contains only
+        // the closed rejection identity, so its detailed reason cannot be
+        // recovered from that marker after the process exits.
+        if let Some(reason) = outcome.rejection_reason() {
+            iroha_logger::warn!(
+                round = ?self.round,
+                subject = ?self.subject,
+                %reason,
+                "durable candidate validation rejected its exact body"
+            );
+        }
         Ok(ExecutedDurableValidateExecution {
             request: self,
             outcome,
@@ -79,7 +91,7 @@ impl DurableValidateDispatch {
             && self.request.lifecycle_key.context().as_bytes()
                 == self.request.round.context_id.0.as_ref()
             && self.request.lifecycle_key.round().height() == self.request.round.height
-            && self.request.lifecycle_key.phase() == super::LifecyclePhase::Validate
+            && self.request.lifecycle_key.phase().is_validate()
             && self.request.lifecycle_stage.kind() == super::LifecycleStageKind::ValidateBody
     }
     /// Execute the exact request after its claimed lifecycle row became an

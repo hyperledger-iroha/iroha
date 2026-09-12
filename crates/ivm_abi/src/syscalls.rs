@@ -129,8 +129,8 @@ pub const STATE_SCAN_MAX_ITEMS_V1: u64 = 64;
 ///
 /// The 16 KiB path accommodates a canonical `Name` base of at most 255 UTF-8 bytes, one separator,
 /// and the lowercase-hex expansion of a 4 KiB canonical key. Keep this synchronized with
-/// `iroha_data_model::state_path::MAX_STATE_PATH_BYTES`.
-pub const STATE_MAX_PATH_BYTES: usize = iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
+/// `iroha_model_base::state_path::MAX_STATE_PATH_BYTES`.
+pub const STATE_MAX_PATH_BYTES: usize = iroha_model_base::state_path::MAX_STATE_PATH_BYTES;
 /// Conservative maximum canonical Norito frame carried inside the `NoritoBytes` path TLV.
 ///
 /// This separately ABI-binds transport framing so header-only gas quoting can
@@ -149,7 +149,7 @@ pub const STATE_MAX_VALUE_BYTES: usize = 512 * 1024;
 /// Maximum raw canonical Norito key-payload bytes accepted by V1 `StateMap` paths.
 pub const STATE_MAP_MAX_KEY_BYTES: usize = 4 * 1024;
 /// Maximum UTF-8 bytes in the canonical `Name` used as a V1 `StateMap` base.
-pub const STATE_MAP_MAX_BASE_BYTES: usize = iroha_data_model::name::MAX_NAME_BYTES;
+pub const STATE_MAP_MAX_BASE_BYTES: usize = iroha_model_base::name::MAX_NAME_BYTES;
 /// Conservative maximum canonical Norito `Name` frame accepted for a V1 `StateMap` base.
 pub const STATE_MAP_MAX_BASE_FRAME_BYTES: usize = STATE_MAP_MAX_BASE_BYTES
     + norito::core::Header::SIZE
@@ -2440,7 +2440,7 @@ fn private_input_surface_v1() -> Result<AbiPrivateInputSurface, AbiSurfaceError>
     Ok(AbiPrivateInputSurface {
         abi_version: PRIVATE_INPUT_ABI_VERSION_V1,
         record_name: PRIVATE_INPUT_RECORD_NAME_V1,
-        record_schema_hash: <PrivateInputRecordV1 as norito::NoritoSerialize>::schema_hash(),
+        record_schema_hash: norito::schema::identity::frame_hash::<PrivateInputRecordV1>(),
         record_layout: "canonical-Norito-v1-frame;PrivateInputRecordV1{kind:explicit-u32-codec-index,payload:Vec<u8>};payload-is-one-complete-canonical-schema-bound-numeric-frame",
         kind_discriminant_layout: "u32-little-endian-codec-index;Int=0;Decimal=1;Quantity=2;register-request-tag-is-the-same-numeric-value",
         kinds: vec![
@@ -3365,9 +3365,9 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         schema_hash_domain: STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
         schema_hash_algorithm: "iroha_crypto::Hash::new(schema-hash-domain||exact-canonical-Norito-schema-frame)",
         schema_name: STATE_VALUE_SCHEMA_NAME_V1,
-        schema_hash: <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash(),
+        schema_hash: norito::schema::identity::frame_hash::<StateValueSchemaV1>(),
         record_name: STATE_VALUE_RECORD_NAME_V1,
-        record_hash: <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash(),
+        record_hash: norito::schema::identity::frame_hash::<StateValueRecordV1>(),
         schema_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KSV1||u16le(total-logical-node-count)||flat-preorder-u8-node-and-kind-tag-stream);List-capacity-precedes-inline-element-subtree;exactly-one-root;iterative-encode-decode",
         record_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KRV1||schema-hash-[u8;32]||root-u16le-atom-count||flat-active-only-atom-stream);atom=u8-tag+variant-payload;Tag-and-Bool=u8(only-0-or-1);Pointer=u32le-byte-length+raw-bytes;List=u8-item-count(0..64)+each-item-u16le-atom-count(1..256)+inline-item-stream;iterative-encode-decode-drop",
         traversal_semantics: "schema-is-exactly-one-preorder-tree;products-store-children-in-order;sums-and-lists-consume-one-compiler-owned-word;record-atoms-contain-only-active-sum-payloads",
@@ -3436,11 +3436,13 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
         contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_types);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
-        contract_interface_schema_hash:
-            <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(),
+        contract_interface_schema_hash: norito::schema::identity::frame_hash::<
+            crate::metadata::EmbeddedContractInterfaceV1,
+        >(),
         embedded_state_type_schema_name: crate::metadata::EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1,
-        embedded_state_type_schema_hash:
-            <crate::metadata::EmbeddedStateType as norito::NoritoSerialize>::schema_hash(),
+        embedded_state_type_schema_hash: norito::schema::identity::frame_hash::<
+            crate::metadata::EmbeddedStateType,
+        >(),
         embedded_state_type_tag_layout: "one-u8-tag-at-start-of-custom-length-delimited-payload",
         embedded_state_type_max_depth: u64::try_from(
             crate::metadata::MAX_EMBEDDED_STATE_TYPE_DEPTH_V1,
@@ -3487,9 +3489,13 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         operation_path_rules: "canonical-StatePath-transport-only;CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;count-operation(STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;page-operation(STATE_SCAN)=exact-declared-bare-StateMap-base-only;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
         state_value_validation_version: 1,
         state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;schema-frame=canonical-Norito-Vec<u8>(KSV1+u16le-total-logical-node-count+flat-preorder-u8-node-and-kind-tags);record-frame=canonical-Norito-Vec<u8>(KRV1+schema-hash+root-u16le-atom-count+flat-active-only-u8-tagged-atom-stream);require-exact-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=unavailable",
-        cursor_schema_hash: <iroha_data_model::smart_contract::state_cursor::StateCursorV1 as norito::NoritoSerialize>::schema_hash(),
-        cursor_schema_hash_domain: iroha_data_model::smart_contract::state_cursor::STATE_CURSOR_SCHEMA_HASH_DOMAIN_V1,
-        cursor_max_bytes: iroha_data_model::smart_contract::state_cursor::MAX_STATE_CURSOR_BYTES_V1 as u64,
+        cursor_schema_hash: norito::schema::identity::frame_hash::<
+            iroha_data_model::smart_contract::state_cursor::StateCursorV1,
+        >(),
+        cursor_schema_hash_domain:
+            iroha_data_model::smart_contract::state_cursor::STATE_CURSOR_SCHEMA_HASH_DOMAIN_V1,
+        cursor_max_bytes: iroha_data_model::smart_contract::state_cursor::MAX_STATE_CURSOR_BYTES_V1
+            as u64,
         scan_max_candidates: STATE_SCAN_MAX_CANDIDATES_V1 as u64,
         cursor_layout: "canonical-Norito-StateCursorV1{instance:String<=1024,map:bare-Name-StatePath<=255,schema_hash:[u8;32],key_type:EntrypointValueKindV1,last_key:canonical-map-child-StatePath};schema_hash=Iroha-Hash(domain||canonical-Norito-EmbeddedStateType::StateMap);word=NoritoBytes-pointer;JSON=0x-prefixed-frame-hex",
         scan_semantics: "STATE_SCAN=seek-after-last-examined-canonical-key;instance-and-exact-map-schema-bound;position-never-authorization;current-invocation-backing-plus-overlay;sorted-distinct-candidates-including-tombstones;stop-immediately-at-N-live-values-or-64-candidates;no-total-count-or-extra-lookahead;bounded-page-has-continuation-even-if-next-page-empty;deleted-cursor-key-valid;insertions-before-cursor-not-revisited;gas=request-and-schema-bytes+examined-physical-key-bytes-and-items+response-bytes;conservative-map-prefix-scheduler-read",
@@ -3554,13 +3560,13 @@ mod tests {
     use super::*;
     #[test]
     fn durable_state_frame_bounds_cover_exact_text_maxima() {
-        let path: iroha_data_model::state_path::StatePath = "p"
+        let path: iroha_model_base::state_path::StatePath = "p"
             .repeat(STATE_MAX_PATH_BYTES)
             .parse()
             .expect("maximum StatePath");
         let path_frame = norito::to_bytes(&path).expect("encode maximum StatePath");
         assert!(path_frame.len() <= STATE_MAX_PATH_FRAME_BYTES);
-        let base: iroha_data_model::name::Name = "b"
+        let base: iroha_model_base::name::Name = "b"
             .repeat(STATE_MAP_MAX_BASE_BYTES)
             .parse()
             .expect("maximum Name");
@@ -3568,11 +3574,11 @@ mod tests {
         assert!(base_frame.len() <= STATE_MAP_MAX_BASE_FRAME_BYTES);
         assert_eq!(
             STATE_MAX_PATH_BYTES,
-            iroha_data_model::state_path::MAX_STATE_PATH_BYTES
+            iroha_model_base::state_path::MAX_STATE_PATH_BYTES
         );
         assert_eq!(
             STATE_MAP_MAX_BASE_BYTES,
-            iroha_data_model::name::MAX_NAME_BYTES
+            iroha_model_base::name::MAX_NAME_BYTES
         );
     }
     fn canonical_surface() -> AbiSurface {
@@ -3958,8 +3964,7 @@ mod tests {
         );
         assert_eq!(
             state.contract_interface_schema_hash,
-            <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(
-            )
+            norito::schema::identity::frame_hash::<crate::metadata::EmbeddedContractInterfaceV1>()
         );
         assert_eq!(
             state.embedded_state_type_schema_name,
@@ -3967,7 +3972,7 @@ mod tests {
         );
         assert_eq!(
             state.embedded_state_type_schema_hash,
-            <crate::metadata::EmbeddedStateType as norito::NoritoSerialize>::schema_hash()
+            norito::schema::identity::frame_hash::<crate::metadata::EmbeddedStateType>()
         );
         assert_eq!(
             state.embedded_state_type_max_depth,
@@ -4171,12 +4176,12 @@ mod tests {
         assert_eq!(typed.schema_name, STATE_VALUE_SCHEMA_NAME_V1);
         assert_eq!(
             typed.schema_hash,
-            <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash()
+            norito::schema::identity::frame_hash::<StateValueSchemaV1>()
         );
         assert_eq!(typed.record_name, STATE_VALUE_RECORD_NAME_V1);
         assert_eq!(
             typed.record_hash,
-            <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash()
+            norito::schema::identity::frame_hash::<StateValueRecordV1>()
         );
         assert_eq!(typed.kinds.len(), 19);
         assert_eq!(typed.nodes.len(), 9);

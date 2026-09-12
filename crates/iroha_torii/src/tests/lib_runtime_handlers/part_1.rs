@@ -25,32 +25,31 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId, NetworkId, Registrable, ValidationFail,
+    NetworkId, Registrable, ValidationFail,
     account::{Account, AccountAlias, AccountId, OpaqueAccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION,
-            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+            BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment,
+            GlobalPhase, HeightContext, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
+            finality::V2FinalityArtifact,
         },
     },
     consensus::{
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
         VALIDATOR_SET_HASH_VERSION_V1,
     },
-    domain::{Domain, DomainId},
+    domain::Domain,
     events::{
         pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
         trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     },
     isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
     level::Level,
-    name::Name,
-    nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
+    nexus::{AxtPolicySnapshot, AxtRejectReason, UniversalAccountId},
     parameter::{Parameter, system::SumeragiNposParameters},
-    peer::{Peer, PeerId},
+    peer::Peer,
     permission::Permission,
     soranet::privacy_metrics::{
         SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1, SoranetPrivacyEventV1,
@@ -70,6 +69,11 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
 use iroha_torii_shared::configuration::Configuration;
@@ -96,6 +100,166 @@ fn query_conversion_message(err: &Error) -> Option<&str> {
 pub fn mk_app_state_for_tests() -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
 }
+#[tokio::test]
+async fn api_version_negotiates_text_success_and_typed_unavailable() {
+    use iroha_version::Version as _;
+
+    let app = mk_app_state_for_tests();
+    let router = axum::Router::new()
+        .route(
+            iroha_torii_shared::uri::API_VERSION,
+            axum::routing::get(handler_version),
+        )
+        .layer(axum::middleware::from_fn(capture_response_format))
+        .layer(axum::middleware::from_fn(coalesce_accept_headers))
+        .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+        .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+        .with_state(Arc::clone(&app));
+    let request = |accept| {
+        let mut request = axum::http::Request::builder()
+            .uri(iroha_torii_shared::uri::API_VERSION)
+            .header(axum::http::header::ACCEPT, accept)
+            .body(Body::empty())
+            .expect("version request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::core::API_VERSION,
+            ));
+        request
+    };
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("text/plain"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "text-only requests cannot negotiate the public route's typed errors"
+    );
+    let unavailable = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("version response without genesis");
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        unavailable.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+    let bytes = axum::body::to_bytes(unavailable.into_body(), 4096)
+        .await
+        .unwrap();
+    let envelope: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        envelope.get("code").and_then(norito::json::Value::as_str),
+        Some("service_unavailable")
+    );
+
+    let block = make_empty_signed_block(1, None, 0);
+    let expected_version = block.version().to_string();
+    let header = block.header();
+    let hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, header, hash);
+    let success = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("version response with committed genesis");
+    assert_eq!(success.status(), StatusCode::OK);
+    assert_eq!(
+        success.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let bytes = axum::body::to_bytes(success.into_body(), 4096)
+        .await
+        .unwrap();
+    assert_eq!(bytes.as_ref(), expected_version.as_bytes());
+    assert_eq!(
+        router
+            .oneshot(request("application/json"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "the successful version representation must still be plain text"
+    );
+}
+#[tokio::test]
+async fn readiness_rejects_closed_consensus_ingress() {
+    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
+        .unwrap_or_else(|_| panic!("unique readiness app"));
+    app.sumeragi = Some(iroha_core::sumeragi::SumeragiHandle::emergency_fast_disabled());
+    assert_eq!(
+        handler_readyz(State(Arc::new(app))).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "completed Queue startup alone cannot open consensus ingress"
+    );
+}
+
+#[tokio::test]
+async fn readiness_rejects_empty_queue_startup_reconciliation() {
+    let app = mk_app_state_for_tests();
+    // Exercise the response boundary as well as the handler: readiness success
+    // is plain text, while the ordinary failure contract is a JSON envelope.
+    let router = axum::Router::new()
+        .route("/readyz", axum::routing::get(handler_readyz))
+        .layer(axum::middleware::from_fn(capture_response_format))
+        .layer(axum::middleware::from_fn(coalesce_accept_headers))
+        .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+        .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
+        .with_state(Arc::clone(&app));
+    let request = |accept| {
+        axum::http::Request::builder()
+            .uri("/readyz")
+            .header(axum::http::header::ACCEPT, accept)
+            .body(Body::empty())
+            .expect("readiness request")
+    };
+    let response = router
+        .clone()
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("healthy readiness response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(request("application/json"))
+            .await
+            .expect("incompatible readiness request")
+            .status(),
+        StatusCode::NOT_ACCEPTABLE,
+        "JSON-only probes cannot negotiate a healthy text readiness response"
+    );
+    let directory = tempfile::tempdir().expect("readiness journal root");
+    app.queue
+        .install_lane_reservation_journal(
+            &directory.path().join("reservations.norito"),
+            1024 * 1024,
+        )
+        .expect("install actual empty startup journal");
+    assert!(app.queue.lane_reservation_startup_reconciliation_pending());
+    let response = router
+        .oneshot(request("text/plain, application/json"))
+        .await
+        .expect("pending readiness response");
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "an HTTP listener and empty queue do not establish write readiness"
+    );
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+}
+
 fn mk_app_state_for_tests_with_chain_id(chain_id: ChainId) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options_and_chain_id(
         World::default(),
@@ -646,10 +810,13 @@ fn install_lane_manifest_registry_for_test(
 }
 /// Test-only wire twin of the private core committee record.
 ///
-/// The explicit schema name keeps its Norito header identical to the record
+/// The explicit frame identity keeps its Norito header identical to the record
 /// decoded by `State`; field order and types intentionally mirror that record.
-#[derive(norito::Encode)]
-#[norito(schema_name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1",
+    frame = "iroha_core::state::AutoscaleLaneCommitteeV1"
+)]
 struct AutoscaleLaneCommitteeFixtureV1 {
     version: u8,
     validator_set_hash_version: u16,
@@ -658,6 +825,33 @@ struct AutoscaleLaneCommitteeFixtureV1 {
     validator_pops: Vec<Vec<u8>>,
     validator_count: u32,
     min_quorum: u32,
+}
+#[test]
+fn autoscale_fixture_declares_its_nominal_identity_and_core_frame_projection() {
+    use norito::NoritoSchema as _;
+    let nominal = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1";
+    let frame = "iroha_core::state::AutoscaleLaneCommitteeV1";
+    assert_eq!(AutoscaleLaneCommitteeFixtureV1::nominal_name(), nominal);
+    assert_eq!(AutoscaleLaneCommitteeFixtureV1::frame_name(), frame);
+    assert_ne!(nominal, frame);
+    assert_eq!(
+        Vec::<AutoscaleLaneCommitteeFixtureV1>::nominal_name(),
+        format!("alloc::vec::Vec<{nominal}>"),
+    );
+    assert_eq!(
+        norito::schema::identity::frame_hash::<AutoscaleLaneCommitteeFixtureV1>(),
+        norito::core::schema_hash_for_name(frame),
+    );
+    let keys = (0xa1_u8..=0xa4)
+        .map(|seed| checked_torii_test_bls_keypair(seed, "declared autoscale fixture identity"))
+        .collect::<Vec<_>>();
+    let mut lane = iroha_data_model::nexus::LaneConfig::default();
+    let peers = pin_autoscale_lane_committee_for_test(&mut lane, &keys);
+    assert_eq!(peers.len(), 4);
+    let bytes = hex::decode(&lane.metadata[iroha_data_model::nexus::AUTOSCALE_META_COMMITTEE])
+        .expect("actual fixture committee frame");
+    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::core::schema_hash_for_name(frame));
 }
 /// Attach a canonical, PoP-valid immutable committee to an autoscale fixture.
 fn pin_autoscale_lane_committee_for_test(
@@ -1162,7 +1356,7 @@ pub(crate) fn bind_account_alias_for_test(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     world
         .account_aliases_mut_for_testing()
@@ -1216,7 +1410,7 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
     let controllers = vec![iroha_data_model::sns::NameControllerV1::account(
         &account_address,
     )];
-    let mut dataspace_metadata = iroha_data_model::metadata::Metadata::default();
+    let mut dataspace_metadata = iroha_model_base::metadata::Metadata::default();
     dataspace_metadata.insert(
         iroha_core::sns::SNS_DATASPACE_ID_METADATA_KEY
             .parse()
@@ -1243,7 +1437,7 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     let next_height = app
         .state
@@ -1358,7 +1552,7 @@ pub(crate) fn bind_domain_name_for_test_with_status(
         u64::MAX,
         u64::MAX,
         u64::MAX,
-        iroha_data_model::metadata::Metadata::default(),
+        iroha_model_base::metadata::Metadata::default(),
     );
     record.status = status;
     tx.world_mut_for_testing()
@@ -1623,7 +1817,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         topo_block.clear();
         let peer_keypair =
             checked_torii_test_ed25519_keypair(0xb3, "derive Torii topology fixture peer key");
-        let peer_id = iroha_data_model::peer::PeerId::from(peer_keypair.public_key().clone());
+        let peer_id = iroha_model_base::peer::PeerId::from(peer_keypair.public_key().clone());
         topo_block.push(peer_id);
         topo_block.commit();
     }
@@ -1845,6 +2039,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         "default query memory pool admits one stored ordinary query"
     );
     Arc::new(AppState {
+        build_status: crate::build_identity_test_fixture::build_identity().status(),
         shutdown_signal: ShutdownSignal::new(),
         events,
         kura,
@@ -2083,6 +2278,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         #[cfg(feature = "app_api")]
         stream_token_admission_capture: None,
         #[cfg(feature = "app_api")]
+        stream_token_cleanup: None,
+        #[cfg(feature = "app_api")]
         stream_token_concurrency: sorafs::StreamTokenConcurrencyTracker::default(),
         #[cfg(feature = "app_api")]
         stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),
@@ -2110,7 +2307,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
         #[cfg(feature = "connect")]
-        torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        torii_proxy_pending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         #[cfg(feature = "connect")]
         torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(
             CompletedToriiProxyRequests::default(),
@@ -2143,12 +2340,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     })
 }
 #[cfg(feature = "telemetry")]
-pub async fn mk_norito_rpc_test_harness(
-    cfg: NoritoRpcTransport,
-) -> (SharedAppState, Arc<iroha_telemetry::metrics::Metrics>) {
-    let app = mk_app_state_for_tests_with_options(None, None, Some(cfg), None);
-    let metrics = iroha_telemetry::metrics::global_or_default();
-    (app, metrics)
+pub async fn mk_norito_rpc_test_harness(cfg: NoritoRpcTransport) -> SharedAppState {
+    mk_app_state_for_tests_with_options(None, None, Some(cfg), None)
 }
 #[tokio::test]
 async fn runtime_handlers_ok_without_token_and_rate_limit() {
@@ -2423,7 +2616,10 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        routing::MaybeTelemetry::disabled(),
+        crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii test fixture");
     assert!(
@@ -2489,7 +2685,10 @@ async fn torii_ram_lfe_uses_config_runtime() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        routing::MaybeTelemetry::disabled(),
+        crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii test fixture");
     assert!(

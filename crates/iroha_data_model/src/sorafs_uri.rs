@@ -1,7 +1,7 @@
 //! Module with [`SorafsUri`] and related impls.
 pub use self::model::*;
-use crate::error::ParseError;
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use iroha_primitives::conststr::ConstString;
 use norito::codec::{Decode, Encode};
 use std::{str::FromStr, string::String};
@@ -21,29 +21,23 @@ impl SorafsUri {
         const PREFIX: &str = "sorafs://";
         let trimmed = value.trim();
         if trimmed.is_empty() {
-            return Err(ParseError {
-                reason: "SoraFS URI must not be empty",
-            });
+            return Err(ParseError::new("SoraFS URI must not be empty"));
         }
         if trimmed != value {
-            return Err(ParseError {
-                reason: "SoraFS URI must not contain leading or trailing whitespace",
-            });
+            return Err(ParseError::new(
+                "SoraFS URI must not contain leading or trailing whitespace",
+            ));
         }
         if trimmed.chars().any(char::is_control) {
-            return Err(ParseError {
-                reason: "SoraFS URI must not contain control characters",
-            });
+            return Err(ParseError::new(
+                "SoraFS URI must not contain control characters",
+            ));
         }
         let Some(rest) = trimmed.strip_prefix(PREFIX) else {
-            return Err(ParseError {
-                reason: "Logo URI must use `sorafs://` scheme",
-            });
+            return Err(ParseError::new("Logo URI must use `sorafs://` scheme"));
         };
         if rest.is_empty() {
-            return Err(ParseError {
-                reason: "SoraFS URI payload must not be empty",
-            });
+            return Err(ParseError::new("SoraFS URI payload must not be empty"));
         }
         Ok(())
     }
@@ -60,7 +54,7 @@ impl AsRef<str> for SorafsUri {
         &self.0
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for SorafsUri {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -72,7 +66,7 @@ impl norito::json::FastJsonWrite for SorafsUri {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for SorafsUri {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -80,7 +74,7 @@ impl norito::json::JsonDeserialize for SorafsUri {
         let value = parser.parse_string()?;
         value
             .parse()
-            .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
+            .map_err(|err: ParseError| norito::json::Error::Message(err.reason().into()))
     }
 }
 #[cfg(test)]

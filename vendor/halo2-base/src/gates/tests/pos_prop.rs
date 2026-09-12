@@ -8,7 +8,7 @@ use crate::{QuantumCell, QuantumCell::Witness};
 use num_bigint::{BigUint, RandBigInt, RandomBits};
 use proptest::{collection::vec, prelude::*};
 use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 
 prop_compose! {
     pub fn rand_fr()(seed in any::<u64>()) -> Fr {

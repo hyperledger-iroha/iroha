@@ -42,12 +42,21 @@ fn is_zero_prehash_sentinel(hash: Hash) -> bool {
 }
 
 /// Cast-capable lifecycle phases admitted to the authenticated context set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(tag = "phase", content = "value", rename_all = "SCREAMING_SNAKE_CASE")
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
+#[norito(tag = "phase", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingPhaseV1")]
 pub enum ParliamentTimedOvnCastingPhaseV1 {
@@ -60,10 +69,17 @@ pub enum ParliamentTimedOvnCastingPhaseV1 {
 }
 
 /// Cached commitment to the exact ordered canonical registration-record bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -123,10 +139,17 @@ impl ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
 }
 
 /// Compact exact future-release identity carried after survivor freeze.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -151,10 +174,16 @@ pub struct ParliamentTimedOvnReleaseBindingV1 {
 }
 
 /// Compact archive-derived commitment for one authorized timed-OVN casting context.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -289,10 +318,17 @@ impl ParliamentTimedOvnCastingContextBindingV1 {
 }
 
 /// Root-and-count commitment written into every non-replay block witness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -323,6 +359,13 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     }
 
     /// Commit a strictly ballot-id-ordered set of independently valid bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for height zero, a count exceeding `u32` or the protocol maximum, a
+    /// binding with another height or invalid phase/binding fields, or ballot identifiers
+    /// that are not strictly increasing. Also rejects failure to derive a root from a
+    /// nonempty binding set.
     pub fn from_ordered_bindings(
         evaluated_height: u64,
         bindings: &[ParliamentTimedOvnCastingContextBindingV1],
@@ -374,10 +417,16 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
 }
 
 /// Merkle membership proof for one compact casting-context binding.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -430,10 +479,16 @@ impl ParliamentTimedOvnCastingContextMembershipProofV1 {
 }
 
 /// Sparse-SMT proof that the casting-context snapshot is an ordinary write.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -450,10 +505,16 @@ pub struct ParliamentTimedOvnCastingWitnessProofV1 {
 }
 
 /// Finalized proof material for one requested authorized casting context.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -519,6 +580,12 @@ impl ParliamentTimedOvnCastingWitnessProofV1 {
     }
 
     /// Decode and return the exact canonical snapshot commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is not an exact canonical snapshot frame, decoding
+    /// fails or exceeds its resource limits, or the decoded version, height, count and root
+    /// are incoherent.
     pub fn commitment(&self) -> Result<ParliamentTimedOvnCastingSnapshotCommitmentV1, String> {
         let commitment: ParliamentTimedOvnCastingSnapshotCommitmentV1 =
             norito::decode_canonical(&self.value).map_err(|error| {
@@ -617,7 +684,7 @@ mod tests {
         let snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(12, &bindings)
                 .expect("snapshot");
-        let tree = MerkleTree::from_iter(bindings.iter().map(HashOf::new));
+        let tree: MerkleTree<_> = bindings.iter().map(HashOf::new).collect();
         let proof = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(1).expect("second proof"),
         );
@@ -712,7 +779,7 @@ mod tests {
         let snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(12, &bindings)
                 .expect("casting snapshot");
-        let tree = MerkleTree::from_iter(bindings.iter().map(HashOf::new));
+        let tree: MerkleTree<_> = bindings.iter().map(HashOf::new).collect();
         let membership = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(0).expect("first membership proof"),
         );

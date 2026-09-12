@@ -1,0 +1,5 @@
+error: duplicate `validate` attribute
+ --> tests/ui_fail/duplicate_binary_validation_hook.rs:4:36
+  |
+4 | #[norito(validate = "Self::first", validate = "Self::second")]
+  |                                    ^^^^^^^^

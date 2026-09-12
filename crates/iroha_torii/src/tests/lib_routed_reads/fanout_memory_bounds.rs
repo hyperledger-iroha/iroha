@@ -238,6 +238,32 @@ fn canonical_iterable_writer_matches_query_response_wire_and_exact_cap() {
         let encoded = crate::utils::encode_norito_bounded(&bounded, golden.len())
             .expect("the exact response boundary must fit");
         assert_eq!(encoded, golden);
+        assert_eq!(
+            <BoundedCanonicalIterableFanoutResponse as norito::NoritoSchema>::nominal_name(),
+            "iroha_torii::BoundedCanonicalIterableFanoutResponse",
+        );
+        assert_eq!(
+            <BoundedCanonicalIterableFanoutResponse as norito::NoritoSchema>::frame_name(),
+            <iroha_data_model::query::QueryResponse as norito::NoritoSchema>::frame_name(),
+        );
+        let decoded: iroha_data_model::query::QueryResponse =
+            norito::decode_canonical(&encoded).expect("bounded writer uses the actual model frame");
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("reencode model frame"),
+            encoded
+        );
+        let mut wrong_owner = encoded.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<iroha_data_model::query::QueryResponse>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch),
+        ));
+        assert!(
+            norito::decode_canonical::<iroha_data_model::query::QueryResponse>(
+                &encoded[..encoded.len() - 1]
+            )
+            .is_err()
+        );
         let error = crate::utils::encode_norito_bounded(&bounded, golden.len() - 1)
             .expect_err("F + 1 must fail before allocating the destination");
         assert!(matches!(
@@ -452,8 +478,8 @@ fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
     assert!(
         QUERY_FANOUT_ROUTE_OVERHEAD_BYTES
             >= core::mem::size_of::<(
-                iroha_data_model::nexus::DataSpaceId,
-                iroha_data_model::nexus::LaneId,
+                iroha_model_base::topology::DataSpaceId,
+                iroha_model_base::topology::LaneId,
             )>() + core::mem::size_of::<RoutingDecision>(),
         "the per-route charge must cover map payload plus the collected route"
     );
@@ -659,8 +685,28 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scr
         .expect("exact proxy HTTP phase boundary should fit");
     assert_eq!(
         envelope.working_set_bytes,
-        fixed + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 + 5 * 17
+        fixed
+            + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1
+            + torii_proxy_strict_response_working_set_bytes().unwrap()
+            + 5 * 17
     );
+    #[cfg(feature = "connect")]
+    {
+        let strict = torii_proxy_strict_response_working_set_bytes().unwrap();
+        assert!(
+            strict
+                >= QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS
+                    * QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1
+        );
+        let omitted = ToriiProxyHttpIngressEnvelope {
+            working_set_bytes: envelope.working_set_bytes - strict,
+            ..envelope
+        };
+        assert!(
+            !omitted.phases_fit(),
+            "omitting the strict response reservation must fail admission"
+        );
+    }
     assert_eq!(envelope.body_bytes, 17);
     assert_eq!(envelope.decode_allocated_bytes, 17);
     assert_eq!(envelope.forwarded_request_bytes, 17);
@@ -672,7 +718,7 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scr
     };
     assert!(
         !undersized.phases_fit(),
-        "the strict local clone must be charged to the admitted envelope"
+        "the local clone, fixed response window and reduction scratch must all be charged"
     );
 }
 #[test]
@@ -813,13 +859,15 @@ fn fanout_decode_budget_accepts_exact_bound_and_rejects_next_byte() {
 #[test]
 fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_torii::torii_routed_read_tests::versioned_ingress_counts_bad_exact_serializer_before_destination_allocation::BadExact"
+    )]
     struct BadExact<'a> {
         calls: &'a AtomicUsize,
         payload: [u8; 32],
     }
-    impl norito::core::NoritoSerialize for BadExact<'_> {
-}
-impl norito::core::SerializePayload for BadExact<'_> {
+    impl norito::core::SerializePayload for BadExact<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -856,6 +904,40 @@ impl norito::core::SerializePayload for BadExact<'_> {
     let encoded = encode_versioned_norito_bounded(&hostile, 33)
         .expect("the exact real frame boundary should fit");
     assert_eq!(encoded.len(), 33);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+#[test]
+fn versioned_ingress_accepts_payload_only_roots_without_frame_identity() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // No NoritoSchema: this helper emits a version byte and adaptive payload.
+    struct PayloadOnly<'a>(&'a AtomicUsize);
+    impl norito::core::SerializePayload for PayloadOnly<'_> {
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::io::Write::write_all(writer, &[0xA5; 4])?;
+            Ok(())
+        }
+    }
+    impl iroha_version::Version for PayloadOnly<'_> {
+        fn version(&self) -> u8 {
+            1
+        }
+        fn supported_versions() -> core::ops::Range<u8> {
+            1..2
+        }
+    }
+    let calls = AtomicUsize::new(0);
+    let payload = PayloadOnly(&calls);
+    let rejected = encode_versioned_norito_bounded(&payload, 4)
+        .expect_err("the version byte is part of the exact admission bound");
+    assert_eq!(rejected.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let bytes = encode_versioned_norito_bounded(&payload, 5)
+        .expect("a payload-only root fits its exact versioned boundary");
+    assert_eq!(bytes, [1, 0xA5, 0xA5, 0xA5, 0xA5]);
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 #[test]

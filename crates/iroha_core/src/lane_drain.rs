@@ -4,8 +4,8 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     block::consensus::{CertPhase, LaneBlockVoteBodyV1},
     merge::LaneDrainCertificateBodyV1,
-    nexus::{DataSpaceId, LaneId},
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 #[cfg(unix)]
@@ -26,6 +26,8 @@ const RECORD_KEY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record:v1\0";
 const RECORD_INTEGRITY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record-integrity:v1\0";
 const MAX_RECORD_BYTES: usize = 32 * 1024;
 const MAX_RECORDS: usize = 65_536;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneDrainSigningKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneDrainSigningKeyV1 {
     lane_id: LaneId,
@@ -52,6 +54,8 @@ impl LaneDrainSigningKeyV1 {
         Hash::new_from_chunks(&[RECORD_KEY_DOMAIN, encoded.as_slice()])
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneCommitVoteLockV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneCommitVoteLockV1 {
     proposal_height: u64,
@@ -71,7 +75,8 @@ impl LaneCommitVoteLockV1 {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneDrainSigningRecordV1")]
 struct LaneDrainSigningRecordV1 {
     version: u8,
     key: LaneDrainSigningKeyV1,
@@ -552,7 +557,7 @@ fn set_no_follow_flag(options: &mut OpenOptions) {
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -666,8 +671,8 @@ mod tests {
     use iroha_data_model::{
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         merge::{LaneDrainFrontierV1, LaneDrainIntentV1},
-        peer::PeerId,
     };
+    use iroha_model_base::peer::PeerId;
     fn incarnation() -> Hash {
         Hash::new(b"lane-drain-signing-guard-incarnation")
     }
@@ -922,6 +927,22 @@ mod tests {
         let bytes = fs::read(&record_path).expect("read signing record");
         let mut record = norito::decode_from_bytes::<LaneDrainSigningRecordV1>(&bytes)
             .expect("decode canonical signing record");
+        assert_eq!(
+            LaneDrainSigningGuard::read_record(
+                record_path.parent().expect("guard directory"),
+                &record_path
+            )
+            .expect("production reader validates original journal record"),
+            record,
+        );
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::lane_drain::LaneDrainSigningRecordV1",
+        );
+        assert!(matches!(
+            norito::decode_canonical::<LaneDrainCertificateBodyV1>(&bytes),
+            Err(norito::Error::SchemaMismatch),
+        ));
         record
             .highest_commit_vote
             .as_mut()

@@ -1,46 +1,46 @@
 error: #[norito(required)] can only be used on Option fields
- --> tests/ui/fail/json_required_option_misuse.rs:7:5
+ --> tests/ui/fail/json_required_option_misuse.rs:5:5
   |
-7 | /     #[norito(required)]
-8 | |     value: u32,
+5 | /     #[norito(required)]
+6 | |     value: u32,
   | |______________^
 
 error: #[norito(required)] cannot be combined with #[norito(default)]
-  --> tests/ui/fail/json_required_option_misuse.rs:13:5
+  --> tests/ui/fail/json_required_option_misuse.rs:10:5
    |
-13 | /     #[norito(required, default)]
-14 | |     value: Option<u32>,
+10 | /     #[norito(required, default)]
+11 | |     value: Option<u32>,
    | |______________________^
 
 error: #[norito(required)] cannot be combined with #[norito(skip)]
-  --> tests/ui/fail/json_required_option_misuse.rs:19:5
+  --> tests/ui/fail/json_required_option_misuse.rs:15:5
    |
-19 | /     #[norito(required, skip)]
-20 | |     value: Option<u32>,
+15 | /     #[norito(required, skip)]
+16 | |     value: Option<u32>,
    | |______________________^
 
 error: #[norito(required)] cannot be combined with #[norito(flatten)]
-  --> tests/ui/fail/json_required_option_misuse.rs:25:5
+  --> tests/ui/fail/json_required_option_misuse.rs:20:5
    |
-25 | /     #[norito(required, flatten)]
-26 | |     value: Option<u32>,
+20 | /     #[norito(required, flatten)]
+21 | |     value: Option<u32>,
    | |______________________^
 
 error: #[norito(required)] cannot be combined with #[norito(skip_serializing_if = ...)]
-  --> tests/ui/fail/json_required_option_misuse.rs:31:5
+  --> tests/ui/fail/json_required_option_misuse.rs:25:5
    |
-31 | /     #[norito(required, skip_serializing_if = "Option::is_none")]
-32 | |     value: Option<u32>,
+25 | /     #[norito(required, skip_serializing_if = "Option::is_none")]
+26 | |     value: Option<u32>,
    | |______________________^
 
 error: #[norito(required)] is only supported on named fields
-  --> tests/ui/fail/json_required_option_misuse.rs:36:14
+  --> tests/ui/fail/json_required_option_misuse.rs:29:14
    |
-36 | struct Tuple(#[norito(required)] Option<u32>);
+29 | struct Tuple(#[norito(required)] Option<u32>);
    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: duplicate `required` attribute
-  --> tests/ui/fail/json_required_option_misuse.rs:40:24
+  --> tests/ui/fail/json_required_option_misuse.rs:32:24
    |
-40 |     #[norito(required, required)]
+32 |     #[norito(required, required)]
    |                        ^^^^^^^^

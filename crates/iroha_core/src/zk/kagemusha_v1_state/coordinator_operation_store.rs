@@ -53,6 +53,10 @@ pub enum KagemushaCoordinatorOperationStoreErrorV1 {
 
 type Result<T> = core::result::Result<T, KagemushaCoordinatorOperationStoreErrorV1>;
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Reservation"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct Reservation {
     operation_id: DigestV1,
@@ -60,7 +64,8 @@ struct Reservation {
     public_binding: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Record")]
 enum Record {
     Initialize {
         lane: KagemushaLaneIdV1,
@@ -511,21 +516,26 @@ where
     H: KagemushaAuthenticatedHistoryStoreV1,
 {
     /// Create new coordinator retry storage for this actual Core wallet. Existing files never reset.
-    /// An existing Core operation requires an existing matching store, not a new empty journal.
+    /// Creation is permitted only while the selected prefix is the exact initializer. Once
+    /// checkpointed journal history advances, recovery must reopen its retained prefix.
     pub fn create_coordinator_operation_store(
         &self,
         path: &Path,
         maximum_reserved_bytes: u64,
     ) -> Result<KagemushaCoordinatorOperationStoreV1> {
-        if !self.outgoing_operation_index().is_empty() {
+        if !self.outgoing_operation_index().is_empty()
+            || self.recovery_metadata.journals.coordinator.sequence != 1
+        {
             return Err(Error::CoreMismatch);
         }
-        KagemushaCoordinatorOperationStoreV1::create_new(
+        let store = KagemushaCoordinatorOperationStoreV1::create_new(
             path,
             self.state.lane.clone(),
             self.state.asset_incarnation,
             maximum_reserved_bytes,
-        )
+        )?;
+        self.reconcile_coordinator_operations(&store)?;
+        Ok(store)
     }
 
     /// Open the existing journal and reconcile every retained Core operation before serving it.
@@ -640,6 +650,17 @@ where
         {
             return Err(Error::CoreMismatch);
         }
+        // Reserve/BeginIntent entries can precede every outgoing Core index entry. Index
+        // coverage alone cannot reject rollback or a different same-lane WAL at that stage.
+        // The selected prefix must exist in this exact held descriptor, including its hash,
+        // sequence and byte boundary; validated local append-only suffixes remain recoverable.
+        if !store
+            .wal
+            .contains_recovery_prefix(self.recovery_metadata.journals.coordinator)
+            .map_err(storage_error)?
+        {
+            return Err(Error::CoreMismatch);
+        }
         // A journal-ahead terminal marker must not authorize capacity reuse against an older
         // Core snapshot. Host retirement bytes are a projection, never release authority.
         for retained in store.operations.values() {
@@ -670,4 +691,12 @@ where
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<Record>(
+        "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Record",
+    );
 }

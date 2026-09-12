@@ -20,7 +20,7 @@ use iroha_data_model::musubi::{
     MusubiContentDigestV1, MusubiDependencyKindV1, MusubiDependencyReqV1, MusubiReleaseManifestV1,
     MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
 };
-use iroha_data_model::name::Name;
+use iroha_model_base::name::Name;
 use sorafs_car::{
     CarBuildPlan, CarStreamingWriter, ChunkSink, ChunkStore, ChunkStoreError, DirectoryPayload,
     FilePayload, ProfileId, compute_chunk_plan_digest_sha3,
@@ -2753,9 +2753,9 @@ mod tests {
             MusubiReleaseManifestV1, MusubiReleaseMetadataV1, MusubiSemanticReleaseManifestV1,
             MusubiVerificationLockV1, MusubiVerificationNodeV1,
         },
-        nexus::DataSpaceId,
         sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
     };
+    use iroha_model_base::topology::DataSpaceId;
     use norito::codec::Encode as _;
     use std::{io::Cursor, path::Path};
     use tempfile::TempDir;

@@ -164,6 +164,12 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .expect("lane relay test lock poisoned")
 }
+/// Hold relay status publication at its actual cache lock for concurrency tests.
+#[cfg(test)]
+pub(crate) fn lane_relay_publication_guard_for_tests()
+-> MutexGuard<'static, Vec<LaneRelayEnvelope>> {
+    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
+}
 #[cfg(test)]
 /// Reset settlement telemetry counters for isolated tests.
 pub fn settlement_status_reset_for_tests() {

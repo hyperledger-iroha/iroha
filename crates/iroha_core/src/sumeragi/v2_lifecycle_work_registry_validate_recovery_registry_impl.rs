@@ -73,7 +73,11 @@ impl ConcreteLifecycleWorkRegistry {
                     statement.proposal_round().view,
                 )),
                 Some(projection::block_subject(subject)),
-                LifecyclePhase::Validate,
+                if statement.phase() == Some(wire::GlobalPhase::Commit) {
+                    LifecyclePhase::ValidateDecision
+                } else {
+                    LifecyclePhase::Validate
+                },
                 statement
                     .execution_commitment()
                     .map(projection::execution_commitment),
@@ -618,7 +622,8 @@ impl ConcreteLifecycleWorkRegistry {
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                 RecoveredLifecycleSignClassV1::ControlProposal
-                | RecoveredLifecycleSignClassV1::ControlTimeout,
+                | RecoveredLifecycleSignClassV1::ControlTimeout
+                | RecoveredLifecycleSignClassV1::PhaseVote,
             ) => (
                 sign.matches_current_ready_record(address, digest, coordinator),
                 sign.dispatch_key,
@@ -764,7 +769,8 @@ impl ConcreteLifecycleWorkRegistry {
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                 RecoveredLifecycleSignClassV1::ControlProposal
-                | RecoveredLifecycleSignClassV1::ControlTimeout,
+                | RecoveredLifecycleSignClassV1::ControlTimeout
+                | RecoveredLifecycleSignClassV1::PhaseVote,
             ) => {
                 if !sign.carrier.matches_claimed_record(coordinator, lease) {
                     return Err(RecoveredLifecycleSignDispatchProjectionErrorV1::InvalidCarrier);
@@ -862,7 +868,8 @@ impl ConcreteLifecycleWorkRegistry {
             (
                 ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                 RecoveredLifecycleSignClassV1::ControlProposal
-                | RecoveredLifecycleSignClassV1::ControlTimeout,
+                | RecoveredLifecycleSignClassV1::ControlTimeout
+                | RecoveredLifecycleSignClassV1::PhaseVote,
             ) => {
                 sign.dispatch_key == Some(key)
                     && sign.carrier.matches_claimed_record(coordinator, lease)
@@ -967,7 +974,8 @@ impl ConcreteLifecycleWorkRegistry {
                     (
                         ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(sign),
                         RecoveredLifecycleSignClassV1::ControlProposal
-                        | RecoveredLifecycleSignClassV1::ControlTimeout,
+                        | RecoveredLifecycleSignClassV1::ControlTimeout
+                        | RecoveredLifecycleSignClassV1::PhaseVote,
                     ) => {
                         sign.dispatch_key == Some(prepared.dispatch_key)
                             && sign.carrier.matches_claimed_record(current, lease)
@@ -1075,12 +1083,16 @@ impl ConcreteLifecycleWorkRegistry {
         ) {
             return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidWorkClass);
         }
-        let (expected_phase, expected_stage) = match record.work_class {
-            LifecycleWorkClass::Fetch => (LifecyclePhase::Fetch, LifecycleStageKind::FetchBody),
-            LifecycleWorkClass::Store => (LifecyclePhase::Store, LifecycleStageKind::StoreBody),
+        let (phase_matches, expected_stage) = match record.work_class {
+            LifecycleWorkClass::Fetch => {
+                (record.key.phase().is_fetch(), LifecycleStageKind::FetchBody)
+            }
+            LifecycleWorkClass::Store => {
+                (record.key.phase().is_store(), LifecycleStageKind::StoreBody)
+            }
             _ => unreachable!("filtered ordinary body work class"),
         };
-        if record.key.phase() != expected_phase {
+        if !phase_matches {
             return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::PhaseMismatch);
         }
         if record.stage.kind() != expected_stage {
@@ -1238,7 +1250,7 @@ impl ConcreteLifecycleWorkRegistry {
         };
         if record.ordinal != ordinal
             || record.work_class != LifecycleWorkClass::Fetch
-            || record.key.phase() != LifecyclePhase::Fetch
+            || record.key.phase() != LifecyclePhase::FetchDecision
             || record.stage.kind() != LifecycleStageKind::FetchBody
             || record.stage.predecessor_scope() != PredecessorScope::Independent
             || record.state != super::LifecycleState::Ready
@@ -1320,7 +1332,7 @@ impl ConcreteLifecycleWorkRegistry {
         if coordinator.fault.is_some()
             || coordinator.active_lease.as_ref() != Some(lease)
             || lease.work_class() != LifecycleWorkClass::Fetch
-            || lease.key().phase() != LifecyclePhase::Fetch
+            || lease.key().phase() != LifecyclePhase::FetchDecision
             || lease.stage().kind() != LifecycleStageKind::FetchBody
             || lease.stage().predecessor_scope() != PredecessorScope::Independent
             || lease.physical_slots().len() != 1
@@ -1376,7 +1388,7 @@ impl ConcreteLifecycleWorkRegistry {
             return false;
         };
         if record.work_class != LifecycleWorkClass::Fetch
-            || record.key.phase() != LifecyclePhase::Fetch
+            || record.key.phase() != LifecyclePhase::FetchDecision
             || record.stage.kind() != LifecycleStageKind::FetchBody
             || record.stage.predecessor_scope() != PredecessorScope::Independent
             || record.physical_slots.len() != 1
@@ -1418,7 +1430,7 @@ impl ConcreteLifecycleWorkRegistry {
         if coordinator.fault.is_some()
             || coordinator.active_lease.as_ref() != Some(lease)
             || lease.work_class() != LifecycleWorkClass::Fetch
-            || lease.key().phase() != LifecyclePhase::Fetch
+            || lease.key().phase() != LifecyclePhase::FetchDecision
             || lease.stage().kind() != LifecycleStageKind::FetchBody
             || lease.stage().predecessor_scope() != PredecessorScope::Independent
             || lease.physical_slots().len() != 1
@@ -1481,7 +1493,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        projection: AuthenticatedRecoveredWalControlProjection,
+        projection: AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Result<
         InstalledRecoveredWalControlSignRegistryCut<'registry>,
         RecoveredWalControlSignInstallError,
@@ -1525,7 +1537,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Option<ConcreteWorkAddress> {
         if !self.entries.is_empty()
             || !projection.is_exact(verified)
@@ -1589,7 +1601,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        control: AuthenticatedRecoveredWalControlProjection,
+        control: AuthenticatedRecoveredWalStandaloneSignProjection,
         broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
         parent_ordinal: u128,
         child_ordinal: u128,
@@ -1725,7 +1737,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         store: &super::ledger::LifecycleLedgerStoreV1,
         ledger: &super::ledger::LifecycleLedgerV1,
-        control: AuthenticatedRecoveredWalControlProjection,
+        control: AuthenticatedRecoveredWalStandaloneSignProjection,
         combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
         pair: super::ledger::RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
     ) -> Result<
@@ -1734,8 +1746,7 @@ impl ConcreteLifecycleWorkRegistry {
     > {
         let preflight_is_exact = self.entries.is_empty()
             && control.is_exact(verified)
-            && pair.parent()
-                == super::ledger::RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+            && pair.parent().is_standalone()
             && pair.exactly_matches_ledger(ledger)
             && store.load().is_ok_and(|opened| opened == *ledger)
             && store.revalidates_recovered_control_signed_broadcast_and_sign(
@@ -2777,6 +2788,9 @@ impl ConcreteLifecycleWorkRegistry {
     /// `None` from this function means ambiguity (including phase and control
     /// together), while `Some(None)` is the exact zero-carrier shape.
     fn exact_recovered_wal_registry_slot(&self) -> Option<RecoveredWalRegistrySlotV1> {
+        if let Some(addresses) = self.exact_control_continuation_addresses() {
+            return Some(RecoveredWalRegistrySlotV1::ControlContinuation(addresses));
+        }
         let mut signs = self
             .entries
             .iter()
@@ -3553,6 +3567,25 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<Vec<_>>();
         match extra {
+            RecoveredWalRegistrySlotV1::ControlContinuation(addresses) => {
+                self.exact_control_continuation_addresses() == Some(addresses)
+                    && unsupported_live.len() == addresses.into_iter().flatten().count()
+                    && addresses.into_iter().flatten().all(|address| {
+                        let Some(record) = unsupported_live.iter().find(|record|
+                            record.ordinal == address.ordinal && record.owner == address.owner) else { return false; };
+                        self.entries.get(&address).is_some_and(|work| {
+                            record.physical_slots.get(&address.slot) == Some(&work.digest)
+                                && work.validates_at(address)
+                                && match &work.kind {
+                                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(carrier) =>
+                                        carrier.matches_current_ready_record(address, work.digest, coordinator),
+                                    ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(carrier) =>
+                                        carrier.matches_current_ready_record(address, work.digest, coordinator),
+                                    _ => false,
+                                }
+                        })
+                    })
+            }
             RecoveredWalRegistrySlotV1::None => unsupported_live.is_empty(),
             RecoveredWalRegistrySlotV1::PhaseVote(address) => {
                 let [record] = unsupported_live.as_slice() else {
@@ -4355,7 +4388,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
     ) -> Result<PreparedDurableStoreExecution<'_>, DurableStoreExecutionError> {
         if lease.work_class() != LifecycleWorkClass::Store
-            || lease.key().phase() != LifecyclePhase::Store
+            || !lease.key().phase().is_store()
             || lease.stage().kind() != LifecycleStageKind::StoreBody
             || lease.stage().predecessor_scope() != PredecessorScope::Independent
             || !lease
@@ -4451,7 +4484,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
     ) -> Result<PreparedDurableValidateExecution<'_>, DurableValidateExecutionError> {
         if lease.work_class() != LifecycleWorkClass::Validate
-            || lease.key().phase() != LifecyclePhase::Validate
+            || !lease.key().phase().is_validate()
             || lease.stage().kind() != LifecycleStageKind::ValidateBody
             || lease.stage().predecessor_scope() != PredecessorScope::Independent
             || !lease

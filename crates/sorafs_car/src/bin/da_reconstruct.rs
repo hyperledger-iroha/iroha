@@ -470,7 +470,7 @@ fn set_no_follow_flag(options: &mut fs::OpenOptions) {
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -517,9 +517,9 @@ mod tests {
                 StorageTicketId,
             },
         },
-        nexus::LaneId,
         sorafs::pin_registry::ManifestDigest,
     };
+    use iroha_model_base::topology::LaneId;
     use iroha_primitives::erasure::rs16;
     use norito::{
         json::{self as norito_json, Map as JsonMap, Value as JsonValue},

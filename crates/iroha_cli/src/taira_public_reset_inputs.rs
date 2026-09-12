@@ -14,6 +14,9 @@ pub(super) struct LocalInputs {
     validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
     onboarding_token: PathBuf,
+    /// Dedicated runtime key whose public identity every validator explicitly allows.
+    #[arg(long, value_name = "PATH")]
+    validator_operator_key: PathBuf,
     #[arg(long, value_name = "DIR")]
     inrou_stage_dir: PathBuf,
     /// Four exact local systemd units in validator order.
@@ -151,9 +154,10 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     inventory.revision.profile = BUILD_PROFILE.to_owned();
     validate_revision(&inventory.revision)?;
     validate_source_closure(&inventory.revision)?;
-    if iroha_core::release_identity::source_commit() != Some(inventory.revision.commit.as_str()) {
+    let build_identity = crate::compiled_build_identity()?;
+    if build_identity.release_source_commit()? != inventory.revision.commit {
         return Err(eyre!(
-            "compiled Core source differs from the release revision"
+            "compiled executable source differs from the release revision"
         ));
     }
     for artifact in inventory
@@ -187,8 +191,9 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
         validator.systemd_unit_sha256 = unit_hash(path)?;
     }
     inventory.edge.systemd_unit_sha256 = unit_hash(&inputs.edge_unit)?;
-    derive_validator_identities(inventory)?;
+    derive_validator_identities(inventory, build_identity)?;
     derive_runtime_stage(inventory, inputs)?;
+    let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
     inventory.artifact_closure_sha256 = artifact_closure_sha256(inventory);
     validate_inventory(inventory)?;
     validate_shared_validator_closure(inventory)?;
@@ -199,6 +204,7 @@ fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result
     for entry in &pinned {
         revalidate_pinned(&entry.input, "release artifact")?;
     }
+    revalidate_pinned(&operator_key, "validator operator key")?;
     Ok(())
 }
 
@@ -213,7 +219,10 @@ fn unit_hash(path: &Path) -> Result<String> {
 }
 
 #[cfg(unix)]
-fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
+fn derive_validator_identities(
+    inventory: &mut InventoryV1,
+    build_identity: iroha_core::release_identity::BuildIdentity,
+) -> Result<()> {
     use iroha_config::{
         base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
         parameters::actual,
@@ -238,12 +247,13 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
             file,
             snapshot,
         };
-        let bytes = pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?;
+        let bytes = Zeroizing::new(pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?);
         validate_validator_genesis_config(
             &bytes,
             Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
             &inventory.next_genesis_hash,
         )?;
+        validate_validator_operator_config(&bytes, &inventory.operator_public_key)?;
         let text =
             std::str::from_utf8(&bytes).map_err(|_| eyre!("validator config is not UTF-8"))?;
         let table: toml::Table =
@@ -254,7 +264,16 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
             crate::soracloud::zeroize_taira_toml_table,
         ))
         .map_err(|_| eyre!("validator config failed current typed admission"))?;
+        validate_validator_pin_fee_asset(
+            &config.gov.sorafs_pin_fee_asset_id,
+            &inventory.faucet_policy.asset_definition_id,
+        )?;
         revalidate_pinned(&input, "validator config")?;
+        host::stopped_runtime::validate_config_slot(
+            &validator.slug,
+            &config.soracloud_runtime.inrou,
+        )?;
+        validate_candidate_probe_bind(&client.probe_origin, config.torii.address.value())?;
         if config.common.chain.to_string() != inventory.chain_id
             || config.common.peer.id.to_string() != client.peer_id
         {
@@ -285,15 +304,33 @@ fn derive_validator_identities(inventory: &mut InventoryV1) -> Result<()> {
             .validate_ingress_roster_capacity(4)
             .map_err(|_| eyre!("validator cannot admit the four-member roster"))?;
         validator.node_fingerprint = Hash::new(config.common.peer.id.encode()).to_string();
-        validator.build_fingerprint = iroha_core::release_identity::build_fingerprint().to_string();
+        validator.build_fingerprint = build_identity.build_fingerprint().to_string();
         validator.config_fingerprint = shared.fingerprint().to_string();
     }
     revalidate_pinned(&genesis, "signed genesis")?;
     Ok(())
 }
 
+fn validate_validator_pin_fee_asset(
+    configured: &iroha::data_model::asset::AssetDefinitionId,
+    faucet_asset: &str,
+) -> Result<()> {
+    let expected = faucet_asset
+        .parse::<iroha::data_model::asset::AssetDefinitionId>()
+        .map_err(|_| eyre!("inventory faucet asset is not a valid asset definition identity"))?;
+    if configured != &expected {
+        return Err(eyre!(
+            "validator SoraFS pin fee asset differs from the inventory faucet asset"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(not(unix))]
-fn derive_validator_identities(_: &mut InventoryV1) -> Result<()> {
+fn derive_validator_identities(
+    _: &mut InventoryV1,
+    _: iroha_core::release_identity::BuildIdentity,
+) -> Result<()> {
     Err(eyre!("public reset input assembly requires Unix"))
 }
 
@@ -306,7 +343,8 @@ fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Re
         .map(|p| pin_owner_private_file(p, "validator client config"))
         .collect::<Result<Vec<_>>>()?;
     host::validate_validator_client_inputs(&clients, inventory)?;
-    let config = host::load_client_config_from_pinned(&runtime, "runtime client config")?;
+    let config =
+        host::load_client_config_for_inventory(&runtime, "runtime client config", inventory)?;
     if config.torii_api_url.as_str() != format!("{PUBLIC_ROOT}/")
         || config.account.to_string() != inventory.canary_onboarding_request.account_id
     {
@@ -413,6 +451,7 @@ fn sign_inventory(
     }
     let claims = AuthorizationClaimsV1 {
         action: "reset_and_deploy".to_owned(),
+        qualification_scope: inventory.qualification_scope,
         deployment_id: inventory.deployment_id.clone(),
         inventory_sha256: sha256_hex(bytes),
         artifact_closure_sha256: inventory.artifact_closure_sha256.clone(),
@@ -445,41 +484,7 @@ fn sign_inventory(
 
 #[cfg(unix)]
 fn inherited_signing_key(fd: u32, public_key: &PublicKey) -> Result<KeyPair> {
-    if !(3..=65535).contains(&fd) {
-        return Err(eyre!(
-            "signing key must use an inherited descriptor in 3..=65535"
-        ));
-    }
-    #[cfg(target_os = "linux")]
-    let path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    #[cfg(not(target_os = "linux"))]
-    let path = PathBuf::from(format!("/dev/fd/{fd}"));
-    // NONBLOCK prevents an inherited pipe from blocking before its descriptor type is checked.
-    let mut file = File::from(
-        rustix::fs::open(
-            &path,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|_| eyre!("cannot open inherited signing descriptor"))?,
-    );
-    let metadata = file.metadata()?;
-    let before = file_snapshot(&metadata)?;
-    require_owner_private_snapshot(&before, "inherited signing key")?;
-    if !metadata.is_file() || before.len == 0 || before.len > 512 {
-        return Err(eyre!(
-            "inherited signing key must be a bounded owner-private regular file"
-        ));
-    }
-    file.rewind()?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    (&mut file)
-        .take(513)
-        .read_to_end(&mut bytes)
-        .map_err(|_| eyre!("cannot read inherited signing key"))?;
-    if file_snapshot(&file.metadata()?)? != before || bytes.len() as u64 != before.len {
-        return Err(eyre!("inherited signing key changed while loading"));
-    }
+    let bytes = crate::client_config::read_inherited_private_file(fd, 512, "owner signing key")?;
     let text =
         std::str::from_utf8(&bytes).map_err(|_| eyre!("invalid owner signing key encoding"))?;
     let private = PrivateKey::from_str(text.strip_suffix('\n').unwrap_or(text))
@@ -493,7 +498,7 @@ fn inherited_signing_key(_: u32, _: &PublicKey) -> Result<KeyPair> {
     Err(eyre!("owner signing requires Unix inherited descriptors"))
 }
 
-fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
     validate_absolute_normal_path(path, "release output")?;
     let parent = path
         .parent()
@@ -508,7 +513,7 @@ fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|_| eyre!("cannot publish fresh release output"))?;
     File::open(parent)?.sync_all()?;
     let pinned = pin_owner_private_file(path, "release output")?;
-    if pinned_bytes(&pinned, MAX_JSON_BYTES)?.as_slice() != bytes {
+    if zeroize::Zeroizing::new(pinned_bytes(&pinned, MAX_JSON_BYTES)?).as_slice() != bytes {
         return Err(eyre!(
             "published release output differs from the retained bytes"
         ));

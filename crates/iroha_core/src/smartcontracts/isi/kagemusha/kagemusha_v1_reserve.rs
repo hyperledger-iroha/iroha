@@ -172,6 +172,10 @@ pub enum KagemushaReserveErrorV1 {
 }
 
 /// Canonical identity of the sole reserve for one network, asset, and exact incarnation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolKeyV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, JsonDeserialize, JsonSerialize,
 )]
@@ -244,6 +248,10 @@ impl KagemushaReservePoolKeyV1 {
 }
 
 /// Durable totals for one pooled Kagemusha reserve.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaReservePoolV1 {
     /// Reserve-state version.
@@ -361,6 +369,10 @@ impl KagemushaReserveCommitContextV1 {
 ///
 /// No mint time or finality is client supplied. The mint time comes from the
 /// committed receipt, and `request_digest` detects corrupted request bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaTopUpIssuanceIntentV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaTopUpIssuanceIntentV1 {
     /// Reserve intent layout version.
@@ -407,6 +419,10 @@ impl KagemushaTopUpIssuanceIntentV1 {
 /// `verified_anchor_identity` records which locally authenticated context admitted
 /// the result. It cannot authenticate itself during snapshot hydration.
 /// This attachment model exercises finality binding in reserve unit tests.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaMintFinalityAttachmentV1"
+)]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaMintFinalityAttachmentV1 {
@@ -421,6 +437,10 @@ pub struct KagemushaMintFinalityAttachmentV1 {
 }
 
 /// Durable record of one atomic online debit and reserve top-up.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaTopUpRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaTopUpRecordV1 {
     /// Reserve-record version.
@@ -450,6 +470,10 @@ pub struct KagemushaTopUpRecordV1 {
 }
 
 /// Durable record of one atomic reserve debit and beneficiary credit.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaRedemptionRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaRedemptionRecordV1 {
     /// Reserve-record version.
@@ -595,6 +619,10 @@ impl KagemushaRedemptionRecordV1 {
 }
 
 /// Durable status record for either reserve operation kind.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveOperationRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "operation_kind", content = "record", deny_unknown_fields)]
 pub enum KagemushaReserveOperationRecordV1 {
@@ -936,6 +964,10 @@ where
 /// in separately keyed `mv::Storage` maps. The exact-entry read sets and sealed
 /// plans above keep each operation O(log n); placing this aggregate in one
 /// clone-on-write `mv::Cell` would make each mutation O(total history).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveBookV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaReserveBookV1 {
     version: u16,
@@ -2146,11 +2178,13 @@ fn validate_mint_finality_attachment(
 }
 
 #[cfg(test)]
-fn canonical_wire_digest<T: norito::NoritoSerialize>(
+fn canonical_wire_digest<T: norito::SerializePayload>(
     domain: &[u8],
     value: &T,
 ) -> Result<[u8; 32], KagemushaReserveErrorV1> {
-    let encoded = norito::encode_canonical(value)
+    // This test-only attachment hashes one fixed-v1 payload in its explicit result domain.
+    let mut encoded = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut encoded)
         .map_err(|error| KagemushaReserveErrorV1::Encoding(error.to_string()))?;
     let encoded_len = u64::try_from(encoded.len())
         .map_err(|_| KagemushaReserveErrorV1::Encoding("wire length exceeds u64".to_owned()))?;
@@ -2180,105 +2214,6 @@ fn state_invariant(reason: &'static str) -> KagemushaReserveErrorV1 {
     KagemushaReserveErrorV1::StateInvariant { reason }
 }
 
-/// Commit one fully shaped top-up for the cross-module aggregate-state acceptance test.
-///
-/// This test-only seam preserves the production admission boundary: it constructs the same
-/// opaque verified intent that the ISI produces after the caller, release, profile, and paired
-/// mint-authorization checks have been mocked by the unit test.
-#[cfg(test)]
-pub(crate) fn commit_top_up_for_aggregate_state_test(
-    book: &mut KagemushaReserveBookV1,
-    request: KagemushaTopUpRequestV1,
-    profile: iroha_data_model::kagemusha::KagemushaHardwareProfileV1,
-    transaction_hash: [u8; 32],
-    committed_at_ms: u64,
-) -> Result<KagemushaTopUpRecordV1, KagemushaReserveErrorV1> {
-    let authorization = VerifiedKagemushaTopUpAuthorizationV1 {
-        request_digest: request.canonical_digest().map_err(map_chain_value_error)?,
-        mint_authorization_digest: request
-            .mint_authorization
-            .as_ref()
-            .ok_or_else(|| state_invariant("top_up_missing_mint_authorization"))?
-            .canonical_digest()
-            .map_err(map_chain_value_error)?,
-        profile,
-    };
-    let verified =
-        VerifiedKagemushaTopUpIntentV1::after_admission_verification(request, authorization)?;
-    let context = KagemushaReserveCommitContextV1::after_block_context_verification(
-        transaction_hash,
-        committed_at_ms,
-    )?;
-    let plan = match book.plan_top_up(&verified, context)? {
-        KagemushaReservePlanOutcomeV1::Commit(plan) => plan,
-        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::TopUp(record),
-        ) => return Ok(record),
-        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::Redemption(_),
-        ) => return Err(state_invariant("top_up_test_operation_kind_mismatch")),
-    };
-    match book.commit(plan)? {
-        KagemushaReserveCommitOutcomeV1::Committed(KagemushaReserveOperationRecordV1::TopUp(
-            record,
-        ))
-        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::TopUp(record),
-        ) => Ok(record),
-        KagemushaReserveCommitOutcomeV1::Committed(
-            KagemushaReserveOperationRecordV1::Redemption(_),
-        )
-        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::Redemption(_),
-        ) => Err(state_invariant("top_up_test_operation_kind_mismatch")),
-    }
-}
-
-/// Commit one state-machine-produced voucher for the aggregate-state acceptance test.
-///
-/// The helper mocks only the paired recursive verifier capability which a unit test cannot
-/// obtain from physical proving hardware; request validation and reserve replay/accounting use
-/// the production paths unchanged.
-#[cfg(test)]
-pub(crate) fn commit_redemption_for_aggregate_state_test(
-    book: &mut KagemushaReserveBookV1,
-    request: KagemushaRedemptionRequestV1,
-    transaction_hash: [u8; 32],
-    committed_at_ms: u64,
-) -> Result<KagemushaRedemptionRecordV1, KagemushaReserveErrorV1> {
-    let verified_proof =
-        VerifiedKagemushaRedemptionProofV1::for_reserve_tests_after_mock_recursive_verification(
-            request,
-        )
-        .map_err(|error| KagemushaReserveErrorV1::InvalidWire(error.to_string()))?;
-    let verified = VerifiedKagemushaRedemptionV1::after_full_verification(verified_proof);
-    let context = KagemushaReserveCommitContextV1::after_block_context_verification(
-        transaction_hash,
-        committed_at_ms,
-    )?;
-    let plan = match book.plan_redemption(&verified, context)? {
-        KagemushaReservePlanOutcomeV1::Commit(plan) => plan,
-        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::Redemption(record),
-        ) => return Ok(record),
-        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::TopUp(_),
-        ) => return Err(state_invariant("redemption_test_operation_kind_mismatch")),
-    };
-    match book.commit(plan)? {
-        KagemushaReserveCommitOutcomeV1::Committed(
-            KagemushaReserveOperationRecordV1::Redemption(record),
-        )
-        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::Redemption(record),
-        ) => Ok(record),
-        KagemushaReserveCommitOutcomeV1::Committed(KagemushaReserveOperationRecordV1::TopUp(_))
-        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
-            KagemushaReserveOperationRecordV1::TopUp(_),
-        ) => Err(state_invariant("redemption_test_operation_kind_mismatch")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2302,7 +2237,6 @@ mod tests {
                 encode_kagemusha_consensus_signature_envelope_v1, finality::V2FinalityArtifact,
             },
         },
-        domain::DomainId,
         isi::{
             KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1,
             KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
@@ -2323,8 +2257,9 @@ mod tests {
             KagemushaTrustedCommitTimeV1, kagemusha_credit_opening_canonical_len_v1,
             kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
         },
-        peer::PeerId,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
     use snark_verifier::{loader::native::NativeLoader, pcs::ipa::IpaAccumulator};
@@ -3320,9 +3255,9 @@ mod tests {
         let mut book = KagemushaReserveBookV1::new();
         let top_up = verified_top_up(1, 1, 80);
         commit_top_up(&mut book, &top_up, 1);
-        let bytes = norito::encode_canonical(&book).expect("encode pending book");
+        let bytes = norito::codec::Encode::encode(&book);
         let decoded: KagemushaReserveBookV1 =
-            norito::decode_canonical(&bytes).expect("decode pending book");
+            norito::codec::decode_adaptive(&bytes).expect("decode pending book payload");
         decoded.validate().expect("valid decoded accounting");
         let record = match decoded.operation(&top_up.operation_id()) {
             Some(KagemushaReserveOperationRecordV1::TopUp(record)) => record,
@@ -3362,9 +3297,9 @@ mod tests {
             KagemushaMintFinalizationOutcomeV1::Finalized(attachment) => attachment,
             _ => panic!("new local attachment"),
         };
-        let bytes = norito::encode_canonical(&attachment).expect("encode local attachment");
+        let bytes = norito::codec::Encode::encode(&attachment);
         let decoded: KagemushaMintFinalityAttachmentV1 =
-            norito::decode_canonical(&bytes).expect("decode local attachment");
+            norito::codec::decode_adaptive(&bytes).expect("decode local attachment payload");
         assert_eq!(
             validate_mint_finality_attachment_with_anchor(
                 record,
@@ -3456,7 +3391,7 @@ mod tests {
         book.commit(plan.clone()).expect("original valid commit");
         let before = book.clone();
         let original = book.operation(&verified.operation_id()).unwrap().clone();
-        let original_bytes = norito::encode_canonical(&original).unwrap();
+        let original_bytes = norito::codec::Encode::encode(&original);
         for time in [90_000, 100_000, u64::MAX] {
             let context = KagemushaReserveCommitContextV1::after_block_context_verification(
                 tagged_id(0x41, time),
@@ -3472,8 +3407,7 @@ mod tests {
             );
             assert_eq!(book, before);
             assert_eq!(
-                norito::encode_canonical(book.operation(&verified.operation_id()).unwrap())
-                    .unwrap(),
+                norito::codec::Encode::encode(book.operation(&verified.operation_id()).unwrap()),
                 original_bytes
             );
         }

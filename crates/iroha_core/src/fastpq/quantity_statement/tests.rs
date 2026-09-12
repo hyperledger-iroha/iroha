@@ -4,10 +4,10 @@ use super::*;
 use crate::fastpq::{FastpqPublicInputsTemplate, poseidon_preimage_digest};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    DomainId,
     asset::AssetDefinitionId,
     fastpq::{FastpqPublicTransferTranscriptV1, TransferDeltaTranscript, TransferSmtWitness},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 

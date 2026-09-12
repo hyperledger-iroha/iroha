@@ -10,6 +10,9 @@
 //! full-world commitment. This ignored gate must run successfully against current validator
 //! binaries; zero-stake settlement does not qualify funded payouts or the cryptographic profile.
 
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
 use std::{collections::BTreeMap, time::Duration};
 
 use eyre::{Result, ensure, eyre};
@@ -93,8 +96,7 @@ async fn verification(
 }
 
 async fn height(client: &Client) -> Result<u64> {
-    let client = client.clone();
-    read_on_dedicated_thread(move || Ok(client.client().get_status()?.blocks)).await
+    Ok(client.client().status().get().await?.blocks)
 }
 
 /// Prepare and sign an exact account transaction with its canonical fee quote.
@@ -227,7 +229,7 @@ async fn finalized_state_observation(
     let url = peer
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join(&format!("v1/ledger/state/{height}"))?;
     let mut response = http
         .get(url)
@@ -693,10 +695,10 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
         eyre!("four-validator release gate cannot succeed with sandbox startup skipped")
     })?;
     let result = timeout(Duration::from_secs(1_200), async {
-        let mut context = network.peers()[0].client().client().clone();
+        let mut context = network.peers()[0].client().client().to_builder();
         // Allow actual native verification on development-profile validator binaries.
         context.transaction_status_timeout = Duration::from_secs(120);
-        let client = Client::from_client(context)?;
+        let client = Client::from_client(context.build()?)?;
         ensure!(
             !compiled_race_profile_v1().qualified,
             "this gate must exercise the real unqualified zero-stake admission path"

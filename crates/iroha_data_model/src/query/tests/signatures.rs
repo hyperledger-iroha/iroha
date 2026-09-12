@@ -1,5 +1,5 @@
-use std::num::NonZeroU64;
 use super::*;
+use std::num::NonZeroU64;
 #[test]
 fn query_signature_decode_from_slice_roundtrip() {
     let key_pair =
@@ -36,7 +36,7 @@ fn query_signature_try_deserialize_rejects_empty_signature_material() {
     let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
     let archived =
         norito::from_bytes::<QuerySignature>(&encoded).expect("archive invalid query signature");
-    let err = <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+    let err = <QuerySignature as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
         .expect_err("empty query signature must fail closed");
     let message = err.to_string();
     assert!(
@@ -52,7 +52,7 @@ fn query_signature_try_deserialize_rejects_all_zero_signature_material() {
     let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
     let archived =
         norito::from_bytes::<QuerySignature>(&encoded).expect("archive invalid query signature");
-    let err = <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+    let err = <QuerySignature as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
         .expect_err("all-zero query signature must fail closed");
     let message = err.to_string();
     assert!(
@@ -87,7 +87,7 @@ fn query_request_try_sign_matches_compatibility_sign() {
         .verify(key_pair.public_key(), &fallible.payload)
         .expect("query signature should verify");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn query_signature_json_rejects_empty_signature_material() {
     let encoded = json_wrappers::base64_encode(&[]);
@@ -103,7 +103,7 @@ fn query_signature_json_rejects_empty_signature_material() {
         "unexpected empty query signature JSON error: {message}"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn query_signature_json_rejects_all_zero_signature_material() {
     let encoded = json_wrappers::base64_encode(&[0_u8; 64]);

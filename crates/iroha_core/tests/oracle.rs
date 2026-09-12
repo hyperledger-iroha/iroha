@@ -41,6 +41,7 @@ use iroha_data_model::{
     role::{Role, RoleId},
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
+use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;

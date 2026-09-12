@@ -1,6 +1,6 @@
 //! End-to-end coverage for bounded Kotodama List lowering and execution.
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Name;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use ivm::{IVM, KotodamaCompiler, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};

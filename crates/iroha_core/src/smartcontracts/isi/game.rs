@@ -9,8 +9,8 @@ use iroha_data_model::{
     execution_proofs::{ExecutionProofEnvelopeV1, ExecutionProofVerificationV1},
     game::*,
     isi::game::*,
-    metadata::Metadata,
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{MAX_DECIMAL_SCALE, Numeric, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode;
@@ -1447,7 +1447,8 @@ mod tests {
     };
     use iroha_crypto::{HashOf, KeyPair};
     use iroha_data_model::Registrable;
-    use iroha_data_model::{block::BlockHeader, domain::DomainId, execution_proofs::RaceTrackV1};
+    use iroha_data_model::{block::BlockHeader, execution_proofs::RaceTrackV1};
+    use iroha_model_base::domain::DomainId;
 
     pub(super) fn seed_session(st: &mut StateTransaction<'_, '_>, session: GameSessionRecordV1) {
         update_session_indexes(st, &session).unwrap();
@@ -2340,16 +2341,16 @@ mod tests {
             .map(|(id, value)| (id.clone(), *value))
             .collect::<Vec<_>>();
         for wrong_term in 0..3 {
-            let mut join = JoinGameSessionV1::new(
-                session.session_id,
-                key(30).public_key().clone(),
-                vec![0],
-                Vec::new(),
-                None,
-                session.manifest_hash,
-                session.asset_definition.clone(),
-                session.stake.clone(),
-            );
+            let mut join = JoinGameSessionV1 {
+                session_id: session.session_id,
+                input_key: key(30).public_key().clone(),
+                application_data: vec![0],
+                resources: Vec::new(),
+                invitation: None,
+                expected_manifest_hash: session.manifest_hash,
+                expected_asset_definition: session.asset_definition.clone(),
+                expected_stake: session.stake.clone(),
+            };
             match wrong_term {
                 0 => join.expected_manifest_hash = Hash::new(b"endpoint-substituted-manifest"),
                 1 => {
@@ -2691,16 +2692,16 @@ mod tests {
             AccountId::new(key(7).public_key().clone()),
         ] {
             assert!(
-                JoinGameSessionV1::new(
-                    fixture.session_id,
-                    key(7).public_key().clone(),
-                    vec![0],
-                    Vec::new(),
-                    None,
-                    opened.manifest_hash,
-                    opened.asset_definition.clone(),
-                    opened.stake.clone(),
-                )
+                JoinGameSessionV1 {
+                    session_id: fixture.session_id,
+                    input_key: key(7).public_key().clone(),
+                    application_data: vec![0],
+                    resources: Vec::new(),
+                    invitation: None,
+                    expected_manifest_hash: opened.manifest_hash,
+                    expected_asset_definition: opened.asset_definition.clone(),
+                    expected_stake: opened.stake.clone(),
+                }
                 .execute(&forbidden_authority, &mut st)
                 .is_err(),
                 "free enrollment must reject custody and absent account authorities"
@@ -2937,6 +2938,10 @@ mod tests {
         let mut session = fixture();
         session.verification_id = Some(Hash::new(b"verified-execution-reference"));
         session.terminal_at_height = Some(123);
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &session,
+            "iroha_data_model::game::GameSessionRecordV1",
+        );
         let bytes = session.encode();
         let decoded = GameSessionRecordV1::decode(&mut bytes.as_slice()).unwrap();
         assert_eq!(decoded, session);
@@ -3213,16 +3218,16 @@ mod tests {
         assert!(error.to_string().contains("globally scoped"), "{error}");
         assert!(st.world.game_sessions.get(&session.session_id).is_none());
         seed_session(&mut st, session.clone());
-        let error = JoinGameSessionV1::new(
-            session.session_id,
-            key(3).public_key().clone(),
-            vec![3],
-            Vec::new(),
-            None,
-            session.manifest_hash,
-            session.asset_definition.clone(),
-            session.stake.clone(),
-        )
+        let error = JoinGameSessionV1 {
+            session_id: session.session_id,
+            input_key: key(3).public_key().clone(),
+            application_data: vec![3],
+            resources: Vec::new(),
+            invitation: None,
+            expected_manifest_hash: session.manifest_hash,
+            expected_asset_definition: session.asset_definition.clone(),
+            expected_stake: session.stake.clone(),
+        }
         .execute(owner, &mut st)
         .unwrap_err();
         assert!(error.to_string().contains("globally scoped"), "{error}");

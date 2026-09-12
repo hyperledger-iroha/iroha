@@ -4,6 +4,8 @@ use crate::data_model::{
     query::{builder::SingleQueryError, dsl::CompoundPredicate, error::FindError},
 };
 use iroha_executor_data_model::isi::multisig::*;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_smart_contract::data_model::{
     account::Account,
     query::{

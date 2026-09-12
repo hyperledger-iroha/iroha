@@ -23,8 +23,8 @@ use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 fn fresh_state() -> State {
-    let domain_id: iroha_data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain");
+    let domain_id: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], []);

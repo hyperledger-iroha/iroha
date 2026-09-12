@@ -18,16 +18,18 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId, Registrable,
+    Registrable,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
-    domain::{Domain, DomainId},
+    domain::Domain,
     isi::{InstructionBox, governance::RegisterCitizen},
-    name::Name,
     permission::Permission,
     smart_contract::manifest::ContractManifest,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
@@ -620,7 +622,7 @@ fn mk_governance_harness(with_permissions: bool) -> GovHarness {
                 .expect("canonical test network id"),
             &authority,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let contract_address_literal = contract_address.to_string();
@@ -745,7 +747,7 @@ seiyaku GovernedReadFixture {
             .expect("canonical test network id"),
         &harness.authority,
         91,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("governed contract address");
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -1694,6 +1696,7 @@ async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
             duration_blocks: "600".to_owned(),
             direction: "Aye".to_owned(),
         };
+        crate::frame_test_support::assert_current_frame(&dto, "iroha_torii::gov::PlainBallotDto");
         let error = handle_gov_ballot_plain_with_policy(
             Arc::clone(&state),
             &authenticated,
@@ -1702,11 +1705,11 @@ async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
         )
         .await
         .expect_err("typed proposal alias must not enter the standalone plain ballot path");
-        assert!(
-            error
-                .to_string()
-                .contains("authenticated Parliament lifecycle"),
-            "unexpected error for {selector:?}: {error:?}"
+        let message = conversion_message(error);
+        assert_eq!(
+            message,
+            "typed proposal fingerprints use the authenticated Parliament lifecycle, not standalone referendum ballots",
+            "unexpected typed rejection for {selector:?}"
         );
     }
 }
@@ -2246,7 +2249,7 @@ async fn governed_contract_read_serializes_exact_missing_shape() {
             .expect("canonical test network id"),
         &harness.authority,
         92,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("inactive contract address");
     let response = handle_gov_contract_get(
@@ -2286,7 +2289,7 @@ async fn governed_contract_read_retains_inactive_lifecycle_projection() {
             .expect("canonical test network id"),
         &harness.authority,
         94,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("inactive contract address");
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2421,7 +2424,7 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
             .expect("canonical test network id"),
         &harness.authority,
         93,
-        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("incomplete contract address");
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2703,3 +2706,4 @@ async fn ballot_zk_v1_rejects_partial_lock_hints() {
 }
 include!("ballot_v1_strictness_tests.rs");
 include!("ballotproof_shape_tests.rs");
+include!("norito_frame_tests.rs");

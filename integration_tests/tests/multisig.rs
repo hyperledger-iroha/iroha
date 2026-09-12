@@ -19,6 +19,9 @@ use iroha::{
     },
     executor_data_model::isi::multisig::*,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,
@@ -383,11 +386,11 @@ fn cli_envs_for_signatory(
 ) -> Vec<(&'static str, String)> {
     let ttl = client
         .client()
-        .transaction_ttl
+        .transaction_ttl()
         .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
     vec![
-        ("CHAIN", client.client().chain.to_string()),
-        ("TORII_URL", client.client().torii_url.to_string()),
+        ("CHAIN", client.client().chain().to_string()),
+        ("TORII_URL", client.client().endpoint().to_string()),
         ("ACCOUNT_DOMAIN", account_domain.to_string()),
         ("ACCOUNT_PUBLIC_KEY", key_pair.public_key().to_string()),
         (
@@ -398,7 +401,7 @@ fn cli_envs_for_signatory(
             "TRANSACTION_STATUS_TIMEOUT_MS",
             client
                 .client()
-                .transaction_status_timeout
+                .transaction_status_timeout()
                 .as_millis()
                 .to_string(),
         ),

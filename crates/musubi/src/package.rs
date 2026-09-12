@@ -21,9 +21,9 @@ use iroha_data_model::{
         MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
         validate_musubi_portable_path_set_v1,
     },
-    name::Name,
     sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
 };
+use iroha_model_base::name::Name;
 use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
 #[cfg(all(test, unix))]
 use norito::codec::Decode;
@@ -1122,7 +1122,7 @@ pub fn publication_claim(
     }
     Ok(publication)
 }
-fn bundle_parse_error(error: iroha_data_model::ParseError) -> PackageError {
+fn bundle_parse_error(error: iroha_model_base::error::ParseError) -> PackageError {
     PackageError::InvalidBundleBinding(error.to_string())
 }
 fn insert_optional_string(table: &mut toml::Table, key: &str, value: Option<&str>) {
@@ -1624,7 +1624,8 @@ fn normalize_nfc(component: &str) -> Result<String, ()> {
         if segment.is_empty() {
             return Ok(());
         }
-        let normalized = Name::from_str(segment).map_err(|_| ())?;
+        let canonical = Name::normalize(segment).map_err(|_| ())?;
+        let normalized = Name::from_str(&canonical).map_err(|_| ())?;
         output.push_str(normalized.as_ref());
         segment.clear();
         Ok(())
@@ -2312,9 +2313,9 @@ mod tests {
             MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptV1,
             MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
         },
-        nexus::DataSpaceId,
         sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_musubi_service::{
         AuthenticatedMusubiPublicationRuntimeClientV1, InMemoryMusubiPublicationServiceJournalV1,
         MusubiProviderReadbackBackendV1, MusubiProviderReadbackRequestV1,
@@ -2574,7 +2575,7 @@ exports = []
         let manifest = crate::manifest::parse_manifest(&rendered).expect("strict clean manifest");
         assert!(manifest.workspace.is_none());
         assert!(manifest.dev_dependencies.is_empty());
-        let dependency_alias: iroha_data_model::name::Name =
+        let dependency_alias: iroha_model_base::name::Name =
             "dep".parse().expect("dependency alias");
         assert!(matches!(
             &manifest.dependencies[&dependency_alias],
@@ -3567,13 +3568,11 @@ exports = []
 #[cfg(all(test, not(unix)))]
 mod unsupported_platform_tests {
     use super::{PackageError, PackageLayout, plan_package};
-    use iroha_data_model::{
-        musubi::{
-            MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
-            MusubiVerificationLockV1,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::musubi::{
+        MUSUBI_REGISTRY_VERSION_V1, MusubiPackageIdV1, MusubiPackageScopeV1, MusubiReleaseIdV1,
+        MusubiVerificationLockV1,
     };
+    use iroha_model_base::topology::DataSpaceId;
     #[test]
     fn package_planning_fails_before_parsing_or_inspecting_the_root() {
         let package = MusubiPackageIdV1::new(

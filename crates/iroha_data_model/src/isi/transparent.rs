@@ -2,8 +2,10 @@ use super::*;
 use crate::asset::id::AssetId;
 use core::num::NonZeroU16;
 use iroha_crypto::PublicKey;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
-#[cfg(feature = "json")]
+
 use norito::json::{FastJsonWrite, JsonSerialize};
 use std::fmt::Display;
 iroha_data_model_derive::model_single! {
@@ -13,6 +15,8 @@ iroha_data_model_derive::model_single! {
     #[derive(iroha_schema::IntoSchema)]
     #[display("SET `{_0}`")]
     #[repr(transparent)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::transparent::SetParameter")]
     pub struct SetParameter(pub Parameter);
 }
 isi! {
@@ -445,7 +449,7 @@ isi! {
         pub executor: Executor,
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for SetParameter {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -457,7 +461,7 @@ impl norito::json::FastJsonWrite for SetParameter {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for SetParameter {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -466,7 +470,7 @@ impl norito::json::JsonDeserialize for SetParameter {
         Ok(Self(parameter))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Upgrade {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.executor, out);
@@ -478,7 +482,7 @@ impl norito::json::FastJsonWrite for Upgrade {
         norito::json::JsonSerialize::json_serialize_to(&self.executor, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Upgrade {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -591,7 +595,7 @@ isi! {
         /// Wire identifier of the instruction that failed to decode.
         pub wire_id: String,
         /// Hash of the raw instruction payload bytes.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub payload_hash: [u8; 32],
         /// Human-readable decode failure message (best-effort).
         pub message: String,
@@ -1216,7 +1220,7 @@ impl CustomInstruction {
     /// Norito wire identifier for custom Kotodama instructions.
     pub const WIRE_ID: &'static str = "iroha.custom";
 }
-#[cfg(feature = "json")]
+
 impl<O> FastJsonWrite for SetKeyValue<O>
 where
     O: Identifiable,
@@ -1248,7 +1252,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for SetAssetKeyValue {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1276,7 +1280,7 @@ impl FastJsonWrite for SetAssetKeyValue {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<O> FastJsonWrite for RemoveKeyValue<O>
 where
     O: Identifiable,
@@ -1304,7 +1308,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for RemoveAssetKeyValue {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1328,7 +1332,7 @@ impl FastJsonWrite for RemoveAssetKeyValue {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<O, D> FastJsonWrite for Grant<O, D>
 where
     O: JsonSerialize,
@@ -1357,7 +1361,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<O, D> FastJsonWrite for Revoke<O, D>
 where
     O: JsonSerialize,
@@ -1386,7 +1390,7 @@ where
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for ExecuteTrigger {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1410,7 +1414,7 @@ impl FastJsonWrite for ExecuteTrigger {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for Log {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1569,7 +1573,7 @@ mod tests {
     fn role_id(name: &str) -> RoleId {
         name.parse().expect("role id")
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -1581,7 +1585,7 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn transparent_instruction_json_families_have_exact_checked_bounds() {
         let key: Name = "memo".parse().expect("metadata key");
@@ -1970,6 +1974,18 @@ mod tests {
             &registry,
             InvalidInstruction::WIRE_ID,
             InvalidInstruction::new("iroha.unknown", [0xAB; 32], "bad payload"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::SetParameter>(
+            "iroha_data_model::isi::transparent::SetParameter",
         );
     }
 }

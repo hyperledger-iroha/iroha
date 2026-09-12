@@ -55,6 +55,10 @@ mod one_instruction {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::governance_proposal_api::DeployContractProposalDraftRequestV1"
+)]
 pub struct DeployContractProposalDraftRequestV1 {
     /// Canonical transaction authority that will submit the returned instruction.
     pub proposal_operator: AccountId,
@@ -80,6 +84,10 @@ pub struct DeployContractProposalDraftRequestV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftRequestV1"
+)]
 pub struct SccpRouteGovernanceProposalDraftRequestV1 {
     /// Atomic closed registry action proposed for enactment.
     pub action: SccpRouteGovernanceActionV1,
@@ -90,6 +98,10 @@ pub struct SccpRouteGovernanceProposalDraftRequestV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::governance_proposal_api::GovernanceProposalInstructionDraftV1"
+)]
 pub struct GovernanceProposalInstructionDraftV1 {
     /// Registered instruction wire identifier.
     pub wire_id: String,
@@ -102,6 +114,10 @@ pub struct GovernanceProposalInstructionDraftV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::governance_proposal_api::DeployContractProposalDraftResponseV1"
+)]
 pub struct DeployContractProposalDraftResponseV1 {
     /// Fingerprint of the complete stored [`iroha_data_model::governance::types::ProposalKind`].
     pub proposal_id: ProposalContentId,
@@ -115,6 +131,10 @@ pub struct DeployContractProposalDraftResponseV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftResponseV1"
+)]
 pub struct SccpRouteGovernanceProposalDraftResponseV1 {
     /// Fingerprint of the complete stored [`iroha_data_model::governance::types::ProposalKind`].
     pub proposal_id: ProposalContentId,
@@ -177,5 +197,37 @@ mod tests {
                 "SCCP response accepted {count} instructions"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::DeployContractProposalDraftRequestV1,
+        >(
+            "iroha_torii_shared::governance_proposal_api::DeployContractProposalDraftRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::DeployContractProposalDraftResponseV1,
+        >(
+            "iroha_torii_shared::governance_proposal_api::DeployContractProposalDraftResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::GovernanceProposalInstructionDraftV1,
+        >(
+            "iroha_torii_shared::governance_proposal_api::GovernanceProposalInstructionDraftV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SccpRouteGovernanceProposalDraftRequestV1,
+        >(
+            "iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SccpRouteGovernanceProposalDraftResponseV1,
+        >(
+            "iroha_torii_shared::governance_proposal_api::SccpRouteGovernanceProposalDraftResponseV1",
+        );
     }
 }

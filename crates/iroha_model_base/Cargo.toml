@@ -1,0 +1,40 @@
+[package]
+name = "iroha_model_base"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Canonical foundational Iroha identities, names, state paths, metadata and validation"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Expose the existing opaque FFI representations for dynamic linking.
+ffi_export = ["dep:iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export"]
+# Preserve the model declaration macro's internal mutable API selection.
+transparent_api = ["iroha_data_model_derive/transparent_api"]
+
+[dependencies]
+iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
+thiserror = { workspace = true }
+getset = { workspace = true }
+iroha_data_model_derive = { path = "../iroha_data_model_derive" }
+iroha_primitives = { workspace = true, features = ["json"] }
+iroha_schema = { workspace = true }
+iroha_ffi = { workspace = true, optional = true }
+derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+mv = { path = "../mv" }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+# Name normalization is consensus-visible. The source checks the baked data
+# against the existing reviewed fingerprint before accepting normalization.
+icu_normalizer = { version = "=2.2.0", default-features = false, features = ["compiled_data"] }
+idna = { version = "1.1.0", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# The immutable schema fixture was captured with all algorithm enum variants.
+# Keep this test selection separate from the minimal production dependency.
+iroha_crypto = { workspace = true, default-features = false, features = ["bls", "gost", "sm"] }
+hex = { workspace = true }

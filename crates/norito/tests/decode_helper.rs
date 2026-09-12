@@ -1,7 +1,10 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::{CompressionConfig, NoritoDeserialize, NoritoSerialize, decode_from_bytes};
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
+#[derive(
+    Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.decode_helper.Foo")]
 struct Foo {
     a: u32,
     b: String,

@@ -20,11 +20,12 @@ use fastpq_prover::{
 };
 use iroha_crypto::HashOf;
 use iroha_data_model::{
-    DomainId, NetworkId,
+    NetworkId,
     asset::AssetDefinitionId,
     fastpq::{FastpqPublicTransferTranscriptV1, TransferDeltaTranscript, TransferSmtWitness},
-    nexus::DataSpaceId,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{
     bigint::BigInt,
     numeric::{Numeric, Quantity},
@@ -105,6 +106,10 @@ fn entries(hash: Hash) -> Vec<FastpqSourceExecutionEntryV1> {
 }
 
 fn encoded_statement(transcript: &TransferTranscript, slot: u64, perm: [u8; 32]) -> usize {
+    encoded_bundle(std::slice::from_ref(transcript), slot, perm)
+}
+
+fn encoded_bundle(bundle: &[TransferTranscript], slot: u64, perm: [u8; 32]) -> usize {
     let inputs = FastpqPublicInputsTemplate {
         dsid: [255; 16],
         slot,
@@ -115,7 +120,7 @@ fn encoded_statement(transcript: &TransferTranscript, slot: u64, perm: [u8; 32])
     .with_tx_set_hash([255; 32]);
     let statement = quantity_statement_from_finalized_transcripts(
         inputs,
-        std::slice::from_ref(transcript),
+        bundle,
         source_statement_public_limits(limits()).unwrap(),
         TransferSmtBuildLimits::for_update_limit(32).unwrap(),
     )
@@ -156,8 +161,7 @@ fn exact_frames_and_all_six_caps_precede_every_private_constructor() {
     assert_eq!(measured.input_transcript_bytes, expected_inputs);
     let sizes: Vec<_> = map
         .values()
-        .flatten()
-        .map(|t| encoded_statement(t, 0, [0; 32]))
+        .map(|bundle| encoded_bundle(bundle, 0, [0; 32]))
         .collect();
     assert_eq!(measured.max_statement_bytes, *sizes.iter().max().unwrap());
     assert_eq!(measured.total_statement_bytes, sizes.iter().sum::<usize>());
@@ -287,7 +291,7 @@ fn private_path_bytes_are_exact_and_never_enter_public_statement_size() {
 #[test]
 fn multi_delta_repeated_keys_zero_and_self_transfers_keep_all_occurrences() {
     let multi = transcript(vec![delta(3, 10, 0), delta(3, 7, 3)]);
-    let mut self_delta = delta(0, 5, 5);
+    let mut self_delta = delta(0, 4, 4);
     self_delta.to_account = self_delta.from_account.clone();
     let zero_self = transcript(vec![self_delta]);
     let map = archive(vec![multi.clone(), zero_self.clone(), zero_self.clone()]);
@@ -296,7 +300,7 @@ fn multi_delta_repeated_keys_zero_and_self_transfers_keep_all_occurrences() {
     assert_eq!(usage.deltas, 4);
     assert_eq!(
         usage.total_statement_bytes,
-        encoded_statement(&multi, 9, [7; 32]) + 2 * encoded_statement(&zero_self, 9, [7; 32])
+        encoded_bundle(&[multi, zero_self.clone(), zero_self], 9, [7; 32])
     );
     let malformed = transcript(vec![delta(3, 10, 0), delta(3, 10, 0)]);
     assert!(measure_fastpq_source_statement_usage(1, &archive(vec![malformed]), limits()).is_err());
@@ -349,21 +353,27 @@ fn canonical_layout_and_inherited_flags_restore_after_measurement() {
 }
 
 #[test]
-fn checked_merge_preserves_maximum_and_requires_separately_owned_entry_count() {
+fn disjoint_entry_merge_preserves_maximum_and_requires_owned_entry_count() {
     let t = transcript(vec![delta(3, 10, 0)]);
     let single =
         measure_fastpq_source_statement_usage(1, &archive(vec![t.clone()]), limits()).unwrap();
-    let merged = single.checked_add(single).unwrap();
-    let both =
-        measure_fastpq_source_statement_usage(1, &archive(vec![t.clone(), t]), limits()).unwrap();
+    let merged = single.checked_add_disjoint_entries(single).unwrap();
+    let mut other = t.clone();
+    other.batch_hash = Hash::new(b"another complete entry");
+    other.poseidon_preimage_digest = Some(poseidon_preimage_digest(
+        &other.deltas[0],
+        &other.batch_hash,
+    ));
+    let map = BTreeMap::from([(t.batch_hash, vec![t]), (other.batch_hash, vec![other])]);
+    let both = measure_fastpq_source_statement_usage(2, &map, limits()).unwrap();
     assert_eq!(merged, both);
     assert_eq!(merged.max_statement_bytes, single.max_statement_bytes);
-    // Both fragments can belong to one entry; a separate non-transfer entry changes E only.
-    merged.check_limits(1, exact(merged, 1)).unwrap();
-    assert!(merged.check_limits(2, exact(merged, 1)).is_err());
+    // Adding a third non-transfer entry changes E without changing statement usage.
+    merged.check_limits(2, exact(merged, 2)).unwrap();
+    assert!(merged.check_limits(3, exact(merged, 2)).is_err());
     assert_eq!(
         FastpqSourceTranscriptUsage::default()
-            .checked_add(merged)
+            .checked_add_disjoint_entries(merged)
             .unwrap(),
         merged
     );
@@ -393,14 +403,14 @@ fn checked_merge_overflow_never_mutates_its_operands() {
             }
         }
         let before = huge;
-        assert!(huge.checked_add(one).is_err());
+        assert!(huge.checked_add_disjoint_entries(one).is_err());
         assert_eq!(huge, before);
     }
     let huge = FastpqSourceTranscriptUsage {
         max_statement_bytes: usize::MAX,
         ..FastpqSourceTranscriptUsage::default()
     };
-    assert_eq!(huge.checked_add(huge).unwrap(), huge);
+    assert_eq!(huge.checked_add_disjoint_entries(huge).unwrap(), huge);
 }
 
 #[test]
@@ -588,4 +598,144 @@ fn multisig_full_key_lengths_are_measured_without_fixed_account_size_assumptions
         usage.total_statement_bytes,
         encoded_statement(&t, 9, [7; 32])
     );
+}
+
+#[test]
+fn same_entry_fragments_require_complete_frame_measurement_before_private_work() {
+    let first = transcript(vec![delta(3, 10, 0)]);
+    let second = transcript(vec![delta(3, 7, 3)]);
+    let singleton_max =
+        encoded_statement(&first, 9, [7; 32]).max(encoded_statement(&second, 9, [7; 32]));
+    let map = archive(vec![first, second]);
+    let bundle_bytes = encoded_bundle(map.values().next().unwrap(), 9, [7; 32]);
+    assert!(bundle_bytes > singleton_max);
+    let usage = measure_fastpq_source_statement_usage(2, &map, limits()).unwrap();
+    assert_eq!(usage.max_statement_bytes, bundle_bytes);
+    assert_eq!(usage.total_statement_bytes, bundle_bytes);
+    let before = norito::encode_canonical(&map).unwrap();
+    let calls = quantity_materializer_invocations_for_testing();
+    let low = FastpqSourceStatementBuildLimits {
+        max_statement_bytes: singleton_max,
+        ..limits()
+    };
+    let error = derive_fastpq_ordinary_source_manifest_v1(
+        source(),
+        &entries(*map.keys().next().unwrap()),
+        9,
+        [7; 32],
+        transaction_wire_hash(),
+        &map,
+        low,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("canonical individual statement bytes"),
+        "{error}"
+    );
+    assert_eq!(quantity_materializer_invocations_for_testing(), calls);
+    assert_eq!(norito::encode_canonical(&map).unwrap(), before);
+}
+
+#[test]
+fn complete_bundle_cumulative_cap_rejects_before_any_private_tree() {
+    let first = vec![
+        transcript(vec![delta(3, 10, 0)]),
+        transcript(vec![delta(3, 7, 3)]),
+    ];
+    let second_hash = Hash::new(b"second cumulative complete entry");
+    let mut second = first.clone();
+    for item in &mut second {
+        item.batch_hash = second_hash;
+        item.poseidon_preimage_digest =
+            Some(poseidon_preimage_digest(&item.deltas[0], &second_hash));
+    }
+    let first_hash = first[0].batch_hash;
+    let expected_bytes = encoded_bundle(&first, 0, [0; 32]) + encoded_bundle(&second, 0, [0; 32]);
+    let map = BTreeMap::from([(first_hash, first), (second_hash, second)]);
+    let mut complete_entries = entries(first_hash);
+    complete_entries.push(FastpqSourceExecutionEntryV1 {
+        entry_hash: second_hash,
+        ..complete_entries[1]
+    });
+    let usage = measure_fastpq_source_statement_usage(3, &map, limits()).unwrap();
+    assert_eq!(usage.transcripts, 4);
+    assert_eq!(usage.total_statement_bytes, expected_bytes);
+    assert!(usage.max_statement_bytes < usage.total_statement_bytes);
+    let bound = exact(usage, 3);
+    let (manifest, leaves) = derive_fastpq_ordinary_source_manifest_v1(
+        source(),
+        &complete_entries,
+        9,
+        [7; 32],
+        transaction_wire_hash(),
+        &map,
+        bound,
+    )
+    .unwrap();
+    assert_eq!(
+        (manifest.executed_entry_count, manifest.statement_count),
+        (3, 2)
+    );
+    assert_eq!(
+        leaves
+            .iter()
+            .map(|leaf| (leaf.entry_index, leaf.entry_transcript_count))
+            .collect::<Vec<_>>(),
+        vec![(1, 2), (2, 2)]
+    );
+    let calls = quantity_materializer_invocations_for_testing();
+    let low = FastpqSourceStatementBuildLimits {
+        max_total_statement_bytes: expected_bytes - 1,
+        ..bound
+    };
+    let error = derive_fastpq_ordinary_source_manifest_v1(
+        source(),
+        &complete_entries,
+        9,
+        [7; 32],
+        transaction_wire_hash(),
+        &map,
+        low,
+    )
+    .unwrap_err();
+    assert!(error.contains("canonical total statement bytes"), "{error}");
+    assert_eq!(quantity_materializer_invocations_for_testing(), calls);
+}
+
+#[test]
+fn cross_transcript_discontinuity_order_and_duplicate_fail_before_private_work() {
+    let original = archive(vec![
+        transcript(vec![delta(3, 10, 0)]),
+        transcript(vec![delta(3, 7, 3)]),
+    ]);
+    let original_hash = *original.keys().next().unwrap();
+    for mutation in 0..3 {
+        let mut map = original.clone();
+        let bundle = map.get_mut(&original_hash).unwrap();
+        match mutation {
+            0 => bundle.swap(0, 1),
+            1 => bundle.push(bundle[0].clone()),
+            _ => {
+                bundle[1] = transcript(vec![delta(3, 8, 3)]);
+            }
+        }
+        let before = norito::encode_canonical(&map).unwrap();
+        let calls = quantity_materializer_invocations_for_testing();
+        let error = derive_fastpq_ordinary_source_manifest_v1(
+            source(),
+            &entries(original_hash),
+            9,
+            [7; 32],
+            transaction_wire_hash(),
+            &map,
+            limits(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("public repeated-key balances do not chain"),
+            "mutation {mutation}: {error}"
+        );
+        assert_eq!(quantity_materializer_invocations_for_testing(), calls);
+        assert_eq!(norito::encode_canonical(&map).unwrap(), before);
+    }
 }

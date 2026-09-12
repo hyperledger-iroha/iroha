@@ -45,6 +45,7 @@ tempfile = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+iroha_model_base = { workspace = true }
 hex = { workspace = true }
 iroha_service_model = { workspace = true }
 sorafs_manifest = { workspace = true }

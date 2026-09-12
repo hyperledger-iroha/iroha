@@ -12,10 +12,10 @@ use iroha_data_model::{
         Parameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
     },
-    peer::PeerId,
     transaction::{Executable, TransactionDomain},
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction, decode_signed_genesis};
+use iroha_model_base::peer::PeerId;
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
 use sha2::Sha256;
@@ -1513,7 +1513,7 @@ mod tests {
     }
     fn stub_genesis() -> RawGenesisTransaction {
         iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("stub"),
+            iroha_model_base::chain::ChainId::from("stub"),
             ".",
         )
         .complete_for_test()
@@ -1524,7 +1524,7 @@ mod tests {
     fn portable_bound_profile_manifest_does_not_publish_the_staging_path() {
         let staging = tempdir().expect("profile staging directory");
         let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("stub"),
+            iroha_model_base::chain::ChainId::from("stub"),
             staging.path(),
         )
         .complete_for_test()
@@ -1552,7 +1552,7 @@ mod tests {
         .expect_err("absolute staging path must fail closed");
         assert!(error.to_string().contains("portable `ivm_dir` value `.`"));
         let leaking_bound_manifest = iroha_genesis::GenesisBuilder::new(
-            iroha_data_model::ChainId::from("stub"),
+            iroha_model_base::chain::ChainId::from("stub"),
             staging.path().join("executor.to"),
             staging.path(),
         )
@@ -1575,7 +1575,7 @@ mod tests {
         let non_default_discriminant = 369;
         let generated_manifest = stub_genesis().with_chain_discriminant(non_default_discriminant);
         let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("stub"),
+            iroha_model_base::chain::ChainId::from("stub"),
             staging.path(),
         )
         .complete_for_test()
@@ -1685,11 +1685,11 @@ mod tests {
             deterministic_keypair("manifest-chain-discriminant-account", Algorithm::Ed25519)
                 .expect("derive deterministic account key");
         let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("manifest-chain-discriminant"),
+            iroha_model_base::chain::ChainId::from("manifest-chain-discriminant"),
             ".",
         )
         .domain(
-            iroha_data_model::domain::DomainId::try_new("accounts", "universal")
+            iroha_model_base::domain::DomainId::try_new("accounts", "universal")
                 .expect("valid fixture domain"),
         )
         .account(account_key.public_key().clone())

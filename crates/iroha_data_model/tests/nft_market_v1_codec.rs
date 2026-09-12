@@ -1,11 +1,11 @@
 //! Independent native check of browser NFT sale bytes and canonical content/offer commitments.
-#![cfg(feature = "json")]
+
 use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::{InstructionBox, nft_market::*},
-    metadata::Metadata,
     nft_market::*,
 };
+use iroha_model_base::metadata::Metadata;
 use norito::{
     codec::Encode,
     json::{self, JsonDeserialize, Value},

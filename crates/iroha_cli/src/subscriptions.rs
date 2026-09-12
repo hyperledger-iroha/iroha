@@ -3,11 +3,10 @@ use crate::{Run, RunContext};
 use eyre::{Result, WrapErr};
 use iroha::{
     blocking,
-    data_model::{
-        account::AccountId, asset::AssetDefinitionId, name::Name, nft::NftId, trigger::TriggerId,
-    },
+    data_model::{account::AccountId, asset::AssetDefinitionId, nft::NftId, trigger::TriggerId},
     subscriptions::{SubscriptionCreate, SubscriptionUsage},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::subscriptions::{
     SubscriptionCancelMode, SubscriptionListParams, SubscriptionPlanListParams,
@@ -50,11 +49,11 @@ impl Run for PlanCommand {
 
 fn account_client<C: RunContext>(context: &C) -> Result<blocking::AccountClient> {
     Ok(blocking::AccountClient::from_client(
-        context.client_from_config().account_client()?,
+        context.client_from_config()?.account_client()?,
     )?)
 }
 fn public_client<C: RunContext>(context: &C) -> Result<blocking::Client> {
-    blocking::Client::from_client(context.client_from_config())
+    blocking::Client::from_client(context.client_from_config()?)
 }
 fn resolve_optional_account_id<C: RunContext>(
     context: &C,

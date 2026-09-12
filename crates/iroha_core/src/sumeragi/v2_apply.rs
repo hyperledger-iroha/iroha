@@ -92,9 +92,10 @@ use iroha_data_model::{
     },
     events::EventBox,
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
+    nexus::{LaneFinalityAuthorityV1, LaneRelayEnvelope},
     transaction::TransactionEntrypoint,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::time::TimeSource;
 use norito::codec::Encode;
 use std::{
@@ -207,7 +208,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     StaleReservationContext {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Historical proposal height.
         proposal_height: u64,
     },
@@ -217,7 +218,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     PartialCommittedGroup {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Historical proposal height.
         proposal_height: u64,
     },
@@ -235,7 +236,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     CommittedCarrierMismatch {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Historical proposal height.
         proposal_height: u64,
     },
@@ -251,7 +252,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     PendingMergeBindingMismatch {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Historical proposal height.
         proposal_height: u64,
     },
@@ -299,7 +300,7 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Canonical global height.
         height: u64,
         /// Conflicting coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
     },
     /// Canonical payload bytes exist but the exact local Kura payload disappeared.
     #[error(
@@ -309,7 +310,7 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Canonical global height.
         height: u64,
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
     },
     /// Historical retain action is missing its exact durable recovery record.
     #[error(
@@ -319,7 +320,7 @@ pub(crate) enum V2ReservationLifecycleError {
         /// Immutable recovery-record identity.
         recovery_id: Hash,
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
     },
     /// A finalized autonomous carrier cannot be installed as exact historical work.
     #[error("historical autonomous recovery {recovery_id} is invalid: {detail}")]
@@ -335,7 +336,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     CertifiedTerminalLoser {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Original proposal height.
         height: u64,
     },
@@ -345,7 +346,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     CertifiedPayloadMissingCanonicalCarrier {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Original proposal height.
         height: u64,
     },
@@ -355,7 +356,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     RetiredCanonicalCarrier {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Canonical global height.
         height: u64,
     },
@@ -365,7 +366,7 @@ pub(crate) enum V2ReservationLifecycleError {
     )]
     UnfinalizedRetirement {
         /// Coordinator lane.
-        lane_id: iroha_data_model::nexus::LaneId,
+        lane_id: iroha_model_base::topology::LaneId,
         /// Undecided proposal height.
         height: u64,
     },
@@ -5576,7 +5577,7 @@ mod fastpq_submission_tests {
             public_inputs: Some(public_inputs),
             tx_set_hash: Some(tx_set_hash),
             entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
-            source_inventory: Some(Arc::clone(&inventory)),
+            _source_inventory: Some(Arc::clone(&inventory)),
         };
         let captured = RefCell::new(None);
 
@@ -5601,7 +5602,7 @@ mod fastpq_submission_tests {
         assert_eq!(actual_public_inputs.perm_root, public_inputs.perm_root);
         assert_eq!(job.context.tx_set_hash, Some(tx_set_hash));
         assert!(Arc::ptr_eq(
-            job.context.source_inventory.as_ref().unwrap(),
+            job.context._source_inventory.as_ref().unwrap(),
             &inventory
         ));
         assert_eq!(

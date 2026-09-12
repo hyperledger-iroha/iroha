@@ -2,7 +2,7 @@
 use criterion::Criterion;
 use iroha_core::smartcontracts::ivm::cache::IvmCache;
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Name;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric_abi::IntValueV1};
 use ivm::{
     ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType,

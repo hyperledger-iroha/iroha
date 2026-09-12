@@ -25,11 +25,14 @@ object AccountFaucetPreparedVerifier {
     fun requireValidPrepared(
         prepared: AccountFaucetPreparedTransactionV1,
         claim: AccountFaucetClaimV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         expectedFeePayment: FeePaymentIntent,
         policy: AccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
     ): SignedTransaction {
+        require(binding.kind == PreparedOperationBindingV1.FAUCET && binding.semanticHashHex == claim.semanticHashHex()) {
+            "faucet binding semantic identity differs from the claim"
+        }
         require(prepared.binding.toJsonMap() == binding.toJsonMap() && prepared.claim.toJsonMap() == claim.toJsonMap()) {
             "prepared faucet envelope differs from the exact claim or binding"
         }
@@ -71,6 +74,7 @@ object AccountFaucetPreparedVerifier {
             "prepared faucet transaction hash differs from the envelope"
         }
         val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
+        requirePreparedOperationLifetime(payload, binding)
         require(
             AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
                 payload.authority,
@@ -86,9 +90,10 @@ object AccountFaucetPreparedVerifier {
             "prepared faucet fee intent differs from the signed transaction"
         }
         val expectedMetadata = mapOf(
-            "taira_public_reset_binding" to JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())),
-            "taira_prepared_operation" to JsonValue.string(AccountFaucetPreparedTransactionV1.OPERATION),
-            "taira_prepared_semantic_hash" to JsonValue.string(prepared.semanticHashHex),
+            "prepared_operation_binding" to JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())),
+            "prepared_operation" to JsonValue.string(AccountFaucetPreparedTransactionV1.OPERATION),
+            "prepared_semantic_hash" to JsonValue.string(prepared.semanticHashHex),
+            "taira_faucet_claim_marker_version" to JsonValue.number(1L),
         )
         require(payload.metadata == expectedMetadata) {
             "prepared faucet transaction metadata differs from the envelope"

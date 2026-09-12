@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate and emit Torii's static OpenAPI authority from one exact, sealed candidate mirror.
+# Emit unsigned authored-spec metadata, or run the detached-signature router corridor.
 set -euo pipefail
 
 # Git provenance must not inherit caller-selected routing or configuration.
@@ -34,7 +34,9 @@ parent is the authenticated artifact root, and cancellation is
 <run>/cancel-request.json. Cargo loads the package-local authority through a
 live Torii router from a fresh, hard-link-free, sealed clone at the caller's
 exact clean HEAD through the authenticated Cargo 1.93.1/--locked/--offline/-j1 process
-policy.
+policy. Plain --unsigned-manifest instead uses the Node authored-spec metadata
+owner on the same clean checkout, requires an empty output directory, and does
+not run Cargo, clone source, or claim live-router validation.
 EOF
   exit 2
 }
@@ -216,6 +218,16 @@ fi
 CANDIDATE_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}")"
 CANDIDATE_TREE="$(git -C "${REPO_ROOT}" rev-parse --verify "${CANDIDATE_COMMIT}^{tree}")"
 
+# Plain unsigned metadata is owned by Node over the authored bytes. Native
+# router projection remains an independent compiled validation gate.
+if [[ "${UNSIGNED_MANIFEST}" == 1 && -z "${SIGNING_PAYLOAD}" ]]; then
+  release_gate_boundary "openapi-authored:before-generation"
+  node "${REPO_ROOT}/tools/openapi/scripts/generate-unsigned-openapi.mjs" \
+    --source-commit="${CANDIDATE_COMMIT}" --output-dir="${OUTPUT_DIR}"
+  release_gate_boundary "openapi-authored:after-generation"
+  exit 0
+fi
+
 OPENAPI_RUN_ROOT="$(mktemp -d /private/tmp/iroha-openapi-generate.XXXXXX)"
 chmod 700 "${OPENAPI_RUN_ROOT}"
 SOURCE_ROOT="${OPENAPI_RUN_ROOT}/source"
@@ -314,7 +326,6 @@ fi
 (
   cd "${SOURCE_ROOT}"
   GIT_OPTIONAL_LOCKS=0 \
-  IROHA_INTEGRATION_TESTS_SKIP_PREBUILT_STAGE=1 \
   NORITO_SKIP_BINDINGS_SYNC=1 \
     run_cargo run \
       --locked \

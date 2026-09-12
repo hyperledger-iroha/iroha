@@ -2,11 +2,9 @@
 use super::{FastpqSourceOpeningBuildLimits, fastpq_ordinary_source_statement_opening_v1};
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
-    NetworkId,
-    execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
-    fastpq::*,
-    nexus::{DataSpaceId, LaneId},
+    NetworkId, execution_witness::FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1, fastpq::*,
 };
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 fn network(seed: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new([seed])))
 }
@@ -38,7 +36,6 @@ fn leaves() -> Vec<FastpqOrdinarySourceStatementLeafV1> {
             },
             statement_index: i,
             entry_index: i * 2,
-            transcript_index: 0,
             entry_transcript_count: 1,
             entry_hash: Hash::new([i as u8]),
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
@@ -581,7 +578,8 @@ fn source_opening_producer_rejects_wrong_schema_and_oversized_manifest_values() 
 #[test]
 fn ordinary_recorder_cannot_alias_the_protected_source_manifest_key() {
     use crate::sumeragi::witness;
-    use iroha_data_model::{execution_witness::ExecutionWitnessKeyTagV1, name::Name};
+    use iroha_data_model::execution_witness::ExecutionWitnessKeyTagV1;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     let _guard = witness::exec_witness_guard();
     witness::start_block();

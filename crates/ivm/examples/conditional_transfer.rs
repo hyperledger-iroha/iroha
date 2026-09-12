@@ -1,8 +1,8 @@
 //! Demonstrates a conditional asset transfer using canonical pointer-ABI
 //! account, asset-definition, quantity, and dataspace TLVs.
-use iroha_data_model::{
-    account::AccountId, asset::AssetDefinitionId, domain::DomainId, nexus::DataSpaceId,
-};
+use iroha_data_model::{account::AccountId, asset::AssetDefinitionId};
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{IVM, PointerType, VMError, encoding, host::IVMHost, instruction, syscalls};
 use std::{

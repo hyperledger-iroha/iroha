@@ -17,7 +17,9 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
+use iroha_data_model::{NetworkId, account::AccountId};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::peer::PeerId;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, TestApiRouterRuntime, Torii};
@@ -137,6 +139,7 @@ impl ToriiHarness {
                     time_source,
                     false,
                 )
+                .expect("test telemetry resource registration")
                 .0,
             )
         } else {
@@ -162,7 +165,10 @@ impl ToriiHarness {
             cfg.common.key_pair.clone(),
             OnlinePeersProvider::new(peers_rx),
             None,
-            telemetry,
+            iroha_torii::ToriiRuntimeDeps::new(
+                build_identity_test_fixture::build_identity(),
+                telemetry,
+            ),
         )
         .expect("valid Torii integration-test fixture")
         .with_local_peer_id(local_peer_id.clone());
@@ -441,3 +447,6 @@ pub fn app_signed_request(
     );
     request
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

@@ -9,7 +9,12 @@ pub const SUBSCRIPTION_MUTATION_DRAFT_VERSION_V1: u16 = 1;
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// One canonical framed instruction returned for local transaction signing.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionInstructionDraftDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionInstructionDraft",
+    frame = "iroha_torii::routing::SubscriptionInstructionDraftDto"
+)]
 pub struct SubscriptionInstructionDraft {
     /// Registered instruction wire identifier.
     pub wire_id: String,
@@ -19,7 +24,11 @@ pub struct SubscriptionInstructionDraft {
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Request payload for creating a subscription plan.
 #[norito(deny_unknown_fields)]
-#[norito(schema_name = "iroha_torii::routing::SubscriptionPlanCreateDto")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionPlanCreateRequest",
+    frame = "iroha_torii::routing::SubscriptionPlanCreateDto"
+)]
 pub struct SubscriptionPlanCreateRequest {
     /// Account authorizing the transaction (plan provider).
     pub authority: iroha_data_model::account::AccountId,
@@ -30,7 +39,12 @@ pub struct SubscriptionPlanCreateRequest {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Canonical unsigned transaction draft for registering a subscription plan.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionPlanCreateResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionPlanCreateResponse",
+    frame = "iroha_torii::routing::SubscriptionPlanCreateResponseDto"
+)]
 pub struct SubscriptionPlanCreateResponse {
     /// Always `false`; Torii has not submitted this transaction.
     pub submitted: bool,
@@ -43,8 +57,12 @@ pub struct SubscriptionPlanCreateResponse {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Query parameters for listing subscription plans.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionPlanListParams")]
-#[derive(Default)]
+
+#[derive(Default, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionPlanListParams",
+    frame = "iroha_torii::routing::SubscriptionPlanListParams"
+)]
 pub struct SubscriptionPlanListParams {
     /// Optional plan provider filter using a canonical I105 id or on-chain alias.
     pub provider: Option<String>,
@@ -59,7 +77,12 @@ pub struct SubscriptionPlanListParams {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Subscription plan list item.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionPlanListItem")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionPlanListItem",
+    frame = "iroha_torii::routing::SubscriptionPlanListItem"
+)]
 pub struct SubscriptionPlanListItem {
     /// Plan asset definition id.
     pub plan_id: iroha_data_model::asset::AssetDefinitionId,
@@ -68,7 +91,12 @@ pub struct SubscriptionPlanListItem {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Response payload for listing subscription plans.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionPlanListResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionPlanListResponse",
+    frame = "iroha_torii::routing::SubscriptionPlanListResponseDto"
+)]
 pub struct SubscriptionPlanListResponse {
     /// Plan items.
     pub items: Vec<SubscriptionPlanListItem>,
@@ -83,7 +111,12 @@ pub struct SubscriptionPlanListResponse {
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request payload for creating a subscription.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionCreateDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionCreateRequest",
+    frame = "iroha_torii::routing::SubscriptionCreateDto"
+)]
 pub struct SubscriptionCreateRequest {
     /// Account authorizing the transaction (subscriber).
     pub authority: iroha_data_model::account::AccountId,
@@ -106,7 +139,12 @@ pub struct SubscriptionCreateRequest {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Exact unsigned subscription creation draft.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionCreateResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionCreateResponse",
+    frame = "iroha_torii::routing::SubscriptionCreateResponseDto"
+)]
 pub struct SubscriptionCreateResponse {
     /// Response layout version.
     pub version: u16,
@@ -134,8 +172,12 @@ pub struct SubscriptionCreateResponse {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Query parameters for listing subscriptions.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionListParams")]
-#[derive(Default)]
+
+#[derive(Default, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionListParams",
+    frame = "iroha_torii::routing::SubscriptionListParams"
+)]
 pub struct SubscriptionListParams {
     /// Optional subscriber filter using a canonical I105 id or on-chain alias.
     pub owned_by: Option<String>,
@@ -154,7 +196,12 @@ pub struct SubscriptionListParams {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Subscription list item payload.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionListItem")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionListItem",
+    frame = "iroha_torii::routing::SubscriptionListItem"
+)]
 pub struct SubscriptionListItem {
     /// Subscription NFT id.
     pub subscription_id: iroha_data_model::nft::NftId,
@@ -169,7 +216,12 @@ pub struct SubscriptionListItem {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Response payload for listing subscriptions.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionListResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionListResponse",
+    frame = "iroha_torii::routing::SubscriptionListResponseDto"
+)]
 pub struct SubscriptionListResponse {
     /// Subscription items.
     pub items: Vec<SubscriptionListItem>,
@@ -183,7 +235,12 @@ pub struct SubscriptionListResponse {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Response payload for fetching a subscription.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionGetResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionGetResponse",
+    frame = "iroha_torii::routing::SubscriptionGetResponseDto"
+)]
 pub struct SubscriptionGetResponse {
     /// Subscription NFT id.
     pub subscription_id: iroha_data_model::nft::NftId,
@@ -199,7 +256,12 @@ pub struct SubscriptionGetResponse {
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request payload for subscription status updates.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionActionDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionActionRequest",
+    frame = "iroha_torii::routing::SubscriptionActionDto"
+)]
 pub struct SubscriptionActionRequest {
     /// Account authorizing the transaction (subscriber).
     pub authority: iroha_data_model::account::AccountId,
@@ -228,7 +290,12 @@ pub struct SubscriptionActionRequest {
     deny_unknown_fields
 )]
 /// Cancelation mode for subscription cancel requests.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionCancelMode")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionCancelMode",
+    frame = "iroha_torii::routing::SubscriptionCancelMode"
+)]
 pub enum SubscriptionCancelMode {
     /// Cancel immediately.
     Immediate,
@@ -238,12 +305,16 @@ pub enum SubscriptionCancelMode {
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Request payload for recording subscription usage.
 #[norito(deny_unknown_fields)]
-#[norito(schema_name = "iroha_torii::routing::SubscriptionUsageRequestDto")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionUsageRequest",
+    frame = "iroha_torii::routing::SubscriptionUsageRequestDto"
+)]
 pub struct SubscriptionUsageRequest {
     /// Account authorizing the transaction (usage reporter).
     pub authority: iroha_data_model::account::AccountId,
     /// Usage counter key to update.
-    pub unit_key: iroha_data_model::name::Name,
+    pub unit_key: iroha_model_base::name::Name,
     /// Non-negative usage increment.
     pub delta: iroha_primitives::numeric::Quantity,
     /// Optional usage trigger id; derived when omitted.
@@ -252,7 +323,12 @@ pub struct SubscriptionUsageRequest {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Exact details projected by a subscription action draft.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionActionDraftDetailsDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionActionDraftDetails",
+    frame = "iroha_torii::routing::SubscriptionActionDraftDetailsDto"
+)]
 pub struct SubscriptionActionDraftDetails {
     /// Billing trigger affected by the action.
     pub billing_trigger_id: iroha_data_model::trigger::TriggerId,
@@ -269,7 +345,12 @@ pub struct SubscriptionActionDraftDetails {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Exact unsigned subscription action draft.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionActionResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionActionResponse",
+    frame = "iroha_torii::routing::SubscriptionActionResponseDto"
+)]
 pub struct SubscriptionActionResponse {
     /// Response layout version.
     pub version: u16,
@@ -286,7 +367,12 @@ pub struct SubscriptionActionResponse {
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 /// Canonical unsigned transaction draft for recording subscription usage.
-#[norito(schema_name = "iroha_torii::routing::SubscriptionUsageResponseDto")]
+
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::subscriptions::SubscriptionUsageResponse",
+    frame = "iroha_torii::routing::SubscriptionUsageResponseDto"
+)]
 pub struct SubscriptionUsageResponse {
     /// Always `false`; Torii has not submitted this transaction.
     pub submitted: bool,
@@ -308,11 +394,8 @@ mod tests {
             name: &str,
         ) {
             let expected = norito::core::schema_hash_for_name(name);
-            assert_eq!(<T as norito::NoritoSerialize>::schema_hash(), expected);
-            assert_eq!(
-                <T as norito::NoritoDeserialize<'_>>::schema_hash(),
-                expected
-            );
+            assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
+            assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
         }
         identity::<SubscriptionInstructionDraft>(
             "iroha_torii::routing::SubscriptionInstructionDraftDto",
@@ -392,6 +475,67 @@ mod tests {
         assert_eq!(
             norito::json::to_json(&decoded).unwrap(),
             norito::json::to_json(&params).unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionActionDraftDetails>(
+            "iroha_torii_shared::subscriptions::SubscriptionActionDraftDetails",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionActionRequest>(
+            "iroha_torii_shared::subscriptions::SubscriptionActionRequest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionActionResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionActionResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionCancelMode>(
+            "iroha_torii_shared::subscriptions::SubscriptionCancelMode",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionCreateRequest>(
+            "iroha_torii_shared::subscriptions::SubscriptionCreateRequest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionCreateResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionCreateResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionGetResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionGetResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionInstructionDraft>(
+            "iroha_torii_shared::subscriptions::SubscriptionInstructionDraft",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionListItem>(
+            "iroha_torii_shared::subscriptions::SubscriptionListItem",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionListParams>(
+            "iroha_torii_shared::subscriptions::SubscriptionListParams",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionListResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionListResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanCreateRequest>(
+            "iroha_torii_shared::subscriptions::SubscriptionPlanCreateRequest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanCreateResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionPlanCreateResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanListItem>(
+            "iroha_torii_shared::subscriptions::SubscriptionPlanListItem",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanListParams>(
+            "iroha_torii_shared::subscriptions::SubscriptionPlanListParams",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionPlanListResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionPlanListResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionUsageRequest>(
+            "iroha_torii_shared::subscriptions::SubscriptionUsageRequest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SubscriptionUsageResponse>(
+            "iroha_torii_shared::subscriptions::SubscriptionUsageResponse",
         );
     }
 }

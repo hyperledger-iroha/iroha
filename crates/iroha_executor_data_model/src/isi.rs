@@ -51,12 +51,26 @@ pub mod multisig {
     };
     use core::num::{NonZeroU16, NonZeroU64};
     use iroha_crypto::{HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
     #[allow(unused_imports)]
     use std::eprintln;
     use std::{borrow::ToOwned, collections::BTreeSet};
     /// Multisig-related instructions
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, From)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        From,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigInstructionBox")]
     pub enum MultisigInstructionBox {
         /// Register a multisig account, which is a prerequisite of multisig transactions
         Register(MultisigRegister),
@@ -209,7 +223,9 @@ pub mod multisig {
         Encode,
         IntoSchema,
         DeriveJsonSerialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigRegister")]
     pub struct MultisigRegister {
         /// Account backing the multisig controller.
         ///
@@ -313,7 +329,9 @@ pub mod multisig {
         Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigPropose")]
     pub struct MultisigPropose {
         /// Multisig account to propose
         pub account: AccountId,
@@ -336,7 +354,9 @@ pub mod multisig {
         Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigApprove")]
     pub struct MultisigApprove {
         /// Multisig account to approve
         pub account: AccountId,
@@ -357,7 +377,9 @@ pub mod multisig {
         Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigCancel")]
     pub struct MultisigCancel {
         /// Multisig account that owns the target proposal
         pub account: AccountId,
@@ -382,6 +404,10 @@ pub mod multisig {
         Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_executor_data_model::isi::multisig::MultisigInvalidateOutstanding"
     )]
     pub struct MultisigInvalidateOutstanding {
         /// Multisig account whose outstanding proposals must be invalidated.
@@ -414,7 +440,19 @@ pub mod multisig {
         }
     }
     /// Native ledger value for a multisig account state entry.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigAccountState")]
     pub struct MultisigAccountState {
         /// Canonical multisig account id for this state entry.
         pub account_id: AccountId,
@@ -439,8 +477,19 @@ pub mod multisig {
     }
     /// Native ledger value for a multisig proposal state entry.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigProposalState")]
     pub struct MultisigProposalState {
         /// Canonical multisig account id that owns this proposal.
         pub multisig_account_id: AccountId,
@@ -458,7 +507,22 @@ pub mod multisig {
         pub is_relayed: Option<bool>,
     }
     /// Terminal lifecycle states persisted for top-level multisig proposals.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_executor_data_model::isi::multisig::MultisigProposalTerminalStatus"
+    )]
     pub enum MultisigProposalTerminalStatus {
         /// Proposal executed after reaching quorum.
         Finalized,
@@ -469,7 +533,20 @@ pub mod multisig {
     }
     /// Native ledger value for a persisted terminal multisig proposal entry.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_executor_data_model::isi::multisig::MultisigProposalTerminalState"
     )]
     pub struct MultisigProposalTerminalState {
         /// Canonical multisig account id that owns this proposal.
@@ -489,7 +566,20 @@ pub mod multisig {
     /// [`MultisigProposalTerminalState`], whose persisted Norito schema must remain decodable for
     /// existing ledgers.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_executor_data_model::isi::multisig::MultisigProposalTerminalExecutionStateV1"
     )]
     pub struct MultisigProposalTerminalExecutionStateV1 {
         /// Terminal proposal payload captured at execution time.
@@ -506,7 +596,22 @@ pub mod multisig {
         pub terminal_entrypoint_hash: [u8; 32],
     }
     /// Whether one successful multisig approval entrypoint executed its proposal.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_executor_data_model::isi::multisig::MultisigApprovalOutcomeStatusV1"
+    )]
     pub enum MultisigApprovalOutcomeStatusV1 {
         /// The approval reached quorum and executed the concrete proposal instructions.
         Executed,
@@ -515,8 +620,19 @@ pub mod multisig {
     }
     /// Immutable transaction-bound classification of one successful multisig approval.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigApprovalOutcomeV1")]
     pub struct MultisigApprovalOutcomeV1 {
         /// Exact account identifier carried by the signed approval instruction.
         pub entrypoint_account_id: AccountId,
@@ -533,8 +649,19 @@ pub mod multisig {
     }
     /// Metadata value for a multisig account specification
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigSpec")]
     pub struct MultisigSpec {
         /// List of signatories and their relative weights of responsibility for the multisig account
         pub signatories: BTreeMap<AccountId, Weight>,
@@ -545,8 +672,19 @@ pub mod multisig {
     }
     /// Metadata value for a multisig transaction proposal
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigProposalValue")]
     pub struct MultisigProposalValue {
         /// Proposal contents
         pub instructions: Vec<InstructionBox>,
@@ -824,16 +962,37 @@ pub mod multisig {
         }
         #[test]
         fn multisig_instruction_batch_hash_matches_sdk_golden() {
-            let instruction = InstructionBox::from(CustomInstruction::new(Json::new(())));
-            let hash = HashOf::new(&vec![instruction]);
+            let fixture: norito::json::Value = norito::json::from_str(include_str!(
+                "../../../fixtures/multisig/instruction_batch_hash_v1.json"
+            ))
+            .expect("shared Rust/Kotlin/Java instruction batch fixture");
             assert_eq!(
-                hash.as_ref(),
-                &[
-                    0x5f, 0x95, 0x7f, 0x67, 0xa4, 0x23, 0x6e, 0xb1, 0x6f, 0x9d, 0xf0, 0xd8, 0x11,
-                    0x70, 0xf3, 0xa7, 0x06, 0x56, 0x94, 0x2b, 0x4e, 0x17, 0x1a, 0x20, 0x8c, 0x26,
-                    0xde, 0x02, 0xe8, 0xe9, 0x9a, 0xcf,
-                ],
-                "HashOf<Vec<InstructionBox>> must match the Java/JS compact-v5 golden",
+                fixture["schema"].as_str(),
+                Some("iroha.multisig.instruction-batch-hash.v1")
+            );
+            assert_eq!(fixture["layout_flags"].as_u64(), Some(2));
+            let fixture_bytes = |key: &str| {
+                let value = fixture[key].as_str().expect("fixture hex string");
+                assert_eq!(value.len() % 2, 0, "complete fixture hex bytes");
+                value
+                    .as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        u8::from_str_radix(std::str::from_utf8(pair).expect("ASCII hex"), 16)
+                            .expect("valid fixture hex byte")
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let instructions = vec![InstructionBox::from(CustomInstruction::new(Json::new(())))];
+            assert_eq!(
+                norito::codec::Encode::encode(&instructions),
+                fixture_bytes("instruction_batch_hex"),
+                "the complete canonical vector must match the shared Rust-produced bytes",
+            );
+            assert_eq!(
+                HashOf::new(&instructions).as_ref().as_slice(),
+                fixture_bytes("instruction_batch_hash_hex"),
+                "HashOf<Vec<InstructionBox>> must match the independently checked shared hash",
             );
         }
         #[test]

@@ -1,4 +1,4 @@
-//! Production Poseidon recovery and compact-key reloads must preserve varied lookup proofs.
+//! Production Poseidon recovery and structured-key reloads must preserve varied lookup proofs.
 
 use super::*;
 use halo2_proofs::{
@@ -119,7 +119,7 @@ impl<F: ff::PrimeField, const HYBRID: bool> halo2_proofs::plonk::Circuit<F>
     }
 }
 
-fn recover_compact_lookup_key<C, const HYBRID: bool>(
+fn recover_structured_lookup_key<C, const HYBRID: bool>(
     key: &ProvingKey<C>,
     parity: KagemushaPastaParityV1,
     role: KagemushaArtifactRoleV1,
@@ -128,16 +128,16 @@ where
     C: CurveAffine + halo2_proofs::SerdeCurveAffine,
     C::Scalar: halo2_proofs::SerdePrimeField + FromUniformBytes<64> + WithSmallOrderMulGroup<3>,
 {
-    let mut bytes = compact_proving_key_buffer_v1(
+    let mut bytes = structured_proving_key_buffer_v1(
         parity,
         "lookup recovery proving key",
         KAGEMUSHA_STATE_PROVING_KEY_MAX_BYTES_V1,
         key,
     )
-    .expect("production compact buffer cap");
+    .expect("production structured buffer cap");
     key.clone()
-        .write_compact_v1_consuming(&mut bytes)
-        .expect("consuming compact key writer");
+        .write_structured_v1_consuming(&mut bytes)
+        .expect("consuming structured key writer");
     let binding = binding(role, &bytes);
     let mut cursor = Cursor::new(bytes.as_slice());
     let recovered = read_canonical_proving_key_v1::<C, LookupRecoveryCircuit<C::Scalar, HYBRID>>(
@@ -147,7 +147,7 @@ where
         6,
         (),
     )
-    .expect("shape-checked, digest-checked canonical compact recovery");
+    .expect("shape-checked, digest-checked canonical structured recovery");
     ensure_cursor_consumed(parity, "lookup recovery proving key", &cursor, bytes.len())
         .expect("no trailing key bytes");
     assert_eq!(
@@ -259,7 +259,7 @@ macro_rules! ordinary_recovery_test {
             let key = keygen_pk(&parameters, vk, &circuit).expect("lookup ordinary PK");
             assert_eq!(key.get_vk().cs().lookups().len(), 1);
             assert_eq!(key.get_vk().get_domain().extended_len() / 64, 8);
-            let recovered = recover_compact_lookup_key::<$curve, false>(
+            let recovered = recover_structured_lookup_key::<$curve, false>(
                 &key,
                 KagemushaPastaParityV1::$parity,
                 KagemushaArtifactRoleV1::$role,
@@ -283,7 +283,7 @@ macro_rules! ordinary_recovery_test {
             );
             assert_eq!(
                 original, restored,
-                "compact reload and seed reconstruction preserve exact bytes"
+                "structured reload and seed reconstruction preserve exact bytes"
             );
             let different_seed = make(
                 &recovered,
@@ -321,7 +321,7 @@ macro_rules! hybrid_recovery_test {
             assert_eq!(key.get_vk().cs().lookups().len(), 1);
             assert_eq!(key.get_vk().cs().num_instance_columns(), 2);
             assert_eq!(key.get_vk().get_domain().extended_len() / 64, 8);
-            let recovered = recover_compact_lookup_key::<$curve, true>(
+            let recovered = recover_structured_lookup_key::<$curve, true>(
                 &key,
                 KagemushaPastaParityV1::$parity,
                 KagemushaArtifactRoleV1::$role,
@@ -345,7 +345,7 @@ macro_rules! hybrid_recovery_test {
             );
             assert_eq!(
                 original, restored,
-                "hybrid compact reload preserves exact recovery bytes"
+                "hybrid structured reload preserves exact recovery bytes"
             );
             let different_seed = make(
                 &key,
@@ -367,7 +367,7 @@ macro_rules! hybrid_recovery_test {
             .expect("actual consuming hybrid recovery helper");
             assert_eq!(
                 original, consuming,
-                "consuming compact key preserves seeded hybrid transcript"
+                "consuming structured key preserves seeded hybrid transcript"
             );
             verify_lookup_cases::<$curve, KAGEMUSHA_ONE_CARRIER_INSTANCE_MASK_V1>(
                 &parameters,
@@ -386,7 +386,7 @@ macro_rules! hybrid_recovery_test {
 }
 
 ordinary_recovery_test!(
-    real_lookup_eq_ordinary_recovery_survives_compact_reload,
+    real_lookup_eq_ordinary_recovery_survives_structured_reload,
     EqAffine,
     Fp,
     Eq,
@@ -394,7 +394,7 @@ ordinary_recovery_test!(
     create_eq_proof_with_key_v1
 );
 ordinary_recovery_test!(
-    real_lookup_ep_ordinary_recovery_survives_compact_reload,
+    real_lookup_ep_ordinary_recovery_survives_structured_reload,
     EpAffine,
     Fq,
     Ep,
@@ -402,7 +402,7 @@ ordinary_recovery_test!(
     create_ep_proof_with_key_v1
 );
 hybrid_recovery_test!(
-    real_lookup_eq_hybrid_recovery_survives_compact_reload,
+    real_lookup_eq_hybrid_recovery_survives_structured_reload,
     EqAffine,
     Fp,
     Eq,
@@ -411,7 +411,7 @@ hybrid_recovery_test!(
     create_eq_hybrid_proof_consuming_key_with_mask_v1
 );
 hybrid_recovery_test!(
-    real_lookup_ep_hybrid_recovery_survives_compact_reload,
+    real_lookup_ep_hybrid_recovery_survives_structured_reload,
     EpAffine,
     Fq,
     Ep,

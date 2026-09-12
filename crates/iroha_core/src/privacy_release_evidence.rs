@@ -6,6 +6,9 @@
 //! seed nor any witness byte is exposed by the public evidence types. Canonical proof bytes do
 //! cross the release-evidence boundary so release gates can authenticate, persist, and
 //! exact-compare what production verified.
+/// Pure governed final Kaigi proof fixtures; ledger installation belongs to signed network instructions.
+#[cfg(feature = "zk-halo2")]
+pub mod kaigi;
 mod network_actions;
 mod retained_native;
 mod vega;
@@ -191,8 +194,7 @@ pub use iroha_data_model::privacy::{
 };
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
-    metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, DomainId, Name, NetworkId},
+    prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1,
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
@@ -224,6 +226,9 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionBuilder, TransactionPayload},
     zk::{ZkAcePrivacyPublicInputsV1, derive_zk_ace_privacy_authorization_digest},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_zkp_halo2::vega::{
     MAX_VEGA_PROOF_BYTES_V1, VegaMdlProverConfigV1, ZkAmsMaskedProverConfigV1,
     vega_mdl_proof_dimensions_v1,
@@ -349,6 +354,8 @@ pub const PRIVACY_RELEASE_MAX_TOTAL_PROOF_ARTIFACT_BYTES_V1: u64 =
         None => panic!("privacy release aggregate proof-byte ceiling overflow"),
     };
 /// Mandatory evidence cases, in canonical per-protocol order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseCaseKindV1")]
 #[derive(
     Clone,
     Copy,
@@ -708,6 +715,8 @@ pub fn validate_privacy_release_stage_coordinates_v1(
     index == coordinates.len()
 }
 /// Stable classification of the expected verifier failure exercised by a successful evidence stage.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseFailureClassV1")]
 #[derive(
     Clone,
     Copy,
@@ -737,6 +746,8 @@ pub enum PrivacyReleaseFailureClassV1 {
 }
 /// Closed numeric resource facts. Unit semantics are frozen in the protocol
 /// descriptor; unbounded caller-selected labels are intentionally absent.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseResourceFactsV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseResourceFactsV1 {
     /// Primary relation dimension actually exercised.
@@ -940,6 +951,10 @@ pub fn privacy_release_resource_facts_v1(
 ///
 /// Artifact semantics and order are frozen by the typed protocol/case pair and
 /// its protocol descriptor. No caller-selected label can alter that meaning.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_release_evidence::PrivacyReleaseProofArtifactEvidenceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyReleaseProofArtifactEvidenceV1 {
@@ -996,6 +1011,8 @@ mod privacy_release_base64_bytes_v1 {
 }
 /// One complete native stage result. It contains exact canonical proofs, their hashes, and public
 /// resource facts; witness material never crosses this API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseStageEvidenceV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseStageEvidenceV1 {
     /// Evidence schema version.
@@ -1018,6 +1035,8 @@ pub struct PrivacyReleaseStageEvidenceV1 {
     pub resources: PrivacyReleaseResourceFactsV1,
 }
 /// Stable fail-closed error category returned by the native evidence API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseEvidenceErrorClassV1")]
 #[derive(
     Clone,
     Copy,
@@ -1065,6 +1084,8 @@ pub enum PrivacyReleaseEvidenceErrorClassV1 {
     ProductionEnvelopeRejected,
 }
 /// Fail-closed native stage error without secret-bearing engine diagnostics.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseEvidenceErrorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseEvidenceErrorV1 {
     /// Protocol whose evidence failed.
@@ -1123,11 +1144,13 @@ pub const fn privacy_release_proof_artifact_count_v1(
         1
     }
 }
-/// Return the sole canonical decoder ceiling for one ordered proof artifact.
+/// Return the sole protocol bound for one ordered proof artifact.
 ///
 /// `None` means that the ordinal is not part of the typed protocol/case stage.
-/// The mapping deliberately repeats the production verifier's protocol-local
-/// cap at the release boundary so a receipt cannot substitute a broader cap.
+/// For supported shapes, this repeats the production verifier's protocol-local
+/// cap so a receipt cannot substitute a broader cap. An unavailable shape may
+/// retain a projected wire bound above the global consensus cap; the artifact
+/// validator rejects that shape regardless of the supplied artifact's size.
 #[must_use]
 pub fn privacy_release_proof_artifact_ceiling_v1(
     protocol_id: PrivacyProtocolIdV1,

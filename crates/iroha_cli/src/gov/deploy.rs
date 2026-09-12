@@ -9,9 +9,9 @@ use iroha::client::Client;
 use iroha::data_model::{
     governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash},
     isi::{InstructionBox, SetParameter},
-    name::Name,
     parameter::{CustomParameterId, Parameter, custom::CustomParameter},
 };
+use iroha_model_base::name::Name;
 #[derive(clap::Args, Debug)]
 pub struct ProposeDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]
@@ -27,7 +27,7 @@ pub struct ProposeDeployArgs {
 }
 impl Run for ProposeDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let (contract_address, contract_alias) = match (
             self.contract_address.as_deref(),
             self.contract_alias.as_deref(),
@@ -58,7 +58,7 @@ impl Run for ProposeDeployArgs {
             }
         };
         let request = iroha::client::DeployContractProposalDraftRequestV1 {
-            proposal_operator: client.account.clone(),
+            proposal_operator: client.account().clone(),
             contract_address,
             contract_alias,
             abi_version: AbiVersion::new(self.abi_version),
@@ -126,7 +126,7 @@ pub struct ProtectedApplyArgs {
 }
 impl Run for ProtectedApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let namespaces: Vec<String> = self
             .namespaces
             .split(',')
@@ -150,7 +150,7 @@ impl Run for ProtectedApplyArgs {
 pub struct ProtectedGetArgs {}
 impl Run for ProtectedGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_protected_namespaces_json()?;
         let found = value
             .get("found")
@@ -176,7 +176,7 @@ pub struct DeployMetaArgs {
 }
 impl Run for DeployMetaArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let contract_address = resolve_contract_address_target(
             &client,
             self.contract_address.as_deref(),
@@ -208,12 +208,12 @@ mod tests {
     use iroha::config::Config;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
-        ChainId,
         account::AccountId,
-        metadata::Metadata,
         transaction::{Executable, IvmBytecode},
     };
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use norito::json::JsonSerialize;
     use url::Url;
     struct TestContext {

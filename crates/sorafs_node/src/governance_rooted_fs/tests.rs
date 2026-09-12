@@ -102,6 +102,90 @@ mod tests {
         hash.update(&header_bytes);
         hash.update(payload);
         let expected_record_digest = *hash.finalize().as_bytes();
+        fn assert_frame<T>(value: &T, name: &str) -> Vec<u8>
+        where
+            T: norito::NoritoSerialize
+                + for<'de> norito::NoritoDeserialize<'de>
+                + PartialEq
+                + std::fmt::Debug,
+        {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            let bytes = encode_two_slot_value(value, "frame boundary").unwrap();
+            assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+            assert_eq!(
+                &decode_two_slot_value::<T>(&bytes, "roundtrip").unwrap(),
+                value
+            );
+            let mut wrong_owner = bytes.clone();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(decode_two_slot_value::<T>(&wrong_owner, "wrong owner").is_err());
+            assert!(decode_two_slot_value::<T>(&bytes[..bytes.len() - 1], "truncated").is_err());
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert!(decode_two_slot_value::<T>(&trailing, "trailing").is_err());
+            bytes
+        }
+        assert_eq!(
+            assert_frame(
+                &material,
+                "sorafs_node::governance_rooted_fs::TwoSlotBindingMaterialV1"
+            ),
+            material_bytes
+        );
+        assert_eq!(
+            assert_frame(
+                &header,
+                "sorafs_node::governance_rooted_fs::TwoSlotRecordHeaderV1"
+            ),
+            header_bytes
+        );
+        let header_region = super::TwoSlotHeaderRegionV1 {
+            header: super::TwoSlotHeaderV1 {
+                binding: material.clone(),
+                binding_digest: expected_binding_digest,
+                slot_id: 1,
+            },
+            reserved: [0; super::TWO_SLOT_HEADER_RESERVED_BYTES_V1],
+        };
+        let record_region = super::TwoSlotRecordHeaderRegionV1 {
+            header: header.clone(),
+            reserved: [0; super::TWO_SLOT_RECORD_HEADER_RESERVED_BYTES_V1],
+        };
+        let trailer_region = super::TwoSlotCommitTrailerRegionV1 {
+            trailer: super::TwoSlotCommitTrailerV1 {
+                format_version: super::TWO_SLOT_FORMAT_VERSION_V1,
+                binding_digest: expected_binding_digest,
+                slot_id: 1,
+                generation: 2,
+                record_digest: expected_record_digest,
+                commit_marker: super::TWO_SLOT_COMMIT_MARKER_V1,
+            },
+            reserved: [0; super::TWO_SLOT_COMMIT_TRAILER_RESERVED_BYTES_V1],
+        };
+        let header_region_bytes = assert_frame(
+            &header_region,
+            "sorafs_node::governance_rooted_fs::TwoSlotHeaderRegionV1",
+        );
+        let record_region_bytes = assert_frame(
+            &record_region,
+            "sorafs_node::governance_rooted_fs::TwoSlotRecordHeaderRegionV1",
+        );
+        let trailer_region_bytes = assert_frame(
+            &trailer_region,
+            "sorafs_node::governance_rooted_fs::TwoSlotCommitTrailerRegionV1",
+        );
+        let layout = super::two_slot_layout(512).unwrap();
+        assert_eq!(layout.header_region_bytes, header_region_bytes.len());
+        assert_eq!(layout.record_header_region_bytes, record_region_bytes.len());
+        assert_eq!(
+            layout.commit_trailer_region_bytes,
+            trailer_region_bytes.len()
+        );
         let mut alternate_frames = 0;
         for flags in two_slot_caller_layouts() {
             let _layout = norito::core::DecodeFlagsGuard::enter(flags);

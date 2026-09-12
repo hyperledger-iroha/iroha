@@ -143,6 +143,11 @@
       "types": "./game.d.ts",
       "browser": "./dist/game.js",
       "import": "./dist/game.js"
+    },
+    "./browser-codec": {
+      "types": "./browser-codec.d.ts",
+      "browser": "./dist/public/browserCodec.js",
+      "import": "./dist/public/browserCodec.js"
     }
   },
   "typesVersions": {
@@ -227,6 +232,9 @@
       ],
       "game": [
         "game.d.ts"
+      ],
+      "browser-codec": [
+        "./browser-codec.d.ts"
       ]
     }
   },
@@ -252,7 +260,10 @@
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
-    "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
+    "report:bundle-size": "node ./scripts/report-bundle-size.mjs",
+    "verify:browser-codec": "node ./scripts/verify-browser-codec.mjs",
+    "prepack": "npm run build:dist && npm run verify:browser-codec",
+    "build:wasm": "python3 scripts/build-wasm.py"
   },
   "keywords": [
     "iroha",
@@ -276,6 +287,7 @@
     "README.md",
     "LICENSE",
     "browser.d.ts",
+    "browser-codec.d.ts",
     "kagemusha.d.ts",
     "address.d.ts",
     "normalizers.d.ts",
@@ -317,8 +329,7 @@
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",
     "./dist/crypto.js": "./dist/crypto.browser.js",
     "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
-    "./dist/native.js": "./dist/native.browser.js",
-    "./dist/address.js": "./dist/address.browser.js"
+    "./dist/native.js": "./dist/native.browser.js"
   },
   "publishConfig": {
     "access": "public",

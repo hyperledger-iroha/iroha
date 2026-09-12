@@ -10,10 +10,9 @@ use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::prelude::StatePath;
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{
-    core::NoritoSerialize,
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -2178,7 +2177,7 @@ impl TieredStateBackend {
     ) -> Result<()>
     where
         K: norito::codec::Encode,
-        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
+        V: json::JsonSerialize + MeasuredBytes,
     {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
@@ -2192,7 +2191,7 @@ impl TieredStateBackend {
         ctx: &mut CollectContext,
     ) -> Result<()>
     where
-        V: json::JsonSerialize + NoritoSerialize + MeasuredBytes,
+        V: json::JsonSerialize + MeasuredBytes,
     {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);
@@ -2713,7 +2712,7 @@ mod measured_bytes_impls {
         common::Owned,
         confidential::ConfidentialStatus,
         consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1},
-        domain::{Domain, DomainId},
+        domain::Domain,
         events::EventFilterBox,
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
@@ -2722,15 +2721,12 @@ mod measured_bytes_impls {
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
-        metadata::Metadata,
-        name::Name,
         nexus::{
             AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtPolicyEntry,
             AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
             PrivateSettlementAbortReceiptV1, PrivateSettlementReceiptV1, UniversalAccountId,
         },
         nft::NftData,
-        peer::PeerId,
         permission::Permission,
         privacy::PrivacyProtocolActivationRecordV1,
         proof::{
@@ -2754,6 +2750,10 @@ mod measured_bytes_impls {
         trigger::{TriggerId, action::Repeats},
         zk::BackendTag,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::{
         bigint::BigInt,
         const_vec::ConstVec,
@@ -4570,7 +4570,7 @@ impl EntryScore {
 /// Key handle for tiered snapshot entries.
 #[derive(Debug, Clone)]
 pub(crate) enum TieredKeyHandle {
-    Domain(iroha_data_model::domain::DomainId),
+    Domain(iroha_model_base::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
     AccountRekey(iroha_data_model::account::rekey::AccountAlias),
     AccountRecoveryPolicy(iroha_data_model::account::AccountAlias),
@@ -4579,8 +4579,8 @@ pub(crate) enum TieredKeyHandle {
     AssetDefinitionAliasBinding(iroha_data_model::asset::AssetDefinitionId),
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),
-    AxtPolicy(iroha_data_model::nexus::DataSpaceId),
-    AxtHandleCounter(iroha_data_model::nexus::DataSpaceId),
+    AxtPolicy(iroha_model_base::topology::DataSpaceId),
+    AxtHandleCounter(iroha_model_base::topology::DataSpaceId),
     AxtAssetIncarnation(iroha_data_model::asset::AssetDefinitionId),
     AxtReplay(iroha_data_model::nexus::AxtHandleReplayKey),
     AxtHandleBudget(iroha_data_model::nexus::AxtHandleBudgetKey),
@@ -5502,11 +5502,12 @@ mod tests {
         },
         nexus::{
             AssetHandleIssuerPayloadV1, AxtAssetIncarnationV1, AxtBinding, AxtHandleBudgetKey,
-            AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtHandleIssuerContextV1, DataSpaceId,
-            GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig, LaneId,
+            AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtHandleIssuerContextV1, GroupBinding,
+            HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
         },
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     };
+    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::numeric::Quantity;
     use nonzero_ext::nonzero;
     #[cfg(unix)]

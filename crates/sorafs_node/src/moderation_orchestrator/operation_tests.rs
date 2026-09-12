@@ -74,6 +74,31 @@ fn historical_operation_replay_precedes_rotated_finalized_authority() {
         .expect("initial submission");
     assert!(!first.replay);
     assert_eq!(submitter.calls(), 1);
+    let action_frame = crate::frame_test_support::assert_current_frame(
+        &action,
+        "sorafs_node::moderation_orchestrator::ModerationNativeActionV1",
+    );
+    assert_eq!(
+        action_frame,
+        action
+            .canonical_bytes()
+            .expect("production action boundary")
+    );
+    {
+        let state = orchestrator
+            .state
+            .lock()
+            .expect("current operation checkpoint");
+        assert_eq!(state.operations.len(), 1);
+        crate::frame_test_support::assert_current_frame(
+            &state.operations[0],
+            "sorafs_node::moderation_orchestrator::StoredOperationV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &*state,
+            "sorafs_node::moderation_orchestrator::ModerationOrchestratorCheckpointV1",
+        );
+    }
     let mut rotated_snapshot = snapshot_with_policy(2, [2; 32], policy(2), rotated_governance);
     rotated_snapshot.events[0].sequence = 2;
     reader.replace(rotated_snapshot);
@@ -1389,8 +1414,8 @@ fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_ident
             && entry.notification.finalized_event_cursor.sequence == 5
             && entry.notification.source_occurred_at_unix_ms == 21
     }));
-    let first_bytes = norito::to_bytes(&first_entries).expect("encode first notifications");
-    let second_bytes = norito::to_bytes(&second_entries).expect("encode second notifications");
+    let first_bytes = norito::codec::encode_adaptive(&first_entries);
+    let second_bytes = norito::codec::encode_adaptive(&second_entries);
     assert_eq!(first_bytes, second_bytes);
     assert_eq!(
         std::fs::read(&first.config().checkpoint_path).expect("read first checkpoint"),
@@ -1509,6 +1534,10 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
             1,
         )
         .expect("prepare exact native redrive");
+    crate::frame_test_support::assert_current_frame(
+        &redrive,
+        "sorafs_node::moderation_orchestrator::ModerationDeadLetterResolutionV1",
+    );
     let mut foreign = redrive.clone();
     foreign.network_id = iroha_data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -1565,6 +1594,22 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
     {
         let state = orchestrator.state.lock().expect("orchestrator state");
         assert_eq!(state.dead_letters.len(), 2);
+        let redrive_payload = state.dead_letters[1]
+            .redrive
+            .as_ref()
+            .expect("retained native redrive");
+        crate::frame_test_support::assert_current_frame(
+            redrive_payload,
+            "sorafs_node::moderation_orchestrator::StoredDeadLetterRedriveV1",
+        );
+        let redrive_frame = norito::encode_canonical(&state.dead_letters[1].redrive).unwrap();
+        let decoded_redrive: Option<StoredDeadLetterRedriveV1> =
+            norito::decode_canonical(&redrive_frame).unwrap();
+        assert_eq!(decoded_redrive, state.dead_letters[1].redrive);
+        assert_eq!(
+            &redrive_frame[6..22],
+            &norito::schema::identity::frame_hash::<Option<StoredDeadLetterRedriveV1>>()
+        );
         assert_eq!(state.dead_letters[0].incident_sequence, 1);
         assert!(state.dead_letters[0].resolution.is_some());
         assert_eq!(state.dead_letters[1].incident_sequence, 2);

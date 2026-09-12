@@ -93,7 +93,7 @@ pub struct WitnessArgs {
 }
 impl Run for WitnessArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         if let Some(path) = &self.decode {
             return self.run_decode(context, path);
         }

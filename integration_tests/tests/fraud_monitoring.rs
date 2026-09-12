@@ -2,7 +2,9 @@
 //! Integration coverage for fraud monitoring admission policy using mocked assessments.
 use eyre::{Report, Result};
 use integration_tests::sandbox;
-use iroha::data_model::{Level, metadata::Metadata, name::Name, prelude::*};
+use iroha::data_model::{Level, prelude::*};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use std::str::FromStr;

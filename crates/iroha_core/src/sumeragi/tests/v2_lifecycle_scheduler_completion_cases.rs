@@ -539,7 +539,8 @@ mod recovered_sign_capacity_tests {
         work_registry::ReadyRecoveredLifecycleSignAttestationV1,
     };
     use iroha_crypto::{Hash, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
+    use iroha_data_model::block::consensus_v2 as wire;
+    use iroha_model_base::peer::PeerId;
     use std::{
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
@@ -640,6 +641,7 @@ mod recovered_sign_capacity_tests {
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
         let planner_io = owner.bind_body_store_to_planner_io_for_test(
             &mut services,
+            0,
             Arc::clone(&output_guard),
             8,
         );
@@ -1701,6 +1703,7 @@ mod recovered_sign_capacity_tests {
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
         let planner_io = owner.bind_body_store_to_planner_io_for_test(
             &mut services,
+            0,
             Arc::clone(&output_guard),
             8,
         );
@@ -2927,10 +2930,12 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
     /// Move the owner's exact startup body store into the bounded test worker
-    /// while retaining only its comparison seal in the running owner.
+    /// while retaining only its comparison seal in the running owner. The
+    /// caller supplies the same local validator selected by its runtime.
     pub(in crate::sumeragi) fn bind_body_store_to_planner_io_for_test(
         &mut self,
         services: &mut ProductionV2Services,
+        local_validator: iroha_data_model::block::consensus_v2::ValidatorIndex,
         output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
         class_capacity: usize,
     ) -> crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture {
@@ -2939,9 +2944,10 @@ impl ProductionLifecycleOwnerV1 {
             .take()
             .expect("the startup owner transfers its body store exactly once");
         let identity = body_store.instance_identity();
-        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
+        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_local_validator_for_test(
             services,
             self.verified.context().clone(),
+            local_validator,
             output_guard,
             body_store,
             identity.clone(),
@@ -3135,5 +3141,181 @@ mod unified_completion_classifier_tests {
             classify_completion_ready_classes(&[], true, true),
             ProductionCompletionReadyWorkV1::RetainedDirectOutput
         );
+    }
+}
+
+include!("v2_lifecycle_scheduler_resolved_validate_cases.rs");
+
+impl ProductionLifecycleOwnerV1 {
+    /// Retain real Ready physical ownership before an independent Decision WAL append.
+    pub(in crate::sumeragi) fn active_body_owner_before_decision_cold_for_test(
+        &self,
+        ordinal: u128,
+        class: LifecycleWorkClass,
+    ) -> BodyOwnerSnapshotForTest {
+        assert!(matches!(
+            class,
+            LifecycleWorkClass::Fetch
+                | LifecycleWorkClass::Store
+                | LifecycleWorkClass::Validate
+                | LifecycleWorkClass::Apply
+        ));
+        let record = &self.coordinator.records[&ordinal];
+        assert_eq!(record.work_class, class);
+        assert_eq!(record.state, LifecycleState::Ready);
+        assert_eq!(self.coordinator.ready_index, BTreeSet::from([ordinal]));
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.fault.is_none());
+        let (count, registry_census) = self
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census();
+        assert_eq!(count, 1);
+        assert_eq!(registry_census.len(), 1);
+        assert_eq!(registry_census[0].0, ordinal);
+        BodyOwnerSnapshotForTest {
+            ordinal,
+            coordinator: self.coordinator.clone(),
+            registry_census,
+        }
+    }
+
+    /// Cold recovery must keep the same real body row executable exactly once.
+    pub(in crate::sumeragi) fn assert_active_body_owner_after_decision_cold_for_test(
+        &self,
+        before: &BodyOwnerSnapshotForTest,
+        class: LifecycleWorkClass,
+    ) {
+        let after = self.active_body_owner_before_decision_cold_for_test(before.ordinal, class);
+        let previous = &before.coordinator.records[&before.ordinal];
+        let current = &after.coordinator.records[&before.ordinal];
+        assert_eq!(
+            (current.key, current.owner, current.ordinal, current.stage),
+            (
+                previous.key,
+                previous.owner,
+                previous.ordinal,
+                previous.stage
+            )
+        );
+        assert_eq!(self.coordinator.key_index, before.coordinator.key_index);
+        assert_eq!(self.coordinator.owner_index, before.coordinator.owner_index);
+        assert_eq!(
+            self.coordinator.records.len(),
+            before.coordinator.records.len()
+        );
+        assert_eq!(
+            super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+                .expect("canonical cold ledger"),
+            super::ledger::LifecycleLedgerV1::from_coordinator(&before.coordinator)
+                .expect("canonical pre-crash ledger")
+        );
+    }
+}
+
+impl ProductionLifecycleOwnerV1 {
+    /// Observe exact cold retirement without exposing mutable ledger or registry parts.
+    pub(in crate::sumeragi) fn assert_stale_body_owner_retired_for_test(
+        &self,
+        before: &BodyOwnerSnapshotForTest,
+        root: &std::path::Path,
+    ) -> u128 {
+        let previous = &before.coordinator.records[&before.ordinal];
+        let retired = &self.coordinator.records[&before.ordinal];
+        assert_eq!(
+            (
+                retired.key,
+                retired.owner,
+                retired.ordinal,
+                retired.work_class,
+                retired.stage
+            ),
+            (
+                previous.key,
+                previous.owner,
+                previous.ordinal,
+                previous.work_class,
+                previous.stage
+            ),
+            "cold retirement must preserve the original admitted identity",
+        );
+        assert_eq!(
+            retired.state,
+            LifecycleState::Terminal(super::TerminalOutcome::Cancelled),
+        );
+        assert!(retired.physical_slots.is_empty());
+        let mut expected_metadata = before.coordinator.durable_records[&before.ordinal].clone();
+        let payload = expected_metadata
+            .payload
+            .terminalized(super::TerminalOutcome::Cancelled)
+            .expect("the original durable body has a canonical cancellation payload");
+        expected_metadata.replay_authority = expected_metadata
+            .terminalized_replay_authority(
+                self.coordinator.active_context,
+                retired.key,
+                retired.work_class,
+                retired.stage,
+                payload,
+            )
+            .expect("cancellation retains the original authenticated replay source");
+        expected_metadata.payload = payload;
+        expected_metadata.continuation = super::schema::DurableContinuation::None;
+        assert_eq!(
+            self.coordinator.durable_records[&before.ordinal],
+            expected_metadata
+        );
+        let original = super::ledger::LifecycleLedgerV1::from_coordinator(&before.coordinator)
+            .expect("canonical pre-crash body ledger");
+        let current = super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .expect("canonical cold body ledger");
+        for previous in original.records() {
+            if previous.ordinal() != before.ordinal {
+                assert_eq!(
+                    current
+                        .records()
+                        .iter()
+                        .find(|row| row.ordinal() == previous.ordinal()),
+                    Some(previous),
+                    "cold retirement must preserve all other historical rows",
+                );
+            }
+        }
+        let (count, census) = self
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census();
+        assert_eq!(
+            count, 1,
+            "one current body owner replaces the retired executable owner"
+        );
+        assert_eq!(census.len(), 1);
+        let current_ordinal = census[0].0;
+        assert!(current_ordinal > before.coordinator.high_water);
+        assert_eq!(
+            self.coordinator.ready_index,
+            BTreeSet::from([current_ordinal])
+        );
+        let current_record = &self.coordinator.records[&current_ordinal];
+        assert_eq!(current_record.state, LifecycleState::Ready);
+        assert_ne!(current_record.owner, previous.owner);
+        assert_eq!(
+            current_record.owner.first_admission_ordinal(),
+            current_ordinal
+        );
+        assert_eq!(
+            self.coordinator.records.len(),
+            before.coordinator.records.len() + 1
+        );
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.fault.is_none());
+        let (_, published) = super::LifecycleLedgerStoreV1::open(
+            &root.join("ledger"),
+            self.coordinator.active_context,
+        )
+        .expect("reopen the actual cold retirement publication");
+        assert_eq!(published, current);
+        current_ordinal
     }
 }

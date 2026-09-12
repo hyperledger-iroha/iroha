@@ -7,11 +7,8 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use iroha_core::state::World;
-use iroha_data_model::{
-    Registrable,
-    account::Account,
-    domain::{Domain, DomainId},
-};
+use iroha_data_model::{Registrable, account::Account, domain::Domain};
+use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use iroha_torii::filter::QueryEnvelope;
 use tower::ServiceExt as _;

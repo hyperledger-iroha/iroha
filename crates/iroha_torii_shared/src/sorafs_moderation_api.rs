@@ -31,8 +31,13 @@ pub const SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1: usize = 8 * 
 /// Maximum JSON bytes accepted from either successful dead-letter route response.
 pub const SORAFS_MODERATION_DEAD_LETTER_JSON_RESPONSE_MAX_BYTES_V1: usize = 8 * 1024;
 /// Closed dead-letter source selected for resolution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
-#[norito(schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.kind")]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterKindV1",
+    frame = "iroha.torii.v1.sorafs.moderation.dead_letter.kind"
+)]
 pub enum SorafsModerationDeadLetterKindV1 {
     /// A native moderation submission exhausted durable delivery attempts.
     NativeSubmission,
@@ -67,8 +72,13 @@ impl norito::json::JsonDeserialize for SorafsModerationDeadLetterKindV1 {
     }
 }
 /// Closed disposition applied to one unresolved dead letter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
-#[norito(schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.action")]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterResolutionActionV1",
+    frame = "iroha.torii.v1.sorafs.moderation.dead_letter.action"
+)]
 pub enum SorafsModerationDeadLetterResolutionActionV1 {
     /// Begin a fresh bounded delivery attempt cycle.
     Redrive,
@@ -102,9 +112,11 @@ impl norito::json::JsonDeserialize for SorafsModerationDeadLetterResolutionActio
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.prepare_request",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterPrepareRequestV1",
+    frame = "iroha.torii.v1.sorafs.moderation.dead_letter.prepare_request"
 )]
 pub struct SorafsModerationDeadLetterPrepareRequestV1 {
     /// Exact non-zero dead-letter identity as 64 lowercase hexadecimal digits.
@@ -135,9 +147,11 @@ impl SorafsModerationDeadLetterPrepareRequestV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.prepare_response",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterPrepareResponseV1",
+    frame = "iroha.torii.v1.sorafs.moderation.dead_letter.prepare_response"
 )]
 pub struct SorafsModerationDeadLetterPrepareResponseV1 {
     /// Exact V1 response schema label.
@@ -175,9 +189,11 @@ impl SorafsModerationDeadLetterPrepareResponseV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.apply_request",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterApplyRequestV1",
+    frame = "iroha.torii.v1.sorafs.moderation.dead_letter.apply_request"
 )]
 pub struct SorafsModerationDeadLetterApplyRequestV1 {
     /// Original canonical padded-standard-base64 Norito resolution frame.
@@ -201,9 +217,11 @@ impl SorafsModerationDeadLetterApplyRequestV1 {
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(
-    schema_name = "iroha.torii.v1.sorafs.moderation.dead_letter.apply_response",
-    deny_unknown_fields
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterApplyResponseV1",
+    frame = "iroha.torii.v1.sorafs.moderation.dead_letter.apply_response"
 )]
 pub struct SorafsModerationDeadLetterApplyResponseV1 {
     /// Exact V1 response schema label.
@@ -574,5 +592,40 @@ mod tests {
             assert_eq!(decoded, value);
             assert_eq!(norito::to_bytes(&decoded).expect("re-encode"), bytes);
         }
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SorafsModerationDeadLetterApplyRequestV1,
+        >(
+            "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterApplyRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SorafsModerationDeadLetterApplyResponseV1,
+        >(
+            "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterApplyResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SorafsModerationDeadLetterKindV1,
+        >("iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterKindV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SorafsModerationDeadLetterPrepareRequestV1,
+        >(
+            "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterPrepareRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SorafsModerationDeadLetterPrepareResponseV1,
+        >(
+            "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterPrepareResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::SorafsModerationDeadLetterResolutionActionV1,
+        >(
+            "iroha_torii_shared::sorafs_moderation_api::SorafsModerationDeadLetterResolutionActionV1",
+        );
     }
 }

@@ -12,14 +12,15 @@ use iroha::data_model::{
         KAIGI_MAX_PARTICIPANTS_V1, KAIGI_RELAY_HPKE_PUBLIC_KEY_MAX_BYTES_V1,
         KAIGI_RELAY_MANIFEST_MAX_HOPS_V1, KAIGI_RELAY_MANIFEST_MIN_HOPS_V1,
     },
-    metadata::Metadata,
     prelude::{
-        AccountId, DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
+        AccountId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
         KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRelayRegistration,
         KaigiRoomPolicy, NewKaigi,
     },
 };
 use iroha_crypto::Hash;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use std::{
     collections::BTreeSet,
     fmt::Write as _,
@@ -725,7 +726,7 @@ impl From<RelayHealthStatusArg> for KaigiRelayHealthStatus {
 }
 fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
     let domain_id = DomainId::parse_fully_qualified(domain).wrap_err("invalid domain id")?;
-    let call = iroha::data_model::name::Name::from_str(call_name).wrap_err("invalid call name")?;
+    let call = iroha_model_base::name::Name::from_str(call_name).wrap_err("invalid call name")?;
     Ok(KaigiId::new(domain_id, call))
 }
 fn validate_max_participants(max_participants: Option<u32>) -> Result<()> {
@@ -860,7 +861,7 @@ fn read_metadata(path: &str) -> Result<Metadata> {
         .ok_or_else(|| eyre::eyre!("metadata JSON must be an object"))?;
     let mut metadata = Metadata::default();
     for (key, value) in obj {
-        let name = iroha::data_model::name::Name::from_str(key)
+        let name = iroha_model_base::name::Name::from_str(key)
             .wrap_err_with(|| format!("invalid metadata key `{key}`"))?;
         metadata.insert(name, value.clone());
     }
@@ -1133,7 +1134,7 @@ mod tests {
         assert_ne!(first, other_process);
         assert_ne!(first, next_tick);
         assert!(
-            iroha::data_model::name::Name::from_str(&first).is_ok(),
+            iroha_model_base::name::Name::from_str(&first).is_ok(),
             "generated label must be a valid Name"
         );
     }

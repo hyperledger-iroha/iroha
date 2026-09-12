@@ -320,7 +320,7 @@ fn all_seven_expected_inputs_are_checked_before_single_proof_decode() {
         let ordinary = f.prepare(ProofSemantics::StateTransition);
         let axt = f.prepare(ProofSemantics::AxtTransferClaim);
         assert!(matches!(
-            compact_public_api::verify_shake_transfer(
+            compact_public_api::verify_transfer_with_allocation(
                 &ordinary,
                 &wrong,
                 &[],
@@ -330,7 +330,7 @@ fn all_seven_expected_inputs_are_checked_before_single_proof_decode() {
             Err(Error::PublicIoMismatch { .. })
         ));
         assert!(matches!(
-            compact_public_api::verify_shake_axt_transfer(
+            compact_public_api::verify_axt_transfer_with_allocation(
                 &axt,
                 &wrong,
                 f.context(),
@@ -588,14 +588,20 @@ fn quantity_facades_keep_proof_and_bundle_preflight_limits() {
         ..VerifyLimits::default()
     };
     assert!(matches!(
-        compact_public_api::verify_shake_transfer(&ordinary, &f.expected(), &[0], limits, 1),
+        compact_public_api::verify_transfer_with_allocation(
+            &ordinary,
+            &f.expected(),
+            &[0],
+            limits,
+            1
+        ),
         Err(Error::VerifierLimitExceeded {
             limit: "max_proof_bytes",
             ..
         })
     ));
     assert!(matches!(
-        compact_public_api::verify_shake_axt_transfer(
+        compact_public_api::verify_axt_transfer_with_allocation(
             &axt,
             &f.expected(),
             f.context(),

@@ -441,31 +441,44 @@ fn queue_plan_handoff_cursor_rotates_under_effect_pressure() {
             .expect("persist");
     }
     adapter.limits.effect_capacity = NonZeroUsize::new(1).unwrap();
-    adapter.push_effect(V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
-        peer: adapter.local_peer.clone(),
-        view: u64::MAX,
-        certificate: Arc::new(vec![0xA5]),
-    });
     assert!(
         !adapter
             .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap(),
+        "one slot cannot enqueue both exact certificates"
+    );
+    assert!(
+        adapter
+            .queue_plan_admission_handoffs_need_refresh(view)
             .unwrap()
     );
-    adapter.drain_effects(usize::MAX);
-    let next = |adapter: &mut V2LaneWorkAdapter| {
-        assert!(
-            !adapter
-                .refresh_pending_queue_plan_admission_handoffs(view)
-                .unwrap()
-        );
-        match adapter.drain_effects(1).pop().unwrap() {
-            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } => certificate,
-            other => panic!("unexpected effect {other:?}"),
-        }
+    let first = match adapter.drain_effects(1).pop().unwrap() {
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } => certificate,
+        other => panic!("unexpected effect {other:?}"),
     };
-    let first = next(&mut adapter);
-    let second = next(&mut adapter);
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap(),
+        "a retained first transfer must not consume the released slot again"
+    );
+    let second = match adapter.drain_effects(1).pop().unwrap() {
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. } => certificate,
+        other => panic!("unexpected effect {other:?}"),
+    };
     assert_ne!(first, second);
+    assert!(
+        !adapter
+            .queue_plan_admission_handoffs_need_refresh(view)
+            .unwrap()
+    );
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap()
+    );
+    assert!(adapter.drain_effects(1).is_empty());
+    assert!(!adapter.output_guard.restart_required());
 }
 
 #[test]
@@ -781,4 +794,188 @@ fn queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete() {
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
     );
+}
+
+#[test]
+fn queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x71);
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&bytes)
+        .unwrap();
+    let first_view = queue_plan_remote_leader_view(&adapter);
+    let next_view = (first_view + 1..first_view + 1 + 2 * adapter.context.roster.len() as u64)
+        .find(|view| {
+            adapter.context.leader(*view) != adapter.context.leader(first_view)
+                && adapter.context.roster[adapter.context.leader(*view) as usize].validator
+                    != adapter.local_peer
+        })
+        .expect("another remote leader");
+    adapter
+        .retain_merge_sidecars_for_global_view(first_view, None, None)
+        .unwrap();
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(first_view)
+            .unwrap()
+    );
+    assert!(
+        !adapter
+            .queue_plan_admission_handoffs_need_refresh(first_view)
+            .unwrap()
+    );
+    // No arrival/dirty notification: the certified view itself changes the
+    // destination. The queued old-view occurrence must not satisfy the new one.
+    adapter
+        .retain_merge_sidecars_for_global_view(next_view, None, None)
+        .unwrap();
+    assert!(
+        adapter
+            .queue_plan_admission_handoffs_need_refresh(next_view)
+            .unwrap()
+    );
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(next_view)
+            .unwrap()
+    );
+    let queued = adapter
+        .drain_effects(usize::MAX)
+        .into_iter()
+        .filter_map(|effect| match effect {
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                peer,
+                view,
+                certificate,
+            } => Some((peer, view, certificate)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(
+        queued[0].0,
+        adapter.context.roster[adapter.context.leader(next_view) as usize].validator
+    );
+    assert_eq!(queued[0].1, next_view);
+    assert_eq!(queued[0].2.as_slice(), bytes.as_slice());
+    assert_queue_plan_kura_source(&adapter, &bytes);
+}
+
+#[test]
+fn queue_plan_handoff_new_inventory_preserves_prior_exact_transfers() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let view = queue_plan_remote_leader_view(&adapter);
+    let (_, first) = queue_plan_test_certificate(&adapter, &keys, 0x72);
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&first)
+        .unwrap();
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap()
+    );
+    assert_eq!(adapter.drain_effects(usize::MAX).len(), 1);
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap()
+    );
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+    let (_, second) = queue_plan_test_certificate(&adapter, &keys, 0x73);
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&second)
+        .unwrap();
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap()
+    );
+    let effects = adapter.drain_effects(usize::MAX);
+    assert_eq!(effects.len(), 1);
+    assert!(
+        matches!(&effects[0], V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. }
+        if certificate.as_slice() == second.as_slice())
+    );
+    assert_queue_plan_kura_source(&adapter, &first);
+    assert_queue_plan_kura_source(&adapter, &second);
+}
+
+#[test]
+fn queue_plan_handoff_stale_generation_cannot_complete_a_new_destination() {
+    let (adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    let first_view = queue_plan_remote_leader_view(&adapter);
+    let first = QueuePlanAdmissionHandoffGeneration {
+        round: wire::ConsensusRound {
+            context_id: adapter.context.id(),
+            height: adapter.context.height,
+            view: first_view,
+        },
+        leader: adapter.context.roster[adapter.context.leader(first_view) as usize]
+            .validator
+            .clone(),
+        pending: BTreeSet::from([Hash::new(b"exact retained certificate")]),
+    };
+    let mut next = first.clone();
+    next.round.view += 1;
+    next.leader = adapter.context.roster[adapter.context.leader(next.round.view) as usize]
+        .validator
+        .clone();
+    let hash = *first.pending.first().unwrap();
+    let mut state = QueuePlanAdmissionHandoffState::Unobserved;
+    state.begin(first.clone());
+    assert!(state.admit(&first, hash));
+    state.begin(next.clone());
+    assert!(!state.contains(&hash));
+    assert!(!state.admit(&first, hash));
+    assert!(!state.finish(&first));
+    assert!(state.needs_refresh(next.round, &next.leader));
+    assert!(state.admit(&next, hash));
+    assert!(state.finish(&next));
+    assert!(!state.needs_refresh(next.round, &next.leader));
+    let mut arrival = next.clone();
+    let new_hash = Hash::new(b"new durable inventory member");
+    arrival.pending.insert(new_hash);
+    state.begin(arrival.clone());
+    assert!(
+        state.contains(&hash),
+        "the prior exact transfer survives an arrival"
+    );
+    assert!(
+        !state.finish(&next),
+        "an older inventory cannot complete the new generation"
+    );
+    assert!(state.admit(&arrival, new_hash));
+    assert!(state.finish(&arrival));
+}
+
+#[test]
+fn queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup() {
+    let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+    prepare_queue_plan_test(&mut adapter, &keys);
+    let view = queue_plan_remote_leader_view(&adapter);
+    let (_, bytes) = queue_plan_test_certificate(&adapter, &keys, 0x74);
+    adapter
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&bytes)
+        .unwrap();
+    assert!(
+        adapter
+            .refresh_pending_queue_plan_admission_handoffs(view)
+            .unwrap()
+    );
+    adapter.purge_queued_merge_broadcasts();
+    assert!(
+        adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .any(|effect| matches!(effect,
+        V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { certificate, .. }
+        if certificate.as_slice() == bytes.as_slice()))
+    );
+    assert_queue_plan_kura_source(&adapter, &bytes);
 }

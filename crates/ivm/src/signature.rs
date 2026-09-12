@@ -19,7 +19,8 @@ pub struct Ed25519BatchEntry {
     pub public_key: Vec<u8>,
 }
 /// Norito-encoded request for ordered strict Ed25519 verification.
-#[derive(Debug, Clone, norito::Encode, norito::Decode, PartialEq, Eq)]
+#[derive(Debug, Clone, norito::Encode, norito::Decode, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "ivm::signature::Ed25519BatchRequest")]
 pub struct Ed25519BatchRequest {
     /// Entries to verify, evaluated in order.
     pub entries: Vec<Ed25519BatchEntry>,

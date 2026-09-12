@@ -33,30 +33,411 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-10 merge reconciliation checkpoint
+
+This checkpoint records work prepared after the resolved merge at HEAD
+`641474bdeb14ebd573df0965d162397ad0228959`. The shared source and build owner
+continues Core qualification. Exact per-file preconditions, rather than a raw
+Git index-file hash or an older frozen tree, govern integration.
+
+A bounded comparison rechecked the 70 previously published defensive-security
+paths: 59 remain byte-identical to their published postimages. The other eleven
+have incoming schema declarations, current test dependency construction,
+shared-wire reexports or unrelated contract-call routing changes. Review of
+those diffs found the published SoraFS security logic retained. This is source
+continuity evidence, not a new complete security audit or native qualification.
+The receipt is `target/evidence/sorafs-v1/current-merged-sorafs-root-reconciliation/security70-continuity-ready.json`
+(SHA-256 `8dd084fe4ce0bf11bd372133c391437ef3ed6f8554ba320e6aed6d80df479885`).
+
+The incoming Norito migration already supplies the prior SoraFS and Connect
+schema declarations. Minimal private successors preserve those identities and
+restore missing regression tests and cohesive source extractions. The Core,
+Node, Model/orchestrator, Connect and CLI portions do not restore superseded
+production schema patches. The daemon PoR fixture still needs the canonical
+repair-handoff acknowledgement field in the exact production order and the
+correct acknowledged value when no repair is required.
+
+A private viewer successor gives each returned grant one publication owner,
+settles definite unpublished failures after releasing service locks, preserves
+committed or uncertain grants, and requires a fresh nonzero issuance nonce in
+canonical claims and active session checkpoints. Its 14 Node and one daemon
+regressions cover qualification drift, concurrent winners, local-cache failure,
+restart and ambiguous late commits. It has no compatibility decoder or missing
+field default. Failed cleanup remains unresolved until authenticated expiry;
+this implementation does not claim crash settlement or a wall-time bound on an
+arbitrary synchronous provider.
+
+These successors are prepared and source-checked; their native tests are still
+unrun. Private formatting, exact forward/inverse patch replay, current source
+precondition checks and scoped line-budget checks do not establish compilation.
+All proposed source-budget changes are downward. The preceding historical
+native results do not qualify these new merged bytes. Current packets and
+reviews under `target/evidence/sorafs-v1/current-merged-*` remain ignored evidence
+until the publication owner integrates their reviewed exact deltas.
+
+The separate shared prover owner completed its 18-test focused selection with
+zero failures or ignored tests against 19,880 unchanged captured repository entries
+and an unchanged binary. The exact receipt is
+`target/privacy-release-evidence/2026-09-07-recovery/native25-current-prover-repairs/result.json`
+(SHA-256 `9d055cdcbf57a93e7eecc2902cc7960c4d303881fd6949bf2bd0aad36824fa02`).
+That scoped result does not qualify the SoraFS successors, the later State
+reservation changes, or production proof-size/allocation limits.
+
+G08 is active because its defensive source work is underway; no goal or lane
+is completed by this checkpoint. HSM/KMS qualification, genuine four-validator
+mandatory-DA/RBC deployment, independently administered regional gateways,
+workspace/SDK checks, load/soak, independent security review, recovery rehearsal
+and all 17 signed readiness lanes remain mandatory. The stopped verifier work
+and its existing recorded restriction are unchanged.
+
+## 2026-09-08 hardware and replay checkpoint
+
+The 137-file hardware stream-token candidate and its reviewed fixture/CLI
+addenda are applied. The full retained retry-16 Manifest library passes
+**954 tests, zero failures and zero ignored**, including the custody-renewal
+regression. Retry 17 emitted the byte-identical Manifest artifact, so that
+result is reused with its original source provenance. The immutable binary
+SHA-256 is `03f076cc5a4b84b98d802e224ecc9305d1e11fbcc972f37399f4b900256a9405`.
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry16/sorafs_manifest-tests-01-result.json`
+(SHA-256 `9524e5e60a00c6dc6496e5236481f555885e989312560db0877679d94759c943`)
+records the actual 954-name inventory and the one unrelated Kura configuration
+change from that build capture, identical before and after test execution.
+
+Six serial selections from retained retry-17 artifacts pass **595 tests, zero
+failures and two ignored**: full orchestrator 222/0/2, full CAR 316/0/0, ten CLI
+binary commitment/ordering tests, 13 hardware-config tests, 27 storage-client
+archive tests and seven CLI fetch integration tests. All nine new metrics
+regressions and the original failing replay test pass. The CLI integration
+run pins both its retained test executable and the actual ordinary CLI child.
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry17/scoped-native-tests-01-result.json`
+(SHA-256 `7a2197f5cf65aefa89413ad9171bc548fb344ac54a39c7fb99f69096803c055d`)
+records unchanged binaries and zero drift across the complete captured source
+scope. All three failures from the earlier retained retry-14 selection now
+have passing reruns. Its original **1,520/3/2** result is retained.
+
+Retries 16, 17, 18, 19 and 20 ended with compilation errors outside the emitted
+artifacts; these counts do not establish a successful combined build. Retry 18
+exited 101 with two denied trivial casts in the Torii hardware-dependency test.
+The reviewed closure return-type correction is applied without changing its
+assertions, and the affected Torii selection passes on retry 19 below. Retry 19
+exited 101 because the daemon's inline 32-byte ambiguous-operation identity triggers
+`variant_size_differences`. A separately reviewed targeted lint expectation keeps
+that failure fence allocation-free and passes this compilation boundary in retry 20.
+Retry 20 exits 101 in 141.648 seconds with zero drift across 8,820 captured source
+paths. The daemon next reports a test CID constructor requiring an explicit
+success check and two denied closure casts; their reviewed two-file correction is
+applied, with all 48 test names and 172 assertion lines retained. Retry 20 emitted
+no daemon test artifact; its first subsequent scoped execution is recorded below.
+These historical build failures and their original evidence remain retained.
+Subsequent semantic changes require new affected native results.
+
+Metrics append/replay uses one canonical frame per record, rejects incomplete
+tails without returning a valid prefix, and requires explicit cumulative
+record, full-frame-byte and Norito-accounted allocation limits. The writer
+preflights the same full-frame ceiling. The Metadata tree-allocation correction
+and its dependent accounting documentation are applied. Retry 18 passes all
+**11 Metadata tests and 20 composed incentives tests**, with zero failures or
+ignored tests. These include the three retained Metadata tests, eight new
+allocation/wire regressions, and all prior incentives assertions. The exact
+registered names were selected from the actual binaries; both original and
+retained binaries remained unchanged, with zero captured source drift before
+and after execution. The aggregate evidence is
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry18/scoped-native-tests-01-result.json`
+(SHA-256 `7800788f942152221136d230d82766c5f85d3e99614d65ec7dc0900c814b67b9`).
+The individual Metadata and incentives results have SHA-256
+`4e58fad77aa8acb76cf3408d412e119a2ea75b3a5e336567233d6c1f0ea8b6e0`
+and `c032bc55bfc67f5c004cf66784f8be487eb2fa128cb31ccf08b00b8fe1bf60ae`.
+Allocation accounting is modeled cumulative admission, not an exact process-heap
+or RSS bound.
+
+The reviewed 11-file prepared-token window change is also applied. It derives
+issuance and expiry from the prepared body, binds both through the sole seven-field
+broker request, and checks the same window at the existing ceremony fences.
+The combined retry-19 capture includes this change and the Torii cast correction.
+Its full Manifest library executes **959 tests: 957 pass and two fail**. The five
+new Manifest leaves have these exact outcomes under
+`signer::stream_token::receipt_tests::`:
+
+- PASS: `authentic_window_chronology_cannot_be_extended_or_backdated_by_resigned_request_claims`.
+- PASS: `prepared_window_checks_both_millisecond_overflows_and_exact_chronology_boundaries`.
+- PASS: `resigned_issue_or_expiry_claims_cannot_replace_the_independently_prepared_body`.
+- FAIL: `prepared_window_request_preimage_and_token_identity_match_independent_oracles_in_ten_layouts`.
+- FAIL: `current_request_schema_rejects_each_missing_window_field_without_a_legacy_decoder`.
+
+Both failures share a hand-built request oracle. The actual Norito derive owner
+writes fixed byte-array struct fields as raw bytes inside each field frame; the
+standalone array codec prefixes every element. Three incorrectly standalone-encoded
+32-byte oracle leaves explain the exact 193-versus-289-byte payload mismatch and
+the positive decode's `LengthMismatch`. The applied fixture correction replaces
+only those three leaves and their explanatory comment. Every test body/assertion,
+including all ten-layout comparisons and missing-field rejection, remains intact;
+production encoding and the request digest are unchanged. The corrected native
+rerun passes all five leaves on retry 20 below. The two new daemon window tests
+and one broker window test remained unexecuted through retry 20; their first
+actual outcomes are recorded in retry 21 below.
+
+The focused retry-19 Torii hardware-token selection passes **33 tests, zero failures
+or ignored**, including the changed dependency fixture and actual local Core-finality
+reader regression. Both original and retained binaries remain unchanged and the
+complete captured source scope has zero drift before and after execution. Evidence:
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry19/scoped-native-tests-01-result.json`
+(SHA-256 `7b2dc19bf7fa47fe119cc7865650f581618d54dfaa10e65f8238b0f3af8ca021`).
+Its individual Manifest result is
+`2f387b2e01a464b9430845e129c2ca1336363d92d84f41649d85f095d35606e5`
+and Torii result is
+`d2d000a3915b92d080fd0b96da4f78285dff15ceb04714df021912e9d5369d0c`.
+The complete native logs retain both original failures. This is **990 passes and
+two failures**, with the overall retry-19 build still failed, not a green aggregate.
+
+Retry 20 executes the full Manifest library with **959 passes, zero failures and
+zero ignored**, including all five prepared-window leaves above. The focused Torii
+hardware-token selection again passes **33 tests, zero failures or ignored**.
+Both selections use individually emitted binaries from the failed build, with
+actual registered-name inventories, unchanged original/retained binaries, and
+zero full captured source drift before and after execution. The aggregate is
+**992/0/0**; it does not include the three then-uncompiled daemon/broker window tests
+or establish combined-build or hardware readiness. Evidence:
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry20-emitted/scoped-native-tests-01-result.json`
+(SHA-256 `00bf769aade448ea62977a05adb7f5e621c901e7ebf83f9390f6cdb3f120aa90`).
+The individual Manifest and Torii result SHA-256 values are
+`ae754de5b228e90cbf7b59b4e3472c7ef12ed55e59cca1fd25fe7a98e2923dbf`
+and `ea1c7f715289a7f7bd3f6281366541a047edede0074786440ce85a7111f377d4`.
+The original retry-19 failed oracle results remain immutable above.
+
+Retry 21 completes the coordinated build with **exit 0** in 136.748 seconds,
+with zero changes across **8,821 captured source paths**. Its actual daemon
+selection executes **62 registered tests: 57 pass, five fail and zero are ignored**
+(out of 1,109 registered daemon library tests). Both original and retained daemon
+images remain unchanged, as does the complete captured source scope before and
+after execution. The build result is
+`target/privacy-release-evidence/2026-09-07-recovery/core-retry-21/core-build-result.json`
+(SHA-256 `cee83f0c88a465603164a31e269955221947b6d39f0801472457a69b109377c8`).
+The scoped result is
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry21/scoped-native-tests-01-result.json`
+(SHA-256 `b81fb7d3f29b86a35b1ee86688e092f7362cffa4fc61a079e2d3ecb18e8887d8`),
+and the immutable daemon image has SHA-256
+`168ac1eb9b1faa2e2a210dc9bd5bad7f4721c26f6202ba07d39a90a4bf429522`.
+A successful build does not turn the five failed tests into passes.
+
+The exact failed names, native log and source diagnoses are retained in
+`target/evidence/sorafs-v1/daemon-retry21-validation-successor/native-terminal-review.json`
+(SHA-256 `3a7170b36086e857253b80324f18a54ae82c2a3c46840516619c1685bd55a6aa`).
+One is a production dispatch defect: the gateway admission role passes its exact
+metadata validator but is omitted from a later accepted-role group. Three recovery
+or observer fixtures omit the accepted socket's blocking-mode reset; the production
+endpoints already perform that reset. Retry 22 below confirms the corrections in native execution. The fifth fixture's otherwise-positive extended custody exceeds its
+attester eligibility interval before reaching the intended body-time negative.
+The first actual prepared-window outcomes are two passes (the daemon all-layout
+commit/recovery test and broker substituted-window rejection) and that one failed
+daemon chronology fixture. The reviewed four-file correction, including one
+production-line change and twelve new metadata mutation cases, is **applied
+and passes the same 62-test native selection in retry 22**. All four live postimages were
+verified against the reviewed candidate in
+`target/evidence/sorafs-v1/daemon-retry21-validation-successor/root-live-postimage-verification.json`
+(SHA-256 `62bc9d44f2b1773e50e2253db183483d1007c54ab590f0d68d583159ae1030fa`).
+Its source-ready record is
+`target/evidence/sorafs-v1/daemon-retry21-validation-successor/candidate-ready.json`
+(SHA-256 `990cb2161c6ba17ab76f0f4fe809bff766f9c84dd9949d3a9002a120a05ef46b`).
+The 52 prior test names and 238 assertion lines remain retained; these source
+checks and subsequent retry-22 passes do not erase the failed retry-21 evidence.
+
+Retry 21 emits byte-identical Manifest and Torii images. The **959 Manifest and
+33 Torii passes remain retry-20 executions**, reused with their original source
+provenance; neither selection runs again in retry 21. The exact image comparison is
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry21-daemon-dispatch/reused-manifest-torii-artifacts.json`
+(SHA-256 `fe738e550041854cb93dbbca49a06c71f538ce04530d7fdaa924e1768343b66f`).
+The reused 992 passes are not a new retry-21 execution aggregate. Native-host and
+other selections outside the recorded daemon scope remain unqualified here.
+
+Retry 22 completes the coordinated build with **exit 0** in 35.512 seconds,
+with zero captured source changes. The daemon executes exactly the same 62 names
+as retry 21: **62 pass, zero fail and zero are ignored**, with 1,047 filtered out
+of 1,109 registered tests. All five formerly failing tests now pass; the gateway
+test also executes the twelve new binding mutation cases. This records actual
+execution, with unchanged original/retained binaries and zero source drift before
+and after the run. The full build result is
+`target/privacy-release-evidence/2026-09-07-recovery/core-retry-22/core-build-result.json`
+(SHA-256 `d61aa0991bb850d2a39942d22453ec4c6b4696af4fe9fd56206076204ff97630`).
+The daemon selection result is
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry22/scoped-native-tests-01-result.json`
+(SHA-256 `70582d025235483a7e5df9bcfb3fa0227a172933ee6c32a7e75361c4e47944e1`),
+and its retained daemon image has SHA-256
+`43194ada6cd3e7f1dbea5ee6231464f39f8faca4f7c16b5ca5901984966aa175`.
+
+Retry 22 again retains byte-identical Manifest/Torii images. Their 992 passes
+remain the actual retry-20 executions; they are not rerun or added to a new
+retry-22 execution aggregate. Exact comparison evidence is
+`target/evidence/sorafs-v1/hardware-stream-token-native-retry22/reused-manifest-torii-artifacts.json`
+(SHA-256 `446f93478f166b1c62f45504ce4606af7b797e8348a150d715b0e6b3adefd8a6`).
+The separate worker-transport successor below is not part of retry 22.
+
+Review found synchronous broker work on async issuance/admission paths, lease
+release before a CAR storage worker finishes, missing authenticated expiry checks
+during CAR body production, and a chunk lease dropped before body transfer. The
+following reviewed packets address these boundaries privately; none is published
+or native-tested by the results above. File counts overlap and are not additive.
+
+| Private packet | Files | Source-ready SHA-256 |
+| --- | ---: | --- |
+| `stream-token-response-body-candidate` | 8 | `851daa52dff05391021421ddbc4a30017fbc4d50291864ff916df72c569e45bd` |
+| `stream-token-range-cleanup-candidate` | 17 | `6ec7c3c98ba69125fe8b18c81e24e14ff0fc1fff118c4ce0e73d56a74aef7cb3` |
+| `stream-token-issuance-worker-guard-successor` | 7 | `b54e3653c1a8409217f0811f7d01318046b72bf389e8305ac6664243b0363c68` |
+| `stream-token-blocking-worker-transport-successor` | 2 | `d1220708d3ce85109edba1ab9d90849ec6c5d9de0238bcec430a23df2fd3bddb` |
+| `broker-absolute-deadline-latch-composed-candidate` | 7 | `1ffba3e11b62facdc0f68bf936c7bbaead4a5b3fde1856c3cae6a1f7de4b5dd7` |
+
+Each record is `target/evidence/sorafs-v1/<packet>/candidate-ready.json`. The
+38-file custody/issuance/cleanup/body composition has private strict replay and
+format checks plus **25 selected Python passes, 60 deselected**; its 43 new named
+native tests remain unrun. Its composition record is
+`target/evidence/sorafs-v1/stream-token-range-composed-candidate/composition.json`
+(SHA-256 `c002cf22c2506c8f240b0b2b7789c09ae3a835719f87b14926dd475e83265bb5`).
+Independent composition source review passed, with its exact origin and postimage
+checks recorded in
+`target/evidence/sorafs-v1/stream-token-range-composition-independent-review-01.json`
+(SHA-256 `7e4079380684b8eb5cbf33c10743319cf0ae75192d0ca4a2fb848c5016b8a666`).
+The composed source-ready record has SHA-256
+`116a36f847aef2ba4c623f1c0fca2c2350cd34698fde622aa777f66d1aadde6f`.
+A reviewed four-file test extraction now composes with these 38 files into one
+**private 41-file candidate**. Its source-ready record is
+`target/evidence/sorafs-v1/stream-token-range-budget-composed-candidate/candidate-ready.json`
+(SHA-256 `92481141ebe86f17eaf45e119041994713e97cdfbc6217257a02bdc6e48f1dd8`).
+Root independent review is
+`target/evidence/sorafs-v1/stream-token-range-budget-composed-candidate/root-extraction-review.json`
+(SHA-256 `4c42bc901ae4776e69d9ed39c4f01dad2a880f20da4119488d5a0043789e794f`).
+The extraction retains all 33 complete test modules and cfg gates byte-for-byte,
+including 176 test attributes and 623 assertion lines. Same-directory textual
+includes retain their module namespaces and relative paths; actual registered
+names still require native verification. `lib.rs` drops from 58,182 to 50,588
+lines, with three test owners of 2,666, 2,104 and 2,859 lines. The source-budget
+guard requires downward ratchets from 50,718 to 50,588 for the root and from
+42,266 to 42,225 for the API; no exception or inventory has been changed here.
+
+Formatting, exact source composition and isolated strict patch replay pass.
+The final test-layout overlay retains 25 selected Python passes. Wrapper/TLS
+checks have the same **11 passes, two failures and 13 passing subtests** before
+and after extraction: the subscription-action macro definition differs from its
+pinned inventory, and the TLS guard reports five missing startup/injection
+markers. These failures remain under source review; no guard is weakened.
+Coordinated publication, all 43 new native tests, actual moved-test registration,
+full source-guard closure and reviewed inventory/ratchets remain pending.
+Physical worker ownership and body expiry checks do not retract bytes already
+handed to Hyper or the socket, or establish finite shutdown for an arbitrary
+synchronous provider.
+
+The separate native release-publication deadline verifier was stopped by an
+automated security filter and remains unfinished; it is not resumed or qualified
+by any packet or test above. Release acceptance and its genuine device, state and
+observer prerequisites remain open.
+Genuine hardware, native custody-control/operation authority, current signer
+revocation in range admission, sustainable private-receipt retention, and the
+coherent hardware promotion-profile replacement remain open. Software signer
+labels and simulated provider receipts do not close G02. The four-voter,
+multi-provider, independently administered regional gateways, 24-hour soak,
+security review and all 17 production lanes remain unqualified by these tests.
+
 ## 2026-09-08 merge and security follow-up
 
-The active repository merge changes shared Norito and SoraFS sources. The
-retained Core **406-pass** and Node **74-pass/4-fail** results below qualify their
-recorded premerge snapshots only. A fresh combined source manifest and native
-capture are required before applying those results to the merged candidate.
+The earlier captured Core/Node candidate passes **406 Core SoraFS tests**, the
+full Node library's **1,468 tests**, and **both opt-in real local Kubo tests**,
+with zero failures. The Kubo cases run separately from the default Node suite. Coordinated
+common retry 7 exits zero with no source drift; the earlier compilation and
+Kubo failures below remain recorded. These focused component results do not
+qualify the full workspace, genuine hardware custody, or reference deployment.
 
-The four Node failures have source corrections under review: quarantine decoding
+The four previous Node failures now have passing native regressions: quarantine decoding
 now derives a schema-specific cumulative allocation bound from the actual frame;
 outbox fixtures use the production private checkpoint writer; and PoP layout
 tests reuse one encrypted enrollment while independently testing fresh encryption
 against canonical plaintext and AAD. Cryptographic entropy hedging remains
 intact. Quarantine tests cover every input alignment, exact and one-byte-short
 allocation budgets, stricter caller limits, and the maximum valid envelope.
-The general Norito ceiling still applies; the maximum-input cases require native
-execution before this correction is qualified.
+The general Norito ceiling still applies. The maximum valid 32 MiB envelope,
+all input alignments, exact owned-allocation boundary, stricter outer limits,
+and compressed/oversized rejection cases pass in the focused and full suites.
 
-Merge review also found that the incoming custom boxed completion decoder omits
-the owned-box allocation charge. Its prior-byte-preservation wrapper must be
-removed in favor of the standard Norito `Box<StoredCompletionDeliveryV1>` codec,
-with populated checkpoint/restart and allocation-boundary tests. This is an open
-first-release correction; the previous private checkpoint layout has no
-compatibility requirement. The merge owner retains source ownership until its
-checks finish. No new native or deployment qualification is claimed here.
+Merge review also found that the custom boxed completion decoder omitted the
+owned-box allocation charge. Its prior-byte-preservation wrapper and custom
+codec are removed in favor of the standard Norito
+`Box<StoredCompletionDeliveryV1>` codec. Three replacement regressions cover
+populated signed checkpoint/restart state across layouts, the exact owned-box
+allocation charge, and rejection of the inner-only layout under the current
+schema. All three native regressions and the focused 26-test source-contract
+suite pass. The previous private checkpoint layout has no compatibility requirement.
+The merge is resolved and source ownership released. Its orphaned checkpoint
+lease implementation was also removed, with useful tests retained under the
+shared writer guard.
+
+The **89-test Node focus** passes in 30.790 seconds, the **1,465-test full Node
+suite** in 317.713 seconds, and the **406-test Core selection** in 66.838 seconds.
+Their runners require the exact compiled pre-build source hashes, retained test
+inventory, and immutable captured binary hashes. All 161 Node and 42 Core scoped
+source hashes remain unchanged; the Node runner also records no broad Rust-source
+drift. Durable results are `target/evidence/sorafs-v1/node-security-04-result.json`
+(SHA-256 `9dcdb6968eeab5a96e3b93660fddc26e1b91518f15339d858f04917ea8f1f3f4`)
+and `core-security-04-result.json`
+(`1200e548a2fd1ffe94d3cb6bb358b2d325a29872404fe64238f7068c22c8f6f1`).
+`core-retry-5-scoped-artifacts.json` links both immutable binaries to the
+successful coordinated build. All old required assertions are retained except
+the prohibited prior-byte compatibility test, replaced by the three stronger
+canonical completion regressions above.
+
+The first real isolated Kubo 0.42.0 run fails **both tests** in 41.379 seconds, before
+publication. The daemon is ready, but the shared IPFS URL producer creates an
+explicit trailing `?` for empty queries; strict canonical request admission
+rejects it before signing or transport. An independent isolated HTTP probe gets
+200 from the same pinned daemon/configuration. The two-file correction is ready:
+create a query serializer only for nonempty parameters, and prove query-free
+version/swarm requests pass descriptor/authentication admission while an explicit
+trailing `?` still fails. The correction passes the rebuilt **90-test focus**
+in 18.302 seconds and **1,465-test full Node suite** in 226.337 seconds, with
+two opt-in tests ignored. Common retry 6 exits zero without source drift. The
+Node05 source manifest retains all 161 files and 1,467 test names, with only the
+two reviewed files changed; sources and immutable binary remain unchanged
+during tests. `node-security-05-result.json` has SHA-256
+`102859de0704834a37eff61c786a741ad345469f694c414ff2c02e9449a65b18`.
+The first failed run
+and source diagnosis remain in `node-security-04-kubo-result.json` and
+`node-security-04-kubo-readiness-diagnosis.json` under the same evidence directory.
+
+The subsequent real Kubo run passes the signed-head publication/restart/tamper
+lane and fails the IPNS lane, **one pass and one failure** in 65.985 seconds.
+`node-security-05-kubo-result.json` has SHA-256
+`30bcf6f774f27e0328bad8dca9173ace73da5d2e35736c537912fbe5bb45b105`.
+Readiness and actual publication now work. The IPNS fixture still expects a
+missing head pin to abort reconciliation, while both steady-state implementations
+authenticate the checkpoint/public head and deterministically restore derived
+objects before readiness. A test-only correction is prepared: acknowledge real
+pin loss, require automatic exact pin/byte recovery with unchanged checkpoint
+and public IPNS head, and retain every subsequent tamper/movement rejection.
+That correction is now applied with the two PoR challenge/report publishers'
+switch to canonical encoding. Five PoR regressions cover all caller layouts,
+exact durable deduplication and restart, dispatch, rejection of rebound alternate
+frames, and unchanged semantic/retention enforcement; three are new registered
+tests. The Node06 source candidate covers 162 files and requires 1,470 test names.
+Its rebuilt **95-test focus** passes in 16.328 seconds, the **1,468-test full suite**
+in 214.797 seconds, and **both opt-in real Kubo tests** in 65.502 seconds. All
+required tests remain registered; scoped and broader source hashes and the
+immutable Node/Kubo binaries remain unchanged. `node-security-06-result.json`
+has SHA-256 `631be77638582a17e20d7b3e93312f9db3afed31e79bc07ff615b4591e9f2d7d`;
+`node-security-06-kubo-result.json` has SHA-256
+`f7988c420ce7d81208fb7f4b9bf65fd8f9e009cbe5eb0167c617ed9d4c4de71b`.
+`core-retry-7-node-artifact.json` binds the captured binary to the successful
+common build. These tests
+use real isolated Kubo transport with simulated signer/state providers; they
+provide neither genuine hardware nor regional deployment qualification.
+
+The merged source-contract capture passes **410 tests and fails two** in
+56.36 seconds, with all 161 scoped source hashes unchanged. The failures retain
+unfinished curated MCP capabilities, directory pagination, hardware signer
+consumers/adapters, authenticated CLI registration/completion, and authenticated
+release-report prerequisites as open work. Evidence is
+`target/evidence/sorafs-v1/node-security-04-source-contracts-result.json`.
+The final Core/Node source manifests require all 406 prior Core regressions and
+1,462 retained or replacement Node tests; the merged Node binary registers 1,467,
+including five additional envelope/network/writer-ownership negatives. All run
+in the full suite except the two explicitly opt-in Kubo cases. These earlier Core/Node results do not cover the subsequent hardware-token
+changes; their application and native status are recorded in the hardware and
+replay checkpoint above.
 
 ## 2026-09-07 post-reboot checkpoint
 
@@ -731,7 +1112,7 @@ aggregate checker. There are 135 required kinds across 17 summaries.
 | `pop_credentials` | 9 | `specs/sorafs_pop_credentials_plan.md`; native PoP registry, `crates/sorafs_node/src/pop_credentials.rs`, the canonical authenticated 14-route Torii V1 service, stock-`irohad` broker injection, exact PoP broker protocol, and public broker-server launcher. | Durable encrypted enrollment/wallet, dual control, signer/key-wrapper interfaces, outbox/reconciliation, canonical/depth/allocation/auth/time rollback negatives, broker binding/operation/substitution/drift tests, privacy, runner, and aggregate tests. | Resolve `V1-BLOCK-POP-RUNTIME-01`: package and supervise a deployment-owned broker executable with qualified signer, wallet key-wrapper, authentication, private issuance/witness, committed-ledger, and finalized-time backends through the shipped launcher, then exercise issuance, reconciliation/revocation, wallet custody, local proofs, verifier replay defense, restart, and rotation without ledger/log secrets or PII. | open |
 | `por` | 6 | `specs/sorafs_por_plan.md`; PoR scheduler/randomness/governance foundations, request-bound sampling, emitted latency/VRF/seed metrics, exact-chain durable native repair handoff, finalized-lease-gated execution, and deletion of the local repair projection. Finalized verdicts retain exact sequence/digest-bound reputation work until durable native admission and acknowledgement. The optional hard-cut replay archive pins a production handle, immutable archive identity, revision, policy digest, and strong Ed25519 verification key; signed predecessor-linked receipts bind the canonical record and reputation work. Standard challenge/verdict paths use the qualified provider automatically, and a supervised worker performs bounded reputation-first reconciliation and authenticated compaction. Local replay state is pruned only after authenticated `current_head` readback equals the final receipt and the provider binding remains unchanged. | VRF/seed/request replay, proof/reference, native 32-byte task identity, handoff retry/signature/checkpoint corruption, stale/wrong lease, restart deduplication, metric-label bounds, archive append/crash-retry/readback/signed-chain/tamper and signed-but-stale-head tests, config missing/disabled/partial/test-marked/bounds/secret-field negatives, provider missing/unrequested/substituted/stale/drift qualification tests, launcher source contracts, checker/runner, and aggregate tests. The newest config/launcher tests remain pending focused Cargo execution. | Supply and qualify a genuine deployment-owned immutable archive plus independently administered external software Ed25519 signer for slot 46, then run live randomness with provider/auditor scheduling and replay, prove cross-peer exactly-once reputation/repair/archive recovery, archive the reporting output, and obtain governed approval. | open |
 | `potr` | 6 | `specs/sorafs_potr_plan.md`; `crates/sorafs_node/src/potr.rs`, proof-stream/governance schemas, fail-closed exact-chain durable native repair handoff, finalized-lease-gated execution, deletion of the local repair projection, and Torii's injected `PotrRuntimeSignersV1` boundary. The stream-token issuer no longer owns or derives a provider ML-DSA key. Distinct gateway/provider runtime objects and administrative identities are mandatory. The strict optional `[sorafs.por.potr_runtime]` binding independently pins both signers, their qualifications, the gateway key, distinct reader/source/resolver identities, and the complete baseline finalized admission anchor; enabled startup requires exact equality with injected roles. Torii constructs `PotrFinalizedAdmissionReaderV1` from `PotrStateFinalizedPolicySourceV1` and the council-verified admission registry, resolves the exact live policy before every receipt, and rechecks it after both signatures; the startup registry alone is not authorization. The tracker atomically persists provider, policy identity/digest/sequence, finalized height/hash, and exact admission-envelope digest, and exposes that retained anchor as the floor for the next read. | Final receipt/reference, signature-shape, persistence/restart, native repair idempotency, stale/wrong lease, restart deduplication, PQ roster, reputation binding, checker/runner, and aggregate tests; source tests cover missing/unconfigured/substituted runtime roles, partial/disabled/test-marked/shared config, identity collisions, shared/drifting signer and reader identities, wrong role/provider/key/algorithm, inactive or untrusted admission, partial invalid output, reader/signer outage, revocation, stale and same-sequence policy substitution, change during signing, governed provider-key rotation, durable-floor restart, and replay rollback. Focused Rust execution remains pending while the shared Cargo lane is occupied. | Resolve `V1-BLOCK-POTR-DUAL-SIGNER-01`: run focused/workspace validation, inject separately administered gateway Ed25519 and provider ML-DSA-65 external software signer services into the state/admission-registry-bound reader path, then exercise independent rotation/outage/replay/crash recovery and prove four-peer exactly-once receipt/repair behavior. | open |
-| `reference_sdk_release` | 6 | `specs/sorafs_reference_sdk_plan.md`; `sorafs-validate`, Rust reference core, ABI-23 C/Node/Python/JNI/Swift/C# wrappers, canonical fixture-bundle and governance-log-node validators plus Governance DAG block/head and appeal-finance cancellation validation across JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java Android, and C#, and the release packager. | The resealed test-only Ed25519-signed `reference_sdk_validation_inventory_v1.json` binds 82 payload artifacts, 32 exact `ValidationOutcomeV1` files, and 38 negative payload vectors across appeal finance, routing/provider admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. All eight generated `CancelAssetLock` payload files are checked in, mandatory, byte-bound, and validated by the offline checker. The transparent V1 `EscrowId` hash representation and retired nested binary/JSON representations are frozen by Rust and SDK tests. The fixture checker rejects tamper, missing/extra/duplicate/traversal, noncanonical/nonfinite JSON, symlink/hardlink, and parent-swap attacks. The checked-in host C/JNI, C#, Node, and pinned-Python-3.12 lane contracts require stable artifact bytes, exact clean source identity, exact ABI 23, and required appeal-finance symbols; Apple/Swift and Android packages retain the separate per-slice source-sealed mobile artifact gate, and Android additionally requires both exact `NativeSignerBridge` JNI contract-revision 5 probe exports. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed. The mandatory Python 3.12 runner rejects every tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or `.dll`, activates its virtual environment, covers cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects JUnit skips; its static workflow-file contract is green at 9/9. The separate pin-register workflow, runner, and guard are exact Python 3.12 and install only `requirements-ci.lock` with `--require-hashes --only-binary=:all:`. A fresh isolated CPython 3.12.13 venv passed 3/3 tests plus positive static and changed-version/resolver/major/workflow/lock-removal negatives. Release-required SDK tests fail rather than count an unavailable/stale bridge as passing. Available Node, Python, C/JNI, Swift, and C# outputs are stale or mixed, so no native-dependent suite is currently qualified. No clean five-target artifact rebuild or provenance record has yet been recorded, and no native release binary is tracked in the source tree. | Build every required native artifact from one clean pinned commit for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64, execute all six SDK exact-parity suites without capability skips, and publish only the authenticated results. Then complete clean-consumer packages, SBOM/provenance, published canaries, and genuine reference-deployment evidence. | open |
+| `reference_sdk_release` | 6 | `specs/sorafs_reference_sdk_plan.md`; `iroha`, Rust reference core, ABI-23 C/Node/Python/JNI/Swift/C# wrappers, canonical fixture-bundle and governance-log-node validators plus Governance DAG block/head and appeal-finance cancellation validation across JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java Android, and C#, and the release packager. | The resealed test-only Ed25519-signed `reference_sdk_validation_inventory_v1.json` binds 82 payload artifacts, 32 exact `ValidationOutcomeV1` files, and 38 negative payload vectors across appeal finance, routing/provider admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. All eight generated `CancelAssetLock` payload files are checked in, mandatory, byte-bound, and validated by the offline checker. The transparent V1 `EscrowId` hash representation and retired nested binary/JSON representations are frozen by Rust and SDK tests. The fixture checker rejects tamper, missing/extra/duplicate/traversal, noncanonical/nonfinite JSON, symlink/hardlink, and parent-swap attacks. The checked-in host C/JNI, C#, Node, and pinned-Python-3.12 lane contracts require stable artifact bytes, exact clean source identity, exact ABI 23, and required appeal-finance symbols; Apple/Swift and Android packages retain the separate per-slice source-sealed mobile artifact gate, and Android additionally requires both exact `NativeSignerBridge` JNI contract-revision 5 probe exports. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed. The mandatory Python 3.12 runner rejects every tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or `.dll`, activates its virtual environment, covers cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects JUnit skips; its static workflow-file contract is green at 9/9. The separate pin-register workflow, runner, and guard are exact Python 3.12 and install only `requirements-ci.lock` with `--require-hashes --only-binary=:all:`. A fresh isolated CPython 3.12.13 venv passed 3/3 tests plus positive static and changed-version/resolver/major/workflow/lock-removal negatives. Release-required SDK tests fail rather than count an unavailable/stale bridge as passing. Available Node, Python, C/JNI, Swift, and C# outputs are stale or mixed, so no native-dependent suite is currently qualified. No clean five-target artifact rebuild or provenance record has yet been recorded, and no native release binary is tracked in the source tree. | Build every required native artifact from one clean pinned commit for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64, execute all six SDK exact-parity suites without capability skips, and publish only the authenticated results. Then complete clean-consumer packages, SBOM/provenance, published canaries, and genuine reference-deployment evidence. | open |
 | `repair` | 8 | `specs/sorafs_repair_plan.md`; native repair records/ISIs/queries/events, Torii caller-signed one-instruction command ingress and finalized query routes, `crates/sorafs_node/src/repair_transaction_forwarder.rs`, the finalized native lease storage executor, bounded full-projection GC/reconciliation, and deletion of the local manager/store/checkpoint/API authority. | Native lifecycle/lease/action/appeal atomicity, exact-chain transaction signing and finality reconciliation, route-specific `202` command and `200` query responses, stale cursor/owner/generation/expiry rejection, malformed finalized-task and unsafe chunk-path rejection, restart deduplication, replay/rate-limit/event, checker/runner, binding, and aggregate tests. | Prove cross-peer exactly-once execution and one terminal outcome. | open |
 | `reputation` | 8 | `specs/sorafs_reputation_plan.md`; deterministic reputation/reference/governance foundations; native governed journal policy/history, one global sequence, event/source indexes, typed committed events, fixed-view query, PoR/token append instructions, atomic capacity-dispute `Opened`/`Resolved` integration, and dedicated type-safe signed Rust `Client` transaction/query builders over the native Torii transport; plus the finalized-identity-keyed, single-flight, byte-identical SFM-1 authority join/cache in `sorafs_orchestrator`. The multi-feed finalized projector is exported from `sorafs_node`, consumes the existing proof/journal/repair/orderbook/reserve projections, exposes five restart-safe physical feed cursors, and persists canonical crash reconciliation plus a bounded idempotent unsigned-material retry/dead-letter/ack outbox. Strict `iroha_config` pins the release window, weights, bounds, checkpoint roots, adapter handles, and DAG publisher identity; standard `irohad` constructs the immutable historical finalized query from its daemon-owned Kura-authenticated archive and requires an externally authenticated journal-transaction submitter, external threshold signer, and Governance DAG client, with no validator-key, queue-backed, or current-head fallback. Enabled startup fails on missing/null/substituted dependencies, supervises reconciliation and shutdown with freshness deadlines, and exports payload-free status/metrics. Authenticated DAG readback gates the committed Torii projection. Its canonical V1 receipt carries a pinned signed head and a contiguous inclusion suffix bounded by the manifest checkpoint window, requires the exact signed snapshot once, links successor receipts to the previously authenticated head, and persists/reverifies the head and every path block on restart. The publication checkpoint retains an immutable authenticated snapshot/readback suffix capped at 1,024 entries and its byte ceiling; snapshot-id reads return the exact retained snapshot, while unknown or evicted ids return `404`. Acknowledgement requires the full public trust-policy digest, quorum, signature, revocation, freshness, future-skew, snapshot, scoring-evidence, and signing-digest verification. The local Torii reputation POST, route catalog/OpenAPI operation, and CLI publication command are removed; rollout collection requires reviewed external publication evidence. All seven committed GET routes, strict JavaScript/TypeScript, Python, Kotlin/JVM, Java Android, Swift, and C# read clients, plus the canonical-account-signed Rust CLI and collector wiring, are implemented locally. PoR verdict ownership now retains typed terminal work, and the standard launcher always supervises bounded durable exact admission/acknowledgement when reputation is enabled; optional replay-archive compaction shares that worker but no longer gates admission. Native stream-token journal admission uses a hard-cut gateway-id/non-zero-sequence/request-context binding and a bounded durable per-gateway high-water mark; exact replay is idempotent while stale or substituted sequence reuse fails closed across restart. The standard supervisor, daemon handle, and object-safe native admission boundary expose a callback only for a complete already-authenticated, externally sequenced typed outcome; they never allocate or rewrite a gateway sequence, revalidate the sealed journal checkpoint and immutable finalized-query providers, and use the finalized source lookup to prove replay or conflict after bounded local compaction. Separately, the canonical payload-free request-context model derives the gateway id from length-framed chain and compliance-gateway identities and binds the authoritative provider, manifest digest/CID, chunk profile, nonce digest, token-presentation commitment, and CAR-range or exact-chunk route without retaining raw nonce, token bytes, aliases, PII, or forwarding metadata. `ProviderMismatch` is attributed to the authoritative serving provider. Strict non-secret configuration, stock runtime-provider registry/broker transport, the standard `irohad` launcher, and Torii capture now hard-bind that external ownership contract. Enabled startup rejects missing, substituted, stale, or test-marked providers; Torii submits the canonical route-byte quota input; only tests retain local quota/concurrency helpers. The capture validates each complete returned pending batch before callbacks, preserves predecessor ordering and authenticated pending-versus-acknowledged replay proofs, forwards the typed external outcome unchanged, and checks the exact externally derived lease deadline. A genuine regional provider implementing sealed monotonic allocation, bounded durable quota/concurrency state, the ordered durable callback outbox, lease expiry, and multi-replica fencing/failover remains open. | Journal policy predecessor/rotation, exact permission and recorder authority, source/provider/policy/block-time binding, global/source continuity, replay, forged/orphan state, bounded fixed-view pagination, and atomic dispute lifecycle tests; projector cursor gap/fork/reorder/equivocation, crash-stage recovery, checkpoint corruption, replica parity, outbox retry/restart/dead-letter/idempotency, substituted material, forged/revoked/duplicate/insufficient-quorum/stale/future signing result, signed-head/path tamper, oversize/no-truncation, exact-target, rollback/fork, provider-drift, restart readback, liveness timeout/freshness, stream retention-gap, exact historical snapshot lookup, bounded eviction/unknown-id rejection, and payload-free failure tests; config missing/null/substituted adapter and checkpoint-restart tests; PoR terminal mapping, durable acknowledgement, archive/crash-retry, launcher/provider qualification tests; stream-token sequence-reuse, restart, older-finalization, finalized-source replay after compaction, same-binding substitution, query-provider drift, multi-row policy-rotation, and bounded-head tests; snapshot/consumer determinism, join concurrency/stale/fork/bounds/replica parity, route/CLI publication hard-cut, seven-route canonical-auth/cache/stream tests, strict SDK client and signed CLI/collector tests, transport/checker/runner, and aggregate tests. Prior focused locked validation was green; the new stream-token config, Torii replay/crash, daemon startup, and registry suites plus the locked daemon check are green, while the latest PoR archive/launcher and full workspace validation remain pending. | Resolve `V1-BLOCK-REPUTATION-RUNTIME-01`: validate and qualify the daemon-owned Kura-authenticated compact historical capture/startup and new PoR archive wiring; deploy genuine external journal submission, threshold-signing, authenticated DAG publication/readback, finalized-PoR replay-archive, and regional stream-token adapters matching their signed contracts; require sealed monotonic allocation, bounded durable quota/concurrency state, an ordered durable callback outbox, expiring leases, and multi-replica fencing; execute the complete SDK/native validation matrix; and prove multi-replica byte parity, signer rotation/revocation, retry/failover, recovery, four-peer consumption, and promotion. | open |
 | `reserve_rent` | 11 | `specs/sorafs_reserve_rent_plan.md`; native reserve policy/provider/movement/rent/lifecycle/credit/repayment/appeal records and ISIs; exact caller-signed one-instruction Torii mutation ingress; authenticated finalized policy/provider/movement/appeal/event projections; durable native forwarding workers; finalized-event/provider telemetry with bounded labels, reconciliation readiness, and represented height. The process-local `sorafs_node` reserve runtime, checkpoint, scheduler, mutation API, obsolete routes, and telemetry authority are deleted. | Native accounting/conservation/authority/lifecycle/event/query tests; signed-envelope, route/instruction/authority/policy/revision/cursor/authentication negatives; empty-page event-resume and atomic telemetry-rebuild regressions; Prometheus rule tests; fresh scrape digest/reconciled-height evidence negatives; matrix/ledger/policy binding, checker/runner, and aggregate tests. | Complete source validation, then prove custody, fork, retry, signer/failover, projection rebuild, and peer reconciliation on the reviewed deployment. | open |
@@ -1278,7 +1659,7 @@ to committed state. They must not be accepted as production truth.
 | Adversarial/security | Fuzz/model/property suites plus dependency, SBOM, provenance, and vulnerability scans. | No unresolved blocker and no critical/high finding. | open |
 | Distributed/load/soak | Four voting validators with DA/RBC, multiple providers, two regional gateways, partitions/restarts/rotations; at least 1,000 concurrent streams; 24-hour soak. | Payload-free reports bound to the final deployment and active policy/digest anchors. | evidence-pending |
 | Disaster recovery | Backup restore, signer/root rotation, gateway/DAG failover, rollback/yank rehearsal. | Reviewed recovery receipts with rollback still available. | evidence-pending |
-| Source-marker and competing-authority audit | `scripts/tests/check_sorafs_rollout_gate_contract_test.py`, `scripts/tests/check_sorafs_public_interface_hard_cut_test.py`, plus semantic review of production handlers, state stores, launchers, adapters, public APIs, and shipped binary names. | Two complete current-tree rollout-contract runs are green at 384/384, including the full rerun after repairing the sole intervening PoP documentation mismatch. The marker-focused ten-test subset and seven-test public-interface hard-cut suite are also green. A semantic scan of 227 active SoraFS, daemon-provider, and Torii Rust sources found no deferred implementation body; replay the exact guards on the pinned release commit. | local-complete |
+| Source-marker and competing-authority audit | Current rollout/provider-ingest source-contract suites and public-interface hard-cut guard, plus semantic review of handlers, state stores, launchers, adapters, APIs and shipped binaries. | The 2026-09-08 merged capture passes 410 tests and fails two active-work guards. Curated MCP, pagination, hardware consumers/adapters, authenticated CLI registration/completion and release-report prerequisites remain open. Re-run the full audit after those implementations and against the final candidate; the dated 384-test results below are historical. | open |
 
 ### 2026-08-02 source-marker and competing-authority audit
 

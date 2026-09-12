@@ -8,6 +8,13 @@
 pub mod external_software_signer;
 #[cfg(all(feature = "daemon", unix))]
 mod runtime_credential;
+/// Opaque hardware operations fenced by independently authenticated custody and completion.
+#[cfg(feature = "daemon")]
+pub mod signer_operation;
+use iroha_model_base::peer::PeerId;
 #[cfg(all(feature = "daemon", unix))]
 pub use runtime_credential::RuntimeCredentialErrorV1;
 include!("main.rs");
+
+#[cfg(all(test, feature = "daemon"))]
+mod frame_test_support;

@@ -3,6 +3,7 @@
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::data_model::{asset::AssetDefinitionId, parameter::BlockParameter, prelude::*};
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use nonzero_ext::nonzero;
 #[test]
@@ -18,7 +19,7 @@ fn transactions_should_be_applied() -> Result<()> {
     let env_dir = network.env_dir().to_path_buf();
     let result = || -> Result<()> {
         let iroha = network.client();
-        let torii = iroha.client().torii_url.clone();
+        let torii = iroha.client().endpoint().clone();
         // Make sure the network is responsive before issuing transactions.
         rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 1).await })
             .wrap_err_with(|| {
@@ -28,11 +29,11 @@ fn transactions_should_be_applied() -> Result<()> {
                 )
             })?;
         let mut target_height = iroha
-            .client()
-            .get_status()
+            .status()
+            .get()
             .wrap_err_with(|| {
                 format!(
-                    "initial get_status; torii={torii}, env_dir={}",
+                    "initial status read; torii={torii}, env_dir={}",
                     env_dir.display()
                 )
             })?
@@ -71,7 +72,7 @@ fn transactions_should_be_applied() -> Result<()> {
             "MAY".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-        let create_domain = domain_setup_instruction(&domain_id, &iroha.client().account)?;
+        let create_domain = domain_setup_instruction(&domain_id, iroha.client().account())?;
         iroha
             .submit(
                 create_domain,

@@ -3,34 +3,29 @@
 //! Storage never establishes proof validity, source finality, or spend authority.
 //! A recovered byte vector must undergo fresh bounded proof verification against
 //! independently authenticated expectations before it can be used as evidence.
-//! TODO: connect configured limits, authenticated reference publication and
-//! retention to the qualified compact producer before enabling production use.
+//! `[kura.fastpq_artifacts]` supplies immutable byte/count caps, including the
+//! one unpublished temporary; startup and every read/write enforce those caps.
+//! Defaults are 1 MiB per complete artifact, 1,024 stable records and 256 MiB
+//! aggregate file bytes. Full stores refuse new content; no unreferenced-record
+//! inference authorizes deletion. Changing the supplied Config after construction
+//! cannot change the live instance policy.
+//! TODO: connect authenticated reference publication and authority-aware retention
+//! to the qualified compact producer before enabling production use.
 
 use std::{
     fs::File,
     io::ErrorKind,
-    num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
 };
 
+use iroha_config::parameters::actual::KuraFastpqArtifactPolicy;
 use iroha_crypto::Hash;
 
 use super::{BoundProgressNamespace, Error, Kura, KuraInstanceIdentity, Result};
 
 pub(super) const DIRECTORY: &str = "fastpq_artifacts_v1";
-const TEMPORARY: &str = "pending.tmp";
+pub(super) const TEMPORARY: &str = "pending.tmp";
 const KIND: &str = "FASTPQ artifact";
-
-/// Explicit storage policy supplied by the owner; no unbounded or environment defaults.
-#[derive(Clone, Copy, Debug)]
-pub struct FastpqArtifactStorageLimits {
-    /// Maximum bytes in one artifact, including its complete nominal wrapper.
-    pub max_artifact_bytes: NonZeroUsize,
-    /// Maximum stable artifact count. One bounded publication temporary is separate.
-    pub max_artifacts: NonZeroUsize,
-    /// Maximum aggregate logical bytes, including any publication temporary.
-    pub max_total_bytes: NonZeroU64,
-}
 
 /// Untrusted content reference, with no claim about proof validity or durability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,11 +115,8 @@ impl Kura {
     /// Fails for invalid limits, size/quota excess, conflicting content, unsafe namespace
     /// entries, unavailable Kura mutation authority, insufficient configured Kura capacity
     /// after existing reservations, or any failed durability barrier.
-    pub fn persist_fastpq_artifact(
-        &self,
-        bytes: &[u8],
-        limits: FastpqArtifactStorageLimits,
-    ) -> Result<FastpqDurableArtifactReceipt> {
+    pub fn persist_fastpq_artifact(&self, bytes: &[u8]) -> Result<FastpqDurableArtifactReceipt> {
+        let limits = self.fastpq_artifact_policy;
         let directory = self.store_root.join(DIRECTORY);
         Self::validate_fastpq_artifact_limits(limits, &directory)?;
         if bytes.is_empty() || bytes.len() > limits.max_artifact_bytes.get() {
@@ -144,16 +136,24 @@ impl Kura {
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
-        // Dropping without a published cache delta invalidates Kura's total-usage
-        // cache, including directory creation and every error/partial-write path.
-        let _usage_mutation = self.begin_total_disk_usage_mutation();
+        // Recovery and publication own sequential, disjoint path snapshots.
+        // Any error leaves their common resource owner unavailable.
+        let mut usage_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(2);
         let namespace = self.open_fastpq_artifact_namespace(true)?;
         let mut inventory = self.inventory_fastpq_artifacts(&namespace, limits)?;
         if inventory.temporary {
+            let temporary_child = usage_mutation.resource_child(vec![directory.join(TEMPORARY)]);
             self.discard_fastpq_artifact_temporary(&namespace, limits)?;
             inventory = self.inventory_fastpq_artifacts(&namespace, limits)?;
+            temporary_child.finish();
+        } else {
+            usage_mutation.resource_batch(0).finish();
         }
         let path = directory.join(reference.file_name());
+        let publication_child =
+            usage_mutation.resource_child(vec![path.clone(), directory.join(TEMPORARY)]);
         let existing = self.read_bound_regular_file_bytes_locked(
             &namespace,
             &path,
@@ -219,6 +219,8 @@ impl Kura {
         )?;
         self.inventory_fastpq_artifacts(&namespace, limits)?;
         self.validate_fastpq_artifact_root()?;
+        publication_child.finish();
+        usage_mutation.finish_resources_before_disk_rescan();
         Ok(FastpqDurableArtifactReceipt {
             reference,
             issuer: self.instance_identity(),
@@ -236,8 +238,8 @@ impl Kura {
     pub fn read_fastpq_artifact(
         &self,
         reference: FastpqStoredArtifactReference,
-        limits: FastpqArtifactStorageLimits,
     ) -> Result<Vec<u8>> {
+        let limits = self.fastpq_artifact_policy;
         let directory = self.store_root.join(DIRECTORY);
         Self::validate_fastpq_artifact_limits(limits, &directory)?;
         if reference.byte_len == 0 || reference.byte_len > limits.max_artifact_bytes.get() as u64 {
@@ -273,18 +275,32 @@ impl Kura {
     }
 
     fn validate_fastpq_artifact_limits(
-        limits: FastpqArtifactStorageLimits,
+        limits: KuraFastpqArtifactPolicy,
         directory: &Path,
     ) -> Result<()> {
-        if limits.max_artifact_bytes.get() as u64 > limits.max_total_bytes.get()
-            || limits.max_artifact_bytes.get() == usize::MAX
-            || limits.max_artifacts.get() == usize::MAX
-        {
-            return Err(invalid(
-                directory,
-                "FASTPQ artifact storage limits are inconsistent",
-            ));
+        limits.validate().map_err(|error| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, error.to_string()),
+                directory.to_path_buf(),
+            )
+        })
+    }
+
+    /// Validate existing retained FASTPQ bytes against the immutable configured policy.
+    /// This bounded owner scan runs at initialization/re-audit, never at metric scrape.
+    pub(super) fn validate_fastpq_artifact_inventory_on_startup(&self) -> Result<()> {
+        let directory = self.store_root.join(DIRECTORY);
+        Self::validate_fastpq_artifact_limits(self.fastpq_artifact_policy, &directory)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        // Missing storage remains valid even on a platform that cannot publish artifacts.
+        // Supported platforms still bind that absence to the live Kura root identity.
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        self.validate_fastpq_artifact_root()?;
+        if self.canonical_sidecar_directory(&directory)?.is_none() {
+            return Ok(());
         }
+        let namespace = self.open_fastpq_artifact_namespace(false)?;
+        self.inventory_fastpq_artifacts(&namespace, self.fastpq_artifact_policy)?;
         Ok(())
     }
 
@@ -328,7 +344,7 @@ impl Kura {
     fn inventory_fastpq_artifacts(
         &self,
         namespace: &BoundProgressNamespace,
-        limits: FastpqArtifactStorageLimits,
+        limits: KuraFastpqArtifactPolicy,
     ) -> Result<Inventory> {
         let directory = self.store_root.join(DIRECTORY);
         let before = self.stable_sidecar_directory_metadata(&directory)?;
@@ -353,7 +369,7 @@ impl Kura {
             let temporary = name == TEMPORARY;
             if !temporary {
                 let hash = name.strip_suffix(".norito").unwrap_or_default();
-                if hash.len() != 64
+                if hash.len() != Hash::LENGTH * 2
                     || !hash
                         .bytes()
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -408,7 +424,7 @@ impl Kura {
     fn discard_fastpq_artifact_temporary(
         &self,
         namespace: &BoundProgressNamespace,
-        limits: FastpqArtifactStorageLimits,
+        limits: KuraFastpqArtifactPolicy,
     ) -> Result<()> {
         let directory = self.store_root.join(DIRECTORY);
         let path = directory.join(TEMPORARY);
@@ -445,16 +461,25 @@ std::thread_local! {
 #[cfg(all(test, unix, not(target_os = "espidf")))]
 mod tests {
     use super::*;
+    use std::num::{NonZeroU64, NonZeroUsize};
 
-    fn limits(file: usize, count: usize, total: u64) -> FastpqArtifactStorageLimits {
-        FastpqArtifactStorageLimits {
+    fn configured_fixture(policy: KuraFastpqArtifactPolicy) -> std::sync::Arc<Kura> {
+        let mut kura = Kura::blank_kura_for_testing();
+        std::sync::Arc::get_mut(&mut kura)
+            .expect("unshared fixture construction")
+            .fastpq_artifact_policy = policy;
+        kura
+    }
+
+    fn limits(file: usize, count: usize, total: u64) -> KuraFastpqArtifactPolicy {
+        KuraFastpqArtifactPolicy {
             max_artifact_bytes: NonZeroUsize::new(file).unwrap(),
             max_artifacts: NonZeroUsize::new(count).unwrap(),
             max_total_bytes: NonZeroU64::new(total).unwrap(),
         }
     }
 
-    fn generous() -> FastpqArtifactStorageLimits {
+    fn generous() -> KuraFastpqArtifactPolicy {
         limits(1024, 16, 16 * 1024)
     }
 
@@ -464,17 +489,14 @@ mod tests {
 
     #[test]
     fn durable_roundtrip_and_idempotent_retry_keep_one_exact_artifact() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let bytes = b"opaque complete nominal proof wrapper";
-        let first = kura.persist_fastpq_artifact(bytes, generous()).unwrap();
+        let first = kura.persist_fastpq_artifact(bytes).unwrap();
         let reference = first.reference();
         assert_eq!(reference.byte_len(), bytes.len() as u64);
         assert_eq!(reference.digest(), *Hash::new(bytes).as_ref());
-        assert_eq!(
-            kura.read_fastpq_artifact(reference, generous()).unwrap(),
-            bytes
-        );
-        let second = kura.persist_fastpq_artifact(bytes, generous()).unwrap();
+        assert_eq!(kura.read_fastpq_artifact(reference).unwrap(), bytes);
+        let second = kura.persist_fastpq_artifact(bytes).unwrap();
         assert_eq!(second.reference(), reference);
         assert_eq!(
             std::fs::read_dir(kura.store_root.join(DIRECTORY))
@@ -486,18 +508,18 @@ mod tests {
 
     #[test]
     fn absent_read_does_not_create_a_storage_directory() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let reference = FastpqStoredArtifactReference::for_bytes(b"absent");
-        assert!(kura.read_fastpq_artifact(reference, generous()).is_err());
+        assert!(kura.read_fastpq_artifact(reference).is_err());
         assert!(!kura.store_root.join(DIRECTORY).exists());
     }
 
     #[test]
     fn receipt_issuer_is_distinct_even_for_identical_content_in_two_stores() {
-        let first = Kura::blank_kura_for_testing();
-        let second = Kura::blank_kura_for_testing();
-        let left = first.persist_fastpq_artifact(b"abc", generous()).unwrap();
-        let right = second.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let first = configured_fixture(generous());
+        let second = configured_fixture(generous());
+        let left = first.persist_fastpq_artifact(b"abc").unwrap();
+        let right = second.persist_fastpq_artifact(b"abc").unwrap();
         assert_eq!(left.reference(), right.reference());
         assert!(left.is_from(&first));
         assert!(!left.is_from(&second));
@@ -507,7 +529,6 @@ mod tests {
 
     #[test]
     fn empty_oversized_and_inconsistent_requests_fail_before_directory_creation() {
-        let kura = Kura::blank_kura_for_testing();
         for (bytes, policy) in [
             (&b""[..], generous()),
             (&b"too big"[..], limits(3, 1, 3)),
@@ -515,39 +536,31 @@ mod tests {
             (&b"a"[..], limits(1, usize::MAX, 1)),
             (&b"a"[..], limits(usize::MAX, 1, u64::MAX)),
         ] {
-            assert!(kura.persist_fastpq_artifact(bytes, policy).is_err());
+            let kura = configured_fixture(policy);
+            assert!(kura.persist_fastpq_artifact(bytes).is_err());
+            assert!(!kura.store_root.join(DIRECTORY).exists());
         }
-        assert!(!kura.store_root.join(DIRECTORY).exists());
     }
 
     #[test]
     fn reference_caps_and_exact_lengths_are_checked() {
-        let kura = Kura::blank_kura_for_testing();
-        let reference = kura
-            .persist_fastpq_artifact(b"abc", generous())
-            .unwrap()
-            .reference();
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
         for length in [0, 2, 4, 1025, u64::MAX] {
             let changed =
                 FastpqStoredArtifactReference::from_advertised(reference.digest(), length);
             assert!(
-                kura.read_fastpq_artifact(changed, generous()).is_err(),
+                kura.read_fastpq_artifact(changed).is_err(),
                 "length {length}"
             );
         }
-        assert_eq!(
-            kura.read_fastpq_artifact(reference, generous()).unwrap(),
-            b"abc"
-        );
+        assert_eq!(kura.read_fastpq_artifact(reference).unwrap(), b"abc");
     }
 
     #[test]
     fn advertised_hash_is_not_normalized_and_content_is_rehashed() {
-        let kura = Kura::blank_kura_for_testing();
-        let reference = kura
-            .persist_fastpq_artifact(b"abc", generous())
-            .unwrap()
-            .reference();
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
         for index in 0..32 {
             let mut digest = reference.digest();
             digest[index] ^= 1;
@@ -556,38 +569,30 @@ mod tests {
             // Give the forged address the actual original bytes. Presence and
             // matching length are insufficient, including the hash marker bit.
             std::fs::copy(path(&kura, reference), path(&kura, changed)).unwrap();
-            assert!(kura.read_fastpq_artifact(changed, generous()).is_err());
+            assert!(kura.read_fastpq_artifact(changed).is_err());
             std::fs::remove_file(path(&kura, changed)).unwrap();
         }
     }
 
     #[test]
     fn changed_content_is_neither_read_nor_overwritten_on_retry() {
-        let kura = Kura::blank_kura_for_testing();
-        let reference = kura
-            .persist_fastpq_artifact(b"abc", generous())
-            .unwrap()
-            .reference();
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
         std::fs::write(path(&kura, reference), b"xyz").unwrap();
-        assert!(kura.read_fastpq_artifact(reference, generous()).is_err());
-        assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+        assert!(kura.read_fastpq_artifact(reference).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
         assert_eq!(std::fs::read(path(&kura, reference)).unwrap(), b"xyz");
     }
 
     #[test]
     fn stable_count_quota_rejects_new_content_but_permits_exact_retry() {
-        let kura = Kura::blank_kura_for_testing();
         let policy = limits(8, 1, 16);
-        let reference = kura
-            .persist_fastpq_artifact(b"abc", policy)
-            .unwrap()
-            .reference();
-        assert!(kura.persist_fastpq_artifact(b"def", policy).is_err());
+        let kura = configured_fixture(policy);
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        assert!(kura.persist_fastpq_artifact(b"def").is_err());
         assert!(!path(&kura, FastpqStoredArtifactReference::for_bytes(b"def")).exists());
         assert_eq!(
-            kura.persist_fastpq_artifact(b"abc", policy)
-                .unwrap()
-                .reference(),
+            kura.persist_fastpq_artifact(b"abc").unwrap().reference(),
             reference
         );
         assert!(!kura.store_root.join(DIRECTORY).join(TEMPORARY).exists());
@@ -595,11 +600,11 @@ mod tests {
 
     #[test]
     fn aggregate_byte_quota_is_reserved_before_writing() {
-        let kura = Kura::blank_kura_for_testing();
         let policy = limits(4, 8, 6);
-        let _first = kura.persist_fastpq_artifact(b"abc", policy).unwrap();
-        let _second = kura.persist_fastpq_artifact(b"def", policy).unwrap();
-        assert!(kura.persist_fastpq_artifact(b"g", policy).is_err());
+        let kura = configured_fixture(policy);
+        let _first = kura.persist_fastpq_artifact(b"abc").unwrap();
+        let _second = kura.persist_fastpq_artifact(b"def").unwrap();
+        assert!(kura.persist_fastpq_artifact(b"g").is_err());
         assert!(!path(&kura, FastpqStoredArtifactReference::for_bytes(b"g")).exists());
         assert_eq!(
             std::fs::read_dir(kura.store_root.join(DIRECTORY))
@@ -612,22 +617,19 @@ mod tests {
     #[test]
     fn interrupted_empty_partial_and_complete_temporaries_are_discarded_without_publication() {
         for temporary in [&b""[..], &b"part"[..], &b"complete-but-unreferenced"[..]] {
-            let kura = Kura::blank_kura_for_testing();
-            let _initial = kura
-                .persist_fastpq_artifact(b"initial", generous())
-                .unwrap();
+            let kura = configured_fixture(generous());
+            let _initial = kura.persist_fastpq_artifact(b"initial").unwrap();
             let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
             std::fs::write(&temp, temporary).unwrap();
             let result = kura
-                .persist_fastpq_artifact(b"fresh-verified-caller-bytes", generous())
+                .persist_fastpq_artifact(b"fresh-verified-caller-bytes")
                 .unwrap();
             assert!(!temp.exists());
             if !temporary.is_empty() {
                 assert!(!path(&kura, FastpqStoredArtifactReference::for_bytes(temporary)).exists());
             }
             assert_eq!(
-                kura.read_fastpq_artifact(result.reference(), generous())
-                    .unwrap(),
+                kura.read_fastpq_artifact(result.reference()).unwrap(),
                 b"fresh-verified-caller-bytes"
             );
         }
@@ -639,15 +641,12 @@ mod tests {
             (&b"12345"[..], limits(4, 2, 8)),
             (&b"1234"[..], limits(4, 2, 6)),
         ] {
-            let kura = Kura::blank_kura_for_testing();
-            let reference = kura
-                .persist_fastpq_artifact(b"abc", policy)
-                .unwrap()
-                .reference();
+            let kura = configured_fixture(policy);
+            let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
             let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
             std::fs::write(&temp, temporary).unwrap();
-            assert!(kura.persist_fastpq_artifact(b"x", policy).is_err());
-            assert!(kura.read_fastpq_artifact(reference, policy).is_err());
+            assert!(kura.persist_fastpq_artifact(b"x").is_err());
+            assert!(kura.read_fastpq_artifact(reference).is_err());
             assert_eq!(std::fs::read(&temp).unwrap(), temporary);
         }
     }
@@ -655,52 +654,44 @@ mod tests {
     #[test]
     fn unknown_names_subdirectories_and_too_many_entries_fail_closed() {
         for name in ["unrecognized", "ABC.norito", "../not-used"] {
-            let kura = Kura::blank_kura_for_testing();
-            let reference = kura
-                .persist_fastpq_artifact(b"abc", generous())
-                .unwrap()
-                .reference();
+            let kura = configured_fixture(generous());
+            let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
             let directory = kura.store_root.join(DIRECTORY);
             if name == "../not-used" {
                 std::fs::create_dir(directory.join("child")).unwrap();
             } else {
                 std::fs::write(directory.join(name), b"x").unwrap();
             }
-            assert!(kura.read_fastpq_artifact(reference, generous()).is_err());
-            assert!(kura.persist_fastpq_artifact(b"new", generous()).is_err());
+            assert!(kura.read_fastpq_artifact(reference).is_err());
+            assert!(kura.persist_fastpq_artifact(b"new").is_err());
         }
-        let kura = Kura::blank_kura_for_testing();
-        let reference = kura
-            .persist_fastpq_artifact(b"abc", generous())
-            .unwrap()
-            .reference();
-        let _second = kura.persist_fastpq_artifact(b"def", generous()).unwrap();
-        assert!(
-            kura.read_fastpq_artifact(reference, limits(1024, 1, 16384))
-                .is_err()
-        );
+        let kura = configured_fixture(limits(1024, 1, 16384));
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        std::fs::write(
+            path(&kura, FastpqStoredArtifactReference::for_bytes(b"def")),
+            b"def",
+        )
+        .unwrap();
+        assert!(kura.read_fastpq_artifact(reference).is_err());
     }
 
     #[test]
     fn symlink_and_hardlink_artifacts_are_rejected_without_touching_targets() {
         use std::os::unix::fs::symlink;
         for symlink_attack in [true, false] {
-            let kura = Kura::blank_kura_for_testing();
+            let kura = configured_fixture(generous());
             let outside = tempfile::tempdir().unwrap();
             let target = outside.path().join("target");
             std::fs::write(&target, b"abc").unwrap();
-            let reference = kura
-                .persist_fastpq_artifact(b"abc", generous())
-                .unwrap()
-                .reference();
+            let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
             std::fs::remove_file(path(&kura, reference)).unwrap();
             if symlink_attack {
                 symlink(&target, path(&kura, reference)).unwrap();
             } else {
                 std::fs::hard_link(&target, path(&kura, reference)).unwrap();
             }
-            assert!(kura.read_fastpq_artifact(reference, generous()).is_err());
-            assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+            assert!(kura.read_fastpq_artifact(reference).is_err());
+            assert!(kura.persist_fastpq_artifact(b"abc").is_err());
             assert_eq!(std::fs::read(&target).unwrap(), b"abc");
         }
     }
@@ -709,18 +700,18 @@ mod tests {
     fn symlink_directory_and_temporary_are_never_followed_or_removed() {
         use std::os::unix::fs::symlink;
         let outside = tempfile::tempdir().unwrap();
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         symlink(outside.path(), kura.store_root.join(DIRECTORY)).unwrap();
-        assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
 
-        let kura = Kura::blank_kura_for_testing();
-        let _initial = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let kura = configured_fixture(generous());
+        let _initial = kura.persist_fastpq_artifact(b"abc").unwrap();
         let target = outside.path().join("target");
         std::fs::write(&target, b"private").unwrap();
         let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
         symlink(&target, &temp).unwrap();
-        assert!(kura.persist_fastpq_artifact(b"def", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"def").is_err());
         assert!(
             std::fs::symlink_metadata(&temp)
                 .unwrap()
@@ -732,12 +723,12 @@ mod tests {
 
     #[test]
     fn retained_kura_root_identity_rejects_a_replaced_root() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let root = kura.store_root.clone();
         let moved = root.with_extension("moved-fastpq-test");
         std::fs::rename(&root, &moved).unwrap();
         std::fs::create_dir(&root).unwrap();
-        let result = kura.persist_fastpq_artifact(b"abc", generous());
+        let result = kura.persist_fastpq_artifact(b"abc");
         let empty = std::fs::read_dir(&root).unwrap().count() == 0;
         std::fs::remove_dir(&root).unwrap();
         std::fs::rename(&moved, &root).unwrap();
@@ -747,78 +738,68 @@ mod tests {
 
     #[test]
     fn existing_file_requires_a_fresh_file_sync_before_every_receipt() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let reference = FastpqStoredArtifactReference::for_bytes(b"abc");
         for _ in 0..2 {
             FAIL_NEXT_FILE_SYNC.with(|flag| flag.set(true));
-            assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+            assert!(kura.persist_fastpq_artifact(b"abc").is_err());
             assert_eq!(std::fs::read(path(&kura, reference)).unwrap(), b"abc");
         }
         assert_eq!(
-            kura.persist_fastpq_artifact(b"abc", generous())
-                .unwrap()
-                .reference(),
+            kura.persist_fastpq_artifact(b"abc").unwrap().reference(),
             reference
         );
     }
 
     #[test]
     fn publication_and_retry_directory_sync_failures_never_mint_receipts() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let reference = FastpqStoredArtifactReference::for_bytes(b"abc");
         for _ in 0..2 {
             super::super::FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(true));
-            assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+            assert!(kura.persist_fastpq_artifact(b"abc").is_err());
             assert_eq!(std::fs::read(path(&kura, reference)).unwrap(), b"abc");
         }
         assert_eq!(
-            kura.persist_fastpq_artifact(b"abc", generous())
-                .unwrap()
-                .reference(),
+            kura.persist_fastpq_artifact(b"abc").unwrap().reference(),
             reference
         );
     }
 
     #[test]
     fn ancestor_sync_failure_is_also_retried_for_existing_content() {
-        let kura = Kura::blank_kura_for_testing();
-        let reference = kura
-            .persist_fastpq_artifact(b"abc", generous())
-            .unwrap()
-            .reference();
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
         super::super::fail_progress_sidecar_ancestor_sync_for_tests(0, 1);
-        assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
         assert_eq!(
-            kura.persist_fastpq_artifact(b"abc", generous())
-                .unwrap()
-                .reference(),
+            kura.persist_fastpq_artifact(b"abc").unwrap().reference(),
             reference
         );
     }
 
     #[test]
     fn temporary_removal_sync_failure_stops_fresh_publication() {
-        let kura = Kura::blank_kura_for_testing();
-        let _initial = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let kura = configured_fixture(generous());
+        let _initial = kura.persist_fastpq_artifact(b"abc").unwrap();
         let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
         std::fs::write(&temp, b"partial").unwrap();
         super::super::FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(true));
-        assert!(kura.persist_fastpq_artifact(b"def", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"def").is_err());
         assert!(!path(&kura, FastpqStoredArtifactReference::for_bytes(b"def")).exists());
-        let receipt = kura.persist_fastpq_artifact(b"def", generous()).unwrap();
+        let receipt = kura.persist_fastpq_artifact(b"def").unwrap();
         assert_eq!(
-            kura.read_fastpq_artifact(receipt.reference(), generous())
-                .unwrap(),
+            kura.read_fastpq_artifact(receipt.reference()).unwrap(),
             b"def"
         );
     }
 
     #[test]
     fn artifact_mutations_invalidate_the_total_disk_usage_cache() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let before = kura.refresh_total_disk_usage_bytes().unwrap();
         let enforced_before = kura.refresh_disk_usage_bytes().unwrap();
-        let _receipt = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let _receipt = kura.persist_fastpq_artifact(b"abc").unwrap();
         assert_eq!(kura.refresh_total_disk_usage_bytes().unwrap(), before + 3);
         assert_eq!(
             kura.refresh_disk_usage_bytes().unwrap(),
@@ -828,23 +809,23 @@ mod tests {
 
     #[test]
     fn failed_publication_counts_retained_bytes_without_minting_a_receipt() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = configured_fixture(generous());
         let before = kura.refresh_total_disk_usage_bytes().unwrap();
         FAIL_NEXT_FILE_SYNC.with(|flag| flag.set(true));
-        assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
         assert_eq!(kura.refresh_total_disk_usage_bytes().unwrap(), before + 3);
-        let _retry = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let _retry = kura.persist_fastpq_artifact(b"abc").unwrap();
         assert_eq!(kura.refresh_total_disk_usage_bytes().unwrap(), before + 3);
     }
 
     #[test]
     fn discarded_temporary_bytes_are_removed_from_global_disk_usage() {
-        let kura = Kura::blank_kura_for_testing();
-        let _initial = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let kura = configured_fixture(generous());
+        let _initial = kura.persist_fastpq_artifact(b"abc").unwrap();
         let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
         std::fs::write(&temp, b"partial").unwrap();
         let before = kura.refresh_total_disk_usage_bytes().unwrap();
-        let _next = kura.persist_fastpq_artifact(b"de", generous()).unwrap();
+        let _next = kura.persist_fastpq_artifact(b"de").unwrap();
         assert!(!temp.exists());
         assert_eq!(
             kura.refresh_total_disk_usage_bytes().unwrap(),
@@ -854,23 +835,22 @@ mod tests {
 
     #[test]
     fn multi_megabyte_artifact_roundtrips_at_exact_capacity_in_separate_store() {
-        let kura = Kura::blank_kura_for_testing();
         let bytes = vec![0xA5; 8 * 1024 * 1024 + 37];
         let policy = limits(bytes.len(), 1, bytes.len() as u64);
-        let receipt = kura.persist_fastpq_artifact(&bytes, policy).unwrap();
+        let kura = configured_fixture(policy);
+        let receipt = kura.persist_fastpq_artifact(&bytes).unwrap();
         assert_eq!(receipt.reference().byte_len(), bytes.len() as u64);
         assert_eq!(
-            kura.read_fastpq_artifact(receipt.reference(), policy)
-                .unwrap(),
+            kura.read_fastpq_artifact(receipt.reference()).unwrap(),
             bytes
         );
-        assert!(kura.persist_fastpq_artifact(b"another", policy).is_err());
+        assert!(kura.persist_fastpq_artifact(b"another").is_err());
         assert_eq!(kura.fastpq_proof_queue_len_for_testing(), 0);
     }
 
     #[test]
     fn configured_capacity_reserves_prune_headroom_before_new_artifact_bytes() {
-        let mut kura = Kura::blank_kura_for_testing();
+        let mut kura = configured_fixture(generous());
         let before = kura.refresh_disk_usage_bytes().unwrap();
         assert!(Kura::canonical_prune_intent_maintenance_headroom_bytes() > 0);
         // The bytes fit the local artifact policy and physical free budget,
@@ -879,7 +859,7 @@ mod tests {
             .unwrap()
             .max_disk_usage_bytes = before.checked_add(3).unwrap();
         let reference = FastpqStoredArtifactReference::for_bytes(b"abc");
-        assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
         assert!(!path(&kura, reference).exists());
         assert!(!kura.store_root.join(DIRECTORY).join(TEMPORARY).exists());
         assert_eq!(kura.refresh_disk_usage_bytes().unwrap(), before);
@@ -887,7 +867,7 @@ mod tests {
 
     #[test]
     fn configured_capacity_accepts_exact_fit_and_retry_but_rejects_new_content() {
-        let mut kura = Kura::blank_kura_for_testing();
+        let mut kura = configured_fixture(generous());
         let before = kura.refresh_disk_usage_bytes().unwrap();
         let limit = before
             .checked_add(Kura::canonical_prune_intent_maintenance_headroom_bytes())
@@ -896,16 +876,15 @@ mod tests {
         std::sync::Arc::get_mut(&mut kura)
             .unwrap()
             .max_disk_usage_bytes = limit;
-        let first = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
-        let retry = kura.persist_fastpq_artifact(b"abc", generous()).unwrap();
+        let first = kura.persist_fastpq_artifact(b"abc").unwrap();
+        let retry = kura.persist_fastpq_artifact(b"abc").unwrap();
         assert_eq!(first.reference(), retry.reference());
         assert_eq!(kura.refresh_disk_usage_bytes().unwrap(), before + 3);
-        assert!(kura.persist_fastpq_artifact(b"d", generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"d").is_err());
         assert!(!path(&kura, FastpqStoredArtifactReference::for_bytes(b"d")).exists());
         assert!(!kura.store_root.join(DIRECTORY).join(TEMPORARY).exists());
         assert_eq!(
-            kura.read_fastpq_artifact(first.reference(), generous())
-                .unwrap(),
+            kura.read_fastpq_artifact(first.reference()).unwrap(),
             b"abc"
         );
     }
@@ -914,8 +893,268 @@ mod tests {
     fn emergency_startup_cannot_publish_or_restore_artifact_evidence() {
         let kura = Kura::blank_kura_for_testing_in_emergency_fast_mode();
         let reference = FastpqStoredArtifactReference::for_bytes(b"abc");
-        assert!(kura.persist_fastpq_artifact(b"abc", generous()).is_err());
-        assert!(kura.read_fastpq_artifact(reference, generous()).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
+        assert!(kura.read_fastpq_artifact(reference).is_err());
         assert!(!kura.store_root.join(DIRECTORY).exists());
+    }
+
+    fn observe_actual_physical_fixture(kura: &Kura) -> super::super::IndexResourceCounts {
+        let counts = kura
+            .physical_resource_scope()
+            .unwrap()
+            .observe(kura.evidence_resource_limits())
+            .unwrap();
+        let values = super::super::PHYSICAL_RESOURCE_FAMILIES
+            .iter()
+            .map(|family| (*family, counts[*family as usize]))
+            .collect::<Vec<_>>();
+        kura.resource_inventory
+            .initialize(
+                kura.resource_inventory.reconciliation_generation().unwrap(),
+                &values,
+            )
+            .unwrap();
+        counts
+    }
+
+    #[test]
+    fn immutable_resources_count_empty_and_partial_temporary_cleanup_with_actual_bytes() {
+        use super::super::ResourceFamily;
+        for temporary_bytes in [Vec::new(), vec![9_u8; 4]] {
+            let kura = configured_fixture(limits(8, 2, 16));
+            let _first = kura.persist_fastpq_artifact(b"abc").unwrap();
+            let temporary = kura.store_root.join(DIRECTORY).join(TEMPORARY);
+            std::fs::write(&temporary, &temporary_bytes).unwrap();
+            let before = observe_actual_physical_fixture(&kura);
+            let first_evidence = before[ResourceFamily::EvidenceKeyRecords as usize];
+            assert!(
+                first_evidence.persisted_entries >= 2,
+                "an empty pending.tmp still occupies a record"
+            );
+            assert_eq!(
+                first_evidence.temporary_index_bytes,
+                temporary_bytes.len() as u64
+            );
+            let receipt = kura.persist_fastpq_artifact(b"de").unwrap();
+            let evidence = kura
+                .resource_inventory
+                .component_usage_for_tests(ResourceFamily::EvidenceKeyRecords)
+                .unwrap();
+            assert_eq!(evidence.persisted_entries, first_evidence.persisted_entries);
+            assert_eq!(evidence.index_bytes, first_evidence.index_bytes + 2);
+            assert_eq!(evidence.temporary_index_bytes, 0);
+            assert_eq!(
+                kura.resource_inventory
+                    .component_usage_for_tests(ResourceFamily::StorageBytes)
+                    .unwrap()
+                    .storage_bytes,
+                before[ResourceFamily::StorageBytes as usize].storage_bytes + 2
+                    - temporary_bytes.len() as u64
+            );
+            assert!(!temporary.exists());
+            assert_eq!(
+                std::fs::read_dir(kura.store_root.join(DIRECTORY))
+                    .unwrap()
+                    .count(),
+                2
+            );
+            assert_eq!(
+                kura.read_fastpq_artifact(receipt.reference()).unwrap(),
+                b"de"
+            );
+            let _retry = kura.persist_fastpq_artifact(b"de").unwrap();
+            assert_eq!(
+                kura.resource_inventory
+                    .component_usage_for_tests(ResourceFamily::EvidenceKeyRecords)
+                    .unwrap(),
+                evidence
+            );
+        }
+    }
+
+    #[test]
+    fn failed_artifact_sync_keeps_physical_resources_unavailable_until_complete_reaudit() {
+        use super::super::ResourceFamily;
+        let kura = configured_fixture(generous());
+        observe_actual_physical_fixture(&kura);
+        FAIL_NEXT_FILE_SYNC.with(|flag| flag.set(true));
+        assert!(
+            kura.persist_fastpq_artifact(b"retained after failed barrier")
+                .is_err()
+        );
+        let reference = FastpqStoredArtifactReference::for_bytes(b"retained after failed barrier");
+        assert_eq!(
+            std::fs::read(path(&kura, reference)).unwrap(),
+            b"retained after failed barrier"
+        );
+        for family in [
+            ResourceFamily::EvidenceKeyRecords,
+            ResourceFamily::StorageBytes,
+        ] {
+            assert!(
+                kura.resource_inventory
+                    .component_usage_for_tests(family)
+                    .is_err()
+            );
+        }
+        let receipt = kura
+            .persist_fastpq_artifact(b"retained after failed barrier")
+            .unwrap();
+        assert_eq!(receipt.reference(), reference);
+        assert!(
+            kura.resource_inventory
+                .component_usage_for_tests(ResourceFamily::EvidenceKeyRecords)
+                .is_err(),
+            "a later successful receipt cannot erase an earlier accounting fault"
+        );
+        kura.validate_fastpq_artifact_inventory_on_startup()
+            .unwrap();
+        let observed = observe_actual_physical_fixture(&kura);
+        assert_eq!(
+            kura.resource_inventory
+                .component_usage_for_tests(ResourceFamily::EvidenceKeyRecords)
+                .unwrap(),
+            observed[ResourceFamily::EvidenceKeyRecords as usize]
+        );
+    }
+
+    fn actual_config(
+        root: &Path,
+        policy: KuraFastpqArtifactPolicy,
+    ) -> iroha_config::parameters::actual::Kura {
+        use iroha_config::parameters::defaults::kura as defaults;
+        iroha_config::parameters::actual::Kura {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            store_dir: iroha_config::base::WithOrigin::inline(root.to_path_buf()),
+            max_disk_usage_bytes: defaults::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: defaults::BLOCKS_IN_MEMORY,
+            lane_history_retention: defaults::LANE_HISTORY_RETENTION,
+            replica_advert: defaults::REPLICA_ADVERT_POLICY,
+            fastpq_artifacts: policy,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: defaults::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: defaults::FSYNC_MODE,
+            fsync_interval: defaults::FSYNC_INTERVAL,
+        }
+    }
+
+    #[test]
+    fn configured_startup_applies_retained_count_and_aggregate_caps_before_accepting_store() {
+        for invalid in [
+            "stable-count",
+            "aggregate-with-temp",
+            "per-artifact",
+            "known-marker-name",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let config = actual_config(directory.path(), limits(8, 1, 8));
+            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &iroha_config::parameters::actual::LaneConfig::default(),
+            )
+            .unwrap();
+            let first = kura.persist_fastpq_artifact(b"12345678").unwrap();
+            drop(kura);
+            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &iroha_config::parameters::actual::LaneConfig::default(),
+            )
+            .expect("a retained namespace exactly at its configured caps reopens");
+            assert_eq!(
+                kura.read_fastpq_artifact(first.reference()).unwrap(),
+                b"12345678"
+            );
+            let namespace = kura.store_root.join(DIRECTORY);
+            match invalid {
+                "stable-count" => {
+                    std::fs::write(
+                        namespace.join(FastpqStoredArtifactReference::for_bytes(b"x").file_name()),
+                        b"x",
+                    )
+                    .unwrap();
+                }
+                "aggregate-with-temp" => {
+                    std::fs::write(namespace.join(TEMPORARY), b"x").unwrap();
+                }
+                "per-artifact" => {
+                    std::fs::write(path(&kura, first.reference()), b"123456789").unwrap();
+                }
+                "known-marker-name" => {
+                    std::fs::write(namespace.join(super::super::COUNT_FILE_NAME), b"x").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                kura.validate_fastpq_artifact_inventory_on_startup()
+                    .is_err(),
+                "{invalid}"
+            );
+            let inventory_before = std::fs::read_dir(&namespace)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), std::fs::read(entry.path()).unwrap())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            drop(kura);
+            let reopened = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &iroha_config::parameters::actual::LaneConfig::default(),
+            );
+            assert!(reopened.is_err(), "{invalid}");
+            let error = reopened
+                .err()
+                .expect("invalid FASTPQ inventory fails startup");
+            assert!(
+                matches!(&error, Error::IO(source, _) if source.to_string().contains("FASTPQ")),
+                "{invalid}: {error}"
+            );
+            let inventory_after = std::fs::read_dir(&namespace)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    (entry.file_name(), std::fs::read(entry.path()).unwrap())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(
+                inventory_after, inventory_before,
+                "startup quota rejection never deletes retained evidence"
+            );
+        }
+    }
+
+    #[test]
+    fn configured_constructor_rejects_invalid_policy_before_creating_store() {
+        let parent = tempfile::tempdir().unwrap();
+        let store = parent.path().join("must-remain-absent");
+        let config = actual_config(&store, limits(8, 1, 7));
+        assert!(
+            Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &iroha_config::parameters::actual::LaneConfig::default()
+            )
+            .is_err()
+        );
+        assert!(!store.exists());
+    }
+
+    #[test]
+    fn constructed_policy_cannot_be_replaced_by_later_config_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = actual_config(directory.path(), limits(8, 2, 16));
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &iroha_config::parameters::actual::LaneConfig::default(),
+        )
+        .unwrap();
+        config.fastpq_artifacts = limits(16, 4, 64);
+        assert!(config.fastpq_artifacts.validate().is_ok());
+        assert!(kura.persist_fastpq_artifact(b"ninebytes").is_err());
+        let receipt = kura.persist_fastpq_artifact(b"eightbyt").unwrap();
+        assert_eq!(
+            kura.read_fastpq_artifact(receipt.reference()).unwrap(),
+            b"eightbyt"
+        );
+        assert_eq!(kura.fastpq_artifact_policy, limits(8, 2, 16));
     }
 }

@@ -1,7 +1,7 @@
 //! Canonical native execution-proof statements and the bounded RaceV1 simulation model.
 
 use crate::NetworkId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
@@ -15,11 +15,11 @@ use norito::codec::{Decode, Encode};
 /// independent limits before admitting funded execution profiles.
 pub const EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1: usize = 4 * 1024 * 1024;
 
-/// Simulation ticks per second in the immutable RaceV1 rules.
+/// Simulation ticks per second in the immutable `RaceV1` rules.
 pub const RACE_TICKS_PER_SECOND_V1: u32 = 30;
-/// Maximum duration of one RaceV1 run.
+/// Maximum duration of one `RaceV1` run.
 pub const RACE_MAX_TICKS_V1: u32 = 5_400;
-/// Maximum authenticated racers in a RaceV1 run.
+/// Maximum authenticated racers in a `RaceV1` run.
 pub const RACE_MAX_PLAYERS_V1: u8 = 8;
 /// Required completed laps.
 pub const RACE_LAPS_V1: u32 = 3;
@@ -31,12 +31,21 @@ pub const RACE_CONTROL_MASK_V1: u16 = 0x3f;
 pub const RACE_SKIN_COUNT_V1: u8 = 6;
 
 /// The closed first-release track catalog.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
 )]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum RaceTrackV1 {
     /// Two-kilometre city circuit.
     NeonTokyo,
@@ -69,8 +78,19 @@ impl RaceTrackV1 {
 }
 
 /// All players' authenticated controls at one exact tick.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RaceInputFrameV1 {
     /// Zero-based tick, without gaps or repeats.
     pub tick: u32,
@@ -79,8 +99,21 @@ pub struct RaceInputFrameV1 {
 }
 
 /// Consensus-authorized removals applied before one exact simulation tick.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceDnfEventV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RaceDnfEventV1 {
     /// Tick boundary at which these unfinished cars lose their collision bodies.
     pub tick: u32,
@@ -89,8 +122,21 @@ pub struct RaceDnfEventV1 {
 }
 
 /// A complete deterministic replay from the prescribed starting grid.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceReplayV1")]
 pub struct RaceReplayV1 {
     /// Immutable track selection.
     pub track: RaceTrackV1,
@@ -103,8 +149,20 @@ pub struct RaceReplayV1 {
 }
 
 /// Integer state of one car; skins are intentionally absent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RaceCarStateV1 {
     /// Unwrapped longitudinal progress, including the negative starting-grid offset.
     pub progress_mm: i64,
@@ -123,8 +181,21 @@ pub struct RaceCarStateV1 {
 }
 
 /// Complete deterministic race state at a tick boundary.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceStateV1")]
 pub struct RaceStateV1 {
     /// Number of completed ticks.
     pub tick: u32,
@@ -135,8 +206,20 @@ pub struct RaceStateV1 {
 }
 
 /// One ranked entry in the result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RaceStandingV1 {
     /// Original participant slot.
     pub slot: u8,
@@ -149,8 +232,21 @@ pub struct RaceStandingV1 {
 }
 
 /// Public outcome recomputed by the native execution relation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceResultV1")]
 pub struct RaceResultV1 {
     /// Exact number of simulated ticks.
     pub ticks: u32,
@@ -161,9 +257,20 @@ pub struct RaceResultV1 {
     pub winners: Vec<u8>,
 }
 
-/// Ledger-bound statement for a native RaceV1 execution proof.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+/// Ledger-bound statement for a native `RaceV1` execution proof.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RacePublicInputsV1 {
     /// Exact runtime network, preventing cross-network replay.
     pub network_id: NetworkId,
@@ -184,8 +291,20 @@ pub struct RacePublicInputsV1 {
 }
 
 /// Application-neutral statement for a compiled native execution relation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct ExecutionPublicInputsV1 {
     /// Exact runtime network.
     pub network_id: NetworkId,
@@ -204,8 +323,21 @@ pub struct ExecutionPublicInputsV1 {
 }
 
 /// Exact first-release application-neutral native execution proof envelope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofEnvelopeV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct ExecutionProofEnvelopeV1 {
     /// Envelope version; exactly one.
     pub version: u16,
@@ -219,14 +351,27 @@ pub struct ExecutionProofEnvelopeV1 {
 
 /// Public replay availability and the exact native cryptographic execution proof.
 /// Replay data is intentionally public, allowing any replaceable worker to prove the race.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceProofPayloadV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RaceProofPayloadV1 {
     /// Exact generic session manifest; this adapter decodes only its compiled parameters.
     pub manifest: crate::game::GameManifestV1,
     /// Public immutable admission body whose canonical commitment must match the statement.
     pub admission: crate::game::GameAdmissionBodyV1,
-    /// Typed generic payout outcome, derived from the proof-bound RaceV1 final state.
+    /// Typed generic payout outcome, derived from the proof-bound `RaceV1` final state.
     pub outcome: crate::game::GameOutcomeV1,
     /// Race-specific relation statement; it is not part of any generic native instruction.
     pub relation_inputs: RacePublicInputsV1,
@@ -241,8 +386,21 @@ pub struct RaceProofPayloadV1 {
 }
 
 /// Portable input to a local native prover or an untrusted proof worker.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceProverRequestV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct RaceProverRequestV1 {
     /// Complete network and ledger-bound claim.
     pub statement: ExecutionPublicInputsV1,
@@ -257,20 +415,41 @@ pub struct RaceProverRequestV1 {
 }
 
 /// A compiled, versioned execution relation; arbitrary circuit or executable installation is absent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "value", rename_all = "snake_case")
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
 )]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ExecutionProofRelationV1 {
     /// The complete bounded deterministic arcade-race transition relation.
     RaceV1,
 }
 
 /// Exact native descriptor retained by the compiled execution-profile registry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
 pub struct ExecutionProofProfileV1 {
     /// Descriptor schema version, exactly one.
     pub version: u16,
@@ -290,8 +469,23 @@ pub struct ExecutionProofProfileV1 {
 }
 
 /// Compact receipt for mathematical execution validity; it does not authorize a race payout.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonDeserialize, DeriveJsonSerialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofVerificationV1")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonDeserialize,
+    DeriveJsonSerialize,
+)]
+
 pub struct ExecutionProofVerificationV1 {
     /// Exact compiled native verifier profile.
     pub profile_id: Hash,
@@ -307,6 +501,44 @@ pub struct ExecutionProofVerificationV1 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn verification_receipt_frame_binds_profile_statement_proof_and_height() {
+        let receipt = ExecutionProofVerificationV1 {
+            profile_id: Hash::new(b"verification-profile"),
+            statement_hash: Hash::new(b"verification-statement"),
+            proof_hash: Hash::new(b"verification-proof"),
+            verified_at_height: 42,
+        };
+        assert_eq!(
+            <ExecutionProofVerificationV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::execution_proofs::ExecutionProofVerificationV1",
+        );
+        let frame = norito::encode_canonical(&receipt).expect("verification frame");
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<ExecutionProofVerificationV1>()
+        );
+        assert_eq!(
+            norito::decode_canonical::<ExecutionProofVerificationV1>(&frame).unwrap(),
+            receipt
+        );
+        let mut changed = receipt;
+        changed.verified_at_height += 1;
+        assert_ne!(norito::encode_canonical(&changed).unwrap(), frame);
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<ExecutionProofVerificationV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<ExecutionProofVerificationV1>(&frame[..frame.len() - 1])
+                .is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<ExecutionProofVerificationV1>(&trailing).is_err());
+    }
     #[test]
     fn replay_norito_roundtrip() {
         let replay = RaceReplayV1 {
@@ -377,7 +609,7 @@ mod tests {
             norito::decode_canonical::<RaceResultV1>(&result_bytes).expect("decode result"),
             result
         );
-        #[cfg(feature = "json")]
+
         {
             let state_json = norito::json::to_json(&state).expect("state JSON");
             let result_json = norito::json::to_json(&result).expect("result JSON");
@@ -390,5 +622,23 @@ mod tests {
                 result
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceReplayV1,
+        >("iroha_data_model::execution_proofs::RaceReplayV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceResultV1,
+        >("iroha_data_model::execution_proofs::RaceResultV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceStateV1,
+        >("iroha_data_model::execution_proofs::RaceStateV1");
     }
 }

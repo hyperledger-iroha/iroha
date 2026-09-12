@@ -18,7 +18,7 @@ use iroha_data_model::block::{
 #[cfg(feature = "bls")]
 use iroha_data_model::merge::MergeQuorumCertificate;
 #[cfg(feature = "bls")]
-use iroha_data_model::peer::PeerId;
+use iroha_model_base::peer::PeerId;
 #[cfg(feature = "bls")]
 use tempfile::TempDir;
 
@@ -539,14 +539,14 @@ fn durable_store_fixture_with_views_and_phase(
         .expect("project exact certified Validate fixture pending");
     let (replay_evidence, _validate_evidence) =
         certified_pipeline_replay_evidence_with_certificate_for_test(
-        tag,
-        &manifest,
-        &durable_receipt,
-        &validate_pending,
-        certificate,
-        &verified.context().roster[0].validator,
-    )
-    .expect("build exact certified Store replay evidence");
+            tag,
+            &manifest,
+            &durable_receipt,
+            &validate_pending,
+            certificate,
+            &verified.context().roster[0].validator,
+        )
+        .expect("build exact certified Store replay evidence");
     let candidate = replay_evidence
         .project_installed_store_candidate(
             InstalledBodyCandidateProjectionPermit::new(),
@@ -1875,15 +1875,15 @@ fn owned_ready_durable_validate_fixture_from_waiting_with_commitment(
         (
             ReadyDurableValidateFixtureOutcome::Validated,
             DurableValidateCompletionPublication::PublishedValidated(published),
-        ) => ReadyValidateSuccessorV1::from_validated_without_physical_completion_for_test(
-            published,
-        ),
+        ) => {
+            ReadyValidateSuccessorV1::from_validated_without_physical_completion_for_test(published)
+        }
         (
             ReadyDurableValidateFixtureOutcome::Rejected,
             DurableValidateCompletionPublication::PublishedRejected(published),
-        ) => ReadyValidateSuccessorV1::from_rejected_without_physical_completion_for_test(
-            published,
-        ),
+        ) => {
+            ReadyValidateSuccessorV1::from_rejected_without_physical_completion_for_test(published)
+        }
         _ => panic!("Ready Validate fixture publication changed its requested outcome"),
     };
     let replacement_digest = holder.registry_for_test().entries[&fixture.address].digest;

@@ -505,6 +505,60 @@ fn plan_v2_startup_replay_inner(
         pending_tip_height: None,
     })
 }
+/// Exact configured startup policy derived without mutating authenticated snapshot state.
+///
+/// Private commitments prevent callers from copying asserted hashes out of a snapshot record.
+/// The candidate is accepted only when both projections match the authenticated boundary.
+#[derive(Clone, Copy, Debug)]
+pub struct V2SnapshotStartupPolicy {
+    nexus_amx_context_hash: Hash,
+    execution_policy_hash: Hash,
+}
+impl V2SnapshotStartupPolicy {
+    /// Derive policy from the exact runtime configuration already installed in State.
+    ///
+    /// # Errors
+    /// Returns an error when a required runtime execution-policy source is absent or invalid.
+    pub fn from_state(state: &State) -> Result<Self, V2StartupReplayError> {
+        let nexus = state.nexus_snapshot();
+        let manifests = state.lane_manifests.read().clone();
+        let compliance = state.lane_compliance_engine();
+        Self::from_configured_runtime(state, &nexus, manifests.as_ref(), compliance.as_deref())
+    }
+    /// Derive policy from configured Nexus merged with restored topology and frozen sources.
+    ///
+    /// All other execution settings and the active validator/lineage records come from State.
+    /// This constructor neither changes canonical snapshot bytes nor publishes Kura authority.
+    ///
+    /// # Errors
+    /// Returns an error when the configured projection or loaded execution policy is incomplete.
+    pub fn from_configured_runtime(
+        state: &State,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        manifests: &crate::governance::manifest::LaneManifestRegistry,
+        compliance: Option<&crate::compliance::LaneComplianceEngine>,
+    ) -> Result<Self, V2StartupReplayError> {
+        let restored = state.nexus_snapshot();
+        if nexus.lane_catalog != restored.lane_catalog || nexus.lane_config != restored.lane_config
+        {
+            return Err(snapshot_bootstrap_error(
+                "configured startup policy differs from the authenticated effective lane geometry",
+            ));
+        }
+        let execution_policy_hash = state
+            .execution_policy_digest_with_runtime_policies_v1(nexus, manifests, compliance)
+            .map(Hash::prehashed)
+            .map_err(|error| {
+                snapshot_bootstrap_error(format!(
+                    "failed to derive configured frozen execution-policy identity: {error}"
+                ))
+            })?;
+        Ok(Self {
+            nexus_amx_context_hash: nexus_amx_context_hash_with_runtime_policy(state, Some(nexus)),
+            execution_policy_hash,
+        })
+    }
+}
 /// Authenticate the first executable context after an audited snapshot import.
 ///
 /// This check must run after the audited snapshot has been authenticated and before generic Kura
@@ -513,6 +567,8 @@ fn plan_v2_startup_replay_inner(
 /// finality artifact. This function is strictly read-only: the token-consuming Kura finalizer
 /// publishes the immutable context only after it claims the provisional transition. A process may
 /// not infer this trust root from local configuration or from a self-signed post-snapshot artifact.
+///
+/// `configured_policy` comes from the exact live or configured frozen startup projection.
 ///
 /// # Errors
 ///
@@ -523,6 +579,7 @@ pub fn authenticate_v2_snapshot_replay_boundary(
     kura: &Kura,
     state: &State,
     plan: &V2StartupReplayPlan,
+    configured_policy: &V2SnapshotStartupPolicy,
 ) -> Result<(), V2StartupReplayError> {
     let state_height = state.committed_height();
     if plan.audited_bootstrap_prefix_height() == 0 {
@@ -541,10 +598,13 @@ pub fn authenticate_v2_snapshot_replay_boundary(
         )
     })?;
     if state_height > plan.audited_bootstrap_prefix_height() {
+        // This authenticates carried historical lineage, not the current AMX boundary. Current
+        // height recovery checks the effective policy against its own context after replay.
         authenticate_persisted_snapshot_boundary(kura, state, plan, record)?;
         return Ok(());
     }
-    let _verified = authenticate_snapshot_bootstrap_record(kura, state, plan, record)?;
+    let _verified =
+        authenticate_snapshot_bootstrap_record(kura, state, plan, record, configured_policy)?;
     // Compare every externally authenticated input before minting a publication capability. In
     // particular, a forged first artifact must not leave behind a context-store mutation.
     if let Some(first_full_height) = plan.first_full_body_height() {
@@ -580,6 +640,8 @@ pub fn authenticate_v2_snapshot_replay_boundary(
 /// after the exact signed State vector, retained original lineage, Kura anchor, immutable context,
 /// and any required first-full finality artifact agree.
 ///
+/// `configured_policy` comes from the exact live or configured frozen startup projection.
+///
 /// # Errors
 ///
 /// Returns an error for any snapshot lineage, hash-vector, anchor, context, or finality mismatch.
@@ -587,11 +649,12 @@ pub fn authenticate_v2_snapshot_startup(
     kura: &Kura,
     state: &State,
     plan: &V2StartupReplayPlan,
+    configured_policy: &V2SnapshotStartupPolicy,
 ) -> Result<Option<AuthenticatedV2SnapshotStartup>, V2StartupReplayError> {
     if plan.audited_bootstrap_prefix_height() == 0 {
         return Ok(None);
     }
-    authenticate_v2_snapshot_replay_boundary(kura, state, plan)?;
+    authenticate_v2_snapshot_replay_boundary(kura, state, plan, configured_policy)?;
     let payload = state
         .authenticated_snapshot_bootstrap_payload()
         .ok_or_else(|| {
@@ -622,6 +685,8 @@ pub fn authenticate_v2_snapshot_startup(
 /// bootstrap lineage. The immutable first-height context and first full finality artifact are
 /// cross-checked before its mode is returned.
 ///
+/// `configured_policy` comes from the exact live or configured frozen startup projection.
+///
 /// # Errors
 ///
 /// Returns an error when the immutable boundary record, first full artifact, Kura anchor, or live
@@ -630,8 +695,9 @@ pub fn authenticated_v2_snapshot_startup_mode(
     kura: &Kura,
     state: &State,
     plan: &V2StartupReplayPlan,
+    configured_policy: &V2SnapshotStartupPolicy,
 ) -> Result<Option<wire::ConsensusMode>, V2StartupReplayError> {
-    authenticate_v2_snapshot_startup(kura, state, plan)
+    authenticate_v2_snapshot_startup(kura, state, plan, configured_policy)
         .map(|authorization| authorization.map(|authorization| authorization.mode()))
 }
 fn authenticate_persisted_snapshot_boundary(
@@ -769,6 +835,7 @@ fn authenticate_snapshot_bootstrap_record(
     state: &State,
     plan: &V2StartupReplayPlan,
     record: &wire::SnapshotV2BootstrapRecord,
+    configured_policy: &V2SnapshotStartupPolicy,
 ) -> Result<VerifiedHeightContext, V2StartupReplayError> {
     let verified = VerifiedHeightContext::snapshot_bootstrap(record)
         .map_err(|error| snapshot_bootstrap_error(error.to_string()))?;
@@ -837,24 +904,17 @@ fn authenticate_snapshot_bootstrap_record(
             "snapshot parent timestamp plus committed block cadence is not a positive representable wire timestamp",
         ));
     }
-    let live_nexus_amx = committed_nexus_amx_context_hash(state);
+    let live_nexus_amx = configured_policy.nexus_amx_context_hash;
     if record.context.nexus_amx_context_hash != live_nexus_amx {
         return Err(snapshot_bootstrap_error(format!(
             "snapshot bootstrap Nexus/AMX hash {:?} differs from restored WSV projection {live_nexus_amx:?}",
             record.context.nexus_amx_context_hash
         )));
     }
-    let live_execution_policy = state
-        .execution_policy_digest_v1()
-        .map(Hash::prehashed)
-        .map_err(|error| {
-            snapshot_bootstrap_error(format!(
-                "failed to derive restored execution-policy identity: {error}"
-            ))
-        })?;
-    if record.context.execution_policy_hash != live_execution_policy {
+    let configured_execution_policy = configured_policy.execution_policy_hash;
+    if record.context.execution_policy_hash != configured_execution_policy {
         return Err(snapshot_bootstrap_error(format!(
-            "snapshot bootstrap execution-policy hash {:?} differs from restored local policy {live_execution_policy:?}",
+            "snapshot bootstrap execution-policy hash {:?} differs from configured frozen policy {configured_execution_policy:?}",
             record.context.execution_policy_hash
         )));
     }
@@ -1491,6 +1551,24 @@ impl RecoveredCompleteTipActivationAuthority {
                 &self.artifact.height_context,
                 &self.artifact.subject,
                 &self.artifact.commit_qc,
+            )
+    }
+    /// Rejoin an original body Validate source to this exact Kura finality.
+    /// The old source and the current Apply remain private comparison inputs;
+    /// this operation cannot mint worker or successor-activation ownership.
+    pub(in crate::sumeragi) fn authorizes_retained_body_apply_origin(
+        &self,
+        validate: &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
+        original_fetch: Option<
+            &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
+        >,
+        apply: &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
+    ) -> bool {
+        self.authorizes_terminal_apply_replay(apply)
+            && validate.authenticates_complete_tip_validate_origin(
+                &self.verified_predecessor,
+                original_fetch,
+                apply,
             )
     }
     /// Return whether height-one CompleteTip may retire an empty genesis ledger.
@@ -2194,7 +2272,12 @@ pub(crate) fn recover_active_height_with_plan(
         });
     }
     verify_state_kura_prefix(kura, state, state_height)?;
-    authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;
+    authenticate_v2_snapshot_replay_boundary(
+        kura,
+        state,
+        &replay_plan,
+        &V2SnapshotStartupPolicy::from_state(state)?,
+    )?;
     // A ledger imported entirely as an audited hash-only snapshot has no historical v2
     // CommitQC from which to derive a successor. Its authenticated snapshot envelope is the sole
     // explicit trust root for the first executable height; freeze that exact record before any
@@ -2622,6 +2705,12 @@ fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -
         )
 }
 pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
+    nexus_amx_context_hash_with_runtime_policy(state, None)
+}
+fn nexus_amx_context_hash_with_runtime_policy(
+    state: &State,
+    configured: Option<&iroha_config::parameters::actual::Nexus>,
+) -> Hash {
     let view = state.view();
     // A height context is frozen from its predecessor state, so committed
     // height `h` supplies the exact validator tenure for target height `h + 1`.
@@ -2649,7 +2738,7 @@ pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
         )
         .collect::<Vec<_>>();
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
-        &view.nexus,
+        configured.unwrap_or(&view.nexus),
         &view.pipeline,
         &eligible_validators,
         &retained_lane_lineage,
@@ -2907,7 +2996,7 @@ mod tests {
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(0_u64),
                 self_stake: iroha_primitives::numeric::Quantity::from(0_u64),
-                metadata: iroha_data_model::metadata::Metadata::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 status,
                 activation_height,
                 deactivation_height,

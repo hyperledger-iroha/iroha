@@ -1,6 +1,6 @@
 //! Deterministic roundtrip tests for Norito payload shapes.
 use norito::{
-    NoritoDeserialize,
+    DeserializePayload, NoritoDeserialize,
     core::{NoritoSerialize, decode_from_bytes, to_bytes},
     from_bytes,
 };
@@ -19,8 +19,16 @@ struct StructPayload {
     values: Vec<u8>,
 }
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.proptest_roundtrip.TestEnum")]
 enum TestEnum {
     Unit,
     Tuple(TuplePayload),
@@ -74,7 +82,7 @@ fn roundtrip_enums() {
     for value in cases {
         let bytes = to_bytes(&value).unwrap();
         let archived = from_bytes::<TestEnum>(&bytes).unwrap();
-        let decoded = <TestEnum as NoritoDeserialize>::try_deserialize(archived)
+        let decoded = <TestEnum as DeserializePayload>::try_deserialize(archived)
             .unwrap_or_else(|error| panic!("failed to decode {value:?}: {error:?}"));
         assert_eq!(value, decoded);
     }

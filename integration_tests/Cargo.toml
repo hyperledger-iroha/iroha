@@ -85,6 +85,7 @@ atomic-private-settlement-release = ["iroha/test-network-private-settlement-evid
 parliament-test-signers = ["iroha_core/test-network-parliament-signers"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }
 eyre = { workspace = true }
 iroha_test_network = { workspace = true }

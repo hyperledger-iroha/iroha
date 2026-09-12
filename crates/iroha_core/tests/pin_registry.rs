@@ -31,6 +31,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::{
     CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
+use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, json::Value, to_bytes};
 use sorafs_manifest::{

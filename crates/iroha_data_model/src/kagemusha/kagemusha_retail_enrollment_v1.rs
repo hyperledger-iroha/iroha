@@ -11,16 +11,14 @@ use super::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaAuthenticatedReleaseV1,
     KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
-    NetworkId,
-    account::AccountId,
-    asset::AssetDefinitionId,
-    name::Name,
-    nexus::{AxtAssetIncarnationV1, DataSpaceId},
+    NetworkId, account::AccountId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1,
 };
 use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
+use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -36,9 +34,22 @@ const APPROVAL_DOMAIN: &str = "iroha:kagemusha:v1:retail-enrollment-approval";
 ///
 /// These fields are not inferred from an authenticated hardware/proof release. Names are
 /// exact canonical deployment namespaces, not user aliases or presentation labels.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-runtime")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentRuntimeV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-runtime"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentRuntimeV1 {
     /// Exact financial institution identifier.
@@ -61,9 +72,22 @@ pub struct KagemushaRetailEnrollmentRuntimeV1 {
 ///
 /// Credential/key/profile, epoch, release, issuer key/policy, validity and challenge
 /// revisions are deliberately absent. Computing this identity supplies no authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-owner")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentOwnerV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-owner"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentOwnerV1 {
     /// Canonical retail wallet account.
@@ -75,9 +99,22 @@ pub struct KagemushaRetailEnrollmentOwnerV1 {
 }
 
 /// Exact issuance bindings. They are never compared with a host-supplied numerical floor.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-issuance")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuanceV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-issuance"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentIssuanceV1 {
     /// Exact authenticated hardware/proof release selected for this issuance.
@@ -91,9 +128,22 @@ pub struct KagemushaRetailEnrollmentIssuanceV1 {
 }
 
 /// Complete issuer assertion; a shape-valid subject is not a verified enrollment.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-subject")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentSubjectV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-subject"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentSubjectV1 {
     /// Sole first-release format version.
@@ -118,9 +168,22 @@ pub struct KagemushaRetailEnrollmentSubjectV1 {
 }
 
 /// Domain-separated typed payload signed by the authorized enrollment issuer.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-approval")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentApprovalV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-approval"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentApprovalV1 {
     /// Exact cross-protocol replay separator supplied by `approval_payload`.
@@ -130,9 +193,22 @@ pub struct KagemushaRetailEnrollmentApprovalV1 {
 }
 
 /// Canonical signed certificate. Decoding alone never constructs verified evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-certificate")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentCertificateV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-certificate"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentCertificateV1 {
     /// Exact signed subject.
@@ -146,9 +222,22 @@ pub struct KagemushaRetailEnrollmentCertificateV1 {
 /// Deployment/native code must authenticate this configuration independently. Loading
 /// these bytes from the certificate, a JWT, UI state or a host path does not establish trust.
 /// The hardware profile issuer and release approvers do not implicitly delegate this role.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-issuer-policy")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuerPolicyV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-issuer-policy"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentIssuerPolicyV1 {
     /// Sole first-release policy format.
@@ -477,7 +566,8 @@ impl KagemushaRetailEnrollmentCertificateV1 {
         credential
             .validate_against_profile(catalog.profile)
             .map_err(|_| KagemushaRetailEnrollmentErrorV1::InvalidCredential)?;
-        if subject.issued_at_ms < policy.valid_from_ms
+        let issued_before_policy_window = subject.issued_at_ms < policy.valid_from_ms;
+        if issued_before_policy_window
             || subject.expires_at_ms > policy.expires_at_ms
             || subject.expires_at_ms - subject.issued_at_ms > policy.maximum_certificate_lifetime_ms
             || subject.issued_at_ms < credential.issued_at_ms
@@ -493,11 +583,8 @@ impl KagemushaRetailEnrollmentCertificateV1 {
 }
 
 #[cfg(test)]
-mod tests {
-    //! Cryptographic verifier-kernel tests with explicit trusted-catalog fixtures.
-    //! These do not construct or claim to test a threshold-authenticated release, an OEM
-    //! enrollment service, a physical device, live KYC or the public release lookup wrapper.
-
+pub(super) mod test_fixture {
+    //! Shared signed issuer, hardware and account fixtures for enrollment kernels.
     use super::*;
     use crate::kagemusha::{
         KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
@@ -507,15 +594,15 @@ mod tests {
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use p256::ecdsa::{SigningKey, signature::Signer as _};
 
-    struct Fixture {
-        issuer: KeyPair,
-        profile: KagemushaHardwareProfileV1,
-        policy: KagemushaRetailEnrollmentIssuerPolicyV1,
-        certificate: KagemushaRetailEnrollmentCertificateV1,
-        selection: KagemushaRetailEnrollmentSelectionV1,
+    pub(in crate::kagemusha) struct Fixture {
+        pub(in crate::kagemusha) issuer: KeyPair,
+        pub(in crate::kagemusha) profile: KagemushaHardwareProfileV1,
+        pub(in crate::kagemusha) policy: KagemushaRetailEnrollmentIssuerPolicyV1,
+        pub(in crate::kagemusha) certificate: KagemushaRetailEnrollmentCertificateV1,
+        pub(in crate::kagemusha) selection: KagemushaRetailEnrollmentSelectionV1,
     }
 
-    fn account(seed: u8) -> AccountId {
+    pub(in crate::kagemusha) fn account(seed: u8) -> AccountId {
         AccountId::new(
             KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .public_key()
@@ -523,11 +610,11 @@ mod tests {
         )
     }
 
-    fn p256_key(seed: u8) -> SigningKey {
+    pub(in crate::kagemusha) fn p256_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes((&[seed; 32]).into()).expect("test signing key")
     }
 
-    fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
+    pub(in crate::kagemusha) fn public(key: &SigningKey) -> KagemushaDevicePublicKeyV1 {
         KagemushaDevicePublicKeyV1::from_sec1_bytes(
             key.verifying_key().to_encoded_point(false).as_bytes(),
         )
@@ -535,31 +622,12 @@ mod tests {
     }
 
     impl Fixture {
-        fn new(generation: u8) -> Self {
+        pub(in crate::kagemusha) fn new(generation: u8) -> Self {
             let issuer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
             let governance = p256_key(2);
             let device = public(&p256_key(generation + 2));
             let suite = [31; 32];
-            let profile = KagemushaHardwareProfileV1 {
-                version: 1,
-                protocol_version: 1,
-                hardware_profile_id: [0; 32],
-                provider_id: [1; 32],
-                platform_class: KagemushaHardwarePlatformClassV1::OtherQualified,
-                product_class_digest: [2; 32],
-                firmware_policy_digest: [3; 32],
-                enrollment_attestation_verifier_digest: [4; 32],
-                attestation_trust_roots_digest: [5; 32],
-                allowed_suite_commitment: kagemusha_suite_commitment_v1(suite),
-                policy_epoch: 1,
-                governance_credential_public_key: public(&governance),
-                capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-                qualification_report_digest: [8; 32],
-                valid_from_ms: 100,
-                expires_at_ms: 10_000,
-            }
-            .seal_hardware_profile_id()
-            .expect("test profile identity");
+            let profile = hardware_profile(&governance, suite);
             let runtime = KagemushaRetailEnrollmentRuntimeV1 {
                 fi_id: "mibank".parse().expect("FI name"),
                 ledger_dataspace_id: DataSpaceId::new(10),
@@ -583,35 +651,8 @@ mod tests {
                 runtime: runtime.clone(),
                 lane_id: [32; 32],
             };
-            let mut credential = KagemushaHardwareCredentialV1 {
-                version: 1,
-                credential_id: [0; 32],
-                network_id: runtime.network_id,
-                hardware_profile_id: profile.hardware_profile_id,
-                suite_id: suite,
-                firmware_policy_digest: profile.firmware_policy_digest,
-                policy_epoch: profile.policy_epoch,
-                lane_commitment: owner.lane_id,
-                hardware_epoch_id: [generation; 32],
-                hardware_epoch_generation: u64::from(generation),
-                device_public_key: device,
-                device_key_reference: kagemusha_device_key_reference_v1(&device),
-                issued_at_ms: 200,
-                expires_at_ms: 9_000,
-                governance_signature: KagemushaDeviceSignatureV1::from_raw_bytes(&[1; 64])
-                    .expect("placeholder shape"),
-            }
-            .seal_credential_id()
-            .expect("test credential ID");
-            let signature: p256::ecdsa::Signature = governance.sign(
-                &credential
-                    .canonical_signing_bytes()
-                    .expect("credential transcript"),
-            );
-            credential.governance_signature = KagemushaDeviceSignatureV1::from_raw_bytes(
-                &signature.normalize_s().unwrap_or(signature).to_bytes(),
-            )
-            .expect("test credential signature");
+            let credential =
+                signed_credential(generation, &governance, device, suite, &profile, &owner);
             let issuance = KagemushaRetailEnrollmentIssuanceV1 {
                 release_id: [40 + generation; 32],
                 hardware_policy_digest: [50 + generation; 32],
@@ -663,7 +704,83 @@ mod tests {
                 selection,
             }
         }
+    }
 
+    fn hardware_profile(governance: &SigningKey, suite: [u8; 32]) -> KagemushaHardwareProfileV1 {
+        KagemushaHardwareProfileV1 {
+            version: 1,
+            protocol_version: 1,
+            hardware_profile_id: [0; 32],
+            provider_id: [1; 32],
+            platform_class: KagemushaHardwarePlatformClassV1::OtherQualified,
+            product_class_digest: [2; 32],
+            firmware_policy_digest: [3; 32],
+            enrollment_attestation_verifier_digest: [4; 32],
+            attestation_trust_roots_digest: [5; 32],
+            allowed_suite_commitment: kagemusha_suite_commitment_v1(suite),
+            policy_epoch: 1,
+            governance_credential_public_key: public(governance),
+            capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+            qualification_report_digest: [8; 32],
+            valid_from_ms: 100,
+            expires_at_ms: 10_000,
+        }
+        .seal_hardware_profile_id()
+        .expect("test profile identity")
+    }
+
+    fn signed_credential(
+        generation: u8,
+        governance: &SigningKey,
+        device: KagemushaDevicePublicKeyV1,
+        suite: [u8; 32],
+        profile: &KagemushaHardwareProfileV1,
+        owner: &KagemushaRetailEnrollmentOwnerV1,
+    ) -> KagemushaHardwareCredentialV1 {
+        let mut credential = KagemushaHardwareCredentialV1 {
+            version: 1,
+            credential_id: [0; 32],
+            network_id: owner.runtime.network_id,
+            hardware_profile_id: profile.hardware_profile_id,
+            suite_id: suite,
+            firmware_policy_digest: profile.firmware_policy_digest,
+            policy_epoch: profile.policy_epoch,
+            lane_commitment: owner.lane_id,
+            hardware_epoch_id: [generation; 32],
+            hardware_epoch_generation: u64::from(generation),
+            device_public_key: device,
+            device_key_reference: kagemusha_device_key_reference_v1(&device),
+            issued_at_ms: 200,
+            expires_at_ms: 9_000,
+            governance_signature: KagemushaDeviceSignatureV1::from_raw_bytes(&[1; 64])
+                .expect("placeholder shape"),
+        }
+        .seal_credential_id()
+        .expect("test credential ID");
+        let signature: p256::ecdsa::Signature = governance.sign(
+            &credential
+                .canonical_signing_bytes()
+                .expect("credential transcript"),
+        );
+        credential.governance_signature = KagemushaDeviceSignatureV1::from_raw_bytes(
+            &signature.normalize_s().unwrap_or(signature).to_bytes(),
+        )
+        .expect("test credential signature");
+        credential
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Cryptographic verifier-kernel tests with explicit trusted-catalog fixtures.
+    //! These do not construct or claim to test a threshold-authenticated release, an OEM
+    //! enrollment service, a physical device, live KYC or the public release lookup wrapper.
+
+    use super::test_fixture::{Fixture, account, p256_key, public};
+    use super::*;
+    use crate::kagemusha::KagemushaDeviceSignatureV1;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
+    impl Fixture {
         fn catalog(&self) -> CatalogBinding<'_> {
             CatalogBinding {
                 release_id: self.selection.issuance.release_id,
@@ -1016,7 +1133,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn json_rejects_unknown_fields_at_every_signed_and_policy_boundary() {
         let fixture = Fixture::new(1);
@@ -1045,6 +1161,121 @@ mod tests {
         reject_unknown!(
             fixture.certificate.subject.approval_payload().unwrap(),
             KagemushaRetailEnrollmentApprovalV1
+        );
+    }
+
+    #[test]
+    fn certificate_policy_and_credential_windows_reject_independently() {
+        for bound in 0..5 {
+            let mut fixture = Fixture::new(1);
+            match bound {
+                0 => fixture.policy.valid_from_ms = 1_001,
+                1 => {
+                    fixture.policy.expires_at_ms = 2_999;
+                    fixture.policy.maximum_certificate_lifetime_ms = 2_500;
+                }
+                2 => fixture.policy.maximum_certificate_lifetime_ms = 1_999,
+                3 => fixture.certificate.subject.issued_at_ms = 199,
+                4 => {
+                    fixture.policy.expires_at_ms = 10_000;
+                    fixture.policy.maximum_certificate_lifetime_ms = 9_000;
+                    fixture.certificate.subject.expires_at_ms = 9_001;
+                }
+                _ => unreachable!(),
+            }
+            fixture.resign();
+            fixture
+                .policy
+                .validate()
+                .expect("valid policy independently of certificate bounds");
+            fixture
+                .certificate
+                .subject
+                .issuance
+                .credential
+                .validate_against_profile(&fixture.profile)
+                .expect("valid credential");
+            assert_eq!(
+                fixture.verify(1_500),
+                Err(KagemushaRetailEnrollmentErrorV1::InvalidValidity),
+                "bound {bound} must reject even with a fresh valid issuer signature"
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_nested_window_and_lifetime_boundaries_are_inclusive() {
+        let mut fixture = Fixture::new(1);
+        fixture.policy.valid_from_ms = 1_000;
+        fixture.policy.expires_at_ms = 3_000;
+        fixture.policy.maximum_certificate_lifetime_ms = 2_000;
+        assert!(fixture.verify(1_500).is_ok());
+        fixture.policy.valid_from_ms += 1;
+        fixture.policy.maximum_certificate_lifetime_ms -= 1;
+        assert_eq!(
+            fixture.verify(1_500),
+            Err(KagemushaRetailEnrollmentErrorV1::InvalidValidity)
+        );
+
+        let mut fixture = Fixture::new(1);
+        fixture.certificate.subject.issued_at_ms = 200;
+        fixture.certificate.subject.expires_at_ms = 9_000;
+        fixture.policy.maximum_certificate_lifetime_ms = 8_800;
+        fixture.resign();
+        assert!(fixture.verify(1_500).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaRetailEnrollmentRuntimeV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentRuntimeV1",
+            "iroha.kagemusha.v1.retail-enrollment-runtime",
+            "67f3af521a2b2c0e2ad110e6f0a528a0",
+        );
+        check::<super::KagemushaRetailEnrollmentOwnerV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentOwnerV1",
+            "iroha.kagemusha.v1.retail-enrollment-owner",
+            "537843eb69ef723fb31655ef7af9b7a8",
+        );
+        check::<super::KagemushaRetailEnrollmentIssuanceV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuanceV1",
+            "iroha.kagemusha.v1.retail-enrollment-issuance",
+            "bcc1a56544552e1ec3b9b4add6565ee0",
+        );
+        check::<super::KagemushaRetailEnrollmentSubjectV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentSubjectV1",
+            "iroha.kagemusha.v1.retail-enrollment-subject",
+            "74aed55fe9158b5bbb9a26dace1696ef",
+        );
+        check::<super::KagemushaRetailEnrollmentApprovalV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentApprovalV1",
+            "iroha.kagemusha.v1.retail-enrollment-approval",
+            "064206d6778777d489ed030ff7239fe2",
+        );
+        check::<super::KagemushaRetailEnrollmentCertificateV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentCertificateV1",
+            "iroha.kagemusha.v1.retail-enrollment-certificate",
+            "7205a003f9151ddd6b3701853f0188d7",
+        );
+        check::<super::KagemushaRetailEnrollmentIssuerPolicyV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuerPolicyV1",
+            "iroha.kagemusha.v1.retail-enrollment-issuer-policy",
+            "7934f8746eb0821b84dcee4bfba3e96c",
         );
     }
 }

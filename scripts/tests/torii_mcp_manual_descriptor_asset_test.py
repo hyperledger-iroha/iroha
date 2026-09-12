@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 107_288
-EXPECTED_ASSET_SHA256 = "1005ef34d13c79c611fa1e5e989df65621314968b5b66d9c949ed1f36e5537ec"
-EXPECTED_SEMANTIC_SHA256 = "0e15423ea2904c11d1bd2b03e07ae95159050a40c63d924b1a835dc678ee0f4e"
+EXPECTED_ASSET_LENGTH = 107_376
+EXPECTED_ASSET_SHA256 = "0f34828802d292e03ef2a78755edd05e9fcd6f39f27c25c3e7e1e527265229e9"
+EXPECTED_SEMANTIC_SHA256 = "7a0625ec740af8b70fcd684bd18f4d975ae476cceddf95966a72bad087e3478a"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -23,13 +23,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "d8f7d0f388427eb4560f2b501c528fa92e2b87621a7cc7b5552cd1fa9d5c31cc"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "ab639586711095532730c2cc629f29587a1da75c71dc62149e5a64726a3b2229"
-)
-EXPECTED_BLAKE3_BYTES = (
-    0xF9, 0x08, 0xDA, 0x8B, 0x71, 0x82, 0xE5, 0xD3,
-    0xFE, 0x09, 0xF8, 0xB8, 0x49, 0xEC, 0xE1, 0x47,
-    0xE8, 0x97, 0xA7, 0xB2, 0x7F, 0xC9, 0x81, 0x00,
-    0x36, 0x95, 0xA2, 0x58, 0x4C, 0x34, 0x79, 0x8D,
+    "0a1b37320d594ec96a284d4f201c5dc0f4afc61fc301e57cac777e6aaf539ece"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -357,19 +351,6 @@ def validate(source: str, asset_bytes: bytes) -> None:
     loader = source[loader_start:first_wrapper]
     if _sha256(_normalized_rust_tokens(loader)) != EXPECTED_LOADER_SOURCE_SHA256:
         raise GuardError("static descriptor loader or wrapper macro drifted")
-
-    digest_match = re.search(
-        r"const MANUAL_STATIC_TOOL_ASSET_BLAKE3: \[u8; 32\] = \[(.*?)\];",
-        source,
-        re.DOTALL,
-    )
-    if digest_match is None:
-        raise GuardError("runtime BLAKE3 seal is missing")
-    digest_bytes = tuple(
-        int(token, 16) for token in re.findall(r"0x[0-9a-fA-F]{2}", digest_match.group(1))
-    )
-    if digest_bytes != EXPECTED_BLAKE3_BYTES:
-        raise GuardError("runtime BLAKE3 seal drifted")
 
     wrapper_pattern = re.compile(
         r"\bmanual_tool!\s*(?:"

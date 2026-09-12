@@ -71,8 +71,8 @@ use super::{
         RemoteProposalFetchReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
@@ -2481,11 +2481,25 @@ pub(in crate::sumeragi) fn project_recovered_lifecycle_next_wal_vote_candidate(
 pub(in crate::sumeragi) fn project_recovered_wal_control_sign(
     verified: &super::v2::VerifiedHeightContext,
     recovered: RecoveredWalControlSign,
-) -> Result<AuthenticatedRecoveredWalControlProjection, RecoveredWalControlSign> {
+) -> Result<AuthenticatedRecoveredWalStandaloneSignProjection, RecoveredWalControlSign> {
     recovered.into_lifecycle_projection(
         RecoveredWalControlPendingMintPermit::new(),
         RecoveredWalCandidateProjectionPermit::new(),
         verified,
+    )
+}
+/// Consume a current WAL vote only with an authenticated immutable terminal result.
+#[allow(clippy::result_large_err)]
+pub(in crate::sumeragi) fn project_recovered_resolved_phase_vote(
+    verified: &super::v2::VerifiedHeightContext,
+    recovered: super::v2::RecoveredWalVoteSign,
+    terminal: std::sync::Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+) -> Result<AuthenticatedRecoveredWalStandaloneSignProjection, super::v2::RecoveredWalVoteSign> {
+    recovered.into_resolved_lifecycle_projection(
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1::new(),
+        RecoveredWalCandidateProjectionPermit::new(),
+        verified,
+        terminal,
     )
 }
 /// Consume one authenticated Decision Fetch token into its closed lifecycle projection.
@@ -2866,9 +2880,9 @@ impl PendingRuntimeEffectBinding {
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
     ///
     /// The causal key is derived from the non-decodable post-fsync frame seal
-    /// and complete effect identity. `Apply` is deliberately excluded because
-    /// its pending owner must instead project from the retained Validate
-    /// predecessor after the durable body receipt joins the WAL source.
+    /// and complete effect identity. `Apply` uses the separate Decision body
+    /// join below; its payload-bound publication selects either the linked
+    /// Validate owner or the independently retained Decision-WAL owner.
     pub(super) fn from_exact_live_wal_append(
         wal_identity: &LiveWalFrameIdentity,
         effect: &AdapterEffect,
@@ -2887,6 +2901,90 @@ impl PendingRuntimeEffectBinding {
             return None;
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+    /// Retain the canonical Decision owner for a later standalone Apply.
+    ///
+    /// Cold Decision recovery projects Fetch, Store, Validate, and Apply from
+    /// the exact Decision-Fetch WAL root. Derive that same root here from the
+    /// sealed append and frozen roster, without scheduling a synthetic Fetch
+    /// or borrowing a completed body's runtime owner. The body receipt still
+    /// has to join this source-only seal before lifecycle admission.
+    pub(super) fn from_exact_live_wal_decision_apply(
+        wal_identity: &LiveWalFrameIdentity,
+        effect: &AdapterEffect,
+        context: &wire::HeightContext,
+    ) -> Option<Self> {
+        let AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } = effect
+        else {
+            return None;
+        };
+        if !wal_identity.is_exact()
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.round.context_id != context.id()
+            || certificate.round.height != context.height
+            || certificate.proposal_round.context_id != context.id()
+            || certificate.proposal_round.height != context.height
+            || tag.height() != context.height
+            || certificate.subject != *subject
+        {
+            return None;
+        }
+        let fetch = AdapterEffect::FetchBody {
+            tag: *tag,
+            round: certificate.proposal_round,
+            subject: *subject,
+            manifest: None,
+            certified_sources: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate.clone()),
+        };
+        let fetch_pending = Self::from_exact_wal_locator(wal_identity.persisted_locator(), &fetch)?;
+        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
+        let pending = Self::from_effect_candidate(
+            *fetch_pending.causal_lifecycle_key(),
+            effect,
+            Some(&candidate),
+        );
+        pending.validate_exact(effect).then_some(pending)
+    }
+    /// Project the Apply role of an already-authenticated Decision Fetch.
+    /// The source projection keeps its independent Fetch role; this inert
+    /// binding only becomes executable inside the sealed Apply handoff.
+    pub(in crate::sumeragi) fn project_decision_fetch_apply_source(
+        &self,
+        fetch: &AdapterEffect,
+        apply: &AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } = fetch
+        else {
+            return None;
+        };
+        if !self.validate_exact(fetch)
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.proposal_round != *round
+            || certificate.subject != *subject
+            || !matches!(apply, AdapterEffect::Apply { tag: apply_tag, subject: apply_subject, certificate: apply_certificate }
+                if apply_tag == tag && apply_subject == subject && apply_certificate == certificate)
+        {
+            return None;
+        }
+        let candidate = production_adapter_effect_candidate_binding(apply, None).ok()??;
+        let pending =
+            Self::from_effect_candidate(*self.causal_lifecycle_key(), apply, Some(&candidate));
+        pending.validate_exact(apply).then_some(pending)
     }
     /// Mint the unique pending owner of one recovered Proposal/Timeout control Sign.
     ///
@@ -3674,7 +3772,9 @@ impl PendingRuntimeEffectBinding {
     ///
     /// An ordinary Validate which observed Prepare only after installation is
     /// handled by the separate move-only registered-Prepare projection below;
-    /// this inherited path never accepts that refinement implicitly.
+    /// this inherited path never accepts that refinement implicitly. The current
+    /// execution tag may be later than the unchanged certified body round.
+    /// Reporting that historical rejection cannot authorize a vote for its view.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn project_validate_report_invalid_certified_body_successor(
         &self,
@@ -3696,7 +3796,7 @@ impl PendingRuntimeEffectBinding {
             return None;
         };
         if predecessor_tag.height() != certificate.round.height
-            || predecessor_tag.view() != certificate.round.view
+            || predecessor_tag.view() < certificate.round.view
             || certificate.phase != wire::GlobalPhase::Prepare
             || certificate.round != *predecessor_round
             || certificate.proposal_round != *predecessor_round
@@ -3759,7 +3859,7 @@ impl PendingRuntimeEffectBinding {
         };
         if !registered.exactly_matches_report(successor)
             || predecessor_tag.height() != certificate.round.height
-            || predecessor_tag.view() != certificate.round.view
+            || predecessor_tag.view() < certificate.round.view
             || certificate.phase != wire::GlobalPhase::Prepare
             || certificate.round != *predecessor_round
             || certificate.proposal_round != *predecessor_round
@@ -8181,17 +8281,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     /// This is a read-only preparation. In particular it does not rotate the
     /// class cursor, increment service debt, remove a FIFO occurrence, or
     /// inspect any timer. A valid token can be consumed only against this exact
-    /// queue snapshot.
-    #[cfg(test)]
-    fn prepare_completion_capacity_relief(
-        &self,
-        blocked_completion_lifecycle_ordinal: u128,
-    ) -> Result<Option<PreparedCompletionCapacityReliefV1>, EnqueueError> {
-        self.prepare_completion_capacity_relief_at_consumer(
-            blocked_completion_lifecycle_ordinal,
-            self.consumer_authority,
-        )
-    }
+    /// queue snapshot and consumer authority.
     fn prepare_completion_capacity_relief_at_consumer(
         &self,
         blocked_completion_lifecycle_ordinal: u128,
@@ -11278,12 +11368,39 @@ impl RuntimeDriver for SumeragiV2Adapter {
         inherited: Option<&RuntimeCandidateSemanticStatement>,
     ) -> Result<Option<RuntimeEffectCandidateSemantic>, String> {
         let effective_inherited = match effect {
-            AdapterEffect::StoreBody { round, subject, .. }
-            | AdapterEffect::ValidateBody { round, subject, .. } => {
-                match self
-                    .replayed_body_authority_certificate()
+            AdapterEffect::StoreBody {
+                tag,
+                round,
+                subject,
+            }
+            | AdapterEffect::ValidateBody {
+                tag,
+                round,
+                subject,
+            } => {
+                // A current PrepareQC is durable before validation can promote
+                // it to the voting lock. Periodic Store/Validate carriers have
+                // no Fetch parent, so mint their statement from that exact QC
+                // here; otherwise they incorrectly appear to be ordinary
+                // Proposal work without its mandatory replay owner.
+                let current_prepare = self
+                    .current_prepare_authority_certificate()
                     .map_err(|error| error.to_string())?
-                {
+                    .filter(|certificate| {
+                        *tag == self.current_tag()
+                            && certificate.round.context_id == round.context_id
+                            && certificate.round.height == tag.height()
+                            && certificate.round.view == tag.view()
+                            && certificate.proposal_round == *round
+                            && certificate.subject == *subject
+                    });
+                let certificate = match current_prepare {
+                    Some(certificate) => Some(certificate),
+                    None => self
+                        .replayed_body_authority_certificate()
+                        .map_err(|error| error.to_string())?,
+                };
+                match certificate {
                     Some(certificate)
                         if *round == certificate.proposal_round
                             && *subject == certificate.subject =>
@@ -11690,7 +11807,7 @@ enum RuntimeTimeoutVoteOriginBinding {
     /// semantic protocol message.
     Mismatch {
         signer: u32,
-        semantic_origin: iroha_data_model::peer::PeerId,
+        semantic_origin: iroha_model_base::peer::PeerId,
     },
 }
 /// Immutable owner retained for one roster source in a timeout-recovery
@@ -11922,25 +12039,6 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
     fail_closed: bool,
     fail_closed_reason: Option<String>,
-}
-impl SerializedV2Runtime<SumeragiV2Adapter> {
-    /// Borrow the production adapter's exact deferred Decision-WAL Apply source.
-    pub(crate) fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision_round: wire::ConsensusRound,
-        proposal_round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        execution_commitment: wire::ExecutionCommitment,
-    ) -> bool {
-        self.driver.has_exact_pending_live_decision_apply(
-            tag,
-            decision_round,
-            proposal_round,
-            subject,
-            execution_commitment,
-        )
-    }
 }
 impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn latch_fail_closed(&mut self, reason: impl Into<String>) {
@@ -17002,6 +17100,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         marker.prepare_apply(&mut self.driver, predecessor, ownership)
     }
 
+    /// Reconsider a real terminal result under one exact current protected
+    /// occurrence, with the same serialized shell exclusion as Ready completion.
+    pub(in crate::sumeragi) fn prepare_resolved_validate_replay(
+        &mut self,
+        pending: &super::v2_lifecycle_coordinator::PendingResolvedValidateReplayV1,
+    ) -> Result<super::v2::PreparedReadyDurableValidateAdapterPublication<'_>, AdapterError> {
+        if self.fail_closed
+            || !self.clocks_armed
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::ReadyDurableValidatePublicationContractViolation);
+        }
+        pending.prepare_adapter(&mut self.driver)
+    }
+
     /// Stage one released live lifecycle validation and its exact Apply child.
     ///
     /// Stable queued ingress is inert. Live clocks must already be armed, and
@@ -18104,6 +18219,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         AdapterError,
     > {
         self.driver.replayed_decision_key()
+    }
+    /// Return the full durable current Prepare independently of the voting lock.
+    pub(crate) fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, AdapterError> {
+        self.driver.current_prepare_authority_certificate()
     }
     /// Return the complete durable Prepare/Commit authority for the retained body.
     pub(crate) fn replayed_body_authority_certificate(

@@ -15,8 +15,7 @@ use super::{
     transfer::TransferType,
 };
 
-#[path = "../../tests/support/fixture_json.rs"]
-mod fixture_json;
+use crate::fixture_json;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -50,8 +49,8 @@ where
         + PartialEq,
 {
     let identity_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), identity_hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), identity_hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), identity_hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), identity_hash);
     assert_eq!(T::frame_name(), T::nominal_name());
     let mut cases = Vec::new();
     for tag in 0..=u8::MAX {
@@ -84,11 +83,11 @@ where
         ("nominal", Value::String(T::nominal_name())),
         (
             "serialize_hash",
-            Value::String(hex(&<T as NoritoSerialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         (
             "deserialize_hash",
-            Value::String(hex(&<T as NoritoDeserialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         ("cases", Value::Array(cases)),
     ])

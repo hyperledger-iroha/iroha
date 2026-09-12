@@ -336,9 +336,9 @@ fn assigned_bits_from_base<const BITS: usize, F: PrimeField + Ord>(
     use_unknown: bool,
 ) -> Result<AssignedBits<BITS, F>, PlonkError> {
     let virtual_cell = assigned.cell.ok_or(PlonkError::Synthesis)?;
-    let cell = *physical_cells
+    let cell = physical_cells
         .assigned_advices
-        .get(&virtual_cell)
+        .resolve(&virtual_cell)
         .ok_or(PlonkError::Synthesis)?;
     Ok(AssignedBits::from_range_checked_cell(
         if use_unknown { Value::unknown() } else { value },
@@ -357,9 +357,9 @@ fn bind_digest_to_base<F: PrimeField + Ord>(
         |mut region| {
             for (actual, expected) in digest.iter().zip(expected) {
                 let virtual_cell = expected.cell.ok_or(PlonkError::Synthesis)?;
-                let expected = *physical_cells
+                let expected = physical_cells
                     .assigned_advices
-                    .get(&virtual_cell)
+                    .resolve(&virtual_cell)
                     .ok_or(PlonkError::Synthesis)?;
                 region.constrain_equal(actual.cell(), expected);
             }

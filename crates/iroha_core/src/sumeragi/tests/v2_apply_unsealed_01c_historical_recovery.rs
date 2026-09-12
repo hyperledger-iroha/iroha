@@ -146,7 +146,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                     .expect("valid grouped Native participant domain")
             })
             .collect::<Vec<_>>();
-        let participant_metadata_key: iroha_data_model::name::Name = "historical-application"
+        let participant_metadata_key: iroha_model_base::name::Name = "historical-application"
             .parse()
             .expect("valid metadata key");
         let participant_metadata_is_committed = || {

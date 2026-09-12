@@ -48,6 +48,30 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
             .unwrap_or_else(|| panic!("runner lost lifecycle startup anchor: {anchor}"));
         remainder = &remainder[offset + anchor.len()..];
     }
+    let pending = include_str!("../v2_runner/lifecycle_pending_kura.rs");
+    let anchors = [
+        "let (pending, control) = if emergency_fast {",
+        "reconcile_pending_lane_startup(",
+        "if control == PendingCanonicalRecoveryControlV1::Shutdown {",
+        "pending.into_clean_shutdown(activation)?;",
+        "return Ok(());",
+        "let reservation_reconciliation_pending = if emergency_fast {",
+        "reservation_reconciliation_pending",
+        "if queue.lane_reservation_startup_reconciliation_pending() {",
+        "return Err(V2RunnerError::Service(",
+        "false\n    };",
+        "pending.prepare_lane_recovery(",
+        "run_pending_active_height(",
+        "super::lifecycle_run_inner::run_non_pending_lifecycle_loop(",
+        "reservation_reconciliation_pending,",
+    ];
+    let mut remainder = pending;
+    for anchor in anchors {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("pending runner lost completed startup handoff: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
 }
 
 #[test]
@@ -178,12 +202,15 @@ fn authenticated_terminal_startup_idles_without_constructing_a_successor() {
     }
 }
 
-#[test]
-fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
+fn empty_lane_evidence_repair_queue() -> (Queue, TempDir) {
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Queue::from_config(
         iroha_config::parameters::actual::Queue::default(),
         events_sender,
+    );
+    assert!(
+        LaneApplicationEvidenceRepairQueueFence::capture(&queue).is_err(),
+        "an empty Queue without a startup quarantine is not a checked replay"
     );
     let journal_dir = tempfile::tempdir().expect("empty runner Queue journal directory");
     queue
@@ -206,13 +233,96 @@ fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
             .expect("capture empty runner Queue replay")
             .is_empty()
     );
+    assert!(queue.lane_reservation_startup_reconciliation_pending());
+    (queue, journal_dir)
+}
+
+fn publish_empty_lane_evidence_repair_queue_startup(queue: &Queue) {
+    let state = State::new_for_testing(
+        crate::prelude::World::default(),
+        Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    assert_eq!(
+        queue
+            .replay_plan_journal(&state)
+            .expect("publish the empty State-aware QueuePlan replay"),
+        Default::default(),
+    );
+    let snapshot = queue
+        .lane_reservation_reconciliation_snapshot()
+        .expect("capture the exact empty startup snapshot");
+    assert!(snapshot.is_empty());
+    let receipt = queue
+        .bind_lane_reservation_startup_reconciliation_receipt(&snapshot)
+        .expect("bind the installed journal replays to the exact snapshot")
+        .expect("the empty startup snapshot remains unchanged");
+    queue
+        .complete_lane_reservation_startup_reconciliation(receipt)
+        .expect("publish real Queue startup completion");
     assert!(!queue.lane_reservation_startup_reconciliation_pending());
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("capture the completed empty startup snapshot"),
+        snapshot,
+    );
+}
+
+#[test]
+fn lane_evidence_repair_fence_accepts_an_empty_quarantined_replay() {
+    let (queue, _journal_dir) = empty_lane_evidence_repair_queue();
     let fence = LaneApplicationEvidenceRepairQueueFence::capture(&queue)
-        .expect("empty unquarantined Queue replay is a valid startup cut");
+        .expect("empty quarantined Queue replay is a valid startup cut");
     fence
         .revalidate(&queue)
         .expect("unchanged empty Queue replay remains valid through evidence repair");
+    let state = State::new(
+        crate::state::World::default(),
+        Kura::blank_kura_for_testing(),
+        crate::query::store::LiveQueryStore::start_test(),
+    );
+    queue.complete_empty_startup_for_test(&state);
+    assert!(
+        fence.revalidate(&queue).is_err(),
+        "publishing the Queue gate invalidates the evidence-repair fence"
+    );
+    assert!(
+        LaneApplicationEvidenceRepairQueueFence::capture(&queue).is_err(),
+        "completed empty startup cannot reacquire startup mutation authority"
+    );
 }
+
+#[test]
+fn lane_evidence_repair_fence_rejects_an_already_published_queue() {
+    let (queue, _journal_dir) = empty_lane_evidence_repair_queue();
+    publish_empty_lane_evidence_repair_queue_startup(&queue);
+    assert!(matches!(
+        LaneApplicationEvidenceRepairQueueFence::capture(&queue),
+        Err(V2RunnerError::Service(reason))
+            if reason == "lane application evidence repair reached startup after the Queue publication gate opened"
+    ));
+}
+
+#[test]
+fn lane_evidence_repair_fence_rejects_publication_during_repair() {
+    let (queue, _journal_dir) = empty_lane_evidence_repair_queue();
+    let fence = LaneApplicationEvidenceRepairQueueFence::capture(&queue)
+        .expect("capture the closed gate before evidence repair");
+    publish_empty_lane_evidence_repair_queue_startup(&queue);
+    assert_eq!(
+        queue
+            .lane_reservation_reconciliation_snapshot()
+            .expect("publication preserves the empty owner snapshot"),
+        fence.snapshot,
+    );
+    assert!(matches!(
+        fence.revalidate(&queue),
+        Err(V2RunnerError::Service(reason))
+            if reason == "lane application evidence repair observed Queue ownership or publication-gate drift"
+    ));
+}
+
 #[test]
 fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
     let source = include_str!("../v2_lifecycle_recovery.rs");
@@ -231,7 +341,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(",
         "let initial_queue_quarantine = queue.lane_reservation_startup_reconciliation_pending();",
         "let initial_snapshot = queue",
-        "if !initial_snapshot.is_empty() && !initial_queue_quarantine",
+        "if !initial_queue_quarantine",
         "let active_routes = active_lifecycle_routes(state, context)?",
         "let network_id = context.network_id;",
         "pending_autonomous_lifecycle_terminal_outcome_inventory()",

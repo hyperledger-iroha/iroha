@@ -2,14 +2,17 @@
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
     asset::AssetDefinitionId,
-    nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
+    nexus::{FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
     query::CommittedTransaction,
     transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
 };
+use iroha_model_base::topology::DataSpaceId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Public account-bootstrap network and signing policy.
 pub mod account_capabilities;
+/// Canonical bounded signing preimage shared by request-witness signers and verifiers.
+pub mod canonical_request_witness;
 /// Canonical node configuration snapshots and operator update records.
 pub mod configuration;
 /// Shared data-availability helpers (sampling, assignment).
@@ -66,6 +69,8 @@ pub const NORITO_V1_WEBSOCKET_SUBPROTOCOL: &str = "iroha-norito-v1";
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeQuoteRequest")]
 pub struct FeeQuoteRequest {
     /// Exact canonical unsigned transaction payload to evaluate.
     pub payload: TransactionPayload,
@@ -83,6 +88,8 @@ pub struct FeeQuoteRequest {
     Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeQuoteObservation")]
 pub struct FeeQuoteObservation {
     /// Creation time of the latest committed block, in Unix milliseconds.
     pub ledger_time_ms: u64,
@@ -96,6 +103,8 @@ pub struct FeeQuoteObservation {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeQuoteComponent")]
 pub struct FeeQuoteComponent {
     /// Fee component represented by this bound.
     pub kind: FeeChargeKind,
@@ -109,6 +118,8 @@ pub struct FeeQuoteComponent {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeQuoteCapacity")]
 pub struct FeeQuoteCapacity {
     /// Asset definition governed by this capacity snapshot.
     pub asset_definition_id: AssetDefinitionId,
@@ -133,6 +144,8 @@ pub struct FeeQuoteCapacity {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeQuoteDecision")]
 pub enum FeeQuoteDecision {
     /// The payload is admissible at the observed state.
     #[norito(rename = "accepted")]
@@ -152,6 +165,8 @@ pub enum FeeQuoteDecision {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeQuoteResponse")]
 pub struct FeeQuoteResponse {
     /// Exact signature-bound intent evaluated by Core.
     pub intent: FeePaymentIntent,
@@ -333,6 +348,8 @@ impl FeeQuoteResponse {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeSponsorProgramByIdRequest")]
 pub struct FeeSponsorProgramByIdRequest {
     /// Canonical `sponsor/program` literal.
     pub program_id: String,
@@ -529,6 +546,8 @@ pub mod uri {
 /// Queue pressure snapshot returned with transaction queue rejections.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::QueueErrorSnapshot")]
 pub struct QueueErrorSnapshot {
     /// Queue state label (`healthy` or `saturated`).
     pub state: String,
@@ -544,6 +563,8 @@ pub struct QueueErrorSnapshot {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::AxtErrorDetails")]
 pub struct AxtErrorDetails {
     /// Stable AXT rejection code.
     #[norito(default)]
@@ -579,6 +600,8 @@ pub struct AxtErrorDetails {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::FeeErrorDetails")]
 pub struct FeeErrorDetails {
     /// Stable snake-case [`iroha_data_model::nexus::FeeRejectionCode`] label.
     pub code: String,
@@ -622,6 +645,8 @@ pub struct FeeErrorDetails {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, Default,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::ErrorDetails")]
 pub struct ErrorDetails {
     /// Public surface layer that produced the error (for example `cli`, `torii`, or `mcp`).
     #[norito(default)]
@@ -763,6 +788,8 @@ pub fn network_profile_names() -> String {
 /// Canonical Torii error envelope returned for HTTP API failures.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::ErrorEnvelope")]
 pub struct ErrorEnvelope {
     /// Stable error code string.
     pub code: String,
@@ -806,7 +833,16 @@ impl ErrorEnvelope {
 /// fails the request with HTTP 422 when the proof registry contains more distinct backends.
 pub const PROOF_RETENTION_STATUS_MAX_BACKENDS: usize = 256;
 /// Per-backend proof retention snapshot.
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+#[derive(
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii_shared::ProofRetentionBackendStatus")]
 pub struct ProofRetentionBackendStatus {
     /// Backend identifier (e.g., `halo2/ipa`).
     pub backend: String,
@@ -820,7 +856,16 @@ pub struct ProofRetentionBackendStatus {
     pub newest_height: Option<u64>,
 }
 /// Proof retention configuration and live counters.
-#[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
+#[derive(
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii_shared::ProofRetentionStatus")]
 pub struct ProofRetentionStatus {
     /// Configured per-backend cap (0 = unlimited).
     pub cap_per_backend: usize,
@@ -840,6 +885,8 @@ pub struct ProofRetentionStatus {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::PipelineTransactionStatusResponse")]
 pub struct PipelineTransactionStatusResponse {
     /// Canonical signed transaction hash (64 lowercase hex digits with the Iroha marker set).
     pub hash: String,
@@ -852,8 +899,17 @@ pub struct PipelineTransactionStatusResponse {
 }
 /// Compact trigger completion included in authenticated detail and historical evidence.
 #[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii_shared::TriggerCompletionSummary")]
 pub struct TriggerCompletionSummary {
     /// Trigger identifier.
     pub trigger_id: String,
@@ -870,8 +926,17 @@ pub struct TriggerCompletionSummary {
 }
 /// Historical trigger completion record returned by `/v1/triggers/completed`.
 #[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii_shared::TriggerCompletionRecord")]
 pub struct TriggerCompletionRecord {
     /// Block height containing this trigger completion.
     pub block_height: u64,
@@ -887,8 +952,17 @@ pub struct TriggerCompletionRecord {
 }
 /// Historical trigger completion query response.
 #[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii_shared::TriggerCompletionListResponse")]
 pub struct TriggerCompletionListResponse {
     /// Latest committed block height observed by the serving node.
     pub latest_height: u64,
@@ -908,6 +982,8 @@ pub struct TriggerCompletionListResponse {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::PipelineTransactionStatus")]
 pub struct PipelineTransactionStatus {
     /// Stable pipeline status kind (`Queued`, `Approved`, `Committed`, `Applied`, `Rejected`, `Expired`).
     pub kind: String,
@@ -921,8 +997,17 @@ pub struct PipelineTransactionStatus {
 /// This payload is never returned by the public pipeline-status endpoint. It is available only
 /// after canonical signed-query admission and an involved-account or operator authorization check.
 #[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii_shared::PipelineTransactionDetailsResponse")]
 pub struct PipelineTransactionDetailsResponse {
     /// Canonical signed transaction hash requested by the caller.
     pub hash: String,
@@ -950,8 +1035,17 @@ impl PipelineTransactionStatusResponse {
 }
 /// Canonical account-read payload returned by `GET /v1/accounts/{account_id}`.
 #[derive(
-    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_torii_shared::AccountReadResponse")]
 pub struct AccountReadResponse {
     /// Canonical account identifier (domainless I105 literal).
     pub account_id: AccountId,
@@ -976,6 +1070,8 @@ pub const ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES: usize = 4 * 1024;
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::AccountOnboardingCurrentStateRequestV1")]
 pub struct AccountOnboardingCurrentStateRequestV1 {
     /// Request layout version. The only accepted value is `1`.
     pub version: u8,
@@ -1037,6 +1133,8 @@ impl AccountOnboardingCurrentStateRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::AccountOnboardingCurrentStateResponseV1")]
 pub struct AccountOnboardingCurrentStateResponseV1 {
     /// Response layout version. The only accepted value is `1`.
     pub version: u8,
@@ -1129,14 +1227,15 @@ mod tests {
         alias_setup::AccountAliasName,
         asset::AssetDefinitionId,
         block::BlockHeader,
-        domain::DomainId,
-        name::Name,
-        nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
+        nexus::{FeeDebitSource, FeeSponsorProgramId},
         prelude::Quantity,
         transaction::{
             FeeChargeKind, FeeChargeLimit, FeePaymentIntent, TransactionBuilder, TransactionPayload,
         },
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU64;
 
     fn checked_test_keypair(seed: u8) -> KeyPair {
@@ -2176,3 +2275,82 @@ pub mod connect;
 pub mod connect_retry;
 /// Helper SDK for sealing/opening Connect frames and key derivation.
 pub mod connect_sdk;
+
+#[cfg(test)]
+mod captured_identity_tests;
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::AccountOnboardingCurrentStateRequestV1,
+        >("iroha_torii_shared::AccountOnboardingCurrentStateRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::AccountOnboardingCurrentStateResponseV1,
+        >("iroha_torii_shared::AccountOnboardingCurrentStateResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<super::AccountReadResponse>(
+            "iroha_torii_shared::AccountReadResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::AxtErrorDetails>(
+            "iroha_torii_shared::AxtErrorDetails",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ErrorDetails>(
+            "iroha_torii_shared::ErrorDetails",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ErrorEnvelope>(
+            "iroha_torii_shared::ErrorEnvelope",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeErrorDetails>(
+            "iroha_torii_shared::FeeErrorDetails",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeQuoteCapacity>(
+            "iroha_torii_shared::FeeQuoteCapacity",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeQuoteComponent>(
+            "iroha_torii_shared::FeeQuoteComponent",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeQuoteDecision>(
+            "iroha_torii_shared::FeeQuoteDecision",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeQuoteObservation>(
+            "iroha_torii_shared::FeeQuoteObservation",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeQuoteRequest>(
+            "iroha_torii_shared::FeeQuoteRequest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeQuoteResponse>(
+            "iroha_torii_shared::FeeQuoteResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::FeeSponsorProgramByIdRequest>(
+            "iroha_torii_shared::FeeSponsorProgramByIdRequest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PipelineTransactionDetailsResponse,
+        >("iroha_torii_shared::PipelineTransactionDetailsResponse");
+        crate::captured_identity_tests::assert_bidirectional::<super::PipelineTransactionStatus>(
+            "iroha_torii_shared::PipelineTransactionStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PipelineTransactionStatusResponse,
+        >("iroha_torii_shared::PipelineTransactionStatusResponse");
+        crate::captured_identity_tests::assert_bidirectional::<super::ProofRetentionBackendStatus>(
+            "iroha_torii_shared::ProofRetentionBackendStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ProofRetentionStatus>(
+            "iroha_torii_shared::ProofRetentionStatus",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::QueueErrorSnapshot>(
+            "iroha_torii_shared::QueueErrorSnapshot",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TriggerCompletionListResponse>(
+            "iroha_torii_shared::TriggerCompletionListResponse",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TriggerCompletionRecord>(
+            "iroha_torii_shared::TriggerCompletionRecord",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TriggerCompletionSummary>(
+            "iroha_torii_shared::TriggerCompletionSummary",
+        );
+    }
+}

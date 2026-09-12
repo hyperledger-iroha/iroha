@@ -6,6 +6,10 @@
 //! is a universal-domain control, NOT private-to-universal transition evidence.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -59,8 +63,8 @@ use iroha_data_model::{
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneLifecycleParameterV1,
-        LaneLifecyclePlan, LaneLifecycleStatusV1, LaneVisibility,
+        LaneCatalog, LaneConfig as ModelLaneConfig, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        LaneLifecycleStatusV1, LaneVisibility,
     },
     parameter::{Parameters, system::SumeragiNposParameters},
     prelude::*,
@@ -69,6 +73,7 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::peer::CanManagePeers;
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, ReleasePrebuiltBinary, genesis_factory_with_post_topology,
@@ -193,8 +198,7 @@ async fn read<T: Send + 'static>(
 }
 
 async fn height(client: &Client) -> Result<u64> {
-    let client = client.clone();
-    read(move || Ok(client.client().get_status()?.blocks)).await
+    Ok(client.client().status().get().await?.blocks)
 }
 
 async fn lane_lifecycle_status(client: &Client) -> Result<LaneLifecycleStatusV1> {
@@ -234,7 +238,7 @@ async fn observe_catalog_expansion(
     // prove this deliberately lane-free catalog addition.
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("v1/sns/names/account-alias/catalog-probe@mibank.bpng")?;
     let mut response = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -1854,6 +1858,7 @@ fn inspect_stopped_peer(
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lanes, &catalog)?;

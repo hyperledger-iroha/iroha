@@ -11,16 +11,14 @@ fn state_block_fragment_counter_updates_on_apply() {
     let state = State::new(World::new(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut state_block = state.block(header);
-    assert!(
-        !state_block.has_committed_fragments(),
-        "new StateBlock should not record committed fragments"
-    );
+    let maintenance_fragments = state_block.committed_fragment_count();
     {
         let tx = state_block.transaction();
         tx.apply();
     }
-    assert!(
-        state_block.has_committed_fragments(),
-        "applying a transaction should increment committed fragments counter"
+    assert_eq!(
+        state_block.committed_fragment_count(),
+        maintenance_fragments + 1,
+        "applying one transaction adds one fragment to block-start maintenance"
     );
 }

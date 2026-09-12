@@ -212,8 +212,46 @@ fn expansion_declares_only_the_child_identity_and_preserves_builder_fields() {
             "Decode",
             "Encode",
             "IntoSchema",
-            "norito :: NoritoSchema"
+            "norito :: NoritoSchema",
+            "norito :: derive :: JsonSerialize",
+            "norito :: derive :: FastJson"
         ]
+    );
+    assert!(
+        builder.attrs.iter().all(|attribute| {
+            !attribute.path().is_ident("cfg") && !attribute.path().is_ident("cfg_attr")
+        }),
+        "builder JSON derives and helpers must be unconditional"
+    );
+    let tags = builder
+        .fields
+        .iter()
+        .find(|field| field.ident.as_ref().is_some_and(|ident| ident == "tags"))
+        .expect("defaulted tags field");
+    assert!(tags.attrs.iter().any(|attribute| {
+        attribute.path().is_ident("norito")
+            && attribute
+                .parse_args::<Path>()
+                .is_ok_and(|path| path.is_ident("default"))
+    }));
+    let json_impl = expanded
+        .items
+        .iter()
+        .find_map(|item| {
+            let Item::Impl(item) = item else {
+                return None;
+            };
+            item.trait_.as_ref().and_then(|(_, path, _)| {
+                path.segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "JsonDeserialize")
+                    .then_some(item)
+            })
+        })
+        .expect("JSON decoder implementation");
+    assert!(
+        json_impl.attrs.is_empty(),
+        "JSON decoding must be unconditional"
     );
     let tokens = expanded.to_token_stream().to_string();
     assert!(!tokens.contains("captured::Parent"));

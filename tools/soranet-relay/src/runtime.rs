@@ -91,25 +91,23 @@ use crate::{
     vpn::{VpnBillingError, VpnFrameIoError, VpnOverlay, VpnSessionHandle, VpnSettlementArtifact},
     vpn_adapter::{VpnAdapter, VpnBridge},
 };
-use iroha_data_model::{
-    metadata::Metadata,
-    prelude::Name,
-    soranet::{
-        RelayId,
-        incentives::{RelayBandwidthProofV1, RelayComplianceStatusV1, RelayEpochMetricsV1},
-        privacy_metrics::{
-            SoranetPowFailureReasonV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
-            SoranetPrivacyThrottleScopeV1,
-        },
-        vpn::{
-            VPN_CELL_LEN, VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1,
-            VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellV1, VpnFlowLabelV1,
-            VpnHelperTicketError, VpnHelperTicketV1, VpnSignedSessionReceiptV1, VpnTariffV1,
-            VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
-            vpn_tariff_meter_hash_v1,
-        },
+use iroha_data_model::soranet::{
+    RelayId,
+    incentives::{RelayBandwidthProofV1, RelayComplianceStatusV1, RelayEpochMetricsV1},
+    privacy_metrics::{
+        SoranetPowFailureReasonV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
+        SoranetPrivacyThrottleScopeV1,
+    },
+    vpn::{
+        VPN_CELL_LEN, VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1,
+        VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellV1, VpnFlowLabelV1,
+        VpnHelperTicketError, VpnHelperTicketV1, VpnSignedSessionReceiptV1, VpnTariffV1,
+        VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
+        vpn_tariff_meter_hash_v1,
     },
 };
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     DecodeLimits,

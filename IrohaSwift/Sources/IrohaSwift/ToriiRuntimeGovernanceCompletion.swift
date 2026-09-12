@@ -244,9 +244,10 @@ extension ToriiClient {
     @discardableResult
     public func callContract(
         _ requestBody: ToriiContractCallRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth? = nil,
         completion: @escaping (Result<ToriiContractCallResponse, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.callContract(requestBody) }
+        runTask(completion) { try await self.callContract(requestBody, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
@@ -271,8 +272,9 @@ extension ToriiClient {
     @discardableResult
     public func prepareDetachedContractCall(
         _ requestBody: ToriiContractCallRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth? = nil,
         completion: @escaping (Result<ToriiContractCallDraft, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.prepareDetachedContractCall(requestBody) }
+        runTask(completion) { try await self.prepareDetachedContractCall(requestBody, canonicalAuth: canonicalAuth) }
     }
 }

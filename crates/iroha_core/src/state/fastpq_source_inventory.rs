@@ -10,7 +10,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 
-use super::{BTreeMap, DataSpaceId, Hash, StateBlock};
+use super::{BTreeMap, Hash, StateBlock};
 use crate::{
     fastpq::{
         FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
@@ -18,11 +18,18 @@ use crate::{
     },
     queue::RoutingDecision,
 };
+use iroha_model_base::topology::DataSpaceId;
 
 mod content_verification;
-pub(crate) mod owned_d7_capture;
+// Qualification support until authenticated policy and mandatory-work accounting own D7 capture.
+#[cfg(test)]
+mod owned_d7_capture;
 mod public_seal;
+mod statement_reservation;
 use public_seal::{SourceTranscriptSeal, seal_public_transcripts};
+pub use statement_reservation::{
+    FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1, FastpqSourceStatementUsageV1,
+};
 
 /// Complete local source projection captured by a validator's block execution.
 ///

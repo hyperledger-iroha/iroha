@@ -31,8 +31,8 @@ use iroha_data_model::{
         PopRegistryStatusV1, PopRevocationPublicationRecordV1, PopRevocationRecordV1,
         pop_registry_payload_digest_v1, pop_revocation_nonce_commitment_v1,
     },
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_canonical_with_limits};
 use sorafs_manifest::pop_credentials::{
@@ -83,7 +83,10 @@ const REVOCATION_LIMITS: DecodeLimits = DecodeLimits::new(
     POP_REVOCATION_LIST_PAYLOAD_MAX_BYTES_V1 * 2,
     32,
 );
-#[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs_pop_registry::NonceBindingStateV1")]
 struct NonceBindingStateV1 {
     credential_commitment: [u8; 32],
     revocation_nonce_commitment: [u8; 32],
@@ -2342,6 +2345,7 @@ impl ValidSingularQuery for FindSorafsPopRegistryStatus {
 }
 #[cfg(test)]
 mod tests {
+    include!("sorafs_pop_registry/schema_identity_tests.rs");
     use super::*;
     include!("sorafs/pop_permission_token_tests.rs");
     use crate::{
@@ -3019,5 +3023,61 @@ mod tests {
                 .is_err()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod nonce_frame_identity_tests {
+    use super::*;
+
+    #[test]
+    fn nonce_binding_frame_preserves_both_commitments_and_rejects_substitution() {
+        let binding = NonceBindingStateV1 {
+            credential_commitment: [0x31; 32],
+            revocation_nonce_commitment: [0x42; 32],
+        };
+        assert_eq!(
+            <NonceBindingStateV1 as norito::NoritoSchema>::nominal_name(),
+            "iroha_core::smartcontracts::isi::sorafs_pop_registry::NonceBindingStateV1"
+        );
+        assert_eq!(
+            <NonceBindingStateV1 as norito::NoritoSchema>::frame_name(),
+            "iroha_core::smartcontracts::isi::sorafs_pop_registry::NonceBindingStateV1"
+        );
+        let bytes = encode_state(&binding, "nonce binding").expect("production state writer");
+        assert_eq!(
+            bytes[6..22],
+            norito::schema::identity::frame_hash::<NonceBindingStateV1>()
+        );
+        let read = |bytes: &[u8]| {
+            decode_exact::<NonceBindingStateV1>(
+                bytes,
+                STATE_LIMITS,
+                STATE_MAX_BYTES,
+                "nonce binding",
+                true,
+            )
+        };
+        let decoded = read(&bytes).expect("production bounded state decoder");
+        assert_eq!(decoded.credential_commitment, binding.credential_commitment);
+        assert_eq!(
+            decoded.revocation_nonce_commitment,
+            binding.revocation_nonce_commitment
+        );
+        assert_eq!(
+            encode_state(&decoded, "nonce binding").expect("re-encode"),
+            bytes
+        );
+        let mut wrong_owner = bytes.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<NonceBindingStateV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(read(&wrong_owner).is_err());
+        assert!(read(&bytes[..bytes.len() - 1]).is_err());
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(read(&trailing).is_err());
     }
 }

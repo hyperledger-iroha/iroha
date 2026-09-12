@@ -1,6 +1,6 @@
 //! Transaction lifetime and ingress-metadata tests.
 use super::*;
-use crate::domain::DomainId;
+use iroha_model_base::domain::DomainId;
 fn checked_random_keypair() -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random().expect("test fixture random key generation should succeed")
 }
@@ -63,15 +63,16 @@ fn signing_workflows_reject_payloads_without_ttl() {
 fn ingress_metadata_accessors_read_numeric_values() {
     let network_id = test_network_id(0x2B);
     let keypair = checked_random_keypair();
-    let _domain: crate::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _domain: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::new(keypair.public_key().clone());
     let mut metadata = Metadata::default();
     metadata.insert(
-        crate::name::Name::from_str("expires_at_height").unwrap(),
+        iroha_model_base::name::Name::from_str("expires_at_height").unwrap(),
         iroha_primitives::json::Json::from(10_u64),
     );
     metadata.insert(
-        crate::name::Name::from_str("tx_sequence").unwrap(),
+        iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
         iroha_primitives::json::Json::from(3_u64),
     );
     let tx = TransactionBuilder::new(
@@ -88,11 +89,12 @@ fn ingress_metadata_accessors_read_numeric_values() {
 fn ingress_metadata_accessors_propagate_decode_error() {
     let network_id = test_network_id(0x2C);
     let keypair = checked_random_keypair();
-    let _domain: crate::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+    let _domain: iroha_model_base::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::new(keypair.public_key().clone());
     let mut metadata = Metadata::default();
     metadata.insert(
-        crate::name::Name::from_str("expires_at_height").unwrap(),
+        iroha_model_base::name::Name::from_str("expires_at_height").unwrap(),
         iroha_primitives::json::Json::new("not-a-number"),
     );
     let tx = TransactionBuilder::new(

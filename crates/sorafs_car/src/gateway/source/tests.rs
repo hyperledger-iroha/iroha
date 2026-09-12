@@ -171,7 +171,7 @@ fn context(
         .as_secs();
     let token = StreamTokenV1::sign(
         StreamTokenBodyV1 {
-            token_id: "source-test".into(),
+            token_id: "0123456789abcdef0123456789abcdef".into(),
             manifest_cid: manifest.root_cid.clone(),
             provider_id: [0x12; 32],
             profile_handle: "sorafs.sf1@1.0.0".into(),
@@ -217,7 +217,7 @@ fn context(
             provider_id_hex: hex::encode([0x12; 32]),
             gateway_public_key_hex: hex::encode(key.verifying_key().to_bytes()),
             base_url: "https://provider.example/".into(),
-            stream_token_b64: STANDARD.encode(norito::to_bytes(&token).unwrap()),
+            stream_token_b64: STANDARD.encode(norito::encode_canonical(&token).unwrap()),
             privacy_events_url: None,
         }],
         engine,

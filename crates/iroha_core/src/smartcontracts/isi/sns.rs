@@ -698,13 +698,12 @@ mod tests {
         },
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
-        domain::{Domain, DomainId},
+        domain::Domain,
         isi::{
             Mint, Register,
             alias_setup::{EnsureAlias, RenewAliasLease},
         },
-        metadata::Metadata,
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        nexus::{DataSpaceCatalog, DataSpaceMetadata},
         permission::Permission,
         query::sns::prelude::FindDataspaceNameOwnerById,
         sns::{NameControllerV1, NameRecordV1},
@@ -712,6 +711,9 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias,
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::numeric::Quantity;
     use mv::storage::StorageReadOnly;
     use std::num::NonZeroU64;
@@ -874,9 +876,10 @@ mod tests {
             AliasLeaseAcquisitionV1::new(1, None),
             AliasQuoteGuardV1 {
                 expected_policy_version: 0,
-                expected_payment_asset: "61CtjvNd9T3THAR65GsMVHr82Bjc"
-                    .parse()
-                    .expect("syntactic payment asset"),
+                expected_payment_asset:
+                    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                        .parse()
+                        .expect("syntactic payment asset"),
                 max_amount: Quantity::zero(),
                 valid_until_ms: 0,
             },
@@ -1023,9 +1026,10 @@ mod tests {
                 .public_key()
                 .clone(),
         );
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&collector);
@@ -1168,9 +1172,10 @@ mod tests {
     #[test]
     fn consensus_auto_renew_validation_rejects_window_as_long_as_term() {
         let mut policy = iroha_data_model::sns::fixtures::default_policy();
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         policy.payment_asset_id = payment_asset.to_string();
         for tier in &mut policy.pricing {
             tier.base_price.asset_id = payment_asset.to_string();
@@ -1218,9 +1223,10 @@ mod tests {
     ) -> AliasAutoRenewFixture {
         let owner = owner();
         let collector = another_owner();
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&collector);
@@ -1491,7 +1497,7 @@ mod tests {
             let fixture = alias_auto_renew_fixture(Quantity::from(2_u32), 3);
             update_domain_policy(&fixture.state, |policy| {
                 if asset_drift {
-                    let other_asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                    let other_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
                         .parse()
                         .expect("other asset definition id");
                     policy.payment_asset_id = other_asset.to_string();
@@ -1586,9 +1592,10 @@ mod tests {
             AliasLeaseAcquisitionV1::new(1, None),
             AliasQuoteGuardV1 {
                 expected_policy_version: 0,
-                expected_payment_asset: "61CtjvNd9T3THAR65GsMVHr82Bjc"
-                    .parse()
-                    .expect("payment asset definition id"),
+                expected_payment_asset:
+                    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                        .parse()
+                        .expect("payment asset definition id"),
                 max_amount: Quantity::zero(),
                 valid_until_ms: 0,
             },
@@ -1615,9 +1622,10 @@ mod tests {
     fn ensure_alias_rejects_absent_endorsement_required_domain_before_charge() {
         let collector = owner();
         let authority = another_owner();
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&collector);
@@ -1711,10 +1719,11 @@ mod tests {
     fn ensure_alias_create_rejects_every_stale_quote_guard_before_charge() {
         let collector = owner();
         let authority = another_owner();
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
-        let other_asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
+        let other_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("different payment asset definition id");
         let genesis_domain =
@@ -1830,9 +1839,10 @@ mod tests {
                 .expect("fixture seed must derive a valid keypair");
             AccountId::new(keypair.public_key().clone())
         };
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&collector);
@@ -2078,9 +2088,10 @@ mod tests {
                 .expect("fixture seed must derive a valid keypair");
             AccountId::new(keypair.public_key().clone())
         };
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&collector);
@@ -2386,7 +2397,7 @@ mod tests {
             crate::sns::record_storage_key(&selector),
             norito::codec::Encode::encode(&record),
         );
-        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+        state.append_committed_block_header_for_tests(BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero height"),
             None,
             None,
@@ -2407,9 +2418,10 @@ mod tests {
     #[test]
     fn ensure_and_renew_account_alias_lease_round_trip() {
         let authority = owner();
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
@@ -2507,9 +2519,10 @@ mod tests {
     fn renew_alias_lease_rejects_stale_expiry_cas_before_charge() {
         let collector = owner();
         let authority = another_owner();
-        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&collector);
@@ -2619,9 +2632,10 @@ mod tests {
     fn register_account_and_ensure_alias_in_one_transaction() {
         let authority = owner();
         let retail_account = another_owner();
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
@@ -2718,9 +2732,10 @@ mod tests {
     fn register_account_and_ensure_fi_alias_in_one_transaction() {
         let authority = owner();
         let retail_account = another_owner();
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
@@ -3039,7 +3054,7 @@ mod tests {
     #[test]
     fn ensure_alias_rejects_stale_policy_without_mutating_it() {
         let authority = owner();
-        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
             .parse()
             .expect("deployment payment asset definition id");
         let genesis_domain =
@@ -3103,7 +3118,8 @@ mod tests {
             .expect("valid policy state")
             .expect("policy");
         assert_eq!(
-            policy.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            policy.payment_asset_id,
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
             "rejected mutation must not silently converge policy state"
         );
         assert!(
@@ -3220,9 +3236,10 @@ mod tests {
     fn ensure_alias_never_debits_a_client_selected_resource_owner() {
         let authority = owner();
         let resource_owner = another_owner();
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&authority);
@@ -3320,9 +3337,10 @@ mod tests {
     fn renew_account_alias_lease_rejects_non_owner_without_permission() {
         let owner = owner();
         let authority = another_owner();
-        let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
-            .parse()
-            .expect("payment asset definition id");
+        let payment_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("payment asset definition id");
         let genesis_domain =
             Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
                 .build(&owner);

@@ -23,8 +23,28 @@ impl ReplayEventTagV1 {
 #[derive(PartialEq, Eq)]
 #[must_use = "a live WAL replay seal must remain joined to its persisted continuation"]
 struct LiveWalPersistedReplaySealV1 {
-    wal_identity: LiveWalFrameIdentity,
+    wal_identity: PersistedWalExecutionOriginV1,
     state: LiveWalPersistedReplayStateV1,
+}
+/// Closed provenance of a persisted continuation. Recovered authority is only
+/// minted by the authenticated Decision projection's one-shot Apply handoff.
+#[derive(PartialEq, Eq)]
+enum PersistedWalExecutionOriginV1 {
+    LiveAppend(LiveWalFrameIdentity),
+    RecoveredDecision(RecoveredWalFrameIdentity),
+}
+impl PersistedWalExecutionOriginV1 {
+    fn project(&self, effect: &AdapterEffect) -> Option<LiveWalReplayProjectionV1> {
+        match self {
+            Self::LiveAppend(identity) => exact_live_wal_replay_projection(identity, effect),
+            Self::RecoveredDecision(identity)
+                if identity.is_exact() && matches!(effect, AdapterEffect::Apply { .. }) =>
+            {
+                exact_persisted_wal_replay_projection(identity.persisted_locator(), effect)
+            }
+            Self::RecoveredDecision(_) => None,
+        }
+    }
 }
 #[derive(PartialEq, Eq)]
 enum LiveWalPersistedReplayStateV1 {
@@ -53,8 +73,12 @@ pub(in crate::sumeragi) struct SealedLiveWalPersistedEffectV1 {
 enum LiveWalPersistedPendingV1 {
     PayloadFree(PendingRuntimeEffectBinding),
     ValidateSignBound(PendingRuntimeEffectBinding),
-    ApplyPending,
+    ApplyPending(PendingRuntimeEffectBinding),
     ApplyBound(PendingRuntimeEffectBinding),
+}
+enum LiveValidateApplyOwnershipV1 {
+    LinkedValidate,
+    StandaloneDecisionWal,
 }
 impl SealedLiveWalPersistedEffectV1 {
     /// Consume the adapter's one record-checked live continuation cause.
@@ -74,10 +98,11 @@ impl SealedLiveWalPersistedEffectV1 {
             ExactLiveWalPersistedContinuationCause::Apply {
                 wal_identity,
                 effect,
+                pending,
             } => (
                 wal_identity,
                 effect,
-                LiveWalPersistedPendingV1::ApplyPending,
+                LiveWalPersistedPendingV1::ApplyPending(pending),
             ),
         };
         let replay =
@@ -89,8 +114,40 @@ impl SealedLiveWalPersistedEffectV1 {
         };
         sealed.exactly_matches_effect().then_some(sealed)
     }
+    /// Receive the one-shot Apply role of an authenticated recovered Decision.
+    /// The minting projection checked the complete WAL/QC/roster and pending
+    /// binding before consuming its private permit; no live append is claimed.
+    pub(super) fn from_authenticated_recovered_decision(
+        _permit: super::wal_recovery::RecoveredDecisionApplySourceMintPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Option<Self> {
+        let origin = PersistedWalExecutionOriginV1::RecoveredDecision(wal_identity);
+        let LiveWalReplayProjectionV1 {
+            context,
+            stage,
+            source,
+        } = origin.project(&effect)?;
+        if stage != LifecycleStageKind::ApplyDecision
+            || !canonical_wal_source(&source)
+            || !pending.exactly_binds_adapter_effect(&effect)
+        {
+            return None;
+        }
+        let sealed = Self {
+            effect,
+            replay: LiveWalPersistedReplaySealV1 {
+                wal_identity: origin,
+                state: LiveWalPersistedReplayStateV1::ApplyPending { context, source },
+            },
+            pending: LiveWalPersistedPendingV1::ApplyPending(pending),
+        };
+        sealed.exactly_matches_effect().then_some(sealed)
+    }
     /// Compare one still-source-only live Decision WAL seal without exposing
     /// or consuming its affine replay authority.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn exactly_binds_pending_apply_decision(
         &self,
         tag: EventTag,
@@ -99,7 +156,7 @@ impl SealedLiveWalPersistedEffectV1 {
         subject: wire::BlockSubject,
         execution_commitment: wire::ExecutionCommitment,
     ) -> bool {
-        matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending)
+        matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending(_))
             && matches!(
                 &self.effect,
                 AdapterEffect::Apply {
@@ -144,6 +201,36 @@ impl SealedLiveWalPersistedEffectV1 {
             return Err((self, pending));
         }
         let Self { effect, replay, .. } = self;
+        Ok(Self {
+            effect,
+            replay,
+            pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
+        })
+    }
+    /// Retain the actual frame-derived owner for a resolved-result standalone
+    /// vote. This moves the already-sealed pending value; it never reconstructs
+    /// an owner from decoded authority or copies an executable binding.
+    pub(in crate::sumeragi) fn retain_exact_wal_vote_pending(self) -> Result<Self, Self> {
+        if !self.exactly_matches_effect()
+            || !matches!(
+                &self.effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Vote(_),
+                    ..
+                }
+            )
+            || !matches!(&self.pending, LiveWalPersistedPendingV1::PayloadFree(_))
+        {
+            return Err(self);
+        }
+        let Self {
+            effect,
+            replay,
+            pending,
+        } = self;
+        let LiveWalPersistedPendingV1::PayloadFree(pending) = pending else {
+            unreachable!("shape checked")
+        };
         Ok(Self {
             effect,
             replay,
@@ -475,7 +562,44 @@ impl SealedLiveWalPersistedEffectV1 {
         child_pending: PendingRuntimeEffectBinding,
         receipt: &DurableBodyReceipt,
     ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
-        if !matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending)
+        self.complete_apply_with_owner(
+            predecessor_effect,
+            predecessor_pending,
+            child_pending,
+            receipt,
+            LiveValidateApplyOwnershipV1::LinkedValidate,
+        )
+    }
+    /// Complete a standalone Apply using the actual Decision-WAL owner.
+    /// The exact current Validate relation and body receipt remain mandatory;
+    /// the historical terminal proof is joined independently at publication.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn complete_exact_released_apply(
+        self,
+        predecessor_effect: &AdapterEffect,
+        predecessor_pending: &PendingRuntimeEffectBinding,
+        child_pending: PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
+        self.complete_apply_with_owner(
+            predecessor_effect,
+            predecessor_pending,
+            child_pending,
+            receipt,
+            LiveValidateApplyOwnershipV1::StandaloneDecisionWal,
+        )
+    }
+    #[allow(clippy::result_large_err)]
+    fn complete_apply_with_owner(
+        self,
+        predecessor_effect: &AdapterEffect,
+        predecessor_pending: &PendingRuntimeEffectBinding,
+        child_pending: PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        ownership: LiveValidateApplyOwnershipV1,
+    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
+        if !self.exactly_matches_effect()
+            || !matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending(_))
             || !predecessor_pending
                 .project_validate_apply_successor(predecessor_effect, &self.effect)
                 .is_some_and(|expected| expected == child_pending)
@@ -485,7 +609,7 @@ impl SealedLiveWalPersistedEffectV1 {
         let Self {
             effect,
             replay,
-            pending: LiveWalPersistedPendingV1::ApplyPending,
+            pending: LiveWalPersistedPendingV1::ApplyPending(wal_pending),
         } = self
         else {
             unreachable!("preflight admitted only the pending Apply state")
@@ -494,13 +618,16 @@ impl SealedLiveWalPersistedEffectV1 {
             Ok(replay) => Ok(Self {
                 effect,
                 replay,
-                pending: LiveWalPersistedPendingV1::ApplyBound(child_pending),
+                pending: LiveWalPersistedPendingV1::ApplyBound(match ownership {
+                    LiveValidateApplyOwnershipV1::LinkedValidate => child_pending,
+                    LiveValidateApplyOwnershipV1::StandaloneDecisionWal => wal_pending,
+                }),
             }),
             Err(replay) => Err((
                 Self {
                     effect,
                     replay,
-                    pending: LiveWalPersistedPendingV1::ApplyPending,
+                    pending: LiveWalPersistedPendingV1::ApplyPending(wal_pending),
                 },
                 child_pending,
             )),
@@ -520,8 +647,9 @@ impl SealedLiveWalPersistedEffectV1 {
                         .replay
                         .exactly_matches_payload_free_effect(&self.effect)
             }
-            LiveWalPersistedPendingV1::ApplyPending => {
-                self.replay.exactly_matches_persisted_effect(&self.effect)
+            LiveWalPersistedPendingV1::ApplyPending(pending) => {
+                pending.exactly_binds_adapter_effect(&self.effect)
+                    && self.replay.exactly_matches_persisted_effect(&self.effect)
             }
             LiveWalPersistedPendingV1::ApplyBound(_) => false,
         }
@@ -555,7 +683,7 @@ impl LiveWalPersistedReplaySealV1 {
             LiveWalPersistedReplayStateV1::Canonical { stage, authority }
         };
         let seal = Self {
-            wal_identity,
+            wal_identity: PersistedWalExecutionOriginV1::LiveAppend(wal_identity),
             state,
         };
         seal.exactly_matches_persisted_effect(effect)
@@ -647,7 +775,7 @@ impl LiveWalPersistedReplaySealV1 {
             context,
             stage: LifecycleStageKind::ApplyDecision,
             source,
-        }) = exact_live_wal_replay_projection(&self.wal_identity, effect)
+        }) = self.wal_identity.project(effect)
         else {
             return false;
         };
@@ -677,7 +805,7 @@ impl LiveWalPersistedReplaySealV1 {
             context,
             stage,
             source,
-        }) = exact_live_wal_replay_projection(&self.wal_identity, effect)
+        }) = self.wal_identity.project(effect)
         else {
             return false;
         };

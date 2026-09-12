@@ -3,7 +3,10 @@
 #![allow(clippy::manual_div_ceil)]
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-#[derive(Debug, Clone, PartialEq, IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug, Clone, PartialEq, IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.hybrid_struct.SampleHybrid")]
 struct SampleHybrid {
     id: u64,
     name: String,

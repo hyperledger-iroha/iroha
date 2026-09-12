@@ -52,16 +52,18 @@ fn axt_replay_ledger_survives_state_restart() {
         active_policy.next_handle_counter,
     );
     assert_eq!(handle.asset_definition_id, asset_definition_id);
-    let_row! { handle_fragment = AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id, kind: "transfer".into(), from: authority.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(10_u64)), }, }, proof: None, amount: Some(Quantity::from(10_u64)), amount_commitment: None, } };
-    let_row! { proof_fragment = AxtProofFragment { dsid, proof: axt_proof_blob_for_remote_spend( dsid, manifest_root, b"state-restart", 200, &handle_fragment, &Quantity::from(10_u64), ), } };
+    // Leave enough signed allowance for a second spend so replay reaches the nonce guard.
+    let_row! { handle_fragment = AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id, kind: "transfer".into(), from: authority.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, } };
+    let_row! { proof_fragment = AxtProofFragment { dsid, proof: axt_proof_blob_for_remote_spend( dsid, manifest_root, b"state-restart", 200, &handle_fragment, &Quantity::from(5_u64), ), } };
     let_row! { ivm_descriptor = ivm::axt::AxtDescriptor { dsids: descriptor.dsids.clone(), touches: descriptor .touches .iter() .map(|touch| ivm::axt::AxtTouchSpec { dsid: touch.dsid, read: touch.read.clone(), write: touch.write.clone(), }) .collect(), } };
     let_row! { ivm_manifest = ivm::axt::TouchManifest { read: touch_manifest.read.clone(), write: touch_manifest.write.clone(), } };
     let_row! { ivm_proof = ivm::axt::ProofBlob { payload: proof_fragment.proof.payload.clone(), expiry_slot: proof_fragment.proof.expiry_slot, } };
     let_row! { ivm_handle = ivm::axt::AssetHandle { scope: handle_fragment.handle.scope.clone(), asset_definition_id: handle_fragment.handle.asset_definition_id.clone(), subject: ivm::axt::HandleSubject { account: handle_fragment.handle.subject.account.clone(), origin_dsid: handle_fragment.handle.subject.origin_dsid, }, budget: ivm::axt::HandleBudget { remaining: handle_fragment.handle.budget.remaining.clone(), per_use: handle_fragment.handle.budget.per_use.clone(), }, handle_era: handle_fragment.handle.handle_era, sub_nonce: handle_fragment.handle.sub_nonce, group_binding: ivm::axt::GroupBinding { composability_group_id: handle_fragment .handle .group_binding .composability_group_id .clone(), epoch_id: handle_fragment.handle.group_binding.epoch_id, }, target_lane: handle_fragment.handle.target_lane, axt_binding: handle_fragment.handle.axt_binding.as_bytes().to_vec(), manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(), expiry_slot: handle_fragment.handle.expiry_slot, max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms, issuer_context: handle_fragment.handle.issuer_context, issuer_signature: handle_fragment.handle.issuer_signature.clone(), } };
     let_row! { ivm_intent = ivm::axt::RemoteSpendIntent { asset_dsid: handle_fragment.intent.asset_dsid, op: ivm::axt::SpendOp { asset_definition_id: handle_fragment.intent.op.asset_definition_id.clone(), kind: handle_fragment.intent.op.kind.clone(), from: handle_fragment.intent.op.from.clone(), to: handle_fragment.intent.op.to.clone(), amount: handle_fragment.intent.op.amount.clone(), }, } };
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
-        let mut block = state.block(header);
+        let genesis = empty_signed_block_after(None, 1);
+        store_block_for_state_commit(&state.kura, &genesis);
+        let mut block = state.block(genesis.header());
         let mut stx = block.transaction();
         stx.current_lane_id = Some(lane);
         stx.record_axt_envelope(AxtEnvelopeRecord {
@@ -93,6 +95,10 @@ fn axt_replay_ledger_survives_state_restart() {
             current_slot: 0,
         },
     );
+    let genesis = state
+        .kura
+        .get_block(nonzero!(1_usize))
+        .expect("persisted genesis");
     let world = mem::replace(&mut state.world, World::new());
     let mut restarted =
         State::new_with_nexus_for_testing(world, nexus, LiveQueryStore::start_test());
@@ -105,7 +111,8 @@ fn axt_replay_ledger_survives_state_restart() {
             .is_some(),
         "restart must retain the exact persisted replay row"
     );
-    let authenticated_tip = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    store_block_for_state_commit(&restarted.kura, genesis.as_ref());
+    let authenticated_tip = genesis.header();
     restarted.push_block_hash_for_testing(authenticated_tip.hash());
     restarted.update_latest_block_header_cache_for_tests(authenticated_tip);
     let_row! { mut host = CoreHost::from_state(authority.clone(), &restarted).expect("canonical state snapshots") };
@@ -127,16 +134,38 @@ fn axt_replay_ledger_survives_state_restart() {
     let_row! { err = IVMHost::syscall(&mut host, syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm) .expect_err("the permanent counter must reject the already-used nonce after restart") };
     let_row! { reject = host .take_axt_reject_for_tests() .expect("reject context recorded") };
     assert!(matches!(err, ivm::VMError::PermissionDenied));
-    assert_eq!(reject.reason, AxtRejectReason::SubNonce);
+    assert_eq!(reject.reason, AxtRejectReason::Proof, "{reject:?}");
+    assert_eq!(
+        reject.detail,
+        crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+        "host admission requires a finalized source anchor before checking the retained counter"
+    );
     assert_eq!(reject.dataspace, Some(dsid));
     assert_eq!(reject.lane, Some(lane));
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2, 0);
+    let mut block = restarted.block(header);
+    let counter_before = block.world.axt_handle_counters.get(&dsid).cloned();
+    let mut transaction = block.transaction();
+    transaction.current_lane_id = Some(lane);
+    let error = transaction
+        .record_axt_envelope(AxtEnvelopeRecord {
+            binding,
+            lane,
+            descriptor,
+            touches: vec![AxtTouchFragment {
+                dsid,
+                manifest: touch_manifest,
+            }],
+            proofs: vec![proof_fragment],
+            handles: vec![handle_fragment],
+            commit_height: 2,
+        })
+        .expect_err("persisted counter must reject the used nonce after restart");
+    assert!(error.to_string().contains("sub-nonce mismatch"), "{error}");
+    drop(transaction);
     assert_eq!(
-        reject.active_handle_era,
-        Some(active_policy.active_handle_era)
-    );
-    assert_eq!(
-        reject.next_handle_counter,
-        active_policy.next_handle_counter.checked_add(1)
+        block.world.axt_handle_counters.get(&dsid),
+        counter_before.as_ref()
     );
 }
 #[test]
@@ -294,11 +323,14 @@ fn axt_replay_ledger_prunes_after_retention_window() {
     let reject = host
         .take_axt_reject_for_tests()
         .expect("structured stale-subnonce rejection recorded");
-    assert_eq!(reject.reason, AxtRejectReason::SubNonce);
+    assert_eq!(reject.reason, AxtRejectReason::Proof, "{reject:?}");
+    assert_eq!(
+        reject.detail,
+        crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+        "host admission requires a finalized source anchor before checking the retained counter"
+    );
     assert_eq!(reject.dataspace, Some(dsid));
     assert_eq!(reject.lane, Some(lane));
-    assert_eq!(reject.active_handle_era, Some(1));
-    assert_eq!(reject.next_handle_counter, Some(2));
     assert_eq!(
         state.world.axt_handle_counters.view().get(&dsid),
         Some(&counter_before_prune)
@@ -496,7 +528,7 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
             )
             .expect("derive deterministic snapshot mint-finality validator");
             iroha_data_model::block::consensus_v2::ValidatorPower {
-                validator: iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
+                validator: iroha_model_base::peer::PeerId::new(key_pair.public_key().clone()),
                 power: 1,
             }
         })

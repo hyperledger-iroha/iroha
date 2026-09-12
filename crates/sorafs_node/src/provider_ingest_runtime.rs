@@ -734,7 +734,10 @@ const fn provider_ingest_admitted_payload_read_error_is_retryable(kind: io::Erro
             | io::ErrorKind::Other
     )
 }
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_runtime::ProviderIngestMusubiCompletionClaimDigestPreimageV1"
+)]
 struct ProviderIngestMusubiCompletionClaimDigestPreimageV1 {
     network_id: NetworkId,
     provider_id: [u8; 32],
@@ -1672,7 +1675,10 @@ pub struct ProviderIngestVerifiedMusubiBundleReceiptV1 {
 ///
 /// Keeping codec implementations on this non-exported type preserves durable checkpointing
 /// without turning public receipt bytes into a construction capability.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_runtime::StoredProviderIngestVerifiedMusubiBundleReceiptV1"
+)]
 pub(crate) struct StoredProviderIngestVerifiedMusubiBundleReceiptV1 {
     network_id: NetworkId,
     provider_id: [u8; 32],

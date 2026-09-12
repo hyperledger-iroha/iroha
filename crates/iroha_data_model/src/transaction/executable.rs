@@ -10,7 +10,7 @@ use iroha_data_model_derive::model;
 use iroha_primitives::const_vec::ConstVec;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use norito::{NoritoDeserialize, core as ncore};
+use norito::{DeserializePayload, core as ncore};
 use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
 #[model]
 mod model {
@@ -18,6 +18,8 @@ mod model {
     use iroha_crypto::Hash;
     use iroha_primitives::const_vec::ConstVec;
     /// An executable transaction or trigger payload.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::Executable")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -47,6 +49,8 @@ mod model {
         Batch(ConstVec<ExecutableBatchItem>),
     }
     /// One ordered item in [`Executable::Batch`].
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::ExecutableBatchItem")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -60,6 +64,8 @@ mod model {
     /// Wrapper for IVM bytecode used by [`Executable::Ivm`].
     ///
     /// Uses **base64** (de-)serialization format.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::IvmBytecode")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -72,6 +78,8 @@ mod model {
         pub(super) Vec<u8>,
     );
     /// Wrapper for proved IVM executions.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::IvmProved")]
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -90,20 +98,29 @@ mod model {
     #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[norito(reuse_archived)]
     #[repr(transparent)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::transaction::executable::model::ContractArgumentRecord"
+    )]
     pub struct ContractArgumentRecord(pub(super) Vec<u8>);
     /// By-reference invocation of a deployed contract instance.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::transaction::executable::model::ContractInvocation")]
     #[derive(
-        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+        derive_more::Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveFastJson,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(
-            crate::DeriveFastJson,
-            crate::DeriveJsonSerialize,
-            crate::DeriveJsonDeserialize
-        )
-    )]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     pub struct ContractInvocation {
         /// Canonical deployed contract address.
         pub contract_address: ContractAddress,
@@ -191,7 +208,7 @@ impl TryFrom<Vec<u8>> for ContractArgumentRecord {
         Self::try_new(bytes)
     }
 }
-impl ncore::NoritoSerialize for ContractArgumentRecord {}
+
 impl ncore::SerializePayload for ContractArgumentRecord {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::SerializePayload::serialize(&self.0, writer)
@@ -203,7 +220,8 @@ impl ncore::SerializePayload for ContractArgumentRecord {
         ncore::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl<'de> NoritoDeserialize<'de> for ContractArgumentRecord {
+
+impl<'de> DeserializePayload<'de> for ContractArgumentRecord {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         // Norito's public decode functions, Option decoder, and generated
         // containing-struct decoder all call `try_deserialize`; hostile wire
@@ -235,7 +253,7 @@ impl<'de> ncore::DecodeFromSlice<'de> for ContractArgumentRecord {
         Ok((Self(payload.to_vec()), end))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ContractArgumentRecord {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -247,7 +265,7 @@ impl norito::json::FastJsonWrite for ContractArgumentRecord {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ContractArgumentRecord {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -479,7 +497,7 @@ impl Executable {
             }))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ExecutableBatchItem {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -498,7 +516,7 @@ impl norito::json::JsonDeserialize for ExecutableBatchItem {
         Ok(item)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ExecutableBatchItem {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -537,7 +555,7 @@ impl norito::json::FastJsonWrite for ExecutableBatchItem {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for IvmBytecode {
     fn write_json(&self, out: &mut String) {
         norito::json::write_base64_json(&self.0, out);
@@ -549,7 +567,7 @@ impl norito::json::FastJsonWrite for IvmBytecode {
         norito::json::write_base64_json_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for IvmBytecode {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -561,7 +579,7 @@ impl norito::json::JsonDeserialize for IvmBytecode {
         Ok(Self(bytes))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for IvmProved {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -600,7 +618,7 @@ impl norito::json::FastJsonWrite for IvmProved {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for IvmProved {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -685,7 +703,7 @@ impl Executable {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Executable {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -775,7 +793,7 @@ impl norito::json::JsonDeserialize for Executable {
         Ok(exec)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Executable {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -902,7 +920,7 @@ mod tests {
         let ivm_bytecode = IvmBytecode::from_compiled(vec![0, 1, 2, 3, 4]);
         assert_eq!(format!("{ivm_bytecode:?}"), "IVM bytecode(len = 5)");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manual_executable_json_families_have_closed_bounds() {
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
@@ -1151,7 +1169,7 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, executable);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn ivm_bytecode_should_serialize_and_deserialize() {
         let bytecode = IvmBytecode::from_compiled(vec![1, 2, 3, 4, 5]);
@@ -1159,7 +1177,7 @@ mod tests {
         let deserialized: IvmBytecode = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(bytecode, deserialized);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn executable_json_roundtrip_for_all_variants() {
         let instruction: InstructionBox =

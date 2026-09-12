@@ -17,7 +17,7 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 fn state_path_tlv(path: &str) -> Vec<u8> {
-    let path: iroha_data_model::state_path::StatePath = path.parse().expect("canonical state path");
+    let path: iroha_model_base::state_path::StatePath = path.parse().expect("canonical state path");
     let payload = norito::to_bytes(&path).expect("encode state path");
     make_tlv(PointerType::NoritoBytes, &payload)
 }
@@ -31,8 +31,8 @@ fn decode_state_payload(ptr: u64, vm: &IVM) -> Vec<u8> {
     common::decode_bytes_state_value(tlv.payload)
 }
 fn sample_account() -> ivm::mock_wsv::AccountId {
-    let _domain: ivm::mock_wsv::DomainId =
-        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
+    let _domain: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
     ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

@@ -12,6 +12,8 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
 use std::{borrow::Cow, sync::Arc};
 #[test]
 fn proof_event_includes_call_hash() {

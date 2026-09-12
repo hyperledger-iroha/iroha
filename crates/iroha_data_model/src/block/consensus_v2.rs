@@ -5,7 +5,7 @@
 //! this module are therefore versioned independently and do not replace or
 //! reinterpret the first-release wire types in [`super::consensus`].
 use super::Header as BlockHeader;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -13,14 +13,15 @@ use crate::{
     block::consensus::NativeAmxParticipantSettlement,
     consensus::GlobalThresholdBeaconPartialSignatureV1,
     merge::MergeLedgerEntry,
-    nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
-    peer::PeerId,
+    nexus::{LaneFinalityStatement, PublicLaneValidatorRecord},
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use core::fmt;
 #[cfg(test)]
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
@@ -29,6 +30,7 @@ use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 pub mod finality;
 /// Canonical genesis/handshake fingerprint projection.
 pub mod fingerprint;
+mod messages;
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 4;
 /// Consensus-wide lower bound for one voting roster.
@@ -81,7 +83,7 @@ const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 16 * 1024;
 /// Reserved envelope kind for one KAGEMUSHA V1 Commit-vote seal share.
 pub const KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1: u8 = 1;
-/// Reserved envelope kind for an KAGEMUSHA V1 CommitQC seal bundle.
+/// Reserved envelope kind for an KAGEMUSHA V1 `CommitQC` seal bundle.
 pub const KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1: u8 = 2;
 const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1: [u8; 16] = *b"iroha-kgm-sig-v1";
 const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1: usize = 16 + 1 + 2 + 4;
@@ -162,8 +164,20 @@ pub type View = u64;
 /// Index into the ordered voting roster frozen in a [`HeightContext`].
 pub type ValidatorIndex = u32;
 /// Consensus mode used to select the frozen equal-vote committee.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "mode",
     content = "details",
@@ -218,8 +232,19 @@ impl From<ConsensusMode> for crate::parameter::system::SumeragiConsensusMode {
     }
 }
 /// A validator and its consensus vote at one height.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::ValidatorPower")]
@@ -234,8 +259,20 @@ pub struct ValidatorPower {
 /// The roster has exact `n = 3f + 1` geometry and a certificate requires
 /// `2f + 1` distinct signers. `total_power` is a redundant integrity
 /// projection equal to the validator count because every member has one vote.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::DualQuorum")]
@@ -325,8 +362,20 @@ impl DualQuorum {
     }
 }
 /// Payload chunking parameters frozen for one block height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::DataAvailabilityLayout")]
@@ -345,8 +394,20 @@ pub struct DataAvailabilityLayout {
     pub max_chunk_count: u32,
 }
 /// Payload encoding used by v2 data dissemination.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "encoding",
     content = "details",
@@ -369,8 +430,18 @@ pub enum PayloadEncoding {
 /// this value in [`crate::parameter::system::ConsensusHandshakeMetadata`]; they
 /// are deliberately absent from this snapshot-reconstructible context and its
 /// secondary consensus fingerprint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters")]
@@ -430,8 +501,18 @@ pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidato
 /// The complete [`SnapshotV2BootstrapRecord`] is carried inside the signed or digest-pinned
 /// snapshot payload. These fields bind its frozen context to the exact restored ledger
 /// geometry and WSV, so an appended self-signed artifact cannot introduce a different trust root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SnapshotBootstrapAnchor")]
@@ -449,8 +530,17 @@ pub struct SnapshotBootstrapAnchor {
     pub snapshot_state_hash: Hash,
 }
 /// Complete frozen Sumeragi-v2 trust root authenticated by an audited snapshot payload.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SnapshotV2BootstrapRecord")]
@@ -494,8 +584,17 @@ impl SnapshotV2BootstrapRecord {
     }
 }
 /// Immutable inputs to consensus at one block height.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContext")]
@@ -614,9 +713,11 @@ impl HeightContext {
         }
         let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
         if mint_roster.validate().is_err()
-            || mint_roster.network_id != self.network_id
-            || mint_roster.epoch != self.epoch
-            || mint_roster.validators.len() != self.roster.len()
+            || (
+                mint_roster.network_id,
+                mint_roster.epoch,
+                mint_roster.validators.len(),
+            ) != (self.network_id, self.epoch, self.roster.len())
             || mint_roster
                 .validators
                 .iter()
@@ -765,8 +866,20 @@ struct ParentCommitIdentity {
     execution_commitment: ExecutionCommitment,
 }
 /// Typed identifier of a complete [`HeightContext`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[repr(transparent)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::HeightContextId")]
@@ -775,8 +888,20 @@ pub struct HeightContextId(
     pub HashOf<HeightContext>,
 );
 /// Consensus round identity under a frozen height context.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusRound")]
@@ -793,8 +918,19 @@ pub struct ConsensusRound {
 /// This enum intentionally has no `NewView` variant: view changes are certified
 /// by [`TimeoutCertificate`].  It is also distinct from lane-local phases.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "phase",
     content = "details",
@@ -837,8 +973,20 @@ impl IntoSchema for GlobalPhase {
     }
 }
 /// Proposal subject bound by votes and certificates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::BlockSubject")]
@@ -852,8 +1000,20 @@ pub struct BlockSubject {
     pub payload_hash: Hash,
 }
 /// Ordered result-bearing membership in one Native AMX participant application.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -874,8 +1034,19 @@ pub struct NativeAmxApplicationManifestMemberV1 {
 /// A leaf is control evidence only. It binds one separate participant route to
 /// the global carrier that executed its economic effects; it does not authorize
 /// the participant lane to mutate WSV independently.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestLeafV1")]
@@ -991,8 +1162,20 @@ pub fn native_amx_application_manifest_empty_root() -> Hash {
 /// The compact block reference remains the complete carrier proof while the
 /// block body is locally available. This small projection preserves the same
 /// association after body pruning through retained header/finality evidence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1")]
@@ -1028,8 +1211,20 @@ impl MergeCarrierCommitmentV1 {
 /// The commitment is derived from the exact state-block execution witness
 /// after deterministic candidate validation.  It is never
 /// reconstructed from the proposal header or supplied by an untrusted caller.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::ExecutionCommitment")]
@@ -1320,7 +1515,7 @@ impl ExecutionCommitment {
 /// the KAGEMUSHA verifier separately checks the paired Pasta payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaConsensusSignatureEnvelopePartsV1<'a> {
-    /// Whether the auxiliary payload is a Commit-vote share or CommitQC bundle.
+    /// Whether the auxiliary payload is a Commit-vote share or `CommitQC` bundle.
     pub kind: u8,
     /// Ordinary BLS signature or aggregate signature.
     pub bls_signature: &'a [u8],
@@ -1425,8 +1620,17 @@ pub fn decode_kagemusha_consensus_signature_envelope_v1(
     }))
 }
 /// One global Prepare or Commit vote.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::Vote")]
@@ -1446,85 +1650,19 @@ pub struct Vote {
     /// BLS signature over the canonical vote preimage.
     pub signature: Vec<u8>,
 }
-impl Vote {
-    /// Return the domain-separated canonical bytes authenticated by this vote.
-    ///
-    /// The signature and signer fields are excluded so every signer of the
-    /// same certificate signs the same BLS message. The authenticated-ingress
-    /// adapter still selects the public key by `signer`, and the certificate
-    /// binds its strictly ordered signer set, so a share cannot be reassigned
-    /// to another key.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let payload = VoteSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            round: self.round,
-            proposal_round: self.proposal_round,
-            phase: self.phase,
-            subject: self.subject,
-            execution_commitment: self.execution_commitment,
-        };
-        signature_preimage(b"iroha:sumeragi:v2:vote", &payload.encode())
-    }
-    /// Borrow the ordinary BLS signature from either its raw representation or
-    /// the required KAGEMUSHA V1 Commit-vote envelope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the signature framing is malformed or disagrees
-    /// with the vote phase/top-up commitment.
-    pub fn bls_signature(&self) -> Result<&[u8], ValidationError> {
-        match self.kagemusha_finality_seal_payload()? {
-            Some(_) => decode_kagemusha_consensus_signature_envelope_v1(&self.signature)?
-                .map(|parts| parts.bls_signature)
-                .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope),
-            None => Ok(&self.signature),
-        }
-    }
-    /// Borrow the canonical paired-Pasta Commit-vote seal payload when this vote certifies a
-    /// non-empty KAGEMUSHA V1 top-up root or carries an epoch-boundary roster rotation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a required envelope is absent, an envelope occurs
-    /// on another vote kind, or its framing is malformed.
-    pub fn kagemusha_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
-        let envelope = decode_kagemusha_consensus_signature_envelope_v1(&self.signature)?;
-        let commit = self.phase == GlobalPhase::Commit;
-        let required = commit && self.execution_commitment.kagemusha_top_up_count != 0;
-        match (commit, required, envelope) {
-            (true, _, Some(parts))
-                if parts.kind == KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1 =>
-            {
-                Ok(Some(parts.auxiliary_payload))
-            }
-            (true, false, None) | (false, false, None) => Ok(None),
-            _ => Err(ValidationError::InvalidKagemushaSignatureEnvelope),
-        }
-    }
-    /// Validate the vote's context, signer, and signature presence.
-    ///
-    /// Cryptographic verification remains the authenticated-ingress adapter's
-    /// responsibility and must use [`Self::signature_preimage`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural validation error when the vote or proposal origin
-    /// belongs to another context, its signer is outside the frozen roster,
-    /// its execution commitment is invalid, or its signature is missing or
-    /// oversized.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        validate_proposal_round(self.proposal_round, self.round, context)?;
-        validate_validator_index(self.signer, context)?;
-        self.execution_commitment.validate()?;
-        require_signature(&self.signature)?;
-        self.bls_signature().map(|_| ())
-    }
-}
 /// Canonical same-message fields authenticated by Prepare and Commit votes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::VoteSignaturePayload")]
@@ -1543,8 +1681,20 @@ pub struct VoteSignaturePayload {
     pub execution_commitment: ExecutionCommitment,
 }
 /// Stable reference to a full quorum certificate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::QuorumCertificateRef")]
@@ -1560,26 +1710,18 @@ pub struct QuorumCertificateRef {
     /// Certified deterministic execution result.
     pub execution_commitment: ExecutionCommitment,
 }
-impl QuorumCertificateRef {
-    /// Return whether both references certify the same committed decision.
-    ///
-    /// `CommitQC`s for one immutable body may be assembled before or after an
-    /// unchanged re-proposal. Their stable decision identity excludes the
-    /// round and signer evidence while retaining context, height, subject, and
-    /// deterministic execution.
-    #[must_use]
-    pub fn same_commit_decision(self, other: Self) -> bool {
-        self.phase == GlobalPhase::Commit
-            && other.phase == GlobalPhase::Commit
-            && self.round.context_id == other.round.context_id
-            && self.round.height == other.round.height
-            && self.subject == other.subject
-            && self.execution_commitment == other.execution_commitment
-    }
-}
 /// Aggregate Prepare or Commit certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::QuorumCertificate")]
@@ -1599,101 +1741,18 @@ pub struct QuorumCertificate {
     /// BLS aggregate signature for the canonical signer sequence.
     pub aggregate_signature: Vec<u8>,
 }
-impl QuorumCertificate {
-    /// Return a stable reference to this certificate.
-    #[must_use]
-    pub fn as_ref(&self) -> QuorumCertificateRef {
-        QuorumCertificateRef {
-            round: self.round,
-            proposal_round: self.proposal_round,
-            phase: self.phase,
-            subject: self.subject,
-            execution_commitment: self.execution_commitment,
-        }
-    }
-    /// Borrow the ordinary BLS aggregate from either its raw representation or
-    /// the required KAGEMUSHA V1 CommitQC envelope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the signature framing is malformed or disagrees
-    /// with the certificate phase/top-up commitment.
-    pub fn bls_aggregate_signature(&self) -> Result<&[u8], ValidationError> {
-        match self.kagemusha_finality_seal_payload()? {
-            Some(_) => decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?
-                .map(|parts| parts.bls_signature)
-                .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope),
-            None => Ok(&self.aggregate_signature),
-        }
-    }
-    /// Borrow the canonical paired-Pasta CommitQC seal bundle payload when the certificate
-    /// commits a non-empty KAGEMUSHA V1 top-up root or an epoch-boundary roster rotation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a required envelope is absent, an envelope occurs
-    /// on another certificate kind, or its framing is malformed.
-    pub fn kagemusha_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
-        let envelope = decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?;
-        let commit = self.phase == GlobalPhase::Commit;
-        let required = commit && self.execution_commitment.kagemusha_top_up_count != 0;
-        match (commit, required, envelope) {
-            (true, _, Some(parts))
-                if parts.kind == KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1 =>
-            {
-                Ok(Some(parts.auxiliary_payload))
-            }
-            (true, false, None) | (false, false, None) => Ok(None),
-            _ => Err(ValidationError::InvalidKagemushaSignatureEnvelope),
-        }
-    }
-    /// Validate the certificate's context binding and equal-vote quorum.
-    ///
-    /// Cryptographic aggregate-signature verification remains the caller's
-    /// responsibility.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural or quorum error if the certificate cannot be
-    /// valid under `context`.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        validate_proposal_round(self.proposal_round, self.round, context)?;
-        self.execution_commitment.validate()?;
-        context.validate_certificate_signers(&self.signers)?;
-        require_aggregate_signature(&self.aggregate_signature)?;
-        self.bls_aggregate_signature().map(|_| ())
-    }
-    /// Reconstruct the canonical vote preimage for one certified signer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `signer` is not part of this certificate or is
-    /// outside the frozen roster.
-    pub fn signer_preimage(
-        &self,
-        context: &HeightContext,
-        signer: ValidatorIndex,
-    ) -> Result<Vec<u8>, ValidationError> {
-        self.validate(context)?;
-        if self.signers.binary_search(&signer).is_err() {
-            return Err(ValidationError::SignerNotInCertificate);
-        }
-        Ok(Vote {
-            round: self.round,
-            proposal_round: self.proposal_round,
-            phase: self.phase,
-            subject: self.subject,
-            execution_commitment: self.execution_commitment,
-            signer,
-            signature: Vec::new(),
-        }
-        .signature_preimage())
-    }
-}
 /// One durable timeout vote for a view.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVote")]
@@ -1708,53 +1767,19 @@ pub struct TimeoutVote {
     /// BLS signature over the canonical timeout-vote preimage.
     pub signature: Vec<u8>,
 }
-impl TimeoutVote {
-    /// Return the domain-separated canonical bytes authenticated by this
-    /// timeout vote, excluding the signature itself.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let payload = TimeoutVoteSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            round: self.round,
-            highest_prepare_qc: self
-                .highest_prepare_qc
-                .as_ref()
-                .map(QuorumCertificate::as_ref),
-        };
-        signature_preimage(b"iroha:sumeragi:v2:timeout-vote", &payload.encode())
-    }
-    /// Validate context binding, high-QC reference, signer, and signature
-    /// presence.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural or quorum error when the timeout round or signer
-    /// is invalid, the reported high certificate is not a valid non-future
-    /// `PrepareQC` for the same context, or the signature is missing or
-    /// oversized.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        validate_validator_index(self.signer, context)?;
-        if let Some(highest) = &self.highest_prepare_qc {
-            if highest.phase != GlobalPhase::Prepare {
-                return Err(ValidationError::TimeoutCarriesNonPrepareQc);
-            }
-            if highest.round.context_id != self.round.context_id
-                || highest.round.height != self.round.height
-            {
-                return Err(ValidationError::WrongHeightContext);
-            }
-            if highest.round.view > self.round.view {
-                return Err(ValidationError::QcFromFutureView);
-            }
-            highest.validate(context)?;
-        }
-        require_signature(&self.signature)
-    }
-}
 /// Canonical same-message fields authenticated by one timeout-vote group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVoteSignaturePayload")]
@@ -1768,8 +1793,17 @@ pub struct TimeoutVoteSignaturePayload {
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
 }
 /// Aggregate timeout signatures that reported the same highest `PrepareQC`.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutVoteGroup")]
@@ -1783,8 +1817,17 @@ pub struct TimeoutVoteGroup {
     pub aggregate_signature: Vec<u8>,
 }
 /// Certificate authorizing a transition out of one timed-out view.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutCertificate")]
@@ -1794,115 +1837,21 @@ pub struct TimeoutCertificate {
     /// Groups ordered strictly by their optional `PrepareQC` reference.
     pub groups: Vec<TimeoutVoteGroup>,
 }
-impl TimeoutCertificate {
-    /// Return a stable reference to this timeout certificate.
-    #[must_use]
-    pub fn as_ref(&self) -> TimeoutCertificateRef {
-        TimeoutCertificateRef {
-            round: self.round,
-            highest_prepare_qc: self.highest_prepare_qc().map(QuorumCertificate::as_ref),
-            certificate_hash: HashOf::new(self),
-        }
-    }
-    /// Select the highest reported `PrepareQC` deterministically.
-    ///
-    /// View is the primary ordering key. The semantic certificate reference
-    /// breaks impossible conflicting-subject ties without depending on which
-    /// valid quorum subset happened to be aggregated.
-    #[must_use]
-    pub fn highest_prepare_qc(&self) -> Option<&QuorumCertificate> {
-        self.groups
-            .iter()
-            .filter_map(|group| group.highest_prepare_qc.as_ref())
-            .max_by(|left, right| {
-                left.round
-                    .view
-                    .cmp(&right.round.view)
-                    .then_with(|| left.as_ref().cmp(&right.as_ref()))
-            })
-    }
-    /// Validate grouping, disjoint signers, context binding, and equal-vote quorum.
-    ///
-    /// Cryptographic aggregate-signature verification remains the caller's
-    /// responsibility.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural or quorum error if the timeout certificate cannot
-    /// be valid under `context`.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        if self.groups.is_empty() {
-            return Err(ValidationError::EmptyTimeoutCertificate);
-        }
-        if self.groups.windows(2).any(|pair| {
-            pair[0]
-                .highest_prepare_qc
-                .as_ref()
-                .map(QuorumCertificate::as_ref)
-                >= pair[1]
-                    .highest_prepare_qc
-                    .as_ref()
-                    .map(QuorumCertificate::as_ref)
-        }) {
-            return Err(ValidationError::TimeoutGroupsNotStrictlySorted);
-        }
-        let mut all_signers = BTreeSet::new();
-        let mut highest_at_view: Option<(View, BlockSubject, ExecutionCommitment)> = None;
-        for group in &self.groups {
-            if group.signers.is_empty() {
-                return Err(ValidationError::EmptyTimeoutGroup);
-            }
-            require_aggregate_signature(&group.aggregate_signature)?;
-            if group.signers.windows(2).any(|pair| pair[0] >= pair[1]) {
-                return Err(ValidationError::SignersNotStrictlySorted);
-            }
-            if let Some(highest) = &group.highest_prepare_qc {
-                if highest.phase != GlobalPhase::Prepare {
-                    return Err(ValidationError::TimeoutCarriesNonPrepareQc);
-                }
-                if highest.round.context_id != self.round.context_id
-                    || highest.round.height != self.round.height
-                {
-                    return Err(ValidationError::WrongHeightContext);
-                }
-                if highest.round.view > self.round.view {
-                    return Err(ValidationError::QcFromFutureView);
-                }
-                highest.validate(context)?;
-                match highest_at_view {
-                    Some((view, subject, execution_commitment)) if view == highest.round.view => {
-                        if subject != highest.subject
-                            || execution_commitment != highest.execution_commitment
-                        {
-                            return Err(ValidationError::ConflictingHighestPrepare);
-                        }
-                    }
-                    Some((view, _, _)) if view > highest.round.view => {
-                        return Err(ValidationError::TimeoutGroupsNotStrictlySorted);
-                    }
-                    _ => {
-                        highest_at_view = Some((
-                            highest.round.view,
-                            highest.subject,
-                            highest.execution_commitment,
-                        ));
-                    }
-                }
-            }
-            for signer in &group.signers {
-                if !all_signers.insert(*signer) {
-                    return Err(ValidationError::OverlappingTimeoutSigners);
-                }
-            }
-        }
-        let all_signers: Vec<_> = all_signers.into_iter().collect();
-        context.validate_certificate_signers(&all_signers)
-    }
-}
 /// Stable reference to a full timeout certificate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutCertificateRef")]
@@ -1916,8 +1865,17 @@ pub struct TimeoutCertificateRef {
     pub certificate_hash: HashOf<TimeoutCertificate>,
 }
 /// Justification carried by a proposal.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "kind",
     content = "justification",
@@ -1933,8 +1891,17 @@ pub enum ProposalJustification {
     Timeout(TimeoutJustification),
 }
 /// View-zero proposal justification from the parent `CommitQC`.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::ParentCommitJustification")]
@@ -1944,8 +1911,17 @@ pub struct ParentCommitJustification {
     pub certificate: Option<QuorumCertificate>,
 }
 /// Later-view proposal justification from a timeout certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::TimeoutJustification")]
@@ -1962,8 +1938,17 @@ pub struct TimeoutJustification {
     pub highest_prepare_qc: Option<QuorumCertificate>,
 }
 /// Manifest committing to a complete encoded block payload.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadManifest")]
@@ -2240,8 +2225,17 @@ impl ValidatedPayloadManifest {
     }
 }
 /// One encoded payload chunk.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadChunk")]
@@ -2302,8 +2296,18 @@ impl PayloadChunk {
     }
 }
 /// Canonical fields authenticated by a v2 payload-chunk signature.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::PayloadChunkSignaturePayload")]
@@ -2341,8 +2345,17 @@ impl PayloadChunkSignaturePayload {
     }
 }
 /// Signed proposal for one round.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::Proposal")]
@@ -2360,88 +2373,6 @@ pub struct Proposal {
     /// Leader signature over the canonical proposal preimage.
     pub signature: Vec<u8>,
 }
-impl Proposal {
-    /// Return the domain-separated canonical bytes authenticated by the
-    /// expected leader, excluding the signature itself.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let mut unsigned = self.clone();
-        unsigned.signature.clear();
-        signature_preimage(b"iroha:sumeragi:v2:proposal", &unsigned.encode())
-    }
-    /// Validate the complete structural proposal contract against a frozen
-    /// height context.
-    ///
-    /// Cryptographic verification remains the authenticated-ingress adapter's
-    /// responsibility and must use [`Self::signature_preimage`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural validation error when the proposal, manifest,
-    /// leader, parent/timeout justification, or signature is not valid under
-    /// the frozen height context.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        self.manifest.validate(context)?;
-        if self.manifest.round != self.round || self.manifest.subject != self.subject {
-            return Err(ValidationError::ProposalManifestMismatch);
-        }
-        validate_validator_index(self.proposer, context)?;
-        if self.proposer != context.leader(self.round.view) {
-            return Err(ValidationError::WrongProposer);
-        }
-        match &self.justification {
-            ProposalJustification::ParentCommit(parent) => {
-                let same_finalized_parent = match (
-                    parent.certificate.as_ref(),
-                    context.parent_commit_qc.as_ref(),
-                ) {
-                    (None, None) => true,
-                    (Some(carried), Some(frozen)) => {
-                        // A subject can acquire valid CommitQCs in more than
-                        // one same-round certificate before or after an
-                        // unchanged re-proposal. Context identity deliberately
-                        // ignores that round and the signer evidence, so
-                        // view-zero admission uses the semantic decision key.
-                        // The previous roster is unavailable here, but all
-                        // context-independent certificate shape checks remain
-                        // mandatory before authenticated ingress verifies it.
-                        carried.proposal_round == carried.round
-                            && carried.round.height.checked_add(1) == Some(context.height)
-                            && carried.execution_commitment.validate().is_ok()
-                            && !carried.signers.is_empty()
-                            && carried.signers.len() <= MAX_VALIDATORS_PER_HEIGHT
-                            && carried.signers.windows(2).all(|pair| pair[0] < pair[1])
-                            && require_aggregate_signature(&carried.aggregate_signature).is_ok()
-                            && carried.as_ref().same_commit_decision(frozen.as_ref())
-                    }
-                    (None, Some(_)) | (Some(_), None) => false,
-                };
-                if self.round.view != 0 || !same_finalized_parent {
-                    return Err(ValidationError::InvalidProposalJustification);
-                }
-            }
-            ProposalJustification::Timeout(timeout) => {
-                if self.round.view == 0
-                    || timeout.timeout_certificate.round.context_id != self.round.context_id
-                    || timeout.timeout_certificate.round.height != self.round.height
-                    || timeout.timeout_certificate.round.view.checked_add(1)
-                        != Some(self.round.view)
-                {
-                    return Err(ValidationError::InvalidProposalJustification);
-                }
-                timeout.timeout_certificate.validate(context)?;
-                let selected_highest = timeout.timeout_certificate.highest_prepare_qc();
-                if selected_highest != timeout.highest_prepare_qc.as_ref()
-                    || selected_highest.is_some_and(|highest| highest.subject != self.subject)
-                {
-                    return Err(ValidationError::InvalidProposalJustification);
-                }
-            }
-        }
-        require_signature(&self.signature)
-    }
-}
 /// Exact pair of individually authenticated Sumeragi v2 messages proving one
 /// validator signed conflicting statements for the same consensus slot.
 ///
@@ -2453,8 +2384,9 @@ impl Proposal {
     clippy::large_enum_variant,
     reason = "equivocation evidence retains both complete signed artifacts inline; boxing a variant would change the canonical Norito V1 wire shape"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Decode, Encode, DeriveJsonSerialize, DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "kind",
     content = "artifacts",
@@ -2553,8 +2485,17 @@ impl IntoSchema for SumeragiV2Equivocation {
     }
 }
 /// Authenticated request for a body covered by a `PrepareQC` or `CommitQC`.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyRequest")]
@@ -2571,37 +2512,18 @@ pub struct CertifiedBodyRequest {
     /// Requester signature over the canonical request preimage.
     pub signature: Vec<u8>,
 }
-impl CertifiedBodyRequest {
-    /// Return the canonical request bytes authenticated by the requester.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let mut unsigned = self.clone();
-        unsigned.signature.clear();
-        signature_preimage(
-            b"iroha:sumeragi:v2:certified-body-request",
-            &unsigned.encode(),
-        )
-    }
-    /// Validate context, certificate, requester, and signature presence.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural or quorum error when the requested round or
-    /// certificate is invalid under `context`, the certificate identifies a
-    /// different proposal, or the requester signature is missing or oversized.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        self.certificate.validate(context)?;
-        if self.certificate.proposal_round != self.round || self.certificate.subject != self.subject
-        {
-            return Err(ValidationError::CertifiedBodyCertificateMismatch);
-        }
-        require_signature(&self.signature)
-    }
-}
 /// Authenticated response carrying a certified body and its manifest.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::CertifiedBodyResponse")]
@@ -2621,81 +2543,18 @@ pub struct CertifiedBodyResponse {
     /// Responder signature over the request hash, manifest, and body hash.
     pub signature: Vec<u8>,
 }
-impl CertifiedBodyResponse {
-    /// Return the canonical response bytes authenticated by the responder.
-    ///
-    /// The body is represented by its payload hash in the signed payload so
-    /// implementations need not duplicate large bytes during signing.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let payload = CertifiedBodyResponseSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            request_hash: self.request_hash,
-            manifest: self.manifest.clone(),
-            body_hash: Hash::new(&self.body),
-            responder: self.responder.clone(),
-        };
-        signature_preimage(
-            b"iroha:sumeragi:v2:certified-body-response",
-            &payload.encode(),
-        )
-    }
-    /// Validate the response against the frozen context and signature
-    /// presence. The caller additionally matches `request_hash` to an
-    /// outstanding authenticated request.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural validation error when the manifest is invalid,
-    /// the body hash or length differs from the manifest, the responder is
-    /// malformed, or the response signature is missing or oversized.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        self.manifest.validate(context)?;
-        if Hash::new(&self.body) != self.manifest.subject.payload_hash {
-            return Err(ValidationError::CertifiedBodyHashMismatch);
-        }
-        if u64::try_from(self.body.len()).ok() != Some(self.manifest.payload_size_bytes) {
-            return Err(ValidationError::PayloadSizeMismatch);
-        }
-        require_signature(&self.signature)
-    }
-    /// Validate this response against the exact outstanding request and the
-    /// authenticated outer transport sender.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the response is replayed across requests, changes
-    /// round/subject, or the claimed current responder differs from the
-    /// authenticated transport sender.
-    ///
-    /// The responder need not be one of the request QC signers. Historical
-    /// archive service is safe because the exact request carries the verified
-    /// QC while the response body and manifest are hash-bound to that QC's
-    /// subject. The serving path additionally proves that the responder has
-    /// the canonical applied block in durable storage.
-    pub fn validate_against(
-        &self,
-        context: &HeightContext,
-        request: &CertifiedBodyRequest,
-        authenticated_sender: &PeerId,
-    ) -> Result<(), ValidationError> {
-        request.validate(context)?;
-        self.validate(context)?;
-        if self.request_hash != HashOf::new(request)
-            || self.manifest.round != request.round
-            || self.manifest.subject != request.subject
-        {
-            return Err(ValidationError::CertifiedBodyRequestMismatch);
-        }
-        if &self.responder != authenticated_sender {
-            return Err(ValidationError::ResponderIdentityMismatch);
-        }
-        Ok(())
-    }
-}
 /// Canonical fields authenticated by a certified-body response signature.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -2719,8 +2578,17 @@ pub struct CertifiedBodyResponseSignaturePayload {
 /// from the preceding committed block.  This request deliberately names only
 /// that context: responders cannot skip heights or substitute a certificate
 /// governed by another roster.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateRequest")]
@@ -2738,52 +2606,23 @@ pub struct CommitCertificateRequest {
     /// Requester signature over the canonical request preimage.
     pub signature: Vec<u8>,
 }
-impl CommitCertificateRequest {
-    /// Return the canonical bytes authenticated by the requester.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let mut unsigned = self.clone();
-        unsigned.signature.clear();
-        signature_preimage(
-            b"iroha:sumeragi:v2:commit-certificate-request",
-            &unsigned.encode(),
-        )
-    }
-    /// Validate the request against the one active frozen context.
-    ///
-    /// Cryptographic signature and outer-transport identity verification are
-    /// performed by the transport adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the context itself is invalid, the request uses
-    /// another protocol, chain, context, or height, or its signature is missing
-    /// or oversized.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        context.validate()?;
-        if self.protocol_version != PROTOCOL_VERSION {
-            return Err(ValidationError::UnsupportedProtocolVersion {
-                expected: PROTOCOL_VERSION,
-                actual: self.protocol_version,
-            });
-        }
-        if self.network_id != context.network_id
-            || self.context_id != context.id()
-            || self.height != context.height
-        {
-            return Err(ValidationError::WrongHeightContext);
-        }
-        require_signature(&self.signature)
-    }
-}
 /// Authenticated response carrying the `CommitQC` for an exact outstanding
 /// [`CommitCertificateRequest`].
 ///
 /// The response never carries a block body.  Its certificate is admitted as a
 /// normal v2 `CommitQC` through the authoritative reducer; the reducer then
 /// initiates the existing certified-body fetch and WAL/apply sequence.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::CommitCertificateResponse")]
@@ -2800,63 +2639,18 @@ pub struct CommitCertificateResponse {
     /// Responder signature over the request hash and exact certificate.
     pub signature: Vec<u8>,
 }
-impl CommitCertificateResponse {
-    /// Return the canonical bytes authenticated by the responder.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let payload = CommitCertificateResponseSignaturePayload {
-            protocol_version: PROTOCOL_VERSION,
-            request_hash: self.request_hash,
-            certificate: self.certificate.clone(),
-            responder: self.responder.clone(),
-        };
-        signature_preimage(
-            b"iroha:sumeragi:v2:commit-certificate-response",
-            &payload.encode(),
-        )
-    }
-    /// Validate the certificate and response structure against one context.
-    ///
-    /// Cryptographic aggregate and responder signatures are verified by the
-    /// transport and consensus adapters respectively.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural or quorum error when the certificate is invalid,
-    /// is not a `CommitQC` for `context`, or the response signature is missing
-    /// or oversized.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        self.certificate.validate(context)?;
-        if self.certificate.phase != GlobalPhase::Commit
-            || self.certificate.round.context_id != context.id()
-            || self.certificate.round.height != context.height
-        {
-            return Err(ValidationError::CommitCertificateMismatch);
-        }
-        require_signature(&self.signature)
-    }
-    /// Validate the response against the exact outstanding request.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when either artifact is invalid under `context` or the
-    /// response does not carry the hash of the exact signed request.
-    pub fn validate_against(
-        &self,
-        context: &HeightContext,
-        request: &CommitCertificateRequest,
-    ) -> Result<(), ValidationError> {
-        request.validate(context)?;
-        self.validate(context)?;
-        if self.request_hash != HashOf::new(request) {
-            return Err(ValidationError::CommitCertificateRequestMismatch);
-        }
-        Ok(())
-    }
-}
 /// Canonical fields authenticated by a commit-certificate response.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -2880,8 +2674,17 @@ pub struct CommitCertificateResponseSignaturePayload {
 /// the active public DKG session and the fixed pulse-slot payload reconstructed
 /// from the height and finalized parent anchor. The outer consensus view only
 /// routes retries; it is not included in the threshold-signed payload.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::GlobalBeaconPartialSignature")]
@@ -2892,29 +2695,6 @@ pub struct GlobalBeaconPartialSignature {
     pub partial: GlobalThresholdBeaconPartialSignatureV1,
 }
 
-impl GlobalBeaconPartialSignature {
-    /// Validate the round and one-based DKG signer seat against a frozen context.
-    ///
-    /// Cryptographic proof verification is deliberately performed by the
-    /// threshold-beacon reducer after it reconstructs the exact pulse payload.
-    ///
-    /// # Errors
-    ///
-    /// Returns a structural validation error for another height context or an
-    /// out-of-range signer seat.
-    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
-        validate_round(self.round, context)?;
-        let zero_based = self
-            .partial
-            .signer_index
-            .checked_sub(1)
-            .ok_or(ValidationError::SignerOutOfRange)?;
-        if usize::from(zero_based) >= context.roster.len() {
-            return Err(ValidationError::SignerOutOfRange);
-        }
-        Ok(())
-    }
-}
 /// First-release wire tag for [`ConsensusMessageV2Payload::Proposal`].
 pub const CONSENSUS_MESSAGE_V2_PROPOSAL_TAG: u32 = 0;
 /// First-release wire tag for [`ConsensusMessageV2Payload::Vote`].
@@ -2945,8 +2725,17 @@ pub const CONSENSUS_MESSAGE_V2_GLOBAL_BEACON_PARTIAL_SIGNATURE_TAG: u32 = 10;
     clippy::large_enum_variant,
     reason = "consensus variants retain their canonical V1 Norito payloads inline; introducing indirection would change the signed wire representation"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "kind",
     content = "message",
@@ -2991,8 +2780,17 @@ pub enum ConsensusMessageV2Payload {
     GlobalBeaconPartialSignature(GlobalBeaconPartialSignature),
 }
 /// Explicitly versioned Sumeragi v2 network envelope.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::ConsensusMessageV2")]
@@ -3003,8 +2801,18 @@ pub struct ConsensusMessageV2 {
     pub payload: ConsensusMessageV2Payload,
 }
 /// High-level reducer phase exported by the compact Sumeragi v2 status API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "phase",
     content = "details",
@@ -3028,8 +2836,18 @@ pub enum SumeragiV2StatusPhase {
     PendingApply,
 }
 /// Local availability/application state for the current proposal body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "state",
     content = "details",
@@ -3053,8 +2871,18 @@ pub enum SumeragiV2BodyState {
     Applied,
 }
 /// Frozen election and equal-vote quorum inputs governing the active status height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2HeightContextStatus")]
@@ -3073,8 +2901,18 @@ pub struct SumeragiV2HeightContextStatus {
     pub quorum: DualQuorum,
 }
 /// Equal-vote summary of the latest authenticated durable `CommitQC`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2CommitQcStatus")]
@@ -3098,8 +2936,18 @@ pub struct SumeragiV2CommitQcStatus {
 /// installation, replaces vote pools or asynchronous completion ownership.
 pub type SumeragiV2Generation = u64;
 /// Partial equal-vote quorum state for one exact voting round and proposal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus")]
@@ -3122,8 +2970,18 @@ pub struct SumeragiV2VoteQuorumStatus {
     pub total_power: u64,
 }
 /// Partial timeout quorum state for one exact round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2TimeoutQuorumStatus")]
@@ -3142,8 +3000,20 @@ pub struct SumeragiV2TimeoutQuorumStatus {
     pub certificate_formed: bool,
 }
 /// Durable protocol intent retained for fair outbound service.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "kind",
     content = "details",
@@ -3169,8 +3039,20 @@ pub enum SumeragiV2OutboundIntentKind {
     TimeoutCertificate,
 }
 /// Current lifecycle stage of a durable outbound intent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "stage",
     content = "details",
@@ -3194,8 +3076,18 @@ pub enum SumeragiV2OutboundIntentStage {
 /// All three optional evidence slots are required on the JSON wire. Intent
 /// shape determines whether their explicit value is `null`; omission is not a
 /// first-release representation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2OutboundIntentStatus")]
@@ -3219,9 +3111,20 @@ pub struct SumeragiV2OutboundIntentStatus {
 }
 /// State of one terminating local-work stage.
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(
     tag = "stage",
     content = "details",
@@ -3242,8 +3145,19 @@ pub enum SumeragiV2LocalWorkStage {
     Complete,
 }
 /// Local body, validation, application, and handoff pipeline.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2WorkStatus")]
@@ -3262,8 +3176,20 @@ pub struct SumeragiV2WorkStatus {
     pub successor_height: SumeragiV2LocalWorkStage,
 }
 /// Bounded queue contributing to Sumeragi v2 progress.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "queue",
     content = "details",
@@ -3301,8 +3227,18 @@ pub enum SumeragiV2QueueKind {
 ///
 /// `oldest_age_ms` is an explicit nullable JSON slot: an empty queue reports
 /// `null` and never omits the current field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QueueStatus")]
@@ -3325,8 +3261,20 @@ pub struct SumeragiV2QueueStatus {
 /// height-wide semantic high-water. Timeout traffic and reconstruction of an
 /// already observed partial vote pool remain visible here without refreshing
 /// that clock, so repeated view churn cannot mask a stall.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "transition",
     content = "details",
@@ -3369,8 +3317,18 @@ pub enum SumeragiV2ProgressTransition {
     RecoveryReplayed,
 }
 /// Last tracked reducer transition and its local age.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2ProgressTransitionStatus")]
@@ -3385,8 +3343,20 @@ pub struct SumeragiV2ProgressTransitionStatus {
     pub age_ms: u64,
 }
 /// Classified cause of an active no-progress interval.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "blocker",
     content = "details",
@@ -3416,8 +3386,20 @@ pub enum SumeragiV2LivenessBlocker {
     LocalControlPending,
 }
 /// Closed reducer reason for safely ignoring an input.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "reason",
     content = "details",
@@ -3453,8 +3435,18 @@ pub enum SumeragiV2IgnoreReason {
     UnsafeProposal,
 }
 /// Per-height counter for one closed input-ignore reason.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2IgnoreCount")]
@@ -3473,8 +3465,18 @@ pub struct SumeragiV2IgnoreCount {
 /// diagnostics remain bounded by the status snapshot's current view.
 /// Nullable diagnostic slots are always present in JSON and use explicit
 /// `null` when no transition or blocker exists.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2LivenessStatus")]
@@ -3508,8 +3510,19 @@ pub struct SumeragiV2LivenessStatus {
 ///
 /// Both nullable slots are required on the wire so peers never infer missing
 /// fields as `None`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2QcResponse")]
@@ -3526,8 +3539,17 @@ pub struct SumeragiV2QcResponse {
 /// Every field belongs to the first-release JSON schema. Nullable consensus
 /// evidence is encoded as an explicit value or `null`; missing fields are
 /// rejected rather than interpreted as compatibility defaults.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus_v2::SumeragiV2Status")]
@@ -4124,31 +4146,6 @@ impl fmt::Display for SumeragiV2StatusValidationError {
     }
 }
 impl std::error::Error for SumeragiV2StatusValidationError {}
-impl ConsensusMessageV2 {
-    /// Wrap a v2 payload with the canonical protocol version.
-    #[must_use]
-    pub const fn new(payload: ConsensusMessageV2Payload) -> Self {
-        Self {
-            protocol_version: PROTOCOL_VERSION,
-            payload,
-        }
-    }
-    /// Reject envelopes from any other consensus wire version.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ValidationError::UnsupportedProtocolVersion`] when the
-    /// explicit version is not v2.
-    pub fn validate_version(&self) -> Result<(), ValidationError> {
-        if self.protocol_version != PROTOCOL_VERSION {
-            return Err(ValidationError::UnsupportedProtocolVersion {
-                expected: PROTOCOL_VERSION,
-                actual: self.protocol_version,
-            });
-        }
-        Ok(())
-    }
-}
 /// Structural validation failures for Sumeragi v2 wire values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationError {
@@ -4756,7 +4753,9 @@ pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
         next_epoch_roster: None,
     }
 }
-include!("consensus_v2_tests.rs");
+#[cfg(test)]
+#[path = "consensus_v2_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod terminal_height_context_tests {

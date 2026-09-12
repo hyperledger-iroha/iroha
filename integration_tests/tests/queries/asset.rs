@@ -7,6 +7,7 @@ use iroha::{
     client::QueryError,
     data_model::{prelude::*, query::builder::SingleQueryError},
 };
+use iroha_model_base::domain::DomainId;
 use iroha_test_network::submit_ensure_domain_for_network;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::{thread, time::Duration};

@@ -24,16 +24,24 @@ pub enum PrivacyActivationStatementLimitsError {
     },
 }
 /// Validated raw proof payload for a protocol-specific proof variant.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProofBytesV1")]
 pub struct PrivacyProofBytesV1 {
     /// Exact native proof encoding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub bytes: Vec<u8>,
 }
 impl PrivacyProofBytesV1 {
@@ -78,15 +86,20 @@ impl PrivacyProofBytesV1 {
     }
 }
 /// Action-typed native ZK-AMS proof.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "action", content = "proof", deny_unknown_fields)
-)]
+#[norito(tag = "action", content = "proof", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IrohaZkAmsProofV1")]
 pub enum IrohaZkAmsProofV1 {
@@ -128,18 +141,25 @@ impl IrohaZkAmsProofV1 {
     }
 }
 /// Protocol-typed native proof payload.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.proof.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "protocol", content = "proof", deny_unknown_fields)
-)]
+#[norito(tag = "protocol", content = "proof", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofV1", frame = "iroha.privacy.proof.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::PrivacyProofV1",
+    frame = "iroha.privacy.proof.v1"
+)]
 pub enum PrivacyProofV1 {
     /// ZK-ACE post-quantum authorization proof.
     ZkAcePqAuthorizationV1(PrivacyProofBytesV1),
@@ -967,15 +987,25 @@ pub enum PrivacyProofValidationError {
     LengthOverflow,
 }
 /// Complete protocol-bound privacy proof admission envelope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.proof-envelope.v1")]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofEnvelopeV1", frame = "iroha.privacy.proof-envelope.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::PrivacyProofEnvelopeV1",
+    frame = "iroha.privacy.proof-envelope.v1"
+)]
 pub struct PrivacyProofEnvelopeV1 {
     /// Mandatory first-release wire marker; invalid markers fail decoding.
     pub wire_magic: PrivacyProofWireMagicV1,
@@ -1412,16 +1442,16 @@ mod exact12_fixture {
     use crate::{
         NetworkId,
         block::BlockHeader,
-        domain::DomainId,
         isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
-        metadata::Metadata,
-        name::Name,
         transaction::{
             Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain,
             TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use iroha_version::codec::EncodeVersioned as _;
     use std::{
         fmt::Write as _,
@@ -2108,8 +2138,8 @@ mod exact12_fixture {
             _ => proof_for(protocol_id),
         };
         Ok(PrivacyProofEnvelopeV1 {
-            wire_magic: Default::default(),
-            catalog_commitment: Default::default(),
+            wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
+            catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
             protocol_id,
             proof_system_id: protocol_id.expected_proof_system(),
             engine_id: protocol_id.expected_engine(),
@@ -2152,8 +2182,11 @@ mod exact12_fixture {
     /// discriminant next to the complete statement, envelope, instruction,
     /// intent, unsigned-payload, and signed-transaction bytes lets downstream
     /// SDKs reject cross-protocol substitution at every transaction layer.
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-row.v1")]
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::privacy::exact12_fixture::PrivacyExact12TypedFixtureRowV1",
+        frame = "iroha.privacy.exact12-typed-fixture-row.v1"
+    )]
     pub struct PrivacyExact12TypedFixtureRowV1 {
         /// Closed protocol identity in canonical discriminant order.
         pub protocol_id: PrivacyProtocolIdV1,
@@ -2177,8 +2210,11 @@ mod exact12_fixture {
         pub signed_transaction_hash: [u8; 32],
     }
     /// Signed byte-level KAT material for all first-release privacy protocols.
-    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-bundle.v1")]
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::privacy::exact12_fixture::PrivacyExact12FixtureBundleV1",
+        frame = "iroha.privacy.exact12-typed-fixture-bundle.v1"
+    )]
     pub struct PrivacyExact12FixtureBundleV1 {
         /// Exact first-release bundle version.
         pub version: u32,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Domain, DomainId, Level,
+    Domain, Level,
     account::{MultisigMember, MultisigPolicy},
     prelude::{Log, Register, TriggerId},
     privacy::{
@@ -27,6 +27,8 @@ use crate::{
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_version::{
     DecodeAll,
     codec::{DecodeVersioned, EncodeVersioned},
@@ -211,7 +213,7 @@ fn transaction_payload_rejects_wire_omitting_required_admission_intent() {
         "admission_intent is a required V1 transaction-payload wire field"
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
     let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
     assert_eq!(
@@ -223,7 +225,7 @@ fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         Err(norito::json::BoundedJsonError::BodyTooLarge)
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn transaction_manual_json_families_have_exact_checked_bounds() {
     assert_exact_json(&TransactionEntrypoint::External(sample_signed_transaction()));
@@ -269,7 +271,7 @@ fn transaction_domain_network_and_genesis_wire_are_disjoint_and_pinned() {
         "the closed transaction-domain enum must reject unknown discriminants"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
     let network_id = test_network_id(0x35);
@@ -307,7 +309,7 @@ fn transaction_domain_json_is_closed_and_rejects_legacy_identity_keys() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn transaction_payload_json_rejects_retired_identity_keys_and_unknown_fields() {
     let transaction = sample_signed_transaction();
@@ -417,7 +419,7 @@ fn sample_fee_asset() -> AssetDefinitionId {
         "xor".parse().expect("valid fee asset name"),
     )
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fee_payment_json_requires_explicit_nullable_gas_and_closed_objects() {
     let mut unknown_kind =
@@ -623,8 +625,8 @@ fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
         },
     );
     SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
-        wire_magic: Default::default(),
-        catalog_commitment: Default::default(),
+        wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
+        catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
         protocol_id,
         proof_system_id: PrivacyProofSystemIdV1::JindoPolynomialCommitment,
         engine_id: protocol_id.expected_engine(),
@@ -860,7 +862,7 @@ fn privacy_test_contract_call() -> ContractInvocation {
             &test_network_id(0x30),
             &privacy_test_authority(),
             0,
-            crate::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("test contract address"),
         expected_code_hash: Hash::new(b"privacy intent test contract"),
@@ -1328,8 +1330,9 @@ fn zk_ace_intent_projection_zeroes_the_derived_nullifier_and_binds_action_fields
         else {
             panic!("ZK-ACE fixture statement");
         };
-        statement.public_balance_scope =
-            crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
+        statement.public_balance_scope = crate::asset::AssetBalanceScope::Dataspace(
+            iroha_model_base::topology::DataSpaceId::new(7),
+        );
     });
     assert_ne!(
         changed_scope
@@ -1467,8 +1470,9 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
             statement.output_commitments[0].0[0] ^= 1;
         },
         |statement: &mut IrohaIvmPrivateNoteStarkStatementV1| {
-            statement.public_balance_scope =
-                crate::asset::AssetBalanceScope::Dataspace(crate::nexus::DataSpaceId::new(7));
+            statement.public_balance_scope = crate::asset::AssetBalanceScope::Dataspace(
+                iroha_model_base::topology::DataSpaceId::new(7),
+            );
         },
     ];
     for mutate in independent_mutations {
@@ -1952,7 +1956,7 @@ fn signed_contract_invocation_arguments_and_code_hash_are_signature_bound() {
         &network_id,
         &authority,
         0,
-        crate::nexus::DataSpaceId::UNIVERSAL,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("contract address");
     let arguments = crate::transaction::executable::ContractArgumentRecord::try_new(vec![

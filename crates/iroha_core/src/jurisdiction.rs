@@ -9,13 +9,11 @@
 use iroha_crypto::{
     Algorithm, HashOf, Signature, ed25519_parse_signature, mldsa65_parse_signature,
 };
-use iroha_data_model::{
-    jurisdiction::{
-        JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
-        JdgSdnRegistryError, JdgSdnValidationError, JdgSignatureScheme,
-    },
-    nexus::DataSpaceId,
+use iroha_data_model::jurisdiction::{
+    JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
+    JdgSdnRegistryError, JdgSdnValidationError, JdgSignatureScheme,
 };
+use iroha_model_base::topology::DataSpaceId;
 use iroha_schema::IntoSchema;
 use norito::{codec::Encode, decode_from_reader};
 use std::{
@@ -200,7 +198,10 @@ pub enum JdgSdnLoadError {
     AlreadyInitialised,
 }
 /// Manifest entry describing a committee schedule for a single dataspace.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_core::jurisdiction::JdgCommitteeManifest")]
 pub struct JdgCommitteeManifest {
     /// Dataspace covered by the manifest.
     pub dataspace: DataSpaceId,
@@ -208,6 +209,8 @@ pub struct JdgCommitteeManifest {
     pub committees: Vec<JdgCommitteeRecord>,
 }
 /// Committee membership/rotation record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::jurisdiction::JdgCommitteeRecord")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeRecord {
     /// Committee identifier bound into attestations.
@@ -223,6 +226,8 @@ pub struct JdgCommitteeRecord {
     pub retire_height: u64,
 }
 /// Committee member with optional proof-of-possession.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::jurisdiction::JdgCommitteeMember")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeMember {
     /// Member public key.
@@ -1024,12 +1029,10 @@ mod tests {
     #[cfg(feature = "bls")]
     use iroha_crypto::Algorithm;
     use iroha_crypto::{Hash, Signature, SignatureOf};
-    use iroha_data_model::{
-        jurisdiction::{
-            JdgAttestationScope, JdgBlockRange, JdgSignatureScheme, JdgStateAccessSet, JdgVerdict,
-        },
-        nexus::DataSpaceId,
+    use iroha_data_model::jurisdiction::{
+        JdgAttestationScope, JdgBlockRange, JdgSignatureScheme, JdgStateAccessSet, JdgVerdict,
     };
+    use iroha_model_base::topology::DataSpaceId;
     use std::io::Cursor;
     use tempfile::tempdir;
     fn simple_signature_schemes() -> BTreeSet<JdgSignatureScheme> {
@@ -1475,6 +1478,39 @@ mod tests {
             err,
             JdgCommitteeError::DuplicateMember { committee_id }
                 if committee_id == committee.committee_id
+        ));
+    }
+    #[test]
+    fn committee_manifest_frame_roundtrips_through_schedule_file_reader() {
+        let dataspace = DataSpaceId::new(9);
+        let (committee, _) = committee_with_members(dataspace, 10, 20, 3, 4);
+        let manifest = JdgCommitteeManifest {
+            dataspace,
+            committees: vec![committee.clone()],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &manifest,
+            "iroha_core::jurisdiction::JdgCommitteeManifest",
+        );
+        let file = tempfile::NamedTempFile::new().expect("manifest file");
+        let mut frame = norito::encode_canonical(&vec![manifest]).expect("manifest bundle frame");
+        std::fs::write(file.path(), &frame).expect("write committee bundle");
+        let schedule =
+            JdgCommitteeSchedule::from_path(file.path(), 1).expect("production file reader");
+        assert_eq!(
+            schedule
+                .active_committee(&dataspace, 15)
+                .expect("active committee"),
+            &committee
+        );
+        frame[6] ^= 1;
+        std::fs::write(file.path(), frame).expect("write wrong bundle root");
+        assert!(matches!(
+            JdgCommitteeSchedule::from_path(file.path(), 1),
+            Err(JdgCommitteeLoadError::Decode {
+                source: norito::Error::SchemaMismatch,
+                ..
+            })
         ));
     }
     #[test]

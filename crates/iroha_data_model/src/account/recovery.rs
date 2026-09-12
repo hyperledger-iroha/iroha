@@ -7,12 +7,21 @@ use norito::codec::{Decode, Encode};
 use std::{collections::BTreeSet, num::NonZeroU64, vec::Vec};
 use thiserror::Error;
 /// Guardian that can participate in social recovery for an account alias.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::recovery::RecoveryGuardian")]
 pub struct RecoveryGuardian {
@@ -29,12 +38,20 @@ impl RecoveryGuardian {
     }
 }
 /// Alias-keyed social recovery policy for an account.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::recovery::AccountRecoveryPolicy")]
 pub struct AccountRecoveryPolicy {
@@ -136,15 +153,22 @@ impl AccountRecoveryPolicy {
     }
 }
 /// Lifecycle state of an account recovery request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "value", rename_all = "snake_case")
-)]
+#[norito(tag = "status", content = "value", rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::recovery::AccountRecoveryStatus")]
 pub enum AccountRecoveryStatus {
@@ -156,12 +180,20 @@ pub enum AccountRecoveryStatus {
     Finalized,
 }
 /// Alias-keyed account recovery request tracked in world state.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::recovery::AccountRecoveryRequest")]
 pub struct AccountRecoveryRequest {
@@ -257,8 +289,9 @@ pub enum AccountRecoveryPolicyError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Level, isi::Log, nexus::DataSpaceId};
+    use crate::{Level, isi::Log};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::topology::DataSpaceId;
     use std::num::NonZeroU64;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -352,7 +385,7 @@ mod tests {
         let decoded = norito::decode_from_bytes::<AccountRecoveryRequest>(&encoded)
             .expect("decode recovery request");
         assert_eq!(decoded, request);
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_json(&request).expect("encode recovery request JSON");
             let decoded = norito::json::from_str::<AccountRecoveryRequest>(&json)

@@ -12,7 +12,8 @@ use std::vec::Vec;
 #[model]
 mod model {
     use super::*;
-    use crate::{account::AccountId, asset::AssetId, peer::PeerId};
+    use crate::{account::AccountId, asset::AssetId};
+    use iroha_model_base::peer::PeerId;
     /// Unique identifier assigned to an alias record in the Merkle store.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     pub struct AliasIndex(pub u64);
@@ -20,7 +21,7 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasRecord {
         /// Human-readable alias maintained by governance.
-        pub alias: crate::name::Name,
+        pub alias: iroha_model_base::name::Name,
         /// Owner responsible for the alias lifecycle.
         pub owner: AccountId,
         /// Entity targeted by the alias.
@@ -46,7 +47,7 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasAttestation {
         /// Alias covered by the attestation.
-        pub alias: crate::name::Name,
+        pub alias: iroha_model_base::name::Name,
         /// Authority that produced the attestation.
         pub attester: AccountId,
         /// Signature over the attestation payload.
@@ -75,7 +76,7 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     pub struct AliasRevokedEvent {
         /// Alias name.
-        pub alias: crate::name::Name,
+        pub alias: iroha_model_base::name::Name,
         /// Authority performing the revoke operation.
         pub attester: AccountId,
     }
@@ -93,7 +94,7 @@ impl AliasRecord {
     /// Construct a new alias record.
     #[must_use]
     pub fn new(
-        alias: crate::name::Name,
+        alias: iroha_model_base::name::Name,
         owner: crate::account::AccountId,
         target: AliasTarget,
         index: AliasIndex,
@@ -117,7 +118,7 @@ impl AliasAttestation {
     /// Construct a new attestation payload.
     #[must_use]
     pub fn new(
-        alias: crate::name::Name,
+        alias: iroha_model_base::name::Name,
         attester: crate::account::AccountId,
         signature: Signature,
         context: Vec<u8>,
@@ -172,8 +173,10 @@ pub fn alias_frontier_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{account::AccountId, domain::DomainId, name::Name};
+    use crate::account::AccountId;
     use iroha_crypto::KeyPair;
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked alias fixture keypair")

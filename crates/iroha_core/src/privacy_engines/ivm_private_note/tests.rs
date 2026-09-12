@@ -16,7 +16,6 @@ use super::{
 use iroha_data_model::{
     NetworkId,
     asset::AssetDefinitionId,
-    domain::DomainId,
     privacy::{
         IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyCommitmentV1,
         PrivacyEngineManifestDigestV1, PrivacyNullifierV1, PrivacyParameterDigestV1,
@@ -25,6 +24,7 @@ use iroha_data_model::{
         PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVerifierDigestV1,
     },
 };
+use iroha_model_base::domain::DomainId;
 use rand_08::{SeedableRng as _, rngs::StdRng};
 use std::str::FromStr as _;
 fn bytes(seed: u8) -> [u8; 32] {
@@ -33,7 +33,7 @@ fn bytes(seed: u8) -> [u8; 32] {
 fn asset() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("test domain"),
-        iroha_data_model::name::Name::from_str("ivmnote").expect("test asset"),
+        iroha_model_base::name::Name::from_str("ivmnote").expect("test asset"),
     )
 }
 fn context() -> PrivacyStatementContextV1 {

@@ -1,0 +1,25 @@
+[package]
+name = "iroha_js_codec_wasm"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Browser adapter for the canonical Iroha account and instruction codecs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+iroha_js_codec = { workspace = true }
+norito = { workspace = true, features = ["base-codec"] }
+wasm-bindgen = "=0.2.122"
+
+# Each version occurs in the canonical crypto graph. Feature unification selects
+# actual browser WebCrypto for each without changing native entropy providers.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom_02 = { package = "getrandom", version = "=0.2.17", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "=0.3.4", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "=0.4.3", features = ["wasm_js"] }

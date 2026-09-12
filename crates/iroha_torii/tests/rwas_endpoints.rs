@@ -41,7 +41,7 @@ async fn rwas_endpoints_exist() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx;
     let torii = Torii::new_with_handle(
-        iroha_data_model::ChainId::from("test-chain"),
+        iroha_model_base::chain::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
@@ -53,7 +53,10 @@ async fn rwas_endpoints_exist() {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii RWA fixture");
     let runtime = torii
@@ -88,3 +91,6 @@ async fn rwas_endpoints_exist() {
     ));
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

@@ -16,14 +16,16 @@ use iroha_data_model::{
         MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiResolverReleaseRowV1,
         MusubiStorageAvailabilityV1, MusubiVerificationNodeV1, MusubiVersionReqV1, MusubiVersionV1,
     },
-    name::Name,
 };
+use iroha_model_base::name::Name;
 use std::{
-    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt,
     sync::Arc,
 };
+mod search;
+
 /// Maximum candidate rows retained across one bounded sparse-index collection.
 pub const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
 /// Maximum candidate dependency occurrences inspected across one collection.
@@ -665,195 +667,6 @@ impl Solver {
                 })
             })
             .collect()
-    }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the aggregate 512-edge cap bounds recursion while this state machine keeps candidate selection, conflict evidence, and deterministic backtracking adjacent"
-    )]
-    fn search(
-        &self,
-        state: SearchState,
-        mut pending: Vec<Arc<PendingEdge>>,
-        attempts: &mut usize,
-    ) -> Result<SearchState, ResolverError> {
-        if pending.is_empty() {
-            if let Some(conflict) = self.precise_conflict(&state) {
-                return Err(ResolverError::Conflict(Box::new(conflict)));
-            }
-            return Ok(state);
-        }
-        let task = pending.remove(0);
-        if task.depth > self.limits.depth {
-            return Err(ResolverError::Conflict(Box::new(ResolutionConflictV1 {
-                chain: task.chain.to_vec(),
-                reason: ConflictReasonV1::DepthLimit,
-            })));
-        }
-        let preserved_candidate = self.preservable_locked_candidate(&task);
-        let candidates = self.candidates(&state, &task);
-        if candidates.is_empty() {
-            return Err(ResolverError::Conflict(Box::new(ResolutionConflictV1 {
-                chain: task.chain.to_vec(),
-                reason: ConflictReasonV1::NoCandidate,
-            })));
-        }
-        let minimum_parallel_excess = parallel_version_excess(&state);
-        let mut best_conflict = None;
-        let mut best_solution = None;
-        for candidate in candidates {
-            if *attempts >= self.limits.attempts {
-                return Err(ResolverError::SearchLimitExceeded {
-                    limit: self.limits.attempts,
-                });
-            }
-            *attempts += 1;
-            if Self::would_cycle(&state, &task.parent, candidate.as_ref()) {
-                select_better_conflict(
-                    &mut best_conflict,
-                    ResolutionConflictV1 {
-                        chain: task.chain.to_vec(),
-                        reason: ConflictReasonV1::Cycle(candidate.as_ref().clone()),
-                    },
-                );
-                continue;
-            }
-            if state.selected.contains(candidate.as_ref())
-                && let Some(chain) =
-                    self.selected_subtree_depth_conflict(&state, &task, candidate.as_ref())
-            {
-                select_better_conflict(
-                    &mut best_conflict,
-                    ResolutionConflictV1 {
-                        chain,
-                        reason: ConflictReasonV1::DepthLimit,
-                    },
-                );
-                continue;
-            }
-            let mut next = state.clone();
-            let is_new = next.selected.insert(Arc::clone(&candidate));
-            if is_new && next.selected.len() > self.limits.nodes {
-                select_better_conflict(
-                    &mut best_conflict,
-                    ResolutionConflictV1 {
-                        chain: task.chain.to_vec(),
-                        reason: ConflictReasonV1::NodeLimit,
-                    },
-                );
-                continue;
-            }
-            let edge = MusubiExactDependencyEdgeV1 {
-                alias: task.alias.clone(),
-                kind: task.kind,
-                package: task.package.clone(),
-                requirement: task.requirement.as_ref().clone(),
-                selected: candidate.as_ref().clone(),
-            };
-            match next
-                .edges
-                .entry(task.parent.clone())
-                .or_default()
-                .entry(task.alias.clone())
-            {
-                Entry::Occupied(mut occupied) => {
-                    occupied.insert(Arc::new(edge));
-                }
-                Entry::Vacant(vacant) => {
-                    let Some(edge_count) = next.edge_count.checked_add(1) else {
-                        select_better_conflict(
-                            &mut best_conflict,
-                            ResolutionConflictV1 {
-                                chain: task.chain.to_vec(),
-                                reason: ConflictReasonV1::EdgeLimit,
-                            },
-                        );
-                        continue;
-                    };
-                    if edge_count > self.limits.edges {
-                        select_better_conflict(
-                            &mut best_conflict,
-                            ResolutionConflictV1 {
-                                chain: task.chain.to_vec(),
-                                reason: ConflictReasonV1::EdgeLimit,
-                            },
-                        );
-                        continue;
-                    }
-                    next.edge_count = edge_count;
-                    vacant.insert(Arc::new(edge));
-                }
-            }
-            let mut next_pending = Vec::new();
-            if is_new {
-                let row = self
-                    .rows
-                    .get(candidate.as_ref())
-                    .expect("candidate row exists");
-                let parent = ParentKey::shared_release(Arc::clone(&candidate));
-                let origin_parent = task
-                    .origin
-                    .as_ref()
-                    .map(|origin| ParentKey::Release(Arc::clone(&origin.selected)));
-                for dependency in &row.dependencies {
-                    let chain = task.chain.push(PendingEdge::step(
-                        &parent,
-                        &dependency.alias,
-                        &dependency.package,
-                        &dependency.requirement,
-                    ));
-                    next_pending.push(Arc::new(PendingEdge {
-                        parent: parent.clone(),
-                        alias: dependency.alias.clone(),
-                        kind: MusubiDependencyKindV1::Normal,
-                        package: dependency.package.clone(),
-                        requirement: Arc::new(dependency.requirement.clone()),
-                        depth: task.depth.saturating_add(1),
-                        chain,
-                        origin: origin_parent.as_ref().and_then(|origin_parent| {
-                            self.previous_edge(
-                                origin_parent,
-                                &dependency.alias,
-                                &dependency.package,
-                            )
-                        }),
-                    }));
-                }
-            }
-            next_pending.extend(pending.iter().cloned());
-            match self.search(next, next_pending, attempts) {
-                Ok(solution) => {
-                    // A successful still-valid locked branch wins over
-                    // duplicate-version minimization. If that branch cannot
-                    // resolve, normal candidate backtracking remains active.
-                    if preserved_candidate.as_ref() == Some(&candidate) {
-                        return Ok(solution);
-                    }
-                    if preserved_candidate.is_none()
-                        && parallel_version_excess(&solution) == minimum_parallel_excess
-                    {
-                        return Ok(solution);
-                    }
-                    if best_solution.as_ref().is_none_or(|current| {
-                        parallel_version_excess(&solution) < parallel_version_excess(current)
-                    }) {
-                        best_solution = Some(solution);
-                    }
-                }
-                Err(ResolverError::Conflict(conflict)) => {
-                    select_better_conflict(&mut best_conflict, *conflict);
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        if let Some(solution) = best_solution {
-            return Ok(solution);
-        }
-        Err(ResolverError::Conflict(Box::new(
-            best_conflict.unwrap_or_else(|| ResolutionConflictV1 {
-                chain: task.chain.to_vec(),
-                reason: ConflictReasonV1::NoCandidate,
-            }),
-        )))
     }
     #[expect(
         clippy::too_many_lines,
@@ -1602,9 +1415,9 @@ mod tests {
             MusubiReasonV1, MusubiReleaseDigestV1, MusubiReleaseSelectionStateV1,
             MusubiReleaseYankV1, MusubiStorageAvailabilityV1,
         },
-        nexus::DataSpaceId,
         prelude::{Algorithm, KeyPair},
     };
+    use iroha_model_base::topology::DataSpaceId;
     fn network_id() -> NetworkId {
         "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
             .parse()
@@ -3691,5 +3504,72 @@ mod tests {
             resolve(locked),
             Err(ResolverError::LockChangeRequired)
         ));
+    }
+    #[test]
+    fn production_depth_corridor_accepts_limit_and_rejects_next_edge() {
+        let snap = snapshot(36);
+        let depth = usize::from(MUSUBI_MAX_RESOLUTION_DEPTH_V1);
+        let packages = (0..=depth)
+            .map(|index| package(&format!("depth{index:03}")))
+            .collect::<Vec<_>>();
+        let roots = vec![root(vec![root_dependency(
+            "entry",
+            MusubiDependencyKindV1::Normal,
+            &packages[0],
+            "*",
+        )])];
+        let chain_rows = |count: usize| {
+            (0..count)
+                .map(|index| {
+                    let dependencies = if index + 1 < count {
+                        vec![dependency("next", &packages[index + 1], "*")]
+                    } else {
+                        Vec::new()
+                    };
+                    row(&packages[index], "1.0.0", dependencies, snap)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Returning each result also destroys the search continuations and their
+        // shared conflict chains on this ordinary test worker's stack.
+        let exact_rows = chain_rows(depth);
+        let exact = resolve(request(roots.clone(), exact_rows.clone(), snap))
+            .expect("a chain at the production depth bound resolves");
+        assert_eq!(exact.lockfile.nodes.len(), depth);
+        assert_eq!(
+            root_selection(&exact.lockfile, "entry").package,
+            packages[0]
+        );
+        let mut reversed_exact_rows = exact_rows;
+        reversed_exact_rows.reverse();
+        let reversed_exact = resolve(request(roots.clone(), reversed_exact_rows, snap))
+            .expect("input order preserves the exact-bound solution");
+        assert_eq!(reversed_exact, exact);
+
+        let overflow_rows = chain_rows(depth + 1);
+        let overflow = resolve(request(roots.clone(), overflow_rows.clone(), snap))
+            .expect_err("the next dependency exceeds the production depth bound");
+        let mut reversed_overflow_rows = overflow_rows;
+        reversed_overflow_rows.reverse();
+        let reversed_overflow = resolve(request(roots, reversed_overflow_rows, snap))
+            .expect_err("input order preserves the depth conflict");
+        assert_eq!(reversed_overflow, overflow);
+        let ResolverError::Conflict(conflict) = overflow else {
+            panic!("expected depth-limit conflict");
+        };
+        assert_eq!(conflict.reason, ConflictReasonV1::DepthLimit);
+        assert_eq!(conflict.chain.len(), depth + 1);
+        assert_eq!(conflict.chain[0].alias.as_ref(), "entry");
+        assert_eq!(conflict.chain[0].package, packages[0]);
+        let terminal = conflict.chain.last().expect("terminal overflow edge");
+        assert_eq!(terminal.alias.as_ref(), "next");
+        assert_eq!(terminal.package, packages[depth]);
+        assert_eq!(
+            terminal.parent,
+            ConflictParentV1::Release(MusubiReleaseIdV1::new(
+                packages[depth - 1].clone(),
+                version("1.0.0"),
+            ))
+        );
     }
 }

@@ -1036,7 +1036,7 @@ fn set_no_follow_flag(options: &mut fs::OpenOptions) {
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -1228,10 +1228,8 @@ fn encode_base32_lower(data: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use crate::verifier::ParsedCar;
-    use iroha_data_model::{
-        name::Name,
-        taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution},
-    };
+    use iroha_data_model::taikai::{TaikaiAudioLayout, TaikaiCodec, TaikaiResolution};
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
     use tempfile::{TempDir, tempdir};
     #[test]

@@ -9,7 +9,7 @@
 //! because its hardware-bound terminal voucher exists before chain execution.
 
 use super::*;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -29,9 +29,9 @@ use crate::{
         kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
-    peer::PeerId,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::peer::PeerId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -75,17 +75,26 @@ pub const KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1: usize = 32;
 /// These keys are intentionally not derived from the validator's BLS public
 /// key.  The epoch roster is mandatory authority which must match the frozen
 /// consensus roster exactly.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalityValidatorKeysV1 {
     /// Exact consensus identity occupying this roster position.
     pub validator: PeerId,
     /// Canonical compressed Pallas key verified by the Eq/Fp helper.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_proof_public_key: [u8; 32],
     /// Canonical compressed Vesta key verified by the Ep/Fq helper.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_proof_public_key: [u8; 32],
 }
 
@@ -95,8 +104,17 @@ pub struct KagemushaMintFinalityValidatorKeysV1 {
 /// therefore the final [`NetworkId`], exists. Core binds the frozen network
 /// identity after genesis is staged and before constructing the first
 /// [`crate::block::consensus_v2::HeightContext`].
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalityEpochRosterTemplateV1 {
     /// Sole first-release layout version.
@@ -149,8 +167,17 @@ impl KagemushaMintFinalityEpochRosterTemplateV1 {
 }
 
 /// Signed network-independent KAGEMUSHA mint-finality genesis authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalityGenesisParametersV1 {
     /// Mandatory epoch-zero authority template.
@@ -184,8 +211,17 @@ impl KagemushaMintFinalityGenesisParametersV1 {
 }
 
 /// Exact epoch-scoped KAGEMUSHA mint-finality authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalityEpochRosterV1 {
     /// Sole first-release layout version.
@@ -334,8 +370,20 @@ pub enum KagemushaIsiValidationErrorV1 {
 }
 
 /// Immutable kind of one idempotent reserve operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum KagemushaOperationKindV1 {
     /// Debit online funds, increase the reserve, and fix one mint output.
@@ -351,30 +399,43 @@ pub enum KagemushaOperationKindV1 {
 /// `operation_id`, `issuance_commitment`, and `credit_id` are fixed before the
 /// ledger commit. The ciphertext and artifact digest are retained verbatim so
 /// crash recovery can reproduce the exact terminal [`KagemushaMintCreditV1`].
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.torii.v1.kagemusha.top_up.request")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpRequestV1",
+    frame = "iroha.torii.v1.kagemusha.top_up.request"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaTopUpRequestV1 {
     /// Chain layout version.
     pub version: u16,
     /// Globally unique idempotency key chosen before submission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub operation_id: [u8; 32],
     /// Deterministic pre-encryption commitment to the issuance identity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub issuance_commitment: [u8; 32],
     /// Unique mint-credit identifier fixed by this intent.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub credit_id: [u8; 32],
     /// Authenticated paired-Pasta proof release selected for minting.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
     /// Exact governed proof suite selected from the authenticated release.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub suite_id: [u8; 32],
     /// Digest of the exact release-pinned verifying-key set.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub vk_digest: [u8; 32],
     /// Exact network whose reserve accepts the liability.
     pub network_id: NetworkId,
@@ -391,7 +452,7 @@ pub struct KagemushaTopUpRequestV1 {
     /// Positive amount in atomic units.
     pub amount: u128,
     /// Sole deterministic reserve pool for `(network_id, asset, asset_incarnation)`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub liability_pool_id: [u8; 32],
     /// Online account atomically debited by this operation.
     pub payer: AccountId,
@@ -407,20 +468,20 @@ pub struct KagemushaTopUpRequestV1 {
     /// Stable credential, lane, hardware epoch, and key identities remain
     /// private and do not appear in the resulting public mint credit. This is
     /// sampled before and independently of the final credit ID.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub recipient_credential_commitment: [u8; 32],
     /// Receiver-bound private-value commitment sampled independently of the
     /// final credit ID and fixed before chain execution.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub credit_commitment: [u8; 32],
     /// Fresh recipient encryption key whose private half is held by qualified hardware.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub recipient_one_time_key: [u8; 32],
     /// Recipient-only encrypted opening retained for exact recovery.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub encrypted_credit: Vec<u8>,
     /// Digest of the exact proof artifact manifest used for final minting.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_manifest_digest: [u8; 32],
     /// Paired recipient authorization verified before the payer debit.
     ///
@@ -452,8 +513,11 @@ impl Ord for KagemushaTopUpRequestV1 {
 /// finality proof, and mint lifecycle ciphertext digest subsequently bind the
 /// exact encrypted bytes. `credit_commitment` is a pre-ID randomized value and
 /// must not be derived from the final credit ID.
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.top-up-issuance-preimage")]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpIssuancePreimageV1",
+    frame = "iroha.kagemusha.v1.top-up-issuance-preimage"
+)]
 struct KagemushaTopUpIssuancePreimageV1 {
     version: u16,
     operation_id: [u8; 32],
@@ -851,15 +915,28 @@ impl KagemushaTopUpRequestV1 {
 }
 
 /// One hardware-bound redemption request submitted to consensus.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.torii.v1.kagemusha.redeem.request")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaRedemptionRequestV1",
+    frame = "iroha.torii.v1.kagemusha.redeem.request"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRedemptionRequestV1 {
     /// Chain layout version.
     pub version: u16,
     /// Globally unique idempotency key chosen before submission.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub operation_id: [u8; 32],
     /// Full or partial unlinkable terminal voucher, including its literal
     /// trusted-hardware commit time and direct paired state proof.
@@ -924,26 +1001,37 @@ impl KagemushaRedemptionRequestV1 {
 /// The authenticated invariant is always
 /// `available = total_topups - total_redemptions`. Peer-to-peer payments never
 /// create this record and never modify these totals.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptV1")]
 pub struct KagemushaReserveReceiptV1 {
     /// Receipt layout version.
     pub version: u16,
     /// Idempotent operation identity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub operation_id: [u8; 32],
     /// Immutable operation kind.
     pub kind: KagemushaOperationKindV1,
     /// Digest of the exact request whose execution produced this receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub request_digest: [u8; 32],
     /// Canonical mint-statement digest fixed by a top-up's committed block time.
     ///
     /// This is non-zero only for [`KagemushaOperationKindV1::TopUp`].  It is
     /// carried by the consensus receipt because the request digest alone cannot
     /// reconstruct the statement's `minted_at_ms` binding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub mint_statement_digest: [u8; 32],
     /// Exact network owning the reserve.
     pub network_id: NetworkId,
@@ -955,7 +1043,7 @@ pub struct KagemushaReserveReceiptV1 {
     /// Authoritative asset scale.
     pub scale: u32,
     /// Sole deterministic liability pool.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub liability_pool_id: [u8; 32],
     /// Positive amount settled by this operation.
     pub amount: u128,
@@ -964,14 +1052,14 @@ pub struct KagemushaReserveReceiptV1 {
     /// The all-zero value is reserved for the canonical first top-up. Every
     /// later operation uses this as a constant-size compare-and-swap token;
     /// Core must match it against the pool's current head before committing.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub previous_pool_receipt_digest: [u8; 32],
     /// Checked sum of all top-ups after this operation.
     pub total_topups: u128,
     /// Checked sum of all redemptions after this operation.
     pub total_redemptions: u128,
     /// Exact signed transaction containing the operation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub transaction_hash: [u8; 32],
     /// Authoritative committed-block time in Unix milliseconds.
     pub committed_at_ms: u64,
@@ -1165,20 +1253,30 @@ impl KagemushaReserveReceiptV1 {
 /// The statement digest binds the complete receiver credit, while the receipt digest binds the
 /// exact consensus reserve mutation. The paired helper circuit exposes `statement_digest` and
 /// `amount` and proves this leaf's fixed-depth membership in the root signed by the Commit quorum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaTopUpLeafV1 {
     /// Chain layout version.
     pub version: u16,
     /// Exact committed top-up operation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub operation_id: [u8; 32],
     /// Canonical digest of the complete typed reserve receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub reserve_receipt_digest: [u8; 32],
     /// Canonical mint statement digest exposed as the first two helper instances.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub statement_digest: [u8; 32],
     /// Positive mint amount exposed as the third helper instance.
     pub amount: u128,
@@ -1206,8 +1304,17 @@ impl KagemushaTopUpLeafV1 {
 }
 
 /// Private fixed-depth membership witness consumed by both mint-helper parities.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaTopUpMembershipWitnessV1 {
     /// Exact leaf whose statement and amount become public helper instances.
@@ -1263,14 +1370,24 @@ impl KagemushaTopUpMembershipWitnessV1 {
 /// The paired seals are appended to Commit votes over the same subject and execution result as the
 /// ordinary BLS signature. They authenticate the circuit-friendly top-up root without creating a
 /// second consensus round or accepting a host-side finality result as monetary authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalitySealMessageV1 {
     /// Chain layout version.
     pub version: u16,
     /// Epoch-scoped identity of the fixed paired Pasta validator keys.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub finality_epoch_id: [u8; 32],
     /// Exact `3f + 1` validator count baked into the mint helper keys.
     pub validator_count: u32,
@@ -1281,10 +1398,10 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     /// Frozen consensus context governing `block_height`.
     pub height_context_id: HeightContextId,
     /// Digest of the exact Commit vote subject.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub subject_digest: [u8; 32],
     /// Digest of the full exact execution commitment signed by the ordinary Commit vote.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub execution_commitment_digest: [u8; 32],
     /// Marked SHA-256 bridge of the paired Poseidon top-up tree root.
     pub kagemusha_top_up_root: Hash,
@@ -1295,10 +1412,7 @@ pub struct KagemushaMintFinalitySealMessageV1 {
     /// The old epoch's exact quorum signs this value even when the boundary block has no top-ups,
     /// providing the recursive authority-rotation carrier needed by later mint proofs.
     #[norito(required)]
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub next_finality_epoch_id: Option<[u8; 32]>,
 }
 
@@ -1366,30 +1480,37 @@ impl KagemushaMintFinalitySealMessageV1 {
         hasher.update(self.execution_commitment_digest);
         hasher.update(self.kagemusha_top_up_root.as_ref());
         hasher.update(self.kagemusha_top_up_count.to_le_bytes());
-        match self.next_finality_epoch_id {
-            Some(next_epoch_id) => {
-                hasher.update([1]);
-                hasher.update(next_epoch_id);
-            }
-            None => {
-                hasher.update([0]);
-                hasher.update([0; 32]);
-            }
+        if let Some(next_epoch_id) = self.next_finality_epoch_id {
+            hasher.update([1]);
+            hasher.update(next_epoch_id);
+        } else {
+            hasher.update([0]);
+            hasher.update([0; 32]);
         }
         Ok(hasher.finalize().into())
     }
 }
 
 /// One canonical Schnorr signature for an epoch-scoped Pasta validator key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaPastaSchnorrSignatureV1 {
     /// Canonical compressed non-identity nonce point.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub nonce_commitment: [u8; 32],
     /// Canonical non-zero response scalar.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub response: [u8; 32],
 }
 
@@ -1404,8 +1525,18 @@ impl KagemushaPastaSchnorrSignatureV1 {
 }
 
 /// Paired signatures from one fixed roster position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalityValidatorSealV1 {
     /// Zero-based position in the exact epoch roster.
@@ -1417,8 +1548,17 @@ pub struct KagemushaMintFinalityValidatorSealV1 {
 }
 
 /// Canonical auxiliary payload appended to one BLS Commit-vote signature.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalitySealShareV1 {
     /// Sole first-release layout version.
@@ -1448,8 +1588,17 @@ impl KagemushaMintFinalitySealShareV1 {
 }
 
 /// Exact `2f + 1` paired validator seals for one finalized top-up receipt.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalitySealBundleV1 {
     /// Common signed finality message.
@@ -1494,12 +1643,23 @@ impl KagemushaMintFinalitySealBundleV1 {
 }
 
 /// Sparse-Merkle proof that one canonical reserve receipt was an ordinary write.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1")]
 pub struct KagemushaReserveReceiptWitnessV1 {
     /// Exact `0xD6 || operation_id` execution-witness key.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub key: Vec<u8>,
     /// Typed canonical value stored under `key`.
     pub receipt: KagemushaReserveReceiptV1,
@@ -1562,8 +1722,17 @@ impl KagemushaReserveReceiptWitnessV1 {
 /// The frozen-roster certificate proves the block, while the 256-level witness
 /// proves the exact typed receipt under its authenticated ordinary-write root.
 /// Host-side digest comparison alone grants no monetary authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaOperationFinalityV1 {
     /// Finality attachment version.
@@ -1585,8 +1754,18 @@ pub struct KagemushaOperationFinalityV1 {
 ///
 /// This value must come from release-pinned state or an already authenticated
 /// context chain. It is never selected from the untrusted operation response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaFinalityTrustAnchorV1 {
     /// Exact genesis-derived network identity.
@@ -1686,8 +1865,19 @@ impl KagemushaOperationFinalityV1 {
 }
 
 /// Terminal result of one finalized top-up.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpResultV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaTopUpResultV1 {
     /// Result layout version.
@@ -1750,8 +1940,17 @@ impl KagemushaTopUpResultV1 {
 }
 
 /// Terminal result of one finalized full or partial redemption.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRedemptionResultV1 {
     /// Result layout version.
@@ -1803,8 +2002,17 @@ impl KagemushaRedemptionResultV1 {
     clippy::large_enum_variant,
     reason = "boxing would change the sole first-release Norito wire shape"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "kind",
     content = "result",
@@ -1856,8 +2064,20 @@ impl KagemushaOperationResultV1 {
 }
 
 /// Observable lifecycle state of an idempotent public operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "state", content = "value", rename_all = "snake_case")]
 pub enum KagemushaOperationStateV1 {
     /// Accepted but not yet finalized.
@@ -1872,8 +2092,20 @@ pub enum KagemushaOperationStateV1 {
 }
 
 /// Stable machine-readable reason for terminal rejection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "code", content = "value", rename_all = "snake_case")]
 pub enum KagemushaOperationRejectionCodeV1 {
     /// The canonical request was malformed or inconsistent.
@@ -1906,26 +2138,47 @@ pub enum KagemushaOperationRejectionCodeV1 {
 }
 
 /// Deterministic terminal rejection record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaOperationRejectionV1 {
     /// Stable machine-readable failure class.
     pub code: KagemushaOperationRejectionCodeV1,
     /// Non-zero digest of restricted diagnostics, without unstable free text.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub detail_digest: [u8; 32],
 }
 
 /// Response returned by idempotent operation lookup.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1")]
 pub struct KagemushaOperationStatusV1 {
     /// Status layout version.
     pub version: u16,
     /// Immutable operation identity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub operation_id: [u8; 32],
     /// Immutable operation kind.
     pub kind: KagemushaOperationKindV1,
@@ -1996,14 +2249,28 @@ impl KagemushaOperationStatusV1 {
 }
 
 /// Canonical operation lookup selector used by `/v1/kagemusha/operations/{operation_id}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaOperationLookupV1")]
 pub struct KagemushaOperationLookupV1 {
     /// Lookup layout version.
     pub version: u16,
     /// Exact idempotency key selected by the route.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub operation_id: [u8; 32],
 }
 
@@ -2021,7 +2288,7 @@ impl KagemushaOperationLookupV1 {
 
 isi! {
     /// Atomically debit online funds, increase the pooled reserve, and accept one fixed issuance.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1")]
     pub struct TopUpKagemushaV1 {
         /// Complete deterministic pre-finality issuance intent.
@@ -2031,7 +2298,7 @@ isi! {
 
 isi! {
     /// Verify and settle one full or partial hardware-bound redemption voucher.
-    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    #[derive (DeriveJsonSerialize , DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1")]
     pub struct RedeemKagemushaV1 {
         /// Complete terminal redemption request.
@@ -2202,14 +2469,13 @@ fn ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
     Hash::new(preimage)
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 pub(crate) mod generated_identity_values;
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         block::BlockHeader,
-        domain::DomainId,
         kagemusha::{
             KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
             KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
@@ -2220,6 +2486,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_model_base::domain::DomainId;
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
     fn network() -> NetworkId {
@@ -2318,7 +2585,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn mint_finality_genesis_parameters_require_explicit_next_roster_option() {
         let parameters = KagemushaMintFinalityGenesisParametersV1 {
@@ -2555,7 +2821,7 @@ mod tests {
         attach_test_mint_authorization(request)
     }
 
-    pub(super) fn redemption_request() -> KagemushaRedemptionRequestV1 {
+    fn redemption_statement() -> crate::kagemusha::KagemushaRedemptionStatementV1 {
         let network_id = network();
         let asset = asset();
         let asset_incarnation = asset_incarnation(1);
@@ -2588,7 +2854,7 @@ mod tests {
                 time_evidence_commitment: [0x15; 32],
             },
         );
-        let statement = crate::kagemusha::KagemushaRedemptionStatementV1 {
+        crate::kagemusha::KagemushaRedemptionStatementV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             lifecycle,
             amount: 12_000,
@@ -2599,7 +2865,12 @@ mod tests {
             commit_evidence,
         }
         .seal_redemption_id()
-        .expect("seal redemption identity");
+        .expect("seal redemption identity")
+    }
+
+    pub(super) fn redemption_request() -> KagemushaRedemptionRequestV1 {
+        let statement = redemption_statement();
+        let commit_evidence = statement.commit_evidence;
         let semantic_digest = statement
             .canonical_digest()
             .expect("redemption semantic digest");
@@ -3358,5 +3629,92 @@ mod tests {
                 .expect("registered wire id")
                 .expect("decode instruction");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_top_up_issuance_preimage_identity() {
+    use norito::NoritoSchema as _;
+    assert_eq!(
+        KagemushaTopUpIssuancePreimageV1::nominal_name(),
+        "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpIssuancePreimageV1"
+    );
+    assert_eq!(
+        KagemushaTopUpIssuancePreimageV1::frame_name(),
+        "iroha.kagemusha.v1.top-up-issuance-preimage"
+    );
+    assert_eq!(
+        hex::encode(norito::schema::identity::frame_hash::<
+            KagemushaTopUpIssuancePreimageV1,
+        >()),
+        "551ca6e091b578875c90f33c0ed502c2"
+    );
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_operation_frame_identities() {
+        check::<super::KagemushaOperationLookupV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationLookupV1",
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationLookupV1",
+            "2b9b2dad87534b17bd66dbb4febf83d6",
+        );
+        check::<super::KagemushaOperationStatusV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1",
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1",
+            "dd66401614634287213b6d4525d3bde3",
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaTopUpRequestV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpRequestV1",
+            "iroha.torii.v1.kagemusha.top_up.request",
+            "367895bac8a67ba552a3adb642aa51a1",
+        );
+        check::<super::KagemushaRedemptionRequestV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaRedemptionRequestV1",
+            "iroha.torii.v1.kagemusha.redeem.request",
+            "22dda3ff6cd8a84f5e8e96222ecc1e52",
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::KagemushaReserveReceiptV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptV1",
+        );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1,
+        >("iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1");
     }
 }

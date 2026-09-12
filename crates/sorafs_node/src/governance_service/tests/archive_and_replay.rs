@@ -106,6 +106,20 @@ fn sealed_service_records_and_commitments_ignore_caller_layout() {
     let intent = intent_from_source(&source);
     let checkpoint_bytes = norito::encode_canonical(&checkpoint).unwrap();
     let intent_bytes = norito::encode_canonical(&intent).unwrap();
+    assert_eq!(
+        assert_declared_governance_frame(
+            &checkpoint,
+            "sorafs_node::governance_service::CheckpointBodyV1"
+        ),
+        checkpoint_bytes
+    );
+    assert_eq!(
+        assert_declared_governance_frame(
+            &intent,
+            "sorafs_node::governance_service::PublishIntentBodyV1"
+        ),
+        intent_bytes
+    );
     let expected_checkpoint = GovernanceDagSealedStateRecord::new(
         GovernanceDagSealedStateSlot::Checkpoint,
         checkpoint.generation,
@@ -118,6 +132,13 @@ fn sealed_service_records_and_commitments_ignore_caller_layout() {
     );
     let mirror = MirrorIndexStorePayloadV1::empty();
     let mirror_bytes = norito::encode_canonical(&mirror).unwrap();
+    assert_eq!(
+        assert_declared_governance_frame(
+            &mirror,
+            "sorafs_node::governance_service::MirrorIndexStorePayloadV1"
+        ),
+        mirror_bytes
+    );
     let mut alternate_frames = 0;
     for flags in governance_service_caller_layouts() {
         let _layout = norito::core::DecodeFlagsGuard::enter(flags);
@@ -217,6 +238,13 @@ fn signed_block_archive_decode_and_publication_ignore_caller_layout() {
         &endpoint,
     );
     let baseline = norito::encode_canonical(&archive).unwrap();
+    assert_eq!(
+        assert_declared_governance_frame(
+            &archive,
+            "sorafs_node::governance_service::SignedBlockPrefixArchiveV1"
+        ),
+        baseline
+    );
     assert_eq!(head.digest, *blake3::hash(&baseline).as_bytes());
     assert_eq!(head.ipfs_cid, canonical_raw_sha256_cid(&baseline));
     let mut alternate_frames = 0;
@@ -1479,9 +1507,9 @@ fn v1_max_retention_encoding_budget_fits_durable_stores() {
             <= MIRROR_INDEX_STORE_MAX_PAYLOAD_BYTES,
         "V1 mirror wrapper no longer fits its two-slot store"
     );
-    // A standalone Norito frame includes at least as much framing as the
-    // same value nested in a vector, so multiplying a widest-string sample
-    // frame gives a conservative, allocation-free maximum inventory bound.
+    // Count the nested payload with an envelope and alignment allowance. Multiplying
+    // a widest-string sample retains a conservative, allocation-free inventory bound
+    // without turning field-only block entries into independent frame owners.
     // Submission provenance is not stored in either sealed entry type; it
     // is derived from authenticated source blocks only for the JSON bound above.
     let source = signed_source(1, 0x3B, 1_800_000_000);
@@ -1491,9 +1519,8 @@ fn v1_max_retention_encoding_budget_fits_durable_stores() {
     published_sample.timestamp = u64::MAX;
     published_sample.encoded_len = u64::MAX;
     published_sample.payload_kind = "x".repeat(MAX_PAYLOAD_KIND_BYTES);
-    let published_frame_bytes = norito::to_bytes(&published_sample)
-        .expect("encode maximum-width published-block sizing sample")
-        .len();
+    let published_frame_bytes =
+        crate::frame_test_support::nested_record_reserve_len(&published_sample);
     let checkpoint_upper = published_frame_bytes
         .checked_mul(GOVERNANCE_DAG_MIRROR_MAX_ENTRIES_V1)
         .and_then(|bytes| bytes.checked_add(MAX_SEALED_FIXED_BYTES))
@@ -1508,9 +1535,7 @@ fn v1_max_retention_encoding_budget_fits_durable_stores() {
     intent_sample.timestamp = u64::MAX;
     intent_sample.encoded_len = u64::MAX;
     intent_sample.payload_kind = "x".repeat(MAX_PAYLOAD_KIND_BYTES);
-    let intent_frame_bytes = norito::to_bytes(&intent_sample)
-        .expect("encode maximum-width intent-block sizing sample")
-        .len();
+    let intent_frame_bytes = crate::frame_test_support::nested_record_reserve_len(&intent_sample);
     let intent_upper = intent_frame_bytes
         .checked_mul(SOURCE_ENTRY_HARD_CAP)
         .and_then(|bytes| bytes.checked_add(MAX_SEALED_FIXED_BYTES))
@@ -1724,6 +1749,43 @@ fn ipfs_urls_cids_and_secret_debug_output_are_canonical() {
         )
         .expect("derive test authenticated wire-body bound"),
     };
+    for operation in ["api/v0/version", "api/v0/swarm/peers"] {
+        let url = endpoint
+            .ipfs_url(operation, &[])
+            .expect("construct canonical query-free Kubo URL");
+        assert_eq!(url.as_str(), format!("http://127.0.0.1:5001/{operation}"));
+        assert_eq!(url.query(), None, "empty queries must remain absent");
+        let request = endpoint
+            .request(Method::POST, url.clone())
+            .expect("construct query-free Kubo request")
+            .build()
+            .expect("build query-free Kubo request");
+        let descriptor = canonical_outbound_request_descriptor(
+            &request,
+            endpoint.authentication_scope,
+            endpoint.authenticated_wire_body_max_bytes,
+        )
+        .expect("admit query-free Kubo request before provider I/O");
+        endpoint
+            .authenticator
+            .authenticate(&descriptor)
+            .expect("authenticate exact query-free Kubo request");
+        let mut noncanonical = url;
+        noncanonical.set_query(Some(""));
+        assert!(noncanonical.as_str().ends_with('?'));
+        assert_eq!(
+            canonicalize_governance_dag_outbound_http_request_v1(
+                endpoint.authentication_scope,
+                "POST",
+                noncanonical.as_str(),
+                [("accept-encoding", b"identity".as_slice())],
+                &[],
+                endpoint.authenticated_wire_body_max_bytes,
+            )
+            .expect_err("explicit trailing query delimiter remains forbidden"),
+            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest,
+        );
+    }
     let url = endpoint
         .ipfs_url(
             "api/v0/cat",
@@ -2363,6 +2425,13 @@ fn sealed_request_auth_replay_prunes_expiry_but_never_evicts_live_capacity() {
         entries,
     };
     let payload = norito::to_bytes(&state).expect("encode full replay state");
+    assert_eq!(
+        assert_declared_governance_frame(
+            &state,
+            "sorafs_node::governance_service::RequestAuthReplayStateV1"
+        ),
+        payload
+    );
     assert!(
         payload.len()
             <= governance_dag_sealed_state_payload_max_bytes_v1(
@@ -2466,4 +2535,31 @@ fn sealed_request_auth_replay_rejects_corrupted_state() {
         .expect_err("corrupted replay state must fail closed");
         assert!(error.to_string().contains(expected_error));
     }
+}
+
+fn assert_declared_governance_frame<T>(value: &T, name: &str) -> Vec<u8>
+where
+    T: norito::NoritoSerialize
+        + for<'de> norito::NoritoDeserialize<'de>
+        + PartialEq
+        + std::fmt::Debug,
+{
+    assert_eq!(T::nominal_name(), name);
+    assert_eq!(T::frame_name(), name);
+    let bytes = norito::encode_canonical(value).expect("canonical governance frame");
+    assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+    let decoded: T = norito::decode_canonical(&bytes).expect("exact governance frame roundtrip");
+    assert_eq!(&decoded, value);
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+    let mut wrong_owner = bytes.clone();
+    wrong_owner[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<T>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(norito::decode_canonical::<T>(&trailing).is_err());
+    bytes
 }

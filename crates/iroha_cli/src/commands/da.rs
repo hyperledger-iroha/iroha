@@ -28,9 +28,9 @@ use iroha::data_model::{
             ErasureProfile, ExtraMetadata, GovernanceTag, RetentionPolicy, StorageTicketId,
         },
     },
-    nexus::LaneId,
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::XorQuantity;
 use iroha_storage_client::da::build_car_plan_from_manifest;
 use norito::{
@@ -227,7 +227,7 @@ impl GetBlobArgs {
 pub struct ProofPoliciesArgs {}
 impl ProofPoliciesArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = context.client_from_config().get_da_proof_policies()?;
+        let bundle = context.client_from_config()?.get_da_proof_policies()?;
         let text = render_da_proof_policies_text("DA proof policies", &bundle);
         print_with_optional_text(context, Some(text), &bundle)
     }
@@ -237,7 +237,7 @@ pub struct ProofPolicySnapshotArgs {}
 impl ProofPolicySnapshotArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bundle = context
-            .client_from_config()
+            .client_from_config()?
             .get_da_proof_policy_snapshot()?;
         let text = render_da_proof_policies_text("DA proof policy snapshot", &bundle);
         print_with_optional_text(context, Some(text), &bundle)
@@ -267,13 +267,17 @@ pub struct CommitmentQueryArgs {
 impl CommitmentQueryArgs {
     fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_list_request()?;
-        let response = context.client_from_config().list_da_commitments(&request)?;
+        let response = context
+            .client_from_config()?
+            .list_da_commitments(&request)?;
         let text = render_da_commitments_list_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
     fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_proof_request()?;
-        let response = context.client_from_config().prove_da_commitment(&request)?;
+        let response = context
+            .client_from_config()?
+            .prove_da_commitment(&request)?;
         let text = render_da_commitment_prove_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
@@ -329,7 +333,7 @@ impl CommitmentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let proof =
             load_json_payload::<DaCommitmentProof>(&self.proof_json, "DA commitment proof")?;
-        let response = context.client_from_config().verify_da_commitment(&proof)?;
+        let response = context.client_from_config()?.verify_da_commitment(&proof)?;
         let text = render_da_verify_text(
             "DA commitment verification",
             response.valid,
@@ -368,13 +372,17 @@ pub struct PinIntentQueryArgs {
 impl PinIntentQueryArgs {
     fn run_list<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_list_request()?;
-        let response = context.client_from_config().list_da_pin_intents(&request)?;
+        let response = context
+            .client_from_config()?
+            .list_da_pin_intents(&request)?;
         let text = render_da_pin_intents_list_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
     fn run_prove<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.to_proof_request()?;
-        let response = context.client_from_config().prove_da_pin_intent(&request)?;
+        let response = context
+            .client_from_config()?
+            .prove_da_pin_intent(&request)?;
         let text = render_da_pin_intent_prove_text(&response);
         print_with_optional_text(context, Some(text), &response)
     }
@@ -438,7 +446,7 @@ pub struct PinIntentVerifyArgs {
 impl PinIntentVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let proof = load_json_payload::<DaPinIntentProof>(&self.proof_json, "DA pin intent proof")?;
-        let response = context.client_from_config().verify_da_pin_intent(&proof)?;
+        let response = context.client_from_config()?.verify_da_pin_intent(&proof)?;
         let text = render_da_verify_text(
             "DA pin intent verification",
             response.valid,
@@ -1760,10 +1768,7 @@ mod tests {
     use iroha::{
         config::{self, Config},
         crypto::{Hash, HashOf, KeyPair},
-        data_model::{
-            Metadata,
-            prelude::{AccountId, ChainId},
-        },
+        data_model::prelude::AccountId,
     };
     use iroha_crypto::Algorithm;
     use iroha_data_model::da::{
@@ -1780,6 +1785,8 @@ mod tests {
     };
     use iroha_data_model::sorafs::pin_registry::StorageClass;
     use iroha_i18n::{Bundle, Language, Localizer};
+    use iroha_model_base::chain::ChainId;
+    use iroha_model_base::metadata::Metadata;
     use norito::{json::JsonSerialize, to_bytes};
     use std::{
         fmt::Display,
@@ -2464,7 +2471,7 @@ mod tests {
         let potr = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+                iroha_model_base::domain::DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
         let accounts = da::DaRentLedgerAccounts {

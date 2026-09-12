@@ -685,6 +685,11 @@ Root {
             ttl: 3600s,
             refresh_interval: 900s,
         },
+        fastpq_artifacts: KuraFastpqArtifactPolicy {
+            max_artifact_bytes: 2372085,
+            max_artifacts: 1024,
+            max_total_bytes: 268435456,
+        },
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: 256,
         fsync_mode: Batched,
@@ -1418,7 +1423,7 @@ Root {
             poseidon_mode: Cpu,
             proof_sidecar_queue_cap: 1024,
             proof_sidecar_max_bytes: Bytes(
-                1048576,
+                2372085,
             ),
             proof_sidecar_max_retries: 16,
             device_class: None,

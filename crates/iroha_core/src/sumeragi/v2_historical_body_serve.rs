@@ -18,7 +18,8 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf, KeyPair};
-use iroha_data_model::{NetworkId, block::consensus_v2 as wire, peer::PeerId};
+use iroha_data_model::{NetworkId, block::consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use iroha_p2p::network::NetworkReplyRoutes;
 
 use super::{

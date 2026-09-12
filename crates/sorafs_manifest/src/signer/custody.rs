@@ -37,6 +37,8 @@ const MAX_HANDLE_BYTES_V1: usize = 128;
 const MAX_VALIDITY_MS_V1: u64 = 24 * 60 * 60 * 1000;
 
 /// Exact public signer identity to which an independent custody statement applies.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyBindingV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCustodyBindingV1 {
     /// Canonical operator-selected chain label.
@@ -77,6 +79,8 @@ impl fmt::Debug for SignerCustodyBindingV1 {
 }
 
 /// Independently governed identity of the authority validating vendor/device evidence.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyAuthorityV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCustodyAuthorityV1 {
     /// Public attestation service identity, distinct from the signer identities.
@@ -104,6 +108,8 @@ impl fmt::Debug for SignerCustodyAuthorityV1 {
 ///
 /// Both original approval and current use anchors must identify genuinely finalized state.
 /// Mutable external state cannot be assigned the hash or height of an unrelated finalized block.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyAnchorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCustodyAnchorV1 {
     /// Nonzero finalized block height.
@@ -122,6 +128,8 @@ pub struct SignerCustodyAnchorV1 {
 /// There is exactly one admitted profile: generation inside hardware with no exportability or
 /// prior export. The booleans describe observations authenticated by the independent authority;
 /// they cannot replace device-evidence verification performed by that authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyStatementV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCustodyStatementV1 {
     /// Canonical record format marker [`SIGNER_CUSTODY_MAGIC_V1`].
@@ -185,6 +193,8 @@ impl fmt::Debug for SignerCustodyStatementV1 {
 }
 
 /// Complete bounded canonical Norito custody record with an Ed25519 attestation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyRecordV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCustodyRecordV1 {
     /// Exact independent-authority statement.
@@ -246,6 +256,8 @@ pub struct SignerCustodyEnrollmentContextV1 {
 }
 
 /// One exact already-enrolled active custody head from independently authenticated state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::custody::SignerCustodyActiveHeadV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerCustodyActiveHeadV1 {
     /// Exact complete canonical signed record digest committed by enrollment CAS.
@@ -529,7 +541,9 @@ fn valid_hardware_handle(value: &str) -> bool {
         })
 }
 
-fn validate_binding(binding: &SignerCustodyBindingV1) -> Result<(), SignerCustodyErrorV1> {
+pub(super) fn validate_binding(
+    binding: &SignerCustodyBindingV1,
+) -> Result<(), SignerCustodyErrorV1> {
     if iroha_primitives::chain_id::validate_chain_id(&binding.chain_id).is_err()
         || binding.network_id == [0; 32]
         || !valid_hardware_handle(&binding.runtime_handle)
@@ -705,3 +719,6 @@ fn validate_freshness(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+include!("custody/captured_owner_identity_tests.rs");

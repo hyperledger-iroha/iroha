@@ -46,8 +46,8 @@ use iroha_data_model::{
             ReputationJournalSourceKindV1, ReputationJournalValidationError,
         },
     },
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
@@ -70,7 +70,19 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     STATE_MAX_BYTES * 2,
     64,
 );
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_reputation::ReputationJournalHeadStateV1"
+)]
 struct ReputationJournalHeadStateV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -2596,6 +2608,7 @@ impl ValidSingularQuery for FindSorafsReputationJournalEvents {
 }
 #[cfg(test)]
 mod tests {
+    include!("sorafs_reputation/schema_identity_tests.rs");
     use super::*;
     use crate::{
         kura::Kura,
@@ -2608,7 +2621,6 @@ mod tests {
         account::Account,
         block::{BlockHeader, builder::BlockBuilder},
         events::data::DataEvent,
-        metadata::Metadata,
         permission::Permissions,
         sorafs::{
             capacity::CapacityDeclarationRecord,
@@ -2623,6 +2635,7 @@ mod tests {
         CanManageSorafsReputationJournalPolicy, CanRecordSorafsReputationJournal,
         CanResolveSorafsCapacityDispute,
     };
+    use iroha_model_base::metadata::Metadata;
     use std::sync::Arc;
     const TEST_NOW_MS: u64 = 1_700_000_000_000;
     fn keypair(seed: u8) -> KeyPair {
@@ -4139,6 +4152,37 @@ mod tests {
                 .expect("journal head")
                 .last_sequence,
             2
+        );
+    }
+}
+
+#[cfg(test)]
+mod journal_frame_identity_tests {
+    use super::*;
+
+    #[test]
+    fn reputation_head_frame_roundtrips_through_bounded_storage_codec() {
+        let head = ReputationJournalHeadStateV1 {
+            last_sequence: 5,
+            last_target_block_height: 10,
+            last_event_index: 1,
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &head,
+            "iroha_core::smartcontracts::isi::sorafs_reputation::ReputationJournalHeadStateV1",
+        );
+        let bytes =
+            encode_state(&head, "reputation journal head").expect("production state writer");
+        assert_eq!(
+            decode_state::<ReputationJournalHeadStateV1>(&bytes, "reputation journal head")
+                .expect("bounded production state reader"),
+            head
+        );
+        let mut wrong_owner = bytes;
+        wrong_owner[6] ^= 1;
+        assert!(
+            decode_state::<ReputationJournalHeadStateV1>(&wrong_owner, "reputation journal head")
+                .is_err()
         );
     }
 }

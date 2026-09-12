@@ -10,7 +10,7 @@ isi! {
         /// Amount to lock.
         pub amount: iroha_primitives::numeric::Quantity,
         /// Evidence hashes attached when opening the escrow.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
@@ -112,7 +112,7 @@ isi! {
         /// Escrow to dispute.
         pub escrow_id: crate::escrow::EscrowId,
         /// Evidence hashes attached by the disputing party.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
@@ -148,7 +148,7 @@ isi! {
         /// Amount refunded to the seller.
         pub seller_amount: iroha_primitives::numeric::Quantity,
         /// Evidence or judgement hashes attached by the resolver.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
@@ -196,13 +196,13 @@ isi! {
         /// Amount to lock.
         pub amount: iroha_primitives::numeric::Quantity,
         /// Optional account required to draw down this lock.
-        #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+        #[norito (skip_serializing_if = "Option::is_none")]
         pub release_authority: Option<crate::account::AccountId>,
         /// Optional Unix timestamp (milliseconds) after which the lock may expire.
-        #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+        #[norito (skip_serializing_if = "Option::is_none")]
         pub expires_at_ms: Option<u64>,
         /// Evidence hashes attached when opening the lock.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
@@ -249,10 +249,7 @@ impl OpenAssetLock {
 }
 isi! {
     /// Open an attestor-bound conditional escrow with ordered all-of release semantics.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::escrow::OpenConditionalEscrow")]
     pub struct OpenConditionalEscrow {
         /// Caller-selected escrow identifier.
@@ -268,7 +265,7 @@ isi! {
         /// Absolute Unix timestamp (milliseconds) at or after which anyone may trigger refund.
         pub expires_at_ms: u64,
         /// Evidence hashes attached when opening the escrow.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
     }
 }
@@ -317,16 +314,13 @@ impl OpenConditionalEscrow {
 }
 isi! {
     /// Attest the next ordered predicate of one native conditional escrow.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::escrow::AttestEscrowCondition")]
     pub struct AttestEscrowCondition {
         /// Conditional escrow to update.
         pub escrow_id: crate::escrow::EscrowId,
         /// Exact immutable condition identifier.
-        pub condition_id: crate::name::Name,
+        pub condition_id: iroha_model_base::name::Name,
         /// Typed value evaluated by the ledger.
         pub value: crate::escrow::ConditionalEscrowValue,
         /// Optional external evidence digest.
@@ -338,7 +332,7 @@ impl AttestEscrowCondition {
     #[must_use]
     pub const fn new(
         escrow_id: crate::escrow::EscrowId,
-        condition_id: crate::name::Name,
+        condition_id: iroha_model_base::name::Name,
         value: crate::escrow::ConditionalEscrowValue,
         evidence_hash: Option<iroha_crypto::Hash>,
     ) -> Self {
@@ -352,10 +346,7 @@ impl AttestEscrowCondition {
 }
 isi! {
     /// Refund a native conditional escrow whose authoritative deadline has passed.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::escrow::ExpireConditionalEscrow")]
     pub struct ExpireConditionalEscrow {
         /// Conditional escrow to expire.
@@ -401,10 +392,7 @@ impl DrawdownAssetLock {
 }
 isi! {
     /// Cancel an active generic asset lock and refund remaining custody.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::escrow::CancelAssetLock")]
     pub struct CancelAssetLock {
         /// Lock to cancel.
@@ -534,7 +522,7 @@ impl_escrow_decode_from_slice!(OpenConditionalEscrow {
 });
 impl_escrow_decode_from_slice!(AttestEscrowCondition {
     escrow_id: crate::escrow::EscrowId,
-    condition_id: crate::name::Name,
+    condition_id: iroha_model_base::name::Name,
     value: crate::escrow::ConditionalEscrowValue,
     evidence_hash: Option<iroha_crypto::Hash>,
 });
@@ -559,9 +547,10 @@ mod tests {
     use crate::isi::test_support::{
         assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
-    use crate::{domain::DomainId, name::Name};
     use core::num::{NonZeroU32, NonZeroU64};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::name::Name;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::{codec::Encode, core::DecodeFromSlice};
     #[derive(Encode)]
@@ -751,7 +740,7 @@ mod tests {
         assert_slice_roundtrip(CancelAssetLock::new(escrow_id, Quantity::from(20_u64)));
         assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn cancel_asset_lock_v1_fixtures_enforce_the_two_field_hard_cut() {
         let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -856,7 +845,7 @@ mod tests {
         assert_registry_decodes(&registry, attest);
         assert_registry_decodes(&registry, expire);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn conditional_escrow_json_preserves_typed_conditions() {
         let open = OpenConditionalEscrow::new(

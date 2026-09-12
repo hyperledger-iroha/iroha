@@ -21,10 +21,10 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::oracle::AggregateOracleFeed,
-    metadata::Metadata,
     oracle::FeedId,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_primitives::numeric::{Quantity, XorQuantity};
 use norito::{
     decode_from_bytes,
@@ -63,7 +63,7 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 fn xor_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
-        iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+        iroha_model_base::domain::DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     )
 }
@@ -182,18 +182,44 @@ fn sample_bond_entry() -> RelayBondLedgerEntryV1 {
         exit_capable: true,
     }
 }
-#[derive(Debug, NoritoSerialize)]
+#[derive(Debug, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "cli_smoke::TestLedgerExport",
+    frame = "iroha::commands::sorafs::LedgerExportFile"
+)]
 struct TestLedgerExport {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
 }
 fn encode_ledger_export(export: &TestLedgerExport) -> Vec<u8> {
-    const SCHEMA_OFFSET: usize = 4 + 1 + 1;
-    const SCHEMA_LEN: usize = 16;
-    let mut bytes = to_bytes(export).expect("encode ledger export");
-    let schema = norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile");
-    bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN].copy_from_slice(&schema);
-    bytes
+    to_bytes(export).expect("encode ledger export")
+}
+
+#[test]
+fn ledger_export_fixture_declares_its_shared_frame_without_header_rewriting() {
+    use norito::NoritoSchema as _;
+    let export = TestLedgerExport {
+        version: 1,
+        transfers: Vec::new(),
+    };
+    let bytes = encode_ledger_export(&export);
+    assert_eq!(
+        TestLedgerExport::nominal_name(),
+        "cli_smoke::TestLedgerExport"
+    );
+    assert_eq!(
+        TestLedgerExport::frame_name(),
+        "iroha::commands::sorafs::LedgerExportFile"
+    );
+    assert_ne!(
+        TestLedgerExport::nominal_name(),
+        TestLedgerExport::frame_name()
+    );
+    assert_eq!(
+        &bytes[6..22],
+        &norito::schema::identity::frame_hash::<TestLedgerExport>()
+    );
+    assert_eq!(bytes, to_bytes(&export).expect("canonical fixture frame"));
 }
 fn parse_instruction_stdout(stdout: &str) -> Vec<InstructionBox> {
     norito::json::from_str(stdout.trim()).expect("instruction output JSON")
@@ -2983,12 +3009,12 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use core::convert::TryFrom;
     use iroha_crypto::Signature;
-    use iroha_data_model::{
-        da::prelude::{BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId},
-        nexus::LaneId,
+    use iroha_data_model::da::prelude::{
+        BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId,
     };
+    use iroha_model_base::topology::LaneId;
     use norito::{
-        core::NoritoDeserialize,
+        DeserializePayload,
         json::{Map as JsonMap, Value},
     };
     use sorafs_manifest::{
@@ -3909,7 +3935,18 @@ fn incentives_daemon_processes_metrics_spool() {
 }
 #[cfg(unix)]
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "the child-only pre_exec hook passes one retained read-only operator descriptor through exec using fcntl"
+)]
 fn sumeragi_summary_commands_against_torii_mock() {
+    use std::{
+        io::{Seek as _, SeekFrom},
+        os::{
+            fd::{AsRawFd as _, BorrowedFd},
+            unix::process::CommandExt as _,
+        },
+    };
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_sumeragi, write_client_config,
     };
@@ -4003,28 +4040,53 @@ fn sumeragi_summary_commands_against_torii_mock() {
         }),
     )
     .expect("configure canonical Sumeragi status");
+    let mut inherited_operator_file =
+        fs::File::open(operator_key_file.path()).expect("read-only operator descriptor");
+    inherited_operator_file
+        .seek(SeekFrom::Start(5))
+        .expect("retain caller cursor");
+    let operator_fd = inherited_operator_file.as_raw_fd();
     let assert_summary = |args: &[&str], expected: &str| {
-        let output = command()
-            .arg("--config")
-            .arg(&config_path)
-            .arg("--operator-private-key-file")
-            .arg(operator_key_file.path())
-            .arg("--output-format")
-            .arg("text")
-            .args(args)
-            .output()
-            .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
-        assert!(
-            output.status.success(),
-            "expected iroha {args:?} to succeed, stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(
-            stdout.trim_end(),
-            expected,
-            "unexpected summary for {args:?}, stdout: {stdout}"
-        );
+        for inherited in [false, true] {
+            let mut invocation = command();
+            invocation.arg("--config").arg(&config_path);
+            if inherited {
+                invocation
+                    .arg("--operator-private-key-fd")
+                    .arg(operator_fd.to_string());
+                // SAFETY: the read-only file remains open through child execution; this child-only
+                // hook uses only fcntl and lends the descriptor without taking ownership.
+                unsafe {
+                    invocation.inner.pre_exec(move || {
+                        let fd = BorrowedFd::borrow_raw(operator_fd);
+                        let flags = rustix::io::fcntl_getfd(fd).map_err(io::Error::from)?;
+                        rustix::io::fcntl_setfd(fd, flags & !rustix::io::FdFlags::CLOEXEC)
+                            .map_err(io::Error::from)
+                    });
+                }
+            } else {
+                invocation
+                    .arg("--operator-private-key-file")
+                    .arg(operator_key_file.path());
+            }
+            let output = invocation
+                .arg("--output-format")
+                .arg("text")
+                .args(args)
+                .output()
+                .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
+            assert!(
+                output.status.success(),
+                "expected iroha {args:?} to succeed, stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(
+                stdout.trim_end(),
+                expected,
+                "unexpected summary for {args:?}, stdout: {stdout}"
+            );
+        }
     };
     assert_summary(
         &["ops", "sumeragi", "status"],
@@ -4033,6 +4095,12 @@ fn sumeragi_summary_commands_against_torii_mock() {
     assert_summary(
         &["ops", "sumeragi", "leader"],
         "leader=3 prf_h=20 prf_v=2 seed=feedface",
+    );
+    assert_eq!(
+        inherited_operator_file
+            .stream_position()
+            .expect("caller descriptor remains open"),
+        5
     );
 }
 #[test]
@@ -4409,8 +4477,8 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
 }
 #[test]
 fn address_convert_rejects_domain_suffix() {
-    let domain: iroha::data_model::domain::DomainId =
-        iroha_data_model::domain::DomainId::try_new("sora", "universal").expect("domain");
+    let domain: iroha_model_base::domain::DomainId =
+        iroha_model_base::domain::DomainId::try_new("sora", "universal").expect("domain");
     let key_pair = fixture_key_pair(0xAB);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");

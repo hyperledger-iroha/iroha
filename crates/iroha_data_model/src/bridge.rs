@@ -1,7 +1,8 @@
 //! Bridge-related data types for wrapped assets and receipts. Feature-gated behind `bridge`.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{NetworkId, nexus::LaneId, proof::ProofBox};
+use crate::{NetworkId, proof::ProofBox};
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -78,9 +79,18 @@ pub use sccp_ton_breaker::{
 /// Definition metadata for a wrapped asset originating from another chain.
 ///
 /// Stored alongside an Iroha asset definition to bind it to its origin.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::WrappedAssetDef")]
 pub struct WrappedAssetDef {
@@ -92,9 +102,20 @@ pub struct WrappedAssetDef {
     pub bridge_id: Vec<u8>,
 }
 /// A receipt emitted by the bridge lane to record a cross-chain action.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeReceipt")]
@@ -117,9 +138,21 @@ pub struct BridgeReceipt {
     pub recipient: Vec<u8>,
 }
 /// Hash function used by bridge Merkle proofs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "hash_function", content = "value")]
 #[derive(norito::NoritoSchema)]
@@ -131,9 +164,21 @@ pub enum BridgeHashFunction {
     Blake2b,
 }
 /// Height range covered by a bridge proof artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeProofRange")]
@@ -163,9 +208,20 @@ impl BridgeProofRange {
     }
 }
 /// ICS-style proof payload (hash-only light client).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeIcsProof")]
@@ -182,9 +238,20 @@ pub struct BridgeIcsProof {
     pub hash_function: BridgeHashFunction,
 }
 /// Transparent ZK proof payload (rolling recursive proof).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeTransparentProof")]
@@ -201,9 +268,21 @@ pub struct BridgeTransparentProof {
 /// Unlike a transparent proof backend, this identifier is not a caller-chosen string. Each value
 /// selects one concrete native consensus and inclusion verifier, so an unknown value fails decoding
 /// instead of being routed by a node-local naming convention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "protocol")]
@@ -258,9 +337,21 @@ impl BridgeNativeProofBackendV1 {
 /// `anchor_hash` is interpreted only by the closed `backend` verifier. Keeping
 /// the family tag beside the commitment prevents a valid checkpoint hash from
 /// being routed to a different chain verifier through a domain-only lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::SccpNativeTrustAnchorV1")]
@@ -304,9 +395,20 @@ impl SccpNativeTrustAnchorV1 {
 /// DTOs. The data model stores that canonical encoding once, paired with a closed backend
 /// identifier; it does not disguise native consensus evidence as a transparent ZK proof or place it
 /// inside a caller-labelled [`ProofBox`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeNativeProtocolProofV1")]
@@ -331,9 +433,21 @@ impl BridgeNativeProtocolProofV1 {
 ///
 /// An unknown or caller-labelled backend is unrepresentable. The SCCP cryptographic implementation
 /// additionally verifies that the canonical artifact's inner family agrees with this outer tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "family")]
@@ -381,9 +495,20 @@ impl BridgeSccpDestinationProofBackendV1 {
 ///
 /// This closed container prevents production SCCP delivery from being routed
 /// through generic [`ProofBox`] backend strings.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -418,9 +543,20 @@ impl BridgeSccpDestinationProofV1 {
     }
 }
 /// Bridge proof payload kinds supported by the data model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "kind", content = "payload")]
 #[derive(norito::NoritoSchema)]
@@ -484,9 +620,20 @@ impl BridgeProofPayload {
     }
 }
 /// Bridge proof artifact with a payload-owned verifier binding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeProof")]
@@ -516,9 +663,20 @@ impl BridgeProof {
     }
 }
 /// Stored bridge proof record with size metadata and commitment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeProofRecord")]
@@ -542,9 +700,18 @@ pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
 /// The durable finality artifact is the single source of consensus context, height, block hash,
 /// roster powers, quorum, subject, and commit certificate. No legacy certificate projection or
 /// duplicate proof-controlled consensus field is carried alongside it.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityProof")]
@@ -561,9 +728,18 @@ pub struct BridgeFinalityProof {
 /// `genesis_block_hash` is the first entry of the same committed state snapshot whose
 /// durable tip produced `finality_proof`. The challenge is supplied by the caller and
 /// prevents a previously signed capture from being replayed into a later audit run.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityAttestationBodyV1")]
@@ -575,7 +751,7 @@ pub struct BridgeFinalityAttestationBodyV1 {
     /// Exact genesis-derived network identity repeated for explicit signed routing identity.
     pub network_id: NetworkId,
     /// Canonical identity of the node which signs this body.
-    pub node_id: crate::peer::PeerId,
+    pub node_id: iroha_model_base::peer::PeerId,
     /// Hash of the canonical encoded `node_id`.
     pub node_fingerprint: iroha_crypto::Hash,
     /// Actual committed block hash at height one in the captured state snapshot.
@@ -672,9 +848,18 @@ impl BridgeFinalityAttestationBodyV1 {
     }
 }
 /// One node's signature over an exact challenge-bound durable-tip statement.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityAttestationV1")]
@@ -760,9 +945,19 @@ pub enum BridgeFinalityAttestationValidationError {
     InvalidNodeSignature,
 }
 /// Commitment covering a block hash and its exact Sumeragi-v2 context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeCommitment")]
@@ -777,9 +972,18 @@ pub struct BridgeCommitment {
     pub block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
 }
 /// Bundle containing a compact commitment and its exact typed finality proof.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::bridge::BridgeFinalityBundle")]
@@ -1169,8 +1373,9 @@ fn verify_successor_bridge_finality_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{block::consensus_v2 as wire, peer::PeerId};
+    use crate::block::consensus_v2 as wire;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_model_base::peer::PeerId;
     use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;
     use std::num::NonZeroU64;
@@ -1503,7 +1708,9 @@ mod tests {
             successor_keys,
         }
     }
-    fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
+    fn successor_context(
+        parent: &V2Fixture,
+    ) -> (crate::block::BlockHeader, wire::HeightContext, Vec<Vec<u8>>) {
         let parent_artifact = &parent.proof.finality_artifact;
         let (
             epoch,
@@ -1584,6 +1791,12 @@ mod tests {
             da_layout: parent_artifact.height_context.da_layout,
             leader_seed,
         };
+        (header, context, validator_set_pops)
+    }
+    fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
+        let (header, context, validator_set_pops) = successor_context(parent);
+        let parent_artifact = &parent.proof.finality_artifact;
+        let height = context.height;
         let subject = wire::BlockSubject {
             parent_block_hash: Some(parent_artifact.block_hash),
             block_hash: header.hash(),
@@ -1935,7 +2148,7 @@ mod tests {
         let decoded = SccpNativeTrustAnchorV1::decode_all(&mut &encoded[..])
             .expect("native trust anchor must roundtrip");
         assert_eq!(decoded, anchor);
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_json(&anchor).expect("native trust anchor JSON encodes");
             let decoded = norito::json::from_str::<SccpNativeTrustAnchorV1>(&json)
@@ -2085,7 +2298,7 @@ mod tests {
             "a negative signed payload must not decode as a bridge amount"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn bridge_receipt_json_rejects_unknown_fields() {
         let receipt = BridgeReceipt {
@@ -2162,7 +2375,7 @@ mod tests {
         let dec = BridgeProof::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(proof, dec);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn bridge_proof_json_rejects_unknown_fields_at_every_typed_boundary() {
         let leaves = vec![[0xAA; 32], [0xBB; 32]];
@@ -2389,7 +2602,7 @@ mod tests {
             Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     #[expect(
         clippy::too_many_lines,

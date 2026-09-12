@@ -10,6 +10,9 @@ use iroha::{
     blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use ivm::{ProgramMetadata, encoding, instruction, syscalls};
@@ -139,6 +142,21 @@ async fn wait_for_invoice_status(
     {
         Ok(result) => result,
         Err(elapsed) => {
+            let status = client
+                .client()
+                .status()
+                .get()
+                .await
+                .map(|status| {
+                    format!(
+                        "blocks={}, blocks_non_empty={}, txs_approved={}, txs_rejected={}",
+                        status.blocks,
+                        status.blocks_non_empty,
+                        status.txs_approved,
+                        status.txs_rejected
+                    )
+                })
+                .unwrap_or_else(|err| format!("status query failed: {err}"));
             let diagnostics = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -161,18 +179,6 @@ async fn wait_for_invoice_status(
                                 .unwrap_or_else(|| "missing".to_string())
                         })
                         .unwrap_or_else(|err| format!("trigger query failed: {err}"));
-                    let status = client
-                        .client().get_status()
-                        .map(|status| {
-                            format!(
-                                "blocks={}, blocks_non_empty={}, txs_approved={}, txs_rejected={}",
-                                status.blocks,
-                                status.blocks_non_empty,
-                                status.txs_approved,
-                                status.txs_rejected
-                            )
-                        })
-                        .unwrap_or_else(|err| format!("status query failed: {err}"));
                     let latest_block = client
                         .client().query(FindBlockHeaders)
                         .execute_all()

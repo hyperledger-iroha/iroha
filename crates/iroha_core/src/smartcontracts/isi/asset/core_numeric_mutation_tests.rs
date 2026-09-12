@@ -783,7 +783,7 @@ fn find_assets_filters_by_exact_id_with_extra_predicate() {
             __asset_definition_id.clone(),
             "rose".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         )
     }
     .build(&ALICE_ID);
@@ -840,7 +840,7 @@ fn find_assets_filters_by_account_and_domain_predicate() {
             __asset_definition_id.clone(),
             "rose".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(primary_domain_id.clone()),
         )
     }
     .build(&ALICE_ID);
@@ -850,7 +850,7 @@ fn find_assets_filters_by_account_and_domain_predicate() {
             __asset_definition_id.clone(),
             "lily".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(secondary_domain_id.clone()),
         )
     }
     .build(&ALICE_ID);
@@ -1021,7 +1021,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
 #[test]
 fn asset_transfer_controls_require_asset_owner_authority() {
     let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let alice_alias = AccountAlias::new(
@@ -1520,7 +1520,12 @@ fn transfer_rejects_when_account_is_blacklisted_for_asset() {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("blacklisted outbound transfer must be rejected");
     assert!(
-        err.to_string().contains("blacklisted"),
+        matches!(
+            err,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::Blacklisted(_)
+            )
+        ),
         "unexpected error: {err}"
     );
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
@@ -2007,7 +2012,7 @@ fn transfer_rejects_materialized_kagemusha_reserve_source() {
 }
 #[test]
 fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
-    let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
+    let chain_id: iroha_model_base::chain::ChainId = "testnet".parse().expect("chain id");
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -2085,7 +2090,7 @@ fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
 }
 #[test]
 fn burn_rejects_kagemusha_reserve_for_owner_and_delegated_authority() {
-    let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
+    let chain_id: iroha_model_base::chain::ChainId = "testnet".parse().expect("chain id");
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
@@ -2337,7 +2342,7 @@ fn find_assets_filters_by_domain_predicate() {
                 __asset_definition_id.clone(),
                 "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(wonderland_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2347,7 +2352,7 @@ fn find_assets_filters_by_domain_predicate() {
                 __asset_definition_id.clone(),
                 "spice".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(oasis_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2427,7 +2432,7 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
                 __asset_definition_id.clone(),
                 "rose".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(wonderland_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2437,7 +2442,7 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
                 __asset_definition_id.clone(),
                 "spice".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(oasis_id.clone()),
             )
         }
         .build(&ALICE_ID),
@@ -2461,8 +2466,9 @@ fn find_assets_filters_by_definition_domain_alias_predicate() {
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
     let view = state.view();
-    let predicate =
-        CompoundPredicate::<Asset>::build(|p| p.equals("definition.domain", "wonderland"));
+    let predicate = CompoundPredicate::<Asset>::build(|p| {
+        p.equals("definition.domain", wonderland_id.to_string())
+    });
     let assets: Vec<_> = ValidQuery::execute(FindAssets, predicate, &view)
         .expect("query execution succeeds")
         .collect();
@@ -2771,8 +2777,8 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
             Quantity::from(3_u32),
             |tx| {
                 tx.tx_call_hash = Some(hash);
-                tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
-                tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::new(7));
+                tx.current_lane_id = Some(iroha_model_base::topology::LaneId::SINGLE);
+                tx.current_dataspace_id = Some(iroha_model_base::topology::DataSpaceId::new(7));
             },
             true,
         )
@@ -2811,7 +2817,7 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
     let capture = block.captured_fastpq_transcript_sources().unwrap()[&hash];
     assert_eq!(
         capture.dataspace_id(),
-        iroha_data_model::nexus::DataSpaceId::new(7)
+        iroha_model_base::topology::DataSpaceId::new(7)
     );
     assert!(!capture.is_protocol_purpose());
 }

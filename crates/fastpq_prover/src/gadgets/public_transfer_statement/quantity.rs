@@ -18,8 +18,11 @@ pub const QUANTITY_VALUE_MAX_BYTES_V1: usize = 512;
 
 const VALUE_DOMAIN: &[u8] = b"fastpq:quantity:v1:smt:value|";
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::public_transfer::QuantityValueV1")]
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::gadgets::public_transfer_statement::quantity::QuantityValueV1",
+    frame = "fastpq_prover::public_transfer::QuantityValueV1"
+)]
 struct QuantityValueV1 {
     scale: u32,
     limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS],

@@ -120,6 +120,19 @@ virtual dummy without bootstrapping another pool or depending on an earlier
 zero output's role memo. Output roles remain recipient, optional payer change,
 and sponsor reimbursement; inactive output slots carry zero value.
 
+`prepare_atomic_private_settlement_funding_note_v1` derives a positive funding
+commitment before a bundle exists. The release harness funds each pool with
+that input and an unspent reserve note, waits for state-resolved Applied
+activation, and only then chooses an observed committed authority height and
+generates the proof. The virtual dummy remains bound to the resulting bundle;
+its fixed-shape path does not spend the reserve note. Smoke, fault, leakage and
+performance preparation share this ordering. They do not predict how many
+admission blocks precede activation or require a later capability query to
+equal the activation transaction's block height. Exact historical committee
+authorization, governance validity, root membership for positive inputs and
+the 300-height protocol activation notice remain mandatory. Current runtime
+qualification of this harness correction is pending.
+
 The required public `audit_input_commitment` binds the exact two ordered input
 openings with SHA-256 inside the AIR. The statement stores the exact raw 32-byte
 digest; no hash-wrapper marker bit or normalization may alter it. Its private
@@ -422,6 +435,15 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
 
+When participant effects enter the global carrier through an autonomous lane
+merge, the merge validator applies the publication fence defined in
+`specs/merge_ledger.md`. A State or Kura frontier advance during candidate
+revalidation makes that global round unavailable and preserves the durable
+signing journal for retry; it does not turn the already valid private-settlement
+effect into a semantic failure. The private-key action occurs only after the
+validator rechecks the exact State generation and durable Kura parent while
+both publication leases are held.
+
 The complete prepared-bundle digest commits to every certified Prepare body and
 authority-catalog index, but normalizes away the signer bitmap and aggregate
 signature. Every exact three-of-four subset over the same body is therefore
@@ -684,6 +706,14 @@ digests outside the checkout. Skipped tests, failed runs, reused identities,
 changed bytes, or incomplete evidence invalidate the campaign. Synthetic
 validator tests do not satisfy this prerequisite.
 
+The smoke waits for sponsor-side `Applied` registration, then for every
+validator's replicated reservation plane to match the sponsor's complete
+`1 + 9N` map before requesting Commit certificates. The bounded wait requires
+the exact original peer inventory, an empty replicated baseline and unchanged
+financial state throughout convergence; partial or different maps fail.
+It preserves three-of-four committee-local Prepare semantics and does not
+require a local Prepare copy at a validator that did not answer that phase.
+
 `scripts/private_settlement_release_runner.py execute` requires
 `--smoke-campaign <retained-campaign-directory>` at the exact plan commit. It
 revalidates the campaign and execution source before starting any job and
@@ -807,8 +837,10 @@ groups. Changing a same-size public field name, a packet boundary, a
 capture-provenance claim, or an unpaired differential file cannot be hidden by
 rewriting summary reports and their digests.
 
-For each real N, run at least five warmups and thirty measured bundles across
-multiple seeds on pinned hardware. Report p50/p95/p99 with confidence intervals
+Qualification requires at least five actual warmups on each persistent network
+session contributing measurements, and at least thirty measured bundles for
+each profile/N across independent network seeds on pinned hardware. Report
+p50/p95/p99 with confidence intervals
 for proof, upload/availability, auditor response, committee verification,
 Prepare QC aggregation, all-Prepare registration finality, Commit QC
 aggregation, financial finalization, and end-to-end latency, plus throughput,
@@ -835,6 +867,92 @@ it ran on the same pinned environment. Later-release regression comparisons
 reject a baseline captured with a different stable hardware profile,
 configuration matrix, or benchmark requirements before applying the p95/p99
 thresholds.
+
+Benchmark execution uses one mandatory V1 terminal envelope. It binds the exact
+request ID, nonce, request-byte digest, commit and participant count before the
+request moves into the Rust worker. Its outcome is either a complete successful
+measurement, a bounded worker failure, or a typed exhausted completion deadline.
+Only existing declared stage deadlines produce `timed_out`; diagnostic strings
+and transient polling failures do not classify a timeout. Failure and panic
+terminals are published durably before the worker's unsuccessful exit is
+preserved. They contain no successful measurement payload.
+
+The Python adapter retains `evidence/benchmark-protocol/rust-result.json` and
+`adapter-outcome.json` even after a nonzero Rust exit. Missing terminals remain
+incomplete; malformed, substituted or contradictory terminals are invalid.
+Successful publication requires the exact two-file transport inventory and a
+response matching the retained Rust measurement. The pure protocol checks live
+in `scripts/private_settlement_attempt_accounting.py`; they do not confer
+release qualification.
+
+The planner freezes the outer deadline and all seven Rust deadline budgets in
+`benchmark_accounting`. `register-scope --campaign <id>=<plan> --output <scope>`
+registers the complete ordered campaign set before execution. `execute` requires
+`--scope` and `--campaign-id`; its only output locator is
+`<scope-parent>/campaigns/<id>`. A durable start binds scope, campaign, exact plan,
+request and nonce; a retry cannot overwrite that locator or replace its outcome.
+The execution timeout comes from the frozen plan, without an execution override.
+
+Every accepted benchmark retains `benchmark-sample.json` before the next job.
+Its acceptance record binds exact sample and response bytes. Canonical JSONL and
+CSV rows carry `attempt_id`; identical workload coordinates from different
+registered campaigns remain distinct. Destination publication I/O is a typed
+job-invocation failure, without asserting that a financial settlement rolled back.
+
+`account-scope` authenticates every registered campaign and its quiescent closure,
+including process closure for preceding fault/leakage jobs. It rechecks retained
+record bytes, metadata, missing records and directory inventories after collection.
+The shared pure reducer requires exact successful-row joins and computes
+`planned = not_started + attempted` and
+`attempted = succeeded + failed + timed_out + incomplete`. It preserves separate
+profile/N/warmup cohorts. Missing authoritative terminals remain incomplete;
+malformed or contradictory evidence is rejected. Campaigns must share source,
+hardware and declared deadlines, including unsuccessful predecessors.
+
+`close-unstarted` exclusively claims a registered campaign directory and retains
+the original frozen plan and all transitive input bytes before closing it as
+`not_run`. An existing or partially prepared execution directory cannot be
+reclassified through this command. Missing process outcomes require recovery;
+elapsed wall time does not establish quiescence.
+
+`execute` publishes `campaign-artifacts.json` after its own completed closure.
+`finalize-scope --scope <scope> --qualification-campaign-id <id>` requires all
+registered campaigns to have complete accounting and selects one completed
+campaign for the fault/leakage evidence. It reconstructs every retained request
+from its canonical frozen plan, replays accepted measurement semantics, and
+archives the exact controlled records below `accounting/campaigns/<id>`.
+The `benchmark_scope`, `benchmark_accounting_record`, and
+`benchmark_accounting_report` artifact kinds are mandatory. The release verifier
+requires the exact controlled inventory and independently recomputes the counts
+and statistical report from these original records. Failed predecessors and
+accepted samples preceding a later failure remain in the same registered scope.
+
+The reporter requires the registered scope; benchmark JSONL rows alone cannot
+produce a report. Statistics use successful measured jobs, while public job
+accounting separates measured and warmup cohorts and includes failed, timed-out,
+and unstarted jobs. The paper importer exports only those aggregate counts and
+statistical summaries after complete canonical release verification. It does not
+export attempt identifiers, diagnostic text, canaries or retained request data.
+The diagnostic `account-scope` command alone does not qualify measurements or a
+release. Synthetic accounting tests are not empirical benchmark evidence.
+
+The current per-job adapter still starts a fresh network for every benchmark
+invocation. It does not implement persistent warmed sessions. The pure
+`build_benchmark_session_plan` helper assigns contiguous warmup/measurement
+attempts to each profile/N/seed, with adjacent counterbalanced profile pairs and
+a common economic-workload commitment. The grouped and paired bootstrap helpers
+in the reporter resample complete session groups, preserve empty groups and
+undefined replicates, and condition quantiles on successful measured attempts.
+These planning/statistics helpers have no production call sites yet.
+
+TODO: replace benchmark process ownership coherently with separate durable
+session-process and per-attempt evidence. A live warmed network cannot be called
+quiescent after each attempt. Qualify exact consented N-leg transparent economic
+flows, common initialization/finality/convergence windows, proof-worker resources,
+complete sampling and workload-attributed network bytes before accepting real
+measurements. The current N-1 bilateral transparent star transfers and private N
+independent legs are not an equivalent payment graph; a single-bundle latency
+reciprocal is not sustained throughput.
 
 ### Release artifact
 

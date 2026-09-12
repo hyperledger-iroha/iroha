@@ -260,7 +260,7 @@ impl ErasedQueryIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::prelude::*;
+    use iroha_model_base::domain::DomainId;
     use nonzero_ext::nonzero;
     #[test]
     fn empty_selector_projects_full_items() {

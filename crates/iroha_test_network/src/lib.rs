@@ -42,7 +42,6 @@ use iroha_crypto::{
 };
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     alias_setup::{
         AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
@@ -58,7 +57,6 @@ use iroha_data_model::{
         set_instruction_registry,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    metadata::Metadata,
     parameter::{
         CustomParameter, SmartContractParameter,
         system::{
@@ -70,6 +68,12 @@ use iroha_data_model::{
     transaction::Executable,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
     json::Json,
@@ -311,13 +315,14 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
         .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
     {
         Ok(record)
-            if record.owner == client.client().account && record.status == NameStatus::Active =>
+            if &record.owner == client.client().account()
+                && record.status == NameStatus::Active =>
         {
             Ok(true)
         }
         Ok(record) => Err(eyre!(
             "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
-            client.client().account,
+            client.client().account(),
             record.owner,
             record.status
         )),
@@ -327,12 +332,12 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
 fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_exists = match client.client().query(FindDomains::new()).execute_all() {
         Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
-            Some(existing) if existing.owned_by() == &client.client().account => true,
+            Some(existing) if existing.owned_by() == client.client().account() => true,
             Some(existing) => {
                 return Err(eyre!(
                     "domain `{domain}` is owned by `{}`, not setup authority `{}`",
                     existing.owned_by(),
-                    client.client().account
+                    client.client().account()
                 ));
             }
             None => false,
@@ -343,7 +348,7 @@ fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bo
                 debug!(
                     err = %report,
                     %domain,
-                    torii_url = %client.client().torii_url,
+                    torii_url = %client.client().endpoint(),
                     "transient domain visibility query failed while checking SNS lease readiness"
                 );
                 false
@@ -377,7 +382,7 @@ pub fn ensure_domain_setup_in_dataspace(
         return Ok(());
     }
     match client.submit(
-        test_domain_setup_instruction(domain, dataspace_id, &client.client().account)?,
+        test_domain_setup_instruction(domain, dataspace_id, client.client().account())?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
         Ok(_) => {
@@ -414,7 +419,7 @@ pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> 
         if !wait_for_domain_setup(client, domain)? {
             return Err(eyre!(
                 "domain `{domain}` declarative setup was not visible to peer `{}` within {:?}",
-                client.client().torii_url,
+                client.client().endpoint(),
                 TEST_SNS_LEASE_VISIBILITY_TIMEOUT
             ));
         }
@@ -436,7 +441,7 @@ pub fn submit_ensure_domain_for_network(
     client: &Client,
     domain: NewDomain,
 ) -> Result<()> {
-    if client.client().account != network.client().client().account {
+    if client.client().account() != network.client().client().account() {
         return Err(eyre!(
             "network domain setup must be submitted by the network client authority"
         ));
@@ -660,6 +665,14 @@ fn log_status_warning(gate: &StartupWarnGate, warn_log: impl FnOnce(), debug_log
 }
 fn status_error_is_connection_refused(err: &Report) -> bool {
     err.chain().any(|cause| {
+        if let Some(iroha::Error::Transport { kind, .. }) = cause.downcast_ref::<iroha::Error>()
+            && matches!(
+                kind,
+                iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused)
+            )
+        {
+            return true;
+        }
         cause
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io_err| io_err.kind() == ErrorKind::ConnectionRefused)
@@ -667,6 +680,12 @@ fn status_error_is_connection_refused(err: &Report) -> bool {
 }
 fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
     err.chain().any(|cause| {
+        if let Some(iroha::Error::Http { status, body, .. }) = cause.downcast_ref::<iroha::Error>()
+        {
+            return *status == 429
+                && std::str::from_utf8(body)
+                    .is_ok_and(|text| text.contains("Reached the limit of parallel queries"));
+        }
         let message = cause.to_string();
         message.contains("429 Too Many Requests")
             && message.contains("Reached the limit of parallel queries")
@@ -679,6 +698,24 @@ fn torii_request_error_is_transient(err: &Report) -> bool {
     let mut saw_http_transport = false;
     let mut saw_transient_transport = false;
     for cause in err.chain() {
+        if matches!(
+            cause.downcast_ref::<iroha::Error>(),
+            Some(
+                iroha::Error::Timeout { .. }
+                    | iroha::Error::Transport {
+                        kind: iroha::TransportErrorKind::Io(
+                            ErrorKind::ConnectionReset
+                                | ErrorKind::ConnectionAborted
+                                | ErrorKind::BrokenPipe
+                                | ErrorKind::UnexpectedEof
+                                | ErrorKind::TimedOut
+                        ),
+                        ..
+                    }
+            )
+        ) {
+            return true;
+        }
         let message = cause.to_string();
         saw_http_transport |= message.contains("Failed to send http")
             || message.contains("error sending request for url")
@@ -808,9 +845,7 @@ pub fn repo_root() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-fn default_rans_tables_path() -> PathBuf {
-    repo_root().join("codec/rans/tables/rans_seed0.toml")
-}
+const DEFAULT_RANS_TABLES: &[u8] = include_bytes!("../../../codec/rans/tables/rans_seed0.toml");
 fn tempdir_in() -> Option<impl AsRef<Path>> {
     static ENV: OnceLock<Option<PathBuf>> = OnceLock::new();
     ENV.get_or_init(|| std::env::var(TEMPDIR_IN_ENV).map(PathBuf::from).ok())
@@ -2637,6 +2672,14 @@ impl Program {
     /// # Errors
     /// If the path is not found (and build did not help).
     fn resolve_internal(&self, skip_build_override: Option<bool>) -> color_eyre::Result<PathBuf> {
+        self.resolve_internal_in_repo(skip_build_override, &repo_root())
+    }
+
+    fn resolve_internal_in_repo(
+        &self,
+        skip_build_override: Option<bool>,
+        repo: &Path,
+    ) -> color_eyre::Result<PathBuf> {
         fn bin_name(raw: &str) -> String {
             if cfg!(windows) {
                 format!("{raw}.exe")
@@ -2651,8 +2694,7 @@ impl Program {
             build_args,
             isolated_target_subdir,
         } = self.spec();
-        let repo = repo_root();
-        let release_contract = release_program_contract(&repo)?;
+        let release_contract = release_program_contract(repo)?;
         if release_contract.is_some() && !self.release_prebuilt_allowed() {
             return Err(eyre!(
                 "the feature-isolated Parliament signer daemon is forbidden in release-prebuilt corridors"
@@ -2720,8 +2762,8 @@ impl Program {
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
         let target_dir = isolated_target_subdir.map_or_else(
-            || resolve_target_dir(&repo),
-            |subdir| resolve_target_dir(&repo).join(subdir),
+            || resolve_target_dir(repo),
+            |subdir| resolve_target_dir(repo).join(subdir),
         );
         let primary_binary = target_dir.join(format!("{profile}/{bin}"));
         let mut candidates: Vec<PathBuf> = Vec::new();
@@ -2792,7 +2834,7 @@ impl Program {
         }
         if validate_freshness {
             ensure_binary_fresh(
-                &repo,
+                repo,
                 pkg,
                 name,
                 &target_dir,
@@ -9077,7 +9119,7 @@ impl NetworkPeer {
         }
         {
             let tasks = &mut tasks;
-            let client = self.client();
+            let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
@@ -9111,7 +9153,7 @@ impl NetworkPeer {
                         return;
                     }
                     let warn_gate = startup_warn_gate.clone();
-                    // Retry get_status with exponential backoff (50ms ..= 1s); abort if it takes
+                    // Retry status reads with exponential backoff (50ms ..= 1s); abort if it takes
                     // longer than the configured timeout. If Torii is slow to accept connections,
                     // fall back to on-disk height observation so peers can still make progress.
                     let status_backoff = {
@@ -9128,10 +9170,7 @@ impl NetworkPeer {
                             let warn_gate = warn_gate.clone();
                             let http_seen = Arc::clone(&http_seen);
                             async move {
-                                let status = read_on_dedicated_thread(move || {
-                                    client.client().get_status()
-                                })
-                                .await;
+                                let status = client.status().get().await.map_err(Report::from);
                                 match status {
                                     Ok(status) => {
                                         let _ =
@@ -9299,10 +9338,7 @@ impl NetworkPeer {
                                         break;
                                     }
                                     let status = tokio::select! {
-                                        result = read_on_dedicated_thread({
-                                            let client = poll_client.clone();
-                                            move || client.client().get_status()
-                                        }) => result,
+                                        result = async { poll_client.status().get().await } => result.map_err(Report::from),
                                         changed = fatal_rx.changed() => {
                                             if changed.is_ok() && *fatal_rx.borrow() {
                                                 debug!("fatal notify received during status poll");
@@ -9861,6 +9897,14 @@ impl NetworkPeer {
     }
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
+        Client::from_client(self.async_client_for(account_id, account_private_key))
+            .expect("peer blocking client runtime should initialize")
+    }
+    fn async_client_for(
+        &self,
+        account_id: &AccountId,
+        account_private_key: PrivateKey,
+    ) -> AsyncClient {
         tracing::debug!(
             mnemonic = %self.mnemonic,
             port = %self.port_api,
@@ -9870,7 +9914,7 @@ impl NetworkPeer {
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
         let default_account_domain =
-            iroha_data_model::domain::DomainId::try_new("default", "universal")
+            iroha_model_base::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
         let network_id = self
@@ -9879,6 +9923,7 @@ impl NetworkPeer {
             .copied()
             .expect("peer must be attached to a network before creating clients");
         let config = ConfigReader::new()
+            .without_env()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
@@ -9912,17 +9957,19 @@ impl NetworkPeer {
             .expect("peer client config should be valid")
             .parse()
             .expect("peer client config should be valid");
-        let mut client = AsyncClient::new(config);
-        client.set_operator_key_pair(self.key_pair.clone());
-        Client::from_client(client).expect("peer blocking client runtime should initialize")
+        let mut builder = AsyncClient::builder(config);
+        builder.operator_key_pair = Some(self.key_pair.clone());
+        builder
+            .build()
+            .expect("peer account context should be valid")
     }
     /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
     pub fn client(&self) -> Client {
         self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
     }
     pub async fn status(&self) -> Result<Status> {
-        let client = self.client();
-        let result = read_on_dedicated_thread(move || client.client().get_status()).await;
+        let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let result = client.status().get().await.map_err(Report::from);
         match &result {
             Ok(status) => self.record_status_success(status),
             Err(error) => self.record_status_failure(error),
@@ -10116,22 +10163,39 @@ impl NetworkPeer {
             )
     }
     fn ensure_rans_tables(&self) {
-        let src = default_rans_tables_path();
-        assert!(
-            src.exists(),
-            "missing codec rANS tables at {}; ensure codec/rans/tables/rans_seed0.toml is present",
-            src.display()
-        );
         let dst = self
             .dir
             .join("codec")
             .join("rans")
             .join("tables")
             .join("rans_seed0.toml");
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).expect("create codec/rans/tables dir");
+        let parent = dst
+            .parent()
+            .expect("codec rANS table has a parent directory");
+        fs::create_dir_all(parent).expect("create codec/rans/tables dir");
+        match fs::symlink_metadata(&dst) {
+            Ok(metadata) => {
+                assert!(
+                    metadata.file_type().is_file(),
+                    "peer codec rANS tables must be a regular file"
+                );
+                if fs::read(&dst).expect("read peer codec rANS tables") == DEFAULT_RANS_TABLES {
+                    return;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("inspect peer codec rANS tables: {error}"),
         }
-        std::fs::copy(src, dst).expect("copy deterministic rANS tables into peer dir");
+        // Source captures are read-only. Materialize owned bytes instead of inheriting
+        // source permissions, and replace stale tables without truncating a read-only file.
+        let mut staged = tempfile::NamedTempFile::new_in(parent)
+            .expect("create owner-private codec rANS table fixture");
+        staged
+            .write_all(DEFAULT_RANS_TABLES)
+            .expect("write canonical codec rANS tables");
+        staged
+            .persist(&dst)
+            .expect("publish canonical codec rANS tables into peer dir");
     }
     fn canonical_genesis_bytes(block: &GenesisBlock) -> Result<Vec<u8>> {
         let framed = block
@@ -11464,6 +11528,28 @@ mod tests {
         assert!(gate.should_warn());
     }
     #[test]
+    fn status_error_is_connection_refused_checks_structured_transport_kind() {
+        for (kind, expected) in [
+            (
+                iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused),
+                true,
+            ),
+            (iroha::TransportErrorKind::Io(ErrorKind::AddrInUse), false),
+            (iroha::TransportErrorKind::Other, false),
+        ] {
+            let report = Report::from(iroha::Error::Transport {
+                operation: "diagnostic.status",
+                kind,
+                details: "Connection refused text must not decide classification".to_owned(),
+            });
+            assert_eq!(status_error_is_connection_refused(&report), expected);
+            let nested = Err::<(), Report>(report)
+                .wrap_err("client status probe failed")
+                .unwrap_err();
+            assert_eq!(status_error_is_connection_refused(&nested), expected);
+        }
+    }
+    #[test]
     fn status_error_is_connection_refused_detects_io_error() {
         let err = std::io::Error::new(ErrorKind::ConnectionRefused, "refused");
         let report = Report::from(err);
@@ -11494,6 +11580,31 @@ mod tests {
         .wrap_err("client status probe failed")
         .unwrap_err();
         assert!(!status_error_is_connection_refused(&report));
+    }
+    #[test]
+    fn status_error_is_torii_query_backpressure_checks_structured_status_and_body() {
+        for (status, body, expected) in [
+            (429, b"Reached the limit of parallel queries".to_vec(), true),
+            (
+                503,
+                b"Reached the limit of parallel queries".to_vec(),
+                false,
+            ),
+            (429, b"another rate limit".to_vec(), false),
+            (429, vec![0xff], false),
+        ] {
+            let report = Report::from(iroha::Error::Http {
+                operation: "diagnostic.status",
+                status,
+                body,
+                retry_after: None,
+            });
+            assert_eq!(status_error_is_torii_query_backpressure(&report), expected);
+            let nested = Err::<(), Report>(report)
+                .wrap_err("client status probe failed")
+                .unwrap_err();
+            assert_eq!(status_error_is_torii_query_backpressure(&nested), expected);
+        }
     }
     #[test]
     fn status_error_is_torii_query_backpressure_detects_status_throttle() {
@@ -11527,6 +11638,62 @@ mod tests {
             .wrap_err("Unexpected status response; status: 429 Too Many Requests")
             .unwrap_err();
         assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+    #[test]
+    fn torii_request_error_is_transient_checks_structured_transport_causes() {
+        let deadline = iroha::Error::Timeout {
+            operation: "diagnostic.status",
+        };
+        let cases = std::iter::once((deadline, true)).chain(
+            [
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused),
+                    true,
+                ),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionReset),
+                    true,
+                ),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionAborted),
+                    true,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::BrokenPipe), true),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::UnexpectedEof),
+                    true,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::TimedOut), true),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::PermissionDenied),
+                    false,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::InvalidData), false),
+                (iroha::TransportErrorKind::Other, false),
+            ]
+            .into_iter()
+            .map(|(kind, expected)| {
+                (
+                    iroha::Error::Transport {
+                        operation: "diagnostic.status",
+                        kind,
+                        details: "opaque diagnostic".to_owned(),
+                    },
+                    expected,
+                )
+            }),
+        );
+        for (error, expected) in cases {
+            let report = Report::from(error);
+            assert_eq!(torii_request_error_is_transient(&report), expected);
+            let nested = report.wrap_err("status probe");
+            assert_eq!(torii_request_error_is_transient(&nested), expected);
+        }
+        let raw_timeout = Report::from(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "operation timed out while applying local validation",
+        ));
+        assert!(!torii_request_error_is_transient(&raw_timeout));
     }
     #[test]
     fn torii_request_error_is_transient_detects_query_timeout() {
@@ -11585,6 +11752,41 @@ mod tests {
     fn torii_request_error_is_transient_ignores_validation_errors() {
         let report = eyre!("Validation failed: domain already exists");
         assert!(!torii_request_error_is_transient(&report));
+    }
+    #[test]
+    fn peer_client_ignores_ambient_identity_and_endpoint_overrides() {
+        let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        let dir = tempdir().expect("peer client fixture directory");
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]),
+            ),
+        );
+        assert!(peer.network_id.set(network_id).is_ok());
+        let _overrides = [
+            EnvVarRestore::set("CHAIN", "foreign-client-chain"),
+            EnvVarRestore::set("NETWORK_ID", "invalid-ambient-network"),
+            EnvVarRestore::set("TORII_URL", "http://127.0.0.1:1"),
+            EnvVarRestore::set("ACCOUNT_PUBLIC_KEY", "invalid-ambient-public-key"),
+            EnvVarRestore::set("ACCOUNT_PRIVATE_KEY", "invalid-ambient-private-key"),
+            EnvVarRestore::set("ACCOUNT_PRIVATE_KEY_FILE", "nonexistent-ambient-key-file"),
+        ];
+        let client = peer.client();
+        assert_eq!(client.client().chain(), &config::chain_id());
+        assert_eq!(client.client().network_id(), &network_id);
+        assert_eq!(client.client().account(), &*ALICE_ID);
+        assert_eq!(
+            client.client().key_pair().public_key(),
+            ALICE_KEYPAIR.public_key()
+        );
+        assert_eq!(
+            client.client().endpoint().as_str(),
+            format!("http://127.0.0.1:{}/", peer.port_api)
+        );
     }
     #[test]
     fn client_status_timeout_defaults_are_generous() {
@@ -11962,10 +12164,44 @@ mod tests {
             .join("rans")
             .join("tables")
             .join("rans_seed0.toml");
-        assert!(
-            tables_path.exists(),
-            "expected deterministic rANS tables at {}",
-            tables_path.display()
+        assert_eq!(
+            fs::read(&tables_path).expect("read materialized rANS tables"),
+            DEFAULT_RANS_TABLES
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&tables_path, fs::Permissions::from_mode(0o400))
+                .expect("make existing canonical tables read-only");
+        }
+        peer.write_base_config();
+        peer.write_base_config();
+        assert_eq!(
+            fs::read(&tables_path).expect("read reused canonical rANS tables"),
+            DEFAULT_RANS_TABLES
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&tables_path).unwrap().permissions().mode() & 0o777,
+                0o400,
+                "matching read-only tables must be reused without mutation"
+            );
+            fs::set_permissions(&tables_path, fs::Permissions::from_mode(0o600))
+                .expect("prepare divergent table fixture");
+        }
+        fs::write(&tables_path, b"different table bytes").expect("write divergent table fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&tables_path, fs::Permissions::from_mode(0o400))
+                .expect("make divergent table fixture read-only");
+        }
+        peer.write_base_config();
+        assert_eq!(
+            fs::read(&tables_path).expect("read repaired canonical rANS tables"),
+            DEFAULT_RANS_TABLES
         );
     }
     #[test]
@@ -15564,17 +15800,16 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
-        // Point TEST_NETWORK_BIN_IROHA to a dummy file under repo root
-        let repo = repo_root();
+        let repo = tempfile::tempdir().expect("create isolated repository fixture");
         let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy");
-        let abs = repo.join(&rel);
+        let abs = repo.path().join(&rel);
         std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
         std::fs::write(&abs, b"dummy").unwrap();
         let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
         set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
         // Should resolve to the dummy file via env override
         let resolved = Program::Iroha
-            .resolve_skip_build()
+            .resolve_internal_in_repo(Some(true), repo.path())
             .expect("resolve via env");
         assert_eq!(resolved, abs.canonicalize().unwrap());
         // Cleanup and restore environment
@@ -15583,21 +15818,17 @@ mod tests {
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
-        // Do not remove the dummy file to avoid races if other tests concurrently resolve;
-        // it's under target/ and harmless.
     }
     #[tokio::test]
     async fn program_resolve_async_honors_env_override() {
         let _guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
-        let repo = repo_root();
-        let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy-async");
-        let abs = repo.join(&rel);
-        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        let fixture = tempfile::tempdir().expect("create isolated executable fixture");
+        let abs = fixture.path().join("iroha-cli-dummy-async");
         std::fs::write(&abs, b"dummy").unwrap();
         let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
-        set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
+        set_env_var(super::PROGRAM_IROHA_ENV, abs.display().to_string());
         let resolved = Program::Iroha
             .resolve_async()
             .await
@@ -15621,8 +15852,8 @@ mod tests {
     #[test]
     fn cached_binary_if_present_ignores_missing_path() {
         let cache = OnceLock::new();
-        let missing = repo_root().join("target/test-bin-dummy/missing-iroha3d");
-        let _ = fs::remove_file(&missing);
+        let fixture = tempfile::tempdir().expect("create isolated missing executable fixture");
+        let missing = fixture.path().join("missing-iroha3d");
         cache.set(missing).expect("cache should be empty for test");
         assert!(cached_binary_if_present(&cache).is_none());
     }
@@ -15994,15 +16225,55 @@ mod tests {
         let client = network.client();
         let async_client = client.client();
         let expected_host = expected.host_str();
-        assert_eq!(async_client.network_id, network.network_id());
+        assert_eq!(*async_client.network_id(), network.network_id());
         assert_eq!(
-            async_client.torii_url.host_str(),
+            async_client.endpoint().host_str(),
             Some(expected_host.as_ref())
         );
         assert_eq!(
-            async_client.torii_url.port_or_known_default(),
+            async_client.endpoint().port_or_known_default(),
             Some(expected.port())
         );
+    }
+    #[test]
+    fn peer_async_client_factory_preserves_account_operator_and_configuration() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let peer = &network.peers()[0];
+        let private_key = iroha_test_samples::BOB_KEYPAIR.private_key().clone();
+        let client = peer.async_client_for(&BOB_ID, private_key.clone());
+        let blocking = peer.client_for(&BOB_ID, private_key);
+        let config = client.to_builder();
+        assert_eq!(config.account, *BOB_ID);
+        assert_eq!(
+            config.key_pair.public_key(),
+            BOB_ID.expect_single_signatory()
+        );
+        assert_eq!(config.operator_key_pair.as_ref(), Some(&peer.key_pair));
+        assert_eq!(config.network_id, network.network_id());
+        assert_eq!(config.chain, config::chain_id());
+        assert_eq!(
+            config.torii_url,
+            peer.torii_url()
+                .parse::<url::Url>()
+                .expect("valid peer endpoint")
+        );
+        assert_eq!(
+            config.transaction_status_timeout,
+            client_status_timeout_env()
+        );
+        assert_eq!(config.torii_request_timeout, client_request_timeout_env());
+        assert_eq!(
+            config.transaction_ttl,
+            Some(client_ttl_env(config.transaction_status_timeout))
+        );
+        assert_eq!(blocking.client().account(), client.account());
+        assert_eq!(blocking.client().key_pair(), client.key_pair());
+        assert_eq!(
+            blocking.client().operator_key_pair(),
+            client.operator_key_pair()
+        );
+        assert_eq!(blocking.client().network_id(), client.network_id());
+        assert_eq!(blocking.client().endpoint(), client.endpoint());
     }
     #[test]
     fn http_start_gate_requires_http_source() {

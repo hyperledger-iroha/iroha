@@ -2,6 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
+use iroha_model_base::domain::DomainId;
 use ivm::{PointerType, ProgramMetadata};
 use norito::to_bytes;
 fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {

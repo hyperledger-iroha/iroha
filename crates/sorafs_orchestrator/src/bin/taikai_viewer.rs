@@ -613,7 +613,7 @@ fn set_no_follow_flag(options: &mut fs::OpenOptions) {
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -1365,13 +1365,13 @@ mod tests {
     use blake3::hash as blake3_hash;
     use iroha_data_model::{
         da::types::{BlobDigest, StorageTicketId},
-        name::Name,
         taikai::{
             SegmentDuration, SegmentTimestamp, TaikaiCarPointer, TaikaiCodec, TaikaiEventId,
             TaikaiIngestPointer, TaikaiRenditionId, TaikaiResolution, TaikaiStreamId,
             TaikaiTrackMetadata,
         },
     };
+    use iroha_model_base::name::Name;
     use sorafs_car::{CarWriter, ingest_single_file};
     use std::str::FromStr;
     use tempfile::{TempDir, tempdir};

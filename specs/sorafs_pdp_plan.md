@@ -46,7 +46,7 @@ Implemented locally:
   paths, timestamps, and signatures.
 - `crates/sorafs_manifest/tests/pdp.rs` covers the structural validators for
   commitments, challenges, and proofs.
-- `sorafs-validate pdp` performs exhaustive diagnostic validation of committed
+- `iroha app sorafs toolkit validate pdp` performs exhaustive diagnostic validation of committed
   commitments, challenges, proof signatures, byte witnesses, both Merkle roots,
   and all manifest/provider/epoch/deadline/coverage bindings. A standalone
   fixture triple reports `SFS-PDP-DIAG-000` and never authorizes production
@@ -285,7 +285,7 @@ Shipped today:
   `ProofStreamRequestV1` and consumes its one-row finalized terminal NDJSON
   projection. PDP sampling remains fixed by the recorded challenge; the route
   never reports local `pending` status.
-- `sorafs-validate pdp --commitment <commitment.to> --challenge <challenge.to>
+- `iroha app sorafs toolkit validate pdp --commitment <commitment.to> --challenge <challenge.to>
   --proof <proof.to>` validates the reference fixture shape and pair binding.
 - Canonical positive and negative PDP fixtures, the fail-closed rollout
   checker/runner, payload-free canary builder, and operator argfile templates
@@ -309,7 +309,7 @@ administered release-promotion signer corridor. Canonical Norito inputs, request
 bindings, bounded JSON responses, exact response schemas, and
 create-new/no-follow outputs fail closed; focused black-box tests pin all five
 routes and their signed bodies. Local diagnostic verification remains
-`sorafs-validate pdp`; proof generation from storage remains the admitted
+`iroha app sorafs toolkit validate pdp`; proof generation from storage remains the admitted
 provider service's responsibility.
 
 On Linux, Android, macOS, and iOS, file-producing commands require an existing
@@ -382,7 +382,7 @@ Completed local foundations:
   filesystem-race, exact-read, and eviction adversarial coverage.
 - Reserve proof-stream request and telemetry labels.
 - Generate canonical PDP fixture bundle and expanded negative fixtures.
-- Add reference validator and `sorafs-validate pdp` coverage for PDP binding.
+- Add reference validator and `iroha app sorafs toolkit validate pdp` coverage for PDP binding.
 - Keep the canonical positive bundle and all eight negative validation outcomes
   byte-identical across the Rust reference implementation and the JavaScript,
   Python, Kotlin/JVM, Java Android, Swift, and C# SDK surfaces; the dedicated

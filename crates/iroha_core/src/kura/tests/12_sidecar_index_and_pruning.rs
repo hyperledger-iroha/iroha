@@ -976,6 +976,9 @@ fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {
 #[test]
 fn strict_init_prunes_corrupted_index_end_to_end() {
     let temp_dir = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    drop(kura);
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
     let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
@@ -983,9 +986,7 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-    let store_dir = temp_dir.path().to_path_buf();
     drop(store);
-    let config = kura_config_for_path(&store_dir, BLOCKS_IN_MEMORY);
     let (kura, BlockCount(count)) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .unwrap();
@@ -1276,6 +1277,9 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     let temp_dir = TempDir::new().expect("tempdir");
     let (config, blocks, _) = populate_prune_recovery_fixture(&temp_dir);
     let (kura, _) =
@@ -1391,6 +1395,9 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
 }
 #[test]
 fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     for stage in PRUNE_STAGE_INTENT..=PRUNE_STAGE_MEMORY {
         let temp_dir = TempDir::new().expect("tempdir");
         let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
@@ -1551,6 +1558,9 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
 }
 #[test]
 fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_tail() {
+    if run_prune_crash_test_in_subprocess() {
+        return;
+    }
     for promotion_stage in [PRUNE_SIDECAR_PROMOTION_DATA, PRUNE_SIDECAR_PROMOTION_INDEX] {
         let temp_dir = TempDir::new().expect("tempdir");
         let (config, blocks, _) = populate_prune_recovery_fixture(&temp_dir);
@@ -1631,10 +1641,10 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
 fn prune_intent_tampering_fails_closed() {
     let temp_dir = TempDir::new().expect("tempdir");
     let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
-    let intent_path = Kura::prune_intent_path_for(temp_dir.path());
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("open tampering fixture for exact sidecar projection");
+    let intent_path = Kura::prune_intent_path_for(&kura.store_root());
     let sidecar_rewrite = {
         let _guard = kura.sidecar_lock.lock();
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
@@ -1815,14 +1825,6 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     store_thread.join().expect("join store thread");
     assert_eq!(kura.blocks_count(), 1);
     assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
-}
-#[test]
-fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
-    // The first-release prune protocol uses the forward-recovery prune
-    // intent. Reuse its exhaustive crash-boundary matrix here so the
-    // formerly rollback-named regression continues to cover the selected
-    // production protocol without retaining a second writer path.
-    prune_crash_boundaries_recover_forward_and_poison_live_kura();
 }
 #[test]
 fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {

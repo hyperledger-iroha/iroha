@@ -32,11 +32,10 @@ use iroha_data_model::{
             SlashPublicLaneValidator,
         },
     },
-    metadata::Metadata,
     nexus::{
-        Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId, LaneId,
-        ManifestEffect, ManifestEntry, ManifestVersion, PublicLaneRewardRole,
-        PublicLaneRewardShare, UniversalAccountId,
+        Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, ManifestEffect,
+        ManifestEntry, ManifestVersion, PublicLaneRewardRole, PublicLaneRewardShare,
+        UniversalAccountId,
     },
     parameter::system::SumeragiNposParameters,
     prelude::*,
@@ -63,6 +62,11 @@ use iroha_executor_data_model::permission::{
     sorafs::CanIssueSorafsReplicationOrder,
     trigger::CanRegisterTrigger,
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},

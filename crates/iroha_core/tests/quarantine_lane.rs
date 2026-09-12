@@ -6,6 +6,9 @@ use iroha_core::{
     block::BlockBuilder, governance::manifest::LaneManifestRegistry, state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use std::{borrow::Cow, sync::Arc};
 fn quarantine_metadata() -> Metadata {
     let mut metadata = Metadata::default();

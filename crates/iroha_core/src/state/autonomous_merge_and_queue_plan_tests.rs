@@ -1,5 +1,6 @@
 include!("autonomous_merge_and_queue_plan_test_support.rs");
 include!("autonomous_merge_admission_intent_tests.rs");
+include!("autonomous_merge_gas_budget_tests.rs");
 #[test]
 fn finalized_merge_execution_commit_surface_borrows_exact_carrier_hash() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -285,9 +286,7 @@ fn assert_fastpq_batch_rejected(
     match state.validate_merge_execution_batch(
         active_lanes,
         &batch,
-        &std::collections::BTreeMap::new(),
-        true,
-        Some(ConsensusMode::Permissioned),
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
     ) {
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
             assert_eq!(reason, expected_reason)
@@ -316,12 +315,16 @@ fn future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_st
     );
     let state_before = crate::snapshot::canonical_state_snapshot_hash(&state);
     let historical = |candidate: &MergeExecutionBatch| {
+        // Exercise structural validation inside an exact carrier. Authentication
+        // of that carrier's QC belongs to the recovery boundary tests.
+        let mut candidate_entry = entry.clone();
+        candidate_entry.execution_batch = Some(candidate.clone());
         state.validate_merge_execution_batch(
             &entry.active_lanes,
             candidate,
-            &std::collections::BTreeMap::new(),
-            false,
-            None,
+            MergeExecutionValidationAuthority::Historical(HistoricalMergeExecutionAuthority {
+                entry: &candidate_entry,
+            }),
         )
     };
     historical(batch).expect("the unchanged future batch is structurally authentic");
@@ -331,6 +334,17 @@ fn future_historical_merge_rejects_reservation_and_payload_drift_on_consensus_st
         rebind_mutated_fastpq_batch(&mut candidate);
         assert!(crate::merge::merge_execution_batch_commitments_match(
             &candidate
+        ));
+        assert!(matches!(
+            state.validate_merge_execution_batch(
+                &entry.active_lanes,
+                &candidate,
+                MergeExecutionValidationAuthority::Historical(HistoricalMergeExecutionAuthority {
+                    entry: &entry,
+                }),
+            ),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
+                if reason == "historical execution differs from its authenticated canonical carrier"
         ));
         match historical(&candidate) {
             Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
@@ -463,19 +477,14 @@ fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_con
         );
         commit_staged_autonomous_for_test(historical_block)
             .expect("commit the exact historical sealed carrier");
-        historical_state.validate_merge_execution_batch(
-            &historical_entry.active_lanes,
-            historical_entry.execution_batch.as_ref().expect("historical execution batch"),
-            &std::collections::BTreeMap::new(), false, None,
-        ).expect("historical validation accepts complete committed identities and registry ownership");
+        historical_state.recover_merge_ledger_from_kura()
+            .expect("historical recovery authenticates the complete committed carrier and its registry ownership");
     }
     assert!(matches!(
         state.validate_merge_execution_batch(
             &entry.active_lanes,
             batch,
-            &std::collections::BTreeMap::new(),
-            true,
-            Some(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
@@ -516,6 +525,19 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_co
     state_block
         .fastpq_transcripts
         .insert(inner_call_hash, vec![transcript]);
+    let before = state_block.fastpq_transcripts.clone();
+    assert!(matches!(
+        state_block.take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint)),
+        Err(MergeLedgerCommitError::ExecutionDivergence(reason))
+            if reason.contains("has no applied source capture")
+    ));
+    assert_eq!(state_block.fastpq_transcripts, before);
+    let captured = state_block
+        .fastpq_source_context
+        .as_ref()
+        .expect("frozen source context")
+        .capture_transcript(Some(inner_call_hash), inner_call_hash, None, None, 0);
+    state_block.fastpq_source_captures.record(captured);
     let bundles = state_block
         .take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint))
         .expect("sealed reveal maps its inner call evidence to its outer lane identity");
@@ -523,6 +545,12 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_co
     assert_eq!(bundles[0].entry_hash, outer_entrypoint_hash);
     assert_eq!(bundles[0].transcripts[0].batch_hash, inner_call_hash);
     assert!(state_block.fastpq_transcripts.is_empty());
+    assert!(
+        state_block
+            .captured_fastpq_transcript_sources()
+            .expect("healthy remaining captures")
+            .is_empty()
+    );
     state_block
         .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
         .expect("sealed-reveal evidence extraction leaves no unbound side effect");
@@ -2529,6 +2557,8 @@ include!("autonomous_merge_and_queue_plan_route_count_tests.rs");
     reason = "one adversarial roster test covers missing, malformed, oversized, and bounded members"
 )]
 fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomically() {
+    // These checks own only QueuePlan markers. Narrow storage overlays avoid
+    // reserving unrelated World snapshots for every corruption phase.
     {
         let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
         let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -2570,7 +2600,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         seed_exact_queue_plan_admission_state_for_test(&state, &second_certificate);
         assert!(
             State::queue_plan_pending_route_members_from_storage_with_limit(
-                state.world.view().smart_contract_state(),
+                &state.world.smart_contract_state.view(),
                 route,
                 1,
             )
@@ -2584,9 +2614,8 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             State::queue_plan_pending_route_member_marker_key(route, second_member)
                 .expect("fixture second exact route-member key");
         let first_member_payload = {
-            let world = state.world.view();
-            world
-                .smart_contract_state()
+            let storage = state.world.smart_contract_state.view();
+            storage
                 .get(&first_member_key)
                 .cloned()
                 .expect("fixture first exact route-member payload")
@@ -2602,9 +2631,9 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         )
         .expect("fixture second obligation key");
         {
-            let mut world = state.world.block();
-            world.smart_contract_state.remove(first_member_key.clone());
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.remove(first_member_key.clone());
+            storage.commit();
         }
         assert!(
             state
@@ -2613,27 +2642,18 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             "the exact route roster must not conceal a missing member"
         );
         let (first_before, second_before, second_member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world
-                    .smart_contract_state()
-                    .get(&first_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_member_key)
-                    .cloned(),
+                storage.get(&first_obligation_key).cloned(),
+                storage.get(&second_obligation_key).cloned(),
+                storage.get(&second_member_key).cloned(),
             )
         };
         {
-            let mut world = state.world.block();
+            let mut storage = state.world.smart_contract_state.block();
             assert!(
                 State::stage_queue_plan_pending_obligation_in_storage(
-                    &mut world.smart_contract_state,
+                    &mut storage,
                     &first_admission,
                 )
                 .is_err(),
@@ -2641,114 +2661,62 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             );
             assert!(
                 State::resolve_queue_plan_pending_obligation_in_storage(
-                    &mut world.smart_contract_state,
+                    &mut storage,
                     first_binding.network_id_digest,
                     first_binding.entrypoint_hash.clone(),
                 )
                 .is_err(),
                 "nonterminal resolution must reject a missing exact member"
             );
+            assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+            assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
             assert_eq!(
-                world
-                    .smart_contract_state
-                    .get(&first_obligation_key)
-                    .cloned(),
-                first_before
-            );
-            assert_eq!(
-                world
-                    .smart_contract_state
-                    .get(&second_obligation_key)
-                    .cloned(),
-                second_before
-            );
-            assert_eq!(
-                world.smart_contract_state.get(&second_member_key).cloned(),
+                storage.get(&second_member_key).cloned(),
                 second_member_before,
                 "failed exact-member checks must not mutate another roster member"
             );
-            assert!(world.smart_contract_state.get(&first_member_key).is_none());
+            assert!(storage.get(&first_member_key).is_none());
         }
         {
-            let mut world = state.world.block();
-            world
-                .smart_contract_state
-                .insert(first_member_key.clone(), first_member_payload);
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(first_member_key.clone(), first_member_payload);
+            storage.commit();
         }
         {
-            let mut world = state.world.block();
-            world
-                .smart_contract_state
-                .insert(first_member_key.clone(), vec![0x00]);
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(first_member_key.clone(), vec![0x00]);
+            storage.commit();
         }
         let (first_before, second_before, member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world
-                    .smart_contract_state()
-                    .get(&first_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_obligation_key)
-                    .cloned(),
-                world.smart_contract_state().get(&first_member_key).cloned(),
+                storage.get(&first_obligation_key).cloned(),
+                storage.get(&second_obligation_key).cloned(),
+                storage.get(&first_member_key).cloned(),
             )
         };
-        let mut world = state.world.block();
+        let mut storage = state.world.smart_contract_state.block();
         assert!(
-            State::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &first_admission,
-            )
-            .is_err(),
+            State::stage_queue_plan_pending_obligation_in_storage(&mut storage, &first_admission,)
+                .is_err(),
             "idempotent staging must reject a malformed exact member"
         );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&first_obligation_key)
-                .cloned(),
-            first_before
-        );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&second_obligation_key)
-                .cloned(),
-            second_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&first_member_key).cloned(),
-            member_before
-        );
+        assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+        assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
+        assert_eq!(storage.get(&first_member_key).cloned(), member_before);
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
+                &mut storage,
                 first_binding.network_id_digest,
                 first_binding.entrypoint_hash,
             )
             .is_err(),
             "resolution must reject a malformed exact member"
         );
+        assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+        assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
         assert_eq!(
-            world
-                .smart_contract_state
-                .get(&first_obligation_key)
-                .cloned(),
-            first_before
-        );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&second_obligation_key)
-                .cloned(),
-            second_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&first_member_key).cloned(),
+            storage.get(&first_member_key).cloned(),
             member_before,
             "failed malformed-member checks must not mutate the exact roster"
         );
@@ -2780,12 +2748,12 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         let member_key = State::queue_plan_pending_route_member_marker_key(route, member_identity)
             .expect("fixture oversized route-member key");
         {
-            let mut world = state.world.block();
-            world.smart_contract_state.insert(
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(
                 member_key.clone(),
                 vec![0xA5; MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES + 1],
             );
-            world.commit();
+            storage.commit();
         }
         let obligation_key = State::queue_plan_pending_obligation_marker_key(
             binding.network_id_digest,
@@ -2793,44 +2761,32 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         )
         .expect("fixture oversized-member obligation key");
         let (obligation_before, member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world.smart_contract_state().get(&obligation_key).cloned(),
-                world.smart_contract_state().get(&member_key).cloned(),
+                storage.get(&obligation_key).cloned(),
+                storage.get(&member_key).cloned(),
             )
         };
-        let mut world = state.world.block();
+        let mut storage = state.world.smart_contract_state.block();
         assert!(
-            State::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &admission,
-            )
-            .is_err(),
+            State::stage_queue_plan_pending_obligation_in_storage(&mut storage, &admission,)
+                .is_err(),
             "idempotent staging must reject an oversized exact member"
         );
-        assert_eq!(
-            world.smart_contract_state.get(&obligation_key).cloned(),
-            obligation_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&member_key).cloned(),
-            member_before
-        );
+        assert_eq!(storage.get(&obligation_key).cloned(), obligation_before);
+        assert_eq!(storage.get(&member_key).cloned(), member_before);
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
+                &mut storage,
                 binding.network_id_digest,
                 binding.entrypoint_hash,
             )
             .is_err(),
             "resolution must reject an oversized exact member"
         );
+        assert_eq!(storage.get(&obligation_key).cloned(), obligation_before);
         assert_eq!(
-            world.smart_contract_state.get(&obligation_key).cloned(),
-            obligation_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&member_key).cloned(),
+            storage.get(&member_key).cloned(),
             member_before,
             "failed oversized-member checks must not mutate the exact roster"
         );
@@ -3327,13 +3283,17 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         batch.application_block_header.height().get() > restored_height,
         "registry deferral must exercise a carrier beyond the coherent State frontier"
     );
+    let historical_entry = merge_entry_from_candidate(
+        base.clone(),
+        merge_qc_for_candidate(&state, &base, &validator_keypairs, &[0, 1, 2]),
+    );
     let historical = |candidate: &MergeExecutionBatch| {
         state.validate_merge_execution_batch(
             &active_lanes,
             candidate,
-            &std::collections::BTreeMap::new(),
-            false,
-            None,
+            MergeExecutionValidationAuthority::Historical(HistoricalMergeExecutionAuthority {
+                entry: &historical_entry,
+            }),
         )
     };
     historical(batch).expect("exact future execution passes historical structural validation");
@@ -3369,9 +3329,7 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
         .validate_merge_execution_batch(
             &active_lanes,
             batch,
-            &std::collections::BTreeMap::new(),
-            true,
-            Some(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
         )
         .expect("restoring only the exact registry owner restores live authorization");
 }
@@ -3583,7 +3541,12 @@ fn pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives()
             .classify_pending_queue_plan_admission(&certificate, future_proposal_height)
             .expect("future authenticated certificate is retained, not rejected")
             .1,
-        PendingQueuePlanAdmissionDisposition::Future
+        PendingQueuePlanAdmissionDisposition::Future {
+            authority_height: future_authority_height,
+            proposal_height: future_proposal_height,
+            state_height: parent.header().height().get(),
+            carrier_height: future_proposal_height,
+        }
     );
     state
         .kura
@@ -3922,6 +3885,97 @@ fn pending_queue_plan_admission_checks_historical_native_amx_participant_sources
         "historical Native-AMX certificate with a stale participant incarnation",
     );
     let _ = state.set_lane_incarnation_for_test(participant_lane, original_incarnation);
+}
+
+#[test]
+fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        parent.header().height().get(),
+        0x6D,
+    );
+    let state = Arc::new(state);
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+    let observed_state = Arc::clone(&state);
+    let observed_calls = std::rc::Rc::clone(&calls);
+    crate::torii_proxy::observe_queue_plan_authentication_for_test(
+        move || {
+            assert!(
+                observed_state.state_commit_lock.try_lock().is_some(),
+                "signature verification must not exclude State publication"
+            );
+            observed_calls.set(observed_calls.get() + 1);
+        },
+        || {
+            let (_, disposition) = state
+                .classify_pending_queue_plan_admission(
+                    &certificate,
+                    parent.header().height().get() + 1,
+                )
+                .expect("authenticate and classify the current certificate");
+            assert_eq!(
+                disposition,
+                PendingQueuePlanAdmissionDisposition::EligibleAbsent
+            );
+            assert_eq!(
+                calls.replace(0),
+                1,
+                "classification authenticates immutable bytes once"
+            );
+            let first = state
+                .persist_classified_queue_plan_admission(&certificate)
+                .expect("retain the authenticated certificate at the exact durable frontier");
+            assert!(matches!(
+                first,
+                PendingQueuePlanAdmissionPersistenceOutcome::Durable { inserted: true, .. }
+            ));
+            assert_eq!(
+                calls.replace(0),
+                1,
+                "persistence must reuse authenticated bytes under its fence"
+            );
+            let repeated = state
+                .persist_classified_queue_plan_admission(&certificate)
+                .expect("idempotent admission retains the same durable certificate");
+            assert!(matches!(
+                repeated,
+                PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                    inserted: false,
+                    ..
+                }
+            ));
+            assert_eq!(
+                calls.replace(0),
+                1,
+                "an idempotent retry authenticates once before its fence"
+            );
+            assert!(
+                state
+                    .persist_classified_queue_plan_admission(b"malformed")
+                    .is_err()
+            );
+            assert_eq!(
+                calls.get(),
+                1,
+                "malformed input still passes through authentication"
+            );
+        },
+    );
+    assert_eq!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificates()
+            .expect("retained inventory"),
+        vec![(Hash::new(&certificate), certificate)],
+        "failed input and exact retries must not change durable certificate ownership"
+    );
 }
 
 #[test]

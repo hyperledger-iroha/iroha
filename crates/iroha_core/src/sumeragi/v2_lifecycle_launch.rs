@@ -1,9 +1,7 @@
 //! Sealed production launch from recovered lifecycle ownership into live I/O.
 use iroha_crypto::KeyPair;
-use iroha_data_model::{
-    block::{CertifiedMergeLedgerReference, consensus_v2 as wire},
-    peer::PeerId,
-};
+use iroha_data_model::block::{CertifiedMergeLedgerReference, consensus_v2 as wire};
+use iroha_model_base::peer::PeerId;
 use std::{
     collections::BTreeSet,
     sync::Arc,
@@ -2988,5 +2986,6 @@ impl ProductionLifecycleOwnerV1 {
 
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::peer::PeerId;
     include!("v2_lifecycle_launch_tests.rs");
 }

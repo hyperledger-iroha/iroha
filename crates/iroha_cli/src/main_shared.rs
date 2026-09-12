@@ -1,3 +1,4 @@
+use iroha_model_base::chain::ChainId;
 mod address;
 mod audit;
 #[cfg(feature = "bridge")]
@@ -31,11 +32,11 @@ mod subscriptions;
 mod sumeragi;
 mod taira;
 mod taira_public_reset;
+mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
-use futures::{TryStreamExt, stream::TryStream};
 use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha::{
     blocking::Client as BlockingClient,
@@ -47,6 +48,8 @@ use iroha_config::parameters::defaults;
 use iroha_config_base::toml::{FromFileError, TomlSource};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_i18n::{Bundle, Localizer, detect_language};
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::name::Name;
 use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::FeeQuoteResponse;
 use std::num::NonZeroU64;
@@ -59,13 +62,18 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
-use tokio::runtime::Runtime;
 // For base64 Engine trait (decode)
 use base64::Engine as _;
 use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use url::Url;
+fn compiled_build_identity() -> core::result::Result<
+    iroha_core::release_identity::BuildIdentity,
+    iroha_core::release_identity::BuildIdentityError,
+> {
+    iroha_core::compiled_build_identity!()
+}
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",
@@ -330,8 +338,18 @@ struct Args {
     /// This runtime-only credential is never inferred from the account key, environment, or
     /// client TOML. The selected node must allowlist its public key for the configured exact
     /// NetworkId.
-    #[arg(long, value_name("ABSOLUTE_PATH"))]
+    #[arg(
+        long,
+        value_name("ABSOLUTE_PATH"),
+        conflicts_with = "operator_private_key_fd"
+    )]
     operator_private_key_file: Option<PathBuf>,
+    /// Borrow an inherited, read-only owner-private operator key descriptor without reopening it.
+    ///
+    /// The descriptor must be a singly linked regular file with exact mode 0600. Reading it
+    /// preserves the caller's file offset. No account, TOML, or environment key is inferred.
+    #[arg(long, value_name("FD"), value_parser = clap::value_parser!(u32).range(3..=65535), conflicts_with = "operator_private_key_file")]
+    operator_private_key_fd: Option<u32>,
     /// Print configuration details to stderr
     #[arg(short, long)]
     verbose: bool,
@@ -404,6 +422,21 @@ enum Command {
     #[command(subcommand)]
     Soracloud(crate::soracloud::Command),
 }
+/// Build the common CLI submission receipt fields with a reusable transaction locator.
+///
+/// The top-level hash feeds `tx status --hash` and therefore uses raw lowercase hex.
+/// The signed transaction and its checked network identity retain their Norito encoding.
+fn transaction_submission_receipt_fields(
+    hash: HashOf<SignedTransaction>,
+    transaction: &SignedTransaction,
+    fee_quote: &FeeQuoteResponse,
+) -> Result<Vec<(&'static str, json::Value)>> {
+    Ok(vec![
+        ("hash", json_utils::json_value(&hash.to_string())?),
+        ("transaction", json_utils::json_value(transaction)?),
+        ("fee_quote", json_utils::json_value(fee_quote)?),
+    ])
+}
 /// Context inside which commands run
 trait RunContext {
     fn config(&self) -> &Config;
@@ -430,18 +463,18 @@ trait RunContext {
         self.println(data)
     }
     fn println(&mut self, data: impl Display) -> Result<()>;
-    fn client_from_config(&self) -> Client {
-        let mut client = Client::new(self.config().clone());
-        if let Some(operator_key_pair) = self.operator_key_pair() {
-            client.set_operator_key_pair(operator_key_pair.clone());
-        }
-        client
+    fn client_from_config(&self) -> Result<Client> {
+        let mut builder = Client::builder(self.config().clone());
+        builder.operator_key_pair = self.operator_key_pair().cloned();
+        Ok(builder.build()?)
     }
     fn operator_key_pair(&self) -> Option<&KeyPair> {
         None
     }
     fn server_version(&self) -> Result<String> {
-        self.client_from_config().get_server_version()
+        Ok(BlockingClient::from_client(self.client_from_config()?)?
+            .status()
+            .version()?)
     }
     /// Submit instructions or dump them to stdout depending on the flag
     fn finish(&mut self, instructions: impl Into<Executable>) -> Result<()> {
@@ -547,7 +580,7 @@ trait RunContext {
             }
         };
         let fee_payment = apply_cli_gas_limit_override(self.transaction_fee_payment()?, gas_limit)?;
-        let client = self.client_from_config();
+        let client = self.client_from_config()?;
         let blocking_client = BlockingClient::from_client(client.clone())
             .wrap_err("failed to initialize blocking transaction client")?;
         let (transaction, fee_quote) =
@@ -578,11 +611,11 @@ trait RunContext {
         };
         match self.output_format() {
             CliOutputFormat::Json => {
-                let result = json_utils::json_object(vec![
-                    ("hash", json_utils::json_value(&hash)?),
-                    ("transaction", json_utils::json_value(&transaction)?),
-                    ("fee_quote", json_utils::json_value(&fee_quote)?),
-                ])?;
+                let result = json_utils::json_object(transaction_submission_receipt_fields(
+                    hash,
+                    &transaction,
+                    &fee_quote,
+                )?)?;
                 self.print_data(&result)
             }
             CliOutputFormat::Text => {
@@ -1061,7 +1094,7 @@ impl Run for Version {
         }
     }
 }
-fn main() {
+fn main() -> std::process::ExitCode {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let output_format = output_format_override_from_args(
         raw_args
@@ -1070,14 +1103,17 @@ fn main() {
             .map(|arg| arg.to_string_lossy().into_owned()),
     )
     .unwrap_or(CliOutputFormat::Json);
-    if let Err(report) = run() {
-        let rendered = render_cli_error(&report, output_format);
-        eprint!("{}", rendered.output);
-        std::process::exit(rendered.kind.exit_code());
+    match run() {
+        Ok(status) => status,
+        Err(report) => {
+            let rendered = render_cli_error(&report, output_format);
+            eprint!("{}", rendered.output);
+            std::process::ExitCode::from(rendered.kind.exit_code() as u8)
+        }
     }
 }
 #[allow(clippy::too_many_lines)]
-fn run() -> ReportResult<(), MainError> {
+fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let language_override = language_override_from_args(
         raw_args
@@ -1095,11 +1131,11 @@ fn run() -> ReportResult<(), MainError> {
                 let rendered = err.render().to_string();
                 let localized = localize_help_text(&rendered, &help_i18n);
                 print!("{localized}");
-                return Ok(());
+                return Ok(std::process::ExitCode::SUCCESS);
             }
             ErrorKind::DisplayVersion => {
                 print!("{}", err.render());
-                return Ok(());
+                return Ok(std::process::ExitCode::SUCCESS);
             }
             _ => {
                 return Err(Report::new(MainError::CliArgs(err.to_string())));
@@ -1108,6 +1144,24 @@ fn run() -> ReportResult<(), MainError> {
     };
     let args = Args::from_arg_matches(&matches)
         .map_err(|err| Report::new(MainError::CliArgs(err.to_string())))?;
+    if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
+        &args.command
+        && command.is_artifact_tool()
+    {
+        reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit")?;
+        if let Command::App(app::Command::Sorafs(commands::sorafs::Command::Toolkit(command))) =
+            args.command
+        {
+            return Ok(match command.run_artifact() {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::ExitCode::from(error.exit_code())
+                }
+            });
+        }
+        unreachable!("local artifact command matched above");
+    }
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
     if !args.machine {
@@ -1115,23 +1169,26 @@ fn run() -> ReportResult<(), MainError> {
     }
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
         clap_markdown::print_help_markdown::<Args>();
-        return Ok(());
+        return Ok(std::process::ExitCode::SUCCESS);
     }
     error_stack::Report::set_color_mode(color_mode());
     if let Command::Taira(taira::Command::Doctor(doctor)) = &args.command {
         reject_irrelevant_taira_doctor_globals(&args)?;
         return map_command_result(
             doctor.run_without_client_config(effective_output_format(&args), io::stdout()),
-        );
+        )
+        .map(|()| std::process::ExitCode::SUCCESS);
     }
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
-        return map_command_result(reset.run_without_client_config(io::stdout()));
+        return map_command_result(reset.run_without_client_config(io::stdout()))
+            .map(|()| std::process::ExitCode::SUCCESS);
     }
     if matches!(&args.command, Command::App(app::Command::Execution(_))) {
         reject_irrelevant_local_tool_globals(&args, "app execution")?;
         if let Command::App(app::Command::Execution(command)) = args.command {
-            return map_command_result(command.run_without_client_config(io::stdout()));
+            return map_command_result(command.run_without_client_config(io::stdout()))
+                .map(|()| std::process::ExitCode::SUCCESS);
         }
         unreachable!("execution dispatch matched above");
     }
@@ -1146,7 +1203,8 @@ fn run() -> ReportResult<(), MainError> {
             commands::sorafs::toolkit::Command::Pack(command),
         ))) = args.command
         {
-            return map_command_result(command.run_without_client_config(io::stdout()));
+            return map_command_result(command.run_without_client_config(io::stdout()))
+                .map(|()| std::process::ExitCode::SUCCESS);
         }
         unreachable!("local SoraFS pack dispatch matched above");
     }
@@ -1218,16 +1276,11 @@ fn run() -> ReportResult<(), MainError> {
             .preflight_before_operator_key_load()
             .map_err(|error| Report::new(MainError::Command(error.to_string())))?;
     }
-    let operator_key_pair = args
-        .operator_private_key_file
-        .as_deref()
-        .map(operator_key::load_operator_key_pair)
-        .transpose()
-        .map_err(|error| {
-            Report::new(MainError::Config)
-                .attach("failed to load runtime operator signing key")
-                .attach(error.to_string())
-        })?;
+    let operator_key_pair = load_runtime_operator_key(&args).map_err(|error| {
+        Report::new(MainError::Config)
+            .attach("failed to load runtime operator signing key")
+            .attach(error.to_string())
+    })?;
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
@@ -1252,7 +1305,7 @@ fn run() -> ReportResult<(), MainError> {
             .map_err(|report| report.change_context(MainError::TransactionMetadata))?;
         context.transaction_metadata = Some(metadata);
     }
-    map_command_result(args.command.run(&mut context))
+    map_command_result(args.command.run(&mut context)).map(|()| std::process::ExitCode::SUCCESS)
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.into_report().map_err(|report| {
@@ -1260,11 +1313,25 @@ fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
         report.change_context(MainError::Command(message))
     })
 }
+fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
+    match (
+        args.operator_private_key_file.as_deref(),
+        args.operator_private_key_fd,
+    ) {
+        (Some(_), Some(_)) => {
+            eyre::bail!("operator private-key file and descriptor are mutually exclusive")
+        }
+        (Some(path), None) => operator_key::load_operator_key_pair(path).map(Some),
+        (None, Some(fd)) => operator_key::load_operator_key_pair_fd(fd).map(Some),
+        (None, None) => Ok(None),
+    }
+}
 fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
     if args.config.is_some()
         || args.config_fd.is_some()
         || args.config_source_path.is_some()
         || args.operator_private_key_file.is_some()
+        || args.operator_private_key_fd.is_some()
         || args.verbose
         || args.metadata.is_some()
         || args.input
@@ -1286,6 +1353,9 @@ fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainE
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
+    }
+    if args.operator_private_key_fd.is_some() {
+        flags.push("--operator-private-key-fd");
     }
     if args.verbose {
         flags.push("--verbose");
@@ -1330,6 +1400,9 @@ fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(),
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
+    }
+    if args.operator_private_key_fd.is_some() {
+        flags.push("--operator-private-key-fd");
     }
     if args.verbose {
         flags.push("--verbose");
@@ -1763,26 +1836,40 @@ mod filter {
         }
     }
 }
-async fn drive_try_stream_until_timeout<S, F>(
-    stream: &mut S,
+fn drive_stream_until_timeout<T, F>(
+    mut receive: impl FnMut(Duration) -> iroha::Result<Option<T>>,
     mut on_item: F,
     timeout: Duration,
     timeout_message: &str,
 ) -> Result<()>
 where
-    S: TryStream + Unpin,
-    S::Error: std::fmt::Display + Send + Sync + 'static,
-    F: FnMut(S::Ok) -> Result<()>,
+    F: FnMut(T) -> Result<()>,
 {
-    while let Ok(item) = tokio::time::timeout(timeout, stream.try_next()).await {
-        match item.map_err(|err| eyre!("Torii event stream error: {err}"))? {
-            Some(value) => on_item(value)?,
-            None => break,
+    loop {
+        match receive(timeout) {
+            Ok(Some(value)) => on_item(value)?,
+            Ok(None)
+            | Err(iroha::Error::Timeout {
+                operation: "stream.receive",
+            }) => break,
+            Err(error) => return Err(eyre!("Torii event stream error: {error}")),
         }
     }
     eprintln!("{timeout_message}");
     Ok(())
 }
+
+fn finish_stream<T>(result: Result<T>, close: iroha::Result<()>) -> Result<T> {
+    match (result, close) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Err(close_error)) => {
+            Err(error.wrap_err(format!("event stream close failed: {close_error}")))
+        }
+    }
+}
+
 fn listen_events_message(
     filter: &EventFilterBox,
     timeout: Option<Duration>,
@@ -1921,32 +2008,31 @@ mod events {
         timeout: Option<Duration>,
     ) -> Result<()> {
         let filter = filter.into();
-        let client = context.client_from_config();
+        let account = context.client_from_config()?.account_client()?;
+        let client = iroha::blocking::AccountClient::from_client(account)?;
         let i18n = context.i18n().clone();
         eprintln!("{}", listen_events_message(&filter, timeout, &i18n));
-        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-        rt.block_on(async {
-            let mut stream = client
-                .listen_for_events([filter])
-                .await
-                .wrap_err("Failed to listen for events")?;
-            if let Some(timeout) = timeout {
-                let timeout_message = i18n.t("warning.timeout_expired");
-                drive_try_stream_until_timeout(
-                    &mut stream,
-                    |event| context.print_data(&event),
-                    timeout,
-                    timeout_message.as_str(),
-                )
-                .await?;
-            } else {
-                while let Some(event) = stream.try_next().await? {
+        let mut stream = client
+            .events()
+            .subscribe([filter])
+            .wrap_err("Failed to listen for events")?;
+        let result = if let Some(timeout) = timeout {
+            let timeout_message = i18n.t("warning.timeout_expired");
+            drive_stream_until_timeout(
+                |timeout| stream.recv(Some(timeout)),
+                |event| context.print_data(&event),
+                timeout,
+                timeout_message.as_str(),
+            )
+        } else {
+            (|| {
+                while let Some(event) = stream.recv(None)? {
                     context.print_data(&event)?;
                 }
-            }
-            Ok::<(), eyre::Report>(())
-        })?;
-        Ok(())
+                Ok(())
+            })()
+        };
+        finish_stream(result, stream.close())
     }
 }
 mod blocks {
@@ -1973,32 +2059,31 @@ mod blocks {
         context: &mut impl RunContext,
         timeout: Option<Duration>,
     ) -> Result<()> {
-        let client = context.client_from_config();
+        let account = context.client_from_config()?.account_client()?;
+        let client = iroha::blocking::AccountClient::from_client(account)?;
         let i18n = context.i18n().clone();
         eprintln!("{}", listen_blocks_message(height, timeout, &i18n));
-        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-        rt.block_on(async {
-            let mut stream = client
-                .listen_for_blocks(height)
-                .await
-                .wrap_err("Failed to listen for blocks")?;
-            if let Some(timeout) = timeout {
-                let timeout_message = i18n.t("warning.timeout_expired");
-                drive_try_stream_until_timeout(
-                    &mut stream,
-                    |event| context.print_data(&event),
-                    timeout,
-                    timeout_message.as_str(),
-                )
-                .await?;
-            } else {
-                while let Some(block) = stream.try_next().await? {
+        let mut stream = client
+            .blocks()
+            .subscribe(height)
+            .wrap_err("Failed to listen for blocks")?;
+        let result = if let Some(timeout) = timeout {
+            let timeout_message = i18n.t("warning.timeout_expired");
+            drive_stream_until_timeout(
+                |timeout| stream.recv(Some(timeout)),
+                |block| context.print_data(&block),
+                timeout,
+                timeout_message.as_str(),
+            )
+        } else {
+            (|| {
+                while let Some(block) = stream.recv(None)? {
                     context.print_data(&block)?;
                 }
-            }
-            Ok::<(), eyre::Report>(())
-        })?;
-        Ok(())
+                Ok(())
+            })()
+        };
+        finish_stream(result, stream.close())
     }
 }
 mod domain {
@@ -2025,7 +2110,7 @@ mod domain {
             match self {
                 List(cmd) => cmd.run(context),
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindDomains)
                         .execute_all()
@@ -2083,7 +2168,7 @@ mod domain {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindDomains), &args),
                 List::Filter(filter) => {
@@ -2171,7 +2256,7 @@ mod account {
                 Get(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entry = client
                         .get_account_read(&account_id)
                         .wrap_err("Failed to get account")?;
@@ -2216,7 +2301,7 @@ mod account {
                 List(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let mut builder = client.query(FindRolesByAccountId::new(account_id));
                     if args.limit.is_some() || args.offset > 0 {
                         let pagination = iroha::data_model::query::parameters::Pagination::new(
@@ -2269,20 +2354,14 @@ mod account {
                 List(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config();
-                    let mut builder = client.query(FindPermissionsByAccountId::new(account_id));
-                    if args.limit.is_some() || args.offset > 0 {
-                        let pagination = iroha::data_model::query::parameters::Pagination::new(
-                            args.limit.and_then(NonZeroU64::new),
-                            args.offset,
-                        );
-                        builder = builder.with_pagination(pagination);
-                    }
-                    if let Some(n) = args.fetch_size.and_then(NonZeroU64::new) {
-                        let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                        builder = builder.with_fetch_size(fs);
-                    }
-                    let permissions = builder.execute_all()?;
+                    let client = context.client_from_config()?;
+                    let permissions = list_effective_permissions(
+                        &client,
+                        &account_id,
+                        args.limit,
+                        args.offset,
+                        args.fetch_size,
+                    )?;
                     context.print_data(&permissions)
                 }
                 Grant(args) => {
@@ -2313,6 +2392,107 @@ mod account {
                 }
             }
         }
+    }
+    /// Read the complete effective permission set before applying global pagination.
+    ///
+    /// Torii's list fanout applies the requested window independently to every route and
+    /// returns a deduplicated page whose `total` is that page's size, not a global count.
+    /// Only an empty page from a fully successful fanout establishes exhaustion. The
+    /// permission handler rejects limits above its configured cap; it never clamps an
+    /// accepted page size, so advancing by the requested size cannot skip a shard row.
+    fn list_effective_permissions(
+        client: &Client,
+        account_id: &AccountId,
+        limit: Option<u64>,
+        offset: u64,
+        fetch_size: Option<u64>,
+    ) -> Result<Vec<Permission>> {
+        use std::collections::BTreeSet;
+
+        #[derive(crate::json_macros::JsonDeserialize)]
+        struct Page {
+            items: Vec<Permission>,
+            total: u64,
+        }
+
+        let page_size = fetch_size.unwrap_or(500);
+        if page_size == 0 || limit == Some(0) {
+            eyre::bail!("permission --limit and --fetch-size must be positive when provided");
+        }
+        let mut permissions = BTreeSet::new();
+        let mut page_offset = 0_u64;
+        loop {
+            let response = client
+                .get_account_permissions_page_response(account_id, page_size, page_offset)
+                .wrap_err("Failed to get effective account permissions")?;
+            if response.status().as_u16() != 200 {
+                eyre::bail!(
+                    "effective account permissions request failed with HTTP {}",
+                    response.status()
+                );
+            }
+            let header = |name: &str| {
+                response
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+            };
+            if !header("content-type").is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .eq_ignore_ascii_case("application/json")
+            }) {
+                eyre::bail!("effective account permissions response must be application/json");
+            }
+            if header("x-iroha-account-permission-semantics") != Some("effective-v1") {
+                eyre::bail!("account permissions response is missing effective-v1 semantics");
+            }
+            let counter = |name: &str| -> Result<u64> {
+                header(name)
+                    .and_then(|value| value.parse().ok())
+                    .ok_or_else(|| eyre!("account permissions response has invalid {name}"))
+            };
+            let attempted = counter("x-iroha-fanout-routes-attempted")?;
+            let succeeded = counter("x-iroha-fanout-routes-succeeded")?;
+            if attempted == 0
+                || succeeded != attempted
+                || counter("x-iroha-fanout-routes-failed")? != 0
+                || counter("x-iroha-fanout-routes-denied")? != 0
+                || counter("x-iroha-fanout-routes-unavailable")? != 0
+                || counter("x-iroha-fanout-routes-not-found")? != 0
+            {
+                eyre::bail!("account permissions fanout is incomplete; no partial result returned");
+            }
+            let page: Page = parse_json(
+                std::str::from_utf8(response.body())
+                    .wrap_err("account permissions response is not UTF-8")?,
+            )
+            .wrap_err("Failed to decode effective account permissions page")?;
+            if page.total != u64::try_from(page.items.len())? {
+                eyre::bail!("account permissions merged page total does not match its items");
+            }
+            if page.items.is_empty() {
+                break;
+            }
+            permissions.extend(page.items);
+            page_offset = page_offset
+                .checked_add(page_size)
+                .ok_or_else(|| eyre!("account permissions page offset overflow"))?;
+        }
+        Ok(permissions
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| (*index as u64) >= offset)
+            .take(
+                limit
+                    .and_then(|value| usize::try_from(value).ok())
+                    .unwrap_or(usize::MAX),
+            )
+            .map(|(_, permission)| permission)
+            .collect())
     }
     #[derive(clap::Args, Debug)]
     pub struct Id {
@@ -2358,13 +2538,13 @@ mod account {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Maximum number of items to return (server-side limit)
+        /// Maximum number of effective permissions to return after merging all dataspaces
         #[arg(long)]
         limit: Option<u64>,
-        /// Offset into the result set (server-side offset)
+        /// Offset into the complete, canonically ordered effective permission set
         #[arg(long, default_value_t = 0)]
         offset: u64,
-        /// Batch fetch size for iterable queries
+        /// Number of permissions to fetch per dataspace per request (default: 500)
         #[arg(long)]
         fetch_size: Option<u64>,
     }
@@ -2386,7 +2566,7 @@ mod account {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, &client, &args),
                 List::Filter(filter) => {
@@ -2544,15 +2724,10 @@ mod asset {
                     let id = args
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
-                    let client = context.client_from_config();
-                    let entries = client
-                        .query(FindAssets)
-                        .execute_all()
+                    let client = context.client_from_config()?;
+                    let entry = client
+                        .query_single(FindAssetById::new(id))
                         .wrap_err("Failed to get asset")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|e| e.id() == &id)
-                        .ok_or_else(|| eyre!("Asset not found"))?;
                     context.print_data(&entry)
                 }
                 List(cmd) => cmd.run(context),
@@ -2589,7 +2764,7 @@ mod asset {
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
                     let policy = if args.ensure_destination {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         Some(admission_policy(&client)?)
                     } else {
                         None
@@ -2620,7 +2795,7 @@ mod asset {
         let definition = match (definition, definition_alias) {
             (Some(definition), None) => definition,
             (None, Some(alias)) => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 resolve_asset_definition_id_by_alias(&client, &alias)?
             }
             _ => {
@@ -2680,7 +2855,7 @@ mod asset {
                         let id = args
                             .resolve_id(context)
                             .wrap_err("failed to resolve asset definition identifier")?;
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries = client
                             .query(FindAssetsDefinitions)
                             .execute_all()
@@ -2810,7 +2985,7 @@ mod asset {
         }
         impl Run for List {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 match self {
                     List::All(args) => {
                         list_all(context, client.query(FindAssetsDefinitions), &args)
@@ -2911,7 +3086,7 @@ mod asset {
             match (id, alias) {
                 (Some(id), None) => Ok(id),
                 (None, Some(alias)) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     resolve_asset_definition_id_by_alias(&client, &alias)
                 }
                 _ => eyre::bail!("provide either `--id` or `--alias`"),
@@ -3104,7 +3279,7 @@ mod asset {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindAssets), &args),
                 List::Filter(filter) => {
@@ -3273,7 +3448,7 @@ mod nft {
             use self::Command::*;
             match self {
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindNfts)
                         .execute_all()
@@ -3340,7 +3515,7 @@ mod nft {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindNfts), &args),
                 List::Filter(filter) => {
@@ -3442,7 +3617,7 @@ mod rwa {
             use self::Command::*;
             match self {
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindRwas)
                         .execute_all()
@@ -3584,7 +3759,7 @@ mod rwa {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindRwas), &args),
                 List::Filter(filter) => {
@@ -3640,6 +3815,7 @@ mod rwa {
 mod peer {
     use super::*;
     use iroha::data_model::isi::register::RegisterPeerWithPop;
+    use iroha_model_base::peer::PeerId;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
         /// List registered peers expected to connect with each other
@@ -3697,7 +3873,7 @@ mod peer {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindPeers), &args),
             }
@@ -3994,7 +4170,7 @@ mod multisig {
             use iroha::data_model::prelude::FindAccountById;
             let account_id = resolve_account_id(context, &self.account)
                 .wrap_err("failed to resolve --account")?;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let account: Account = client
                 .query_single(FindAccountById::new(account_id.clone()))
                 .wrap_err_with(|| format!("account `{account_id}` not found"))?;
@@ -4104,7 +4280,7 @@ mod multisig {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let (multisig_selectors, limit, offset, fetch_size) = match self {
                 Self::All {
                     multisig_selectors,
@@ -4142,7 +4318,7 @@ mod multisig {
         override_ttl_ms: Option<NonZeroU64>,
     ) -> Result<()> {
         use iroha::data_model::prelude::FindAccountById;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let account = match client.query_single(FindAccountById::new(multisig_account.clone())) {
             Ok(account) => account,
             Err(err) => {
@@ -4621,7 +4797,7 @@ mod query {
             // {"singular": {"type": "FindContractManifestByCodeHash", "payload": {"code_hash": "0x.."}}}
             // {"iterable": {"type": "FindPeers", "params": {"limit": 100, "offset": 0, "fetch_size": 128}}}
             use iroha::data_model::query::json::QueryEnvelopeJson;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let buf = string_from_stdin()?;
             let envelope: QueryEnvelopeJson = parse_json(&buf).wrap_err("decode query envelope")?;
             let request = envelope
@@ -4643,7 +4819,7 @@ mod query {
     impl Run for ContinueArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use iroha::data_model::query::QueryRequest;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let bytes = decode_base64_or_hex(
                 &self.cursor,
                 "invalid hex length for ForwardCursor",
@@ -4663,7 +4839,7 @@ mod query {
     pub struct StdinRaw;
     impl Run for StdinRaw {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let s = string_from_stdin()?;
             let s = s.trim();
             let body =
@@ -4678,7 +4854,9 @@ mod query {
 }
 mod transaction {
     use super::*;
-    use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
+    use iroha::data_model::{Level as LogLevel, isi::Log};
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use std::{
         sync::{
             Arc, LazyLock, Mutex,
@@ -4695,6 +4873,8 @@ mod transaction {
         Get(Get),
         /// Send an empty transaction that logs a message
         Ping(Ping),
+        /// Collect an exact fixed-schedule transaction trace for multilane qualification
+        Load(crate::transaction_load::Args),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -4709,6 +4889,7 @@ mod transaction {
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
+                Load(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
                 SignedSize(cmd) => cmd.run(context),
@@ -4717,7 +4898,7 @@ mod transaction {
     }
     #[derive(clap::Args, Debug)]
     pub struct Status {
-        /// Hash of the signed transaction to inspect
+        /// Raw 64-character hexadecimal hash from a transaction submission receipt
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
         /// Explicit status routing scope for a one-shot read. `--wait` always uses exact global
@@ -4736,7 +4917,7 @@ mod transaction {
     }
     impl Run for Status {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             if self.wait.wait {
                 let status = crate::wait_for_transaction_applied(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
@@ -4762,14 +4943,9 @@ mod transaction {
     }
     impl Run for Get {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
-            let transaction = client
-                .query(FindTransactions)
-                .execute_all()?
-                .into_iter()
-                .find(|t| t.entrypoint_hash() == &self.hash)
-                .ok_or_else(|| eyre!("Transaction not found"))?;
-            context.print_data(&transaction)
+            let client = context.client_from_config()?;
+            let details = client.get_transaction_details(self.hash)?;
+            context.print_data(&details.transaction)
         }
     }
     #[derive(clap::Args, Debug)]
@@ -4909,7 +5085,7 @@ mod transaction {
                 } else {
                     None
                 };
-                let client = Client::new(context.config().clone());
+                let client = Client::builder(context.config().clone()).build()?;
                 let metadata = context.transaction_metadata().cloned().unwrap_or_default();
                 let fee_payment = context.transaction_fee_payment()?;
                 let i18n = context.i18n().clone();
@@ -5126,7 +5302,7 @@ mod transaction {
             let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             let fee_payment = context.transaction_fee_payment()?;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let blocking_client = BlockingClient::from_client(client)
                 .wrap_err("failed to initialize blocking transaction client")?;
             let executable = Executable::Instructions(instructions.into());
@@ -5214,7 +5390,7 @@ mod role {
             use self::PermissionCommand::*;
             match self {
                 List(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let role = client
                         .query(FindRoles)
                         .execute_all()?
@@ -5290,7 +5466,7 @@ mod role {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All {
                     limit,
@@ -5342,7 +5518,7 @@ mod parameter {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let params = client.query_single(FindParameters)?;
             context.print_data(&params)
         }
@@ -5398,7 +5574,7 @@ mod trigger {
             match self {
                 List(cmd) => cmd.run(context),
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entry: Trigger = client
                         .query_single(FindTriggerById::new(args.id))
                         .wrap_err("Failed to get trigger")?;
@@ -5460,7 +5636,7 @@ mod trigger {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All {
                     active,
@@ -5564,7 +5740,7 @@ mod trigger {
                 Executable::Instructions(vec![InstructionBox::from(instruction)].into());
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             let fee_payment = context.transaction_fee_payment()?;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let blocking_client = BlockingClient::from_client(client.clone())
                 .wrap_err("failed to initialize blocking transaction client")?;
             let (transaction, fee_quote) =
@@ -5574,13 +5750,11 @@ mod trigger {
             blocking_client
                 .submit_transaction(&transaction)
                 .wrap_err("Failed to submit trigger execution transaction")?;
-            let mut pairs = vec![
-                ("hash", json_utils::json_value(&hash)?),
+            let mut pairs = transaction_submission_receipt_fields(hash, &transaction, &fee_quote)?;
+            pairs.extend([
                 ("trigger_id", json_utils::json_value(&self.id)?),
-                ("transaction", json_utils::json_value(&transaction)?),
-                ("fee_quote", json_utils::json_value(&fee_quote)?),
                 ("trace_requested", json_utils::json_value(&self.trace)?),
-            ];
+            ]);
             if self.wait.is_enabled() {
                 let status = wait_for_transaction_applied(&client, hash, &self.wait)?;
                 pairs.push(("finalized", json_utils::json_value(&true)?));
@@ -5720,7 +5894,7 @@ mod trigger {
     }
     impl CompletedList {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let trigger_id = self.id.as_ref().map(ToString::to_string);
             let response = client.get_trigger_completions(
                 trigger_id.as_deref(),
@@ -5739,24 +5913,22 @@ mod trigger {
             let filter = completed_filter(self.id, self.outcome);
             let timeout = self.timeout_ms.map(Duration::from_millis);
             if timeout.is_none() && self.limit.is_none() {
-                let client = context.client_from_config();
-                Runtime::new()
-                    .wrap_err("Failed to create runtime")?
-                    .block_on(async {
-                        let mut stream = client
-                            .listen_for_events([filter])
-                            .await
-                            .wrap_err("Failed to listen for trigger completion events")?;
-                        while let Some(event) = stream.try_next().await? {
-                            if let iroha::data_model::events::EventBox::TriggerCompleted(event) =
-                                event
-                            {
-                                context.print_data(&event)?;
-                            }
+                let account = context.client_from_config()?.account_client()?;
+                let client = iroha::blocking::AccountClient::from_client(account)?;
+                let mut stream = client
+                    .events()
+                    .subscribe([filter])
+                    .wrap_err("Failed to listen for trigger completion events")?;
+                let result = (|| {
+                    while let Some(event) = stream.recv(None)? {
+                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) = event
+                        {
+                            context.print_data(&event)?;
                         }
-                        Ok::<(), eyre::Report>(())
-                    })?;
-                return Ok(());
+                    }
+                    Ok(())
+                })();
+                return finish_stream(result, stream.close());
             }
             let events = collect_completed_events(context, filter, timeout, self.limit)?;
             for event in events {
@@ -5778,7 +5950,7 @@ mod trigger {
     }
     impl Inspect {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let entry: Trigger = client
                 .query_single(FindTriggerById::new(self.id.clone()))
                 .wrap_err("Failed to get trigger")?;
@@ -5832,29 +6004,35 @@ mod trigger {
         timeout: Option<Duration>,
         limit: Option<u64>,
     ) -> Result<Vec<iroha::data_model::events::trigger_completed::TriggerCompletedEvent>> {
-        let client = context.client_from_config();
-        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-        rt.block_on(async move {
-            let mut stream = client
-                .listen_for_events([filter])
-                .await
-                .wrap_err("Failed to listen for trigger completion events")?;
-            let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+        let account = context.client_from_config()?.account_client()?;
+        let client = iroha::blocking::AccountClient::from_client(account)?;
+        let mut stream = client
+            .events()
+            .subscribe([filter])
+            .wrap_err("Failed to listen for trigger completion events")?;
+        let result = (|| {
+            let deadline = timeout.map(|duration| std::time::Instant::now() + duration);
             let mut events = Vec::new();
             loop {
                 if limit.is_some_and(|limit| events.len() as u64 >= limit) {
                     break;
                 }
-                let next = if let Some(deadline) = deadline {
-                    if tokio::time::Instant::now() >= deadline {
+                let remaining = if let Some(deadline) = deadline {
+                    let Some(remaining) =
+                        deadline.checked_duration_since(std::time::Instant::now())
+                    else {
                         break;
-                    }
-                    match tokio::time::timeout_at(deadline, stream.try_next()).await {
-                        Ok(result) => result?,
-                        Err(_) => break,
-                    }
+                    };
+                    Some(remaining)
                 } else {
-                    stream.try_next().await?
+                    None
+                };
+                let next = match stream.recv(remaining) {
+                    Ok(next) => next,
+                    Err(iroha::Error::Timeout {
+                        operation: "stream.receive",
+                    }) => break,
+                    Err(error) => return Err(error.into()),
                 };
                 let Some(event) = next else {
                     break;
@@ -5863,8 +6041,9 @@ mod trigger {
                     events.push(event);
                 }
             }
-            Ok::<_, eyre::Report>(events)
-        })
+            Ok(events)
+        })();
+        finish_stream(result, stream.close())
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
@@ -6289,7 +6468,7 @@ mod executor {
             use self::Command::*;
             match self {
                 DataModel => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let model = client.query_single(FindExecutorDataModel)?;
                     context.print_data(&model)
                 }
@@ -6336,7 +6515,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<Domain> = client
                             .query(FindDomains)
                             .execute_all()
@@ -6392,7 +6571,7 @@ mod metadata {
                     Get(args) => {
                         let account_id = resolve_account_id(context, &args.id)
                             .wrap_err("failed to resolve --id account")?;
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entry: Account = client
                             .query_single(FindAccountById::new(account_id))
                             .wrap_err("Failed to get value")?;
@@ -6448,7 +6627,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<AssetDefinition> = client
                             .query(FindAssetsDefinitions)
                             .execute_all()
@@ -6504,7 +6683,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<Nft> = client
                             .query(FindNfts)
                             .execute_all()
@@ -6558,7 +6737,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<Rwa> = client
                             .query(FindRwas)
                             .execute_all()
@@ -6612,7 +6791,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entry: Trigger = client
                             .query_single(FindTriggerById::new(args.id))
                             .wrap_err("Failed to get value")?;
@@ -6650,7 +6829,7 @@ mod repo {
         query::repo::prelude::FindRepoAgreements,
         repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
-    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::metadata::Metadata;
     use std::time::{SystemTime, UNIX_EPOCH};
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -6785,7 +6964,7 @@ mod repo {
             use self::QueryCommand::*;
             match self {
                 List => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let agreements = client
                         .query(FindRepoAgreements::new())
                         .execute_all()
@@ -6793,7 +6972,7 @@ mod repo {
                     context.print_data(&agreements)
                 }
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let agreements = client
                         .query(FindRepoAgreements::new())
                         .execute_all()
@@ -6826,7 +7005,7 @@ mod repo {
     }
     impl Margin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let agreements = client
                 .query(FindRepoAgreements::new())
                 .execute_all()
@@ -6889,7 +7068,6 @@ mod settlement {
     use super::*;
     use clap::ValueEnum;
     use iroha::data_model::{
-        domain::DomainId,
         isi::{
             InstructionBox,
             settlement::{
@@ -6899,12 +7077,14 @@ mod settlement {
                 SettlementPlan,
             },
         },
-        metadata::Metadata,
-        nexus::DataSpaceId,
         oracle::{FeedConfigVersion, FeedEvent, FeedId},
-        prelude::{AssetDefinitionId, Name},
+        prelude::AssetDefinitionId,
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
+    use iroha_model_base::domain::DomainId;
+    use iroha_model_base::metadata::Metadata;
+    use iroha_model_base::name::Name;
+    use iroha_model_base::topology::DataSpaceId;
     use std::collections::BTreeSet;
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -6937,7 +7117,7 @@ mod settlement {
                 Command::GetFxCorridorPolicy(args) => args.run(context),
                 Command::ListFxCorridorPolicies => {
                     let registry = context
-                        .client_from_config()
+                        .client_from_config()?
                         .query_single(FindFxCorridorPolicyRegistry)?;
                     context.print_data(&registry)
                 }
@@ -7011,7 +7191,7 @@ mod settlement {
     impl GetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let policy = context
-                .client_from_config()
+                .client_from_config()?
                 .query_single(FindFxCorridorPolicyById::new(self.policy_id))?;
             context.print_data(&policy)
         }
@@ -7775,7 +7955,7 @@ mod settlement {
             use super::*;
             use iroha::crypto::{Algorithm, KeyPair};
             use iroha_core::iso_bridge::reference_data::DatasetKind;
-            use iroha_data_model::domain::DomainId;
+            use iroha_model_base::domain::DomainId;
             use iroha_primitives::numeric::Quantity;
             use std::io::Write;
             use tempfile::NamedTempFile;
@@ -8124,7 +8304,7 @@ fn parse_asset_balance_scope_literal(
             .parse::<u64>()
             .map_err(|_| eyre!("asset balance scope must be `global` or `dataspace:<id>`"))?;
         return Ok(iroha::data_model::asset::AssetBalanceScope::Dataspace(
-            iroha::data_model::nexus::DataSpaceId::new(dataspace),
+            iroha_model_base::topology::DataSpaceId::new(dataspace),
         ));
     }
     Err(eyre!(
@@ -8359,12 +8539,12 @@ mod multisig_json_tests {
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         account::AccountId,
-        domain::DomainId,
         isi::{CustomInstruction, InstructionBox},
     };
     use iroha::executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigRegister, MultisigSpec,
     };
+    use iroha_model_base::domain::DomainId;
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
     fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -8417,11 +8597,9 @@ mod cli_integration_harness_tests {
         builder::{QueryBuilder, QueryExecutor},
         parameters::{FetchSize, Pagination, Sorting},
     };
-    use iroha::data_model::{
-        domain::{Domain, DomainId},
-        prelude::FindDomains,
-    };
+    use iroha::data_model::{domain::Domain, prelude::FindDomains};
     use iroha_crypto::Algorithm;
+    use iroha_model_base::domain::DomainId;
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9590,7 +9768,6 @@ mod cli_integration_harness {
     use iroha::data_model::{
         account::AccountId,
         asset::{Asset, AssetId},
-        domain::DomainId,
         executor::ExecutorDataModel,
         parameter::Parameters,
         proof::{ProofId, ProofRecord},
@@ -9601,6 +9778,7 @@ mod cli_integration_harness {
         smart_contract::manifest::ContractManifest,
     };
     use iroha_crypto::{Algorithm, Hash};
+    use iroha_model_base::domain::DomainId;
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
     use std::collections::BTreeMap;
@@ -9743,7 +9921,7 @@ mod cli_integration_harness {
         },
         #[cfg(feature = "ids_projection")]
         DomainIds {
-            ids: Vec<iroha::data_model::domain::DomainId>,
+            ids: Vec<iroha_model_base::domain::DomainId>,
             idx: usize,
             fetch: usize,
         },
@@ -10215,10 +10393,11 @@ mod cli_integration_harness {
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection() {
-        use iroha::data_model::domain::{Domain, DomainId};
+        use iroha::data_model::domain::Domain;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self};
+        use iroha_model_base::domain::DomainId;
         let owner_w1 = sample_account_id("w1", 1);
         let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
@@ -10482,10 +10661,11 @@ mod cli_integration_harness {
     #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection_batched() {
-        use iroha::data_model::domain::{Domain, DomainId};
+        use iroha::data_model::domain::Domain;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self};
+        use iroha_model_base::domain::DomainId;
         use std::num::NonZeroU64;
         let owner_d1 = sample_account_id("d1", 1);
         let owner_d2 = sample_account_id("d2", 2);

@@ -616,7 +616,11 @@ fn invalid_replica_advert_runtime_geometry_fails_before_store_creation() {
     assert_rejected(
         invalid_floor,
         &floor_root,
-        "eviction replica floor 129 exceeds the protocol validator limit 128",
+        &format!(
+            "eviction replica floor {} exceeds the protocol validator limit {}",
+            iroha_config::parameters::actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT + 1,
+            iroha_config::parameters::actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
+        ),
     );
     let capacity_root = parent.path().join("invalid-capacity");
     let mut invalid_capacity = kura_config_for_path(&capacity_root, BLOCKS_IN_MEMORY);
@@ -769,11 +773,12 @@ fn replica_adverts_expiring_during_compaction_block_stage_publication() {
             !registry.is_empty(),
             "the fixture must install exact selected-keeper adverts"
         );
-        for adverts in registry.values_mut() {
+        registry.retain(|_, adverts| {
             for advert in adverts.values_mut() {
                 advert.observed_at = expired_at;
             }
-        }
+            true
+        });
     }
     kura.resume_eviction_before_stage_publication_for_tests();
     let freed = handle.join().expect("eviction thread");
@@ -1078,6 +1083,7 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: Duration::from_secs(3600),
         lane_history_retention: LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) =
@@ -1186,6 +1192,7 @@ fn evicted_block_caches_after_remote_rehydrate() {
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
             lane_history_retention: LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),
@@ -1340,7 +1347,7 @@ fn evicted_body_without_hash_metadata_is_missing_even_with_adverts() {
             .truncate_hashes_to_count(1)
             .expect("remove hash metadata for evicted body");
     }
-    advertise_required_replicas(&kura, height);
+    // The exact keeper adverts remain installed from before hash metadata was lost.
     assert_eq!(
         kura.block_body_status_by_hash(block_hash),
         Some(BlockBodyStatus::Missing),

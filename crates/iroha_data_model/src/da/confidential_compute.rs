@@ -48,7 +48,6 @@ impl FromStr for ConfidentialComputeMechanism {
 #[error("invalid confidential-compute mechanism `{0}`")]
 pub struct ConfidentialComputeMechanismParseError(pub String);
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ConfidentialComputeMechanism {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
@@ -62,7 +61,6 @@ impl norito::json::FastJsonWrite for ConfidentialComputeMechanism {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ConfidentialComputeMechanism {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -104,11 +102,7 @@ mod tests {
 /// Lane-level confidentiality policy committed directly by the lane catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::confidential_compute::ConfidentialComputePolicy")]
 pub struct ConfidentialComputePolicy {
     /// Selected confidentiality mechanism.

@@ -69,6 +69,8 @@ iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 # Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
 # request them locally so focused builds do not compile the broadest model.
 iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
+iroha_model_base = { path = "crates/iroha_model_base", default-features = false }
+iroha_js_codec = { path = "crates/iroha_js_codec", default-features = false }
 iroha_service_model = { path = "crates/iroha_service_model" }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
@@ -181,6 +183,9 @@ concread = "=0.5.7"
 # [patch.crates-io] was temporarily disabled; keep the local overrides we still
 # rely on for Halo2 helpers and the CUDA helper.
 [patch.crates-io]
+pqcrypto-internals = { path = "vendor/pqcrypto-internals-0.2.11" }
+pqcrypto-mldsa = { path = "vendor/pqcrypto-mldsa-0.1.2" }
+pqcrypto-mlkem = { path = "vendor/pqcrypto-mlkem-0.1.1" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
@@ -300,6 +305,7 @@ default-members = [
     "crates/norito_derive",
     "crates/iroha_primitives",
     "crates/iroha_crypto",
+    "crates/iroha_model_base",
     "crates/iroha_data_model",
     "crates/iroha_config_base",
     "crates/iroha_config",
@@ -380,9 +386,75 @@ codegen-units = 256
 [profile.dev.package.iroha_data_model]
 codegen-units = 8
 
+# Preserve compiler settings for definitions moved out of the aggregate model.
+[profile.dev.package.iroha_model_base]
+codegen-units = 8
+
 [profile.test.package."*"]
 debug = 0
 codegen-units = 256
+
+# Local validators execute the production memory-hard authentication puzzle.
+# Optimize only its arithmetic dependencies so debug builds can service the
+# same bounded authentication lifetime without weakening the puzzle policy.
+# Match dev and test profiles to reuse these artifacts between node and harness.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.test.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.test.package.blake2]
+opt-level = 3
+
+# Four-peer native consensus profiling found BLS signing and verification in
+# unoptimized field arithmetic. Optimize the concrete crypto instantiations and
+# their arithmetic dependencies in both runnable profiles, retaining assertions
+# and overflow checks and sharing artifacts between the node and test harnesses.
+[profile.dev.package.iroha_crypto]
+opt-level = 3
+
+[profile.test.package.iroha_crypto]
+opt-level = 3
+
+[profile.dev.package.w3f-bls]
+opt-level = 3
+
+[profile.test.package.w3f-bls]
+opt-level = 3
+
+[profile.dev.package.ark-bls12-381]
+opt-level = 3
+
+[profile.test.package.ark-bls12-381]
+opt-level = 3
+
+[profile.dev.package.ark-ec]
+opt-level = 3
+
+[profile.test.package.ark-ec]
+opt-level = 3
+
+[profile.dev.package.ark-ff]
+opt-level = 3
+
+[profile.test.package.ark-ff]
+opt-level = 3
+
+[profile.dev.package.ark-poly]
+opt-level = 3
+
+[profile.test.package.ark-poly]
+opt-level = 3
+
+[profile.dev.package.ark-serialize]
+opt-level = 3
+
+[profile.test.package.ark-serialize]
+opt-level = 3
 
 # Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;
 # one CGU reached 19.32 GiB. Eight was the lowest measured partition count, and
@@ -390,9 +462,16 @@ codegen-units = 256
 [profile.test.package.iroha_data_model]
 codegen-units = 8
 
-# The six-lane native-STARK digest dominates FASTPQ's proof regression tests.
-# Optimize this small arithmetic crate while retaining the test profile's
-# overflow checks and debug assertions. This does not change release settings.
+[profile.test.package.iroha_model_base]
+codegen-units = 8
+
+# The six-lane native-STARK digest also runs on the live consensus path.
+# Match node and test-harness arithmetic: otherwise four-peer checks run an
+# unoptimized digest despite fast unit tests and need a second build artifact.
+# Both profiles retain overflow checks and debug assertions.
+[profile.dev.package.fastpq_isi]
+opt-level = 2
+
 [profile.test.package.fastpq_isi]
 opt-level = 2
 
@@ -402,6 +481,9 @@ opt-level = 2
 # also crossed the fixed 13 GiB soft ceiling before proof work began, so O1
 # avoids that optimizer-only peak. Halo2, core, and the bridge remain at O3.
 [profile.release.package.iroha_data_model]
+opt-level = 1
+
+[profile.release.package.iroha_model_base]
 opt-level = 1
 
 # Fast, incremental optimization for local runnable builds only. This profile
@@ -417,6 +499,9 @@ lto = false
 debug = 0
 
 [profile.local-release.package.iroha_data_model]
+opt-level = 1
+
+[profile.local-release.package.iroha_model_base]
 opt-level = 1
 
 [profile.deploy]

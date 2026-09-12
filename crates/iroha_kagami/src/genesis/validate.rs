@@ -1,10 +1,11 @@
 use crate::{Outcome, RunArgs, tui};
 use clap::Parser;
 use color_eyre::eyre::{WrapErr as _, eyre};
-use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
+use iroha_data_model::account::address::ChainDiscriminantGuard;
 use iroha_genesis::{
     ManifestCrypto, RawGenesisTransaction, genesis_instructions_json, read_genesis_manifest_bytes,
 };
+use iroha_model_base::name::Name;
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
@@ -164,14 +165,12 @@ fn validate_instructions_array(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::{
-        ChainId,
-        parameter::{
-            Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters},
-        },
+    use iroha_data_model::parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters},
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::chain::ChainId;
     use std::{fs, io::BufWriter, path::PathBuf};
     use tempfile::NamedTempFile;
     #[test]
@@ -270,7 +269,7 @@ mod tests {
                 let pop = bls_normal_pop_prove(key_pair.private_key())
                     .expect("generate topology proof of possession");
                 GenesisTopologyEntry::new(
-                    iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
+                    iroha_model_base::peer::PeerId::new(key_pair.public_key().clone()),
                     pop,
                 )
             })

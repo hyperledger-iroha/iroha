@@ -442,7 +442,7 @@ impl Kura {
             return Ok(0);
         };
         let mut reservations = self.post_wsv_lane_artifact_budget_reservations.lock();
-        if let Some(reservation) = reservations.get_mut(&plan.entry_hash) {
+        if let Some(mut reservation) = reservations.get_mut(&plan.entry_hash) {
             if reservation.plan != plan {
                 return Err(Self::invalid_lane_artifact_error(
                     PathBuf::from(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE),
@@ -939,67 +939,77 @@ impl Kura {
     /// exact identities. Recovery never reverse-scans carrier blocks or keeps
     /// an unbounded execution-height index.
     fn rebuild_post_wsv_lane_artifact_budget_reservations_on_startup(&self) -> Result<()> {
-        let _prune_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let pending_canonical_bytes =
-            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
-        let durable_tip = u64::try_from(self.exact_durable_blocks_count()?)?;
-        let durable_tip_block = NonZeroUsize::new(usize::try_from(durable_tip)?)
-            .and_then(|height| self.get_block_without_merge_sidecar(height));
-        if let Some(block) = durable_tip_block.as_ref() {
-            self.ensure_durable_block_at_height(durable_tip, block.hash())?;
-        }
-        let carrier_hashes = {
-            let _geometry_guard = self.lane_geometry_lock.lock();
-            let entries = self
-                .lane_storage_entries
-                .lock()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>();
-            let _sidecar_guard = self.sidecar_lock.lock();
-            let mut incomplete_seen = 0_usize;
-            let mut carrier_hashes = BTreeSet::new();
-            let mut historical_execution_identities = BTreeSet::new();
-            for lane_entry in entries {
-                let inventory =
-                    self.autonomous_lane_attempt_inventory_counts_locked(&lane_entry, 1)?;
-                for identity in inventory
-                    .lifecycle_identities
-                    .union(&inventory.terminal_outcome_identities)
-                    .filter(|identity| {
-                        !inventory
-                            .complete_terminal_outcome_identities
-                            .contains(identity)
-                    })
-                    .copied()
-                {
-                    incomplete_seen = incomplete_seen.checked_add(1).ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "startup incomplete lifecycle identity count overflowed",
-                        )
-                    })?;
-                    if incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
-                        return Err(Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "startup incomplete lifecycle identities exceed the bounded recovery inventory",
-                        ));
-                    }
-                    let terminal_path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
-                        &lane_entry,
-                        &self.store_root,
-                        identity.0,
-                        identity.1,
-                    );
-                    let terminal_parent = terminal_path.parent().ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            terminal_path.clone(),
-                            "startup terminal outcome path has no parent",
-                        )
-                    })?;
-                    let terminal_entry_hash = self
+        // This fence owns no additional associations: nested real map owners
+        // publish their exact deltas while the full reconstruction stays busy.
+        let resource_fence = self
+            .resource_inventory
+            .begin(resource_inventory::Family::ResidentFrontier.mask())
+            .ok();
+        self.post_wsv_resident_recovery_complete
+            .store(false, Ordering::Release);
+        let result = (|| {
+            let _prune_guard = self.prune_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let _canonical_chain_guard = self.canonical_chain_lock.lock();
+            let pending_canonical_bytes =
+                self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+            let durable_tip = u64::try_from(self.exact_durable_blocks_count()?)?;
+            let durable_tip_block = NonZeroUsize::new(usize::try_from(durable_tip)?)
+                .and_then(|height| self.get_block_without_merge_sidecar(height));
+            if let Some(block) = durable_tip_block.as_ref() {
+                self.ensure_durable_block_at_height(durable_tip, block.hash())?;
+            }
+            let carrier_hashes = {
+                let _geometry_guard = self.lane_geometry_lock.lock();
+                let entries = self
+                    .lane_storage_entries
+                    .lock()
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let _sidecar_guard = self.sidecar_lock.lock();
+                let mut incomplete_seen = 0_usize;
+                let mut carrier_hashes = BTreeSet::new();
+                let mut historical_execution_identities = BTreeSet::new();
+                for lane_entry in entries {
+                    let inventory =
+                        self.autonomous_lane_attempt_inventory_counts_locked(&lane_entry, 1)?;
+                    for identity in inventory
+                        .lifecycle_identities
+                        .union(&inventory.terminal_outcome_identities)
+                        .filter(|identity| {
+                            !inventory
+                                .complete_terminal_outcome_identities
+                                .contains(identity)
+                        })
+                        .copied()
+                    {
+                        incomplete_seen = incomplete_seen.checked_add(1).ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                self.store_root.clone(),
+                                "startup incomplete lifecycle identity count overflowed",
+                            )
+                        })?;
+                        if incomplete_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                            return Err(Self::invalid_lane_artifact_error(
+                                self.store_root.clone(),
+                                "startup incomplete lifecycle identities exceed the bounded recovery inventory",
+                            ));
+                        }
+                        let terminal_path =
+                            Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+                                &lane_entry,
+                                &self.store_root,
+                                identity.0,
+                                identity.1,
+                            );
+                        let terminal_parent = terminal_path.parent().ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                terminal_path.clone(),
+                                "startup terminal outcome path has no parent",
+                            )
+                        })?;
+                        let terminal_entry_hash = self
                         .read_regular_sidecar_bytes(
                             &terminal_path,
                             terminal_parent,
@@ -1024,16 +1034,16 @@ impl Kura {
                                 ..
                             } => None,
                         });
-                    if let Some(entry_hash) = terminal_entry_hash {
-                        carrier_hashes.insert(entry_hash);
-                        continue;
-                    }
-                    let (receipt_data_path, receipt_index_path) =
-                        Self::lane_block_application_receipt_paths_for_entry(
-                            &lane_entry,
-                            &self.store_root,
-                        );
-                    if let Some(receipt) = self
+                        if let Some(entry_hash) = terminal_entry_hash {
+                            carrier_hashes.insert(entry_hash);
+                            continue;
+                        }
+                        let (receipt_data_path, receipt_index_path) =
+                            Self::lane_block_application_receipt_paths_for_entry(
+                                &lane_entry,
+                                &self.store_root,
+                            );
+                        if let Some(receipt) = self
                         .read_lane_block_application_receipt_from_paths_durability_attested_locked(
                             lane_entry.lane_id,
                             identity.0,
@@ -1051,151 +1061,166 @@ impl Kura {
                         carrier_hashes.insert(entry_hash);
                         continue;
                     }
-                    let (incarnation, _) = self.active_lane_incarnation_marker(&lane_entry)?;
-                    let latest = self.merge_log.lock().latest_execution_entry(
-                        lane_entry.lane_id,
-                        lane_entry.dataspace_id,
-                        incarnation,
-                    );
-                    let execution_identity = (
-                        lane_entry.lane_id,
-                        lane_entry.dataspace_id,
-                        incarnation,
-                        identity.0,
-                        identity.1,
-                    );
-                    let Some((latest_height, entry_hash)) = latest else {
-                        historical_execution_identities.insert(execution_identity);
-                        continue;
-                    };
-                    if latest_height != identity.0 {
-                        historical_execution_identities.insert(execution_identity);
-                        continue;
+                        let (incarnation, _) = self.active_lane_incarnation_marker(&lane_entry)?;
+                        let latest = self.merge_log.lock().latest_execution_entry(
+                            lane_entry.lane_id,
+                            lane_entry.dataspace_id,
+                            incarnation,
+                        );
+                        let execution_identity = (
+                            lane_entry.lane_id,
+                            lane_entry.dataspace_id,
+                            incarnation,
+                            identity.0,
+                            identity.1,
+                        );
+                        let Some((latest_height, entry_hash)) = latest else {
+                            historical_execution_identities.insert(execution_identity);
+                            continue;
+                        };
+                        if latest_height != identity.0 {
+                            historical_execution_identities.insert(execution_identity);
+                            continue;
+                        }
+                        let entry = self
+                            .merge_log
+                            .lock()
+                            .entry_by_hash(entry_hash)?
+                            .ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    self.store_root.clone(),
+                                    "startup latest-execution index names a missing merge entry",
+                                )
+                            })?;
+                        let exact_member = entry.execution_batch.as_ref().is_some_and(|batch| {
+                            batch.lanes.iter().any(|execution| {
+                                let descriptor = &execution.proposal.descriptor;
+                                descriptor.lane_id == lane_entry.lane_id
+                                    && descriptor.dataspace_id == lane_entry.dataspace_id
+                                    && descriptor.lane_incarnation == incarnation
+                                    && descriptor.lane_block_height == identity.0
+                                    && descriptor.proposal_height == identity.1
+                            })
+                        });
+                        if exact_member {
+                            carrier_hashes.insert(entry_hash);
+                        }
                     }
-                    let entry = self
+                }
+                if !historical_execution_identities.is_empty() {
+                    let historical = self
                         .merge_log
                         .lock()
-                        .entry_by_hash(entry_hash)?
-                        .ok_or_else(|| {
-                            Self::invalid_lane_artifact_error(
-                                self.store_root.clone(),
-                                "startup latest-execution index names a missing merge entry",
-                            )
-                        })?;
-                    let exact_member = entry.execution_batch.as_ref().is_some_and(|batch| {
-                        batch.lanes.iter().any(|execution| {
-                            let descriptor = &execution.proposal.descriptor;
-                            descriptor.lane_id == lane_entry.lane_id
-                                && descriptor.dataspace_id == lane_entry.dataspace_id
-                                && descriptor.lane_incarnation == incarnation
-                                && descriptor.lane_block_height == identity.0
-                                && descriptor.proposal_height == identity.1
-                        })
-                    });
-                    if exact_member {
-                        carrier_hashes.insert(entry_hash);
-                    }
+                        .execution_entries_for_bounded_identities(
+                            &historical_execution_identities,
+                        )?;
+                    carrier_hashes.extend(historical.into_values());
                 }
-            }
-            if !historical_execution_identities.is_empty() {
-                let historical = self
-                    .merge_log
-                    .lock()
-                    .execution_entries_for_bounded_identities(&historical_execution_identities)?;
-                carrier_hashes.extend(historical.into_values());
-            }
-            carrier_hashes
-        };
-        if carrier_hashes.len() > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "startup post-WSV carrier set exceeds the bounded lifecycle inventory",
-            ));
-        }
-        let mut authenticated_carriers = Vec::new();
-        authenticated_carriers
-            .try_reserve_exact(carrier_hashes.len())
-            .map_err(|error| {
-                Self::invalid_lane_artifact_error(
+                carrier_hashes
+            };
+            if carrier_hashes.len() > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
-                    format!("cannot reserve startup post-WSV carrier inventory: {error}"),
-                )
-            })?;
-        for entry_hash in carrier_hashes {
-            let entry = self
-                .merge_log
-                .lock()
-                .entry_by_hash(entry_hash)?
-                .ok_or_else(|| {
+                    "startup post-WSV carrier set exceeds the bounded lifecycle inventory",
+                ));
+            }
+            let mut authenticated_carriers = Vec::new();
+            authenticated_carriers
+                .try_reserve_exact(carrier_hashes.len())
+                .map_err(|error| {
                     Self::invalid_lane_artifact_error(
                         self.store_root.clone(),
-                        "startup post-WSV carrier set names a missing merge entry",
+                        format!("cannot reserve startup post-WSV carrier inventory: {error}"),
                     )
                 })?;
-            let carrier = match self
-                .merge_carrier_for_entry_under_prune_and_canonical_guards(entry_hash)
-            {
-                Ok(Some(carrier)) => carrier,
-                Ok(None) => {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "startup post-WSV carrier set names a missing carrier",
-                    ));
-                }
-                Err(strict_error) => {
-                    // A crash after the canonical carrier commit point but
-                    // before finality loses the process-local reservation.
-                    // Startup admits only that exact durable tip through the
-                    // same prepublication proof used by `store_block_durable`.
-                    let Some(tip_block) = durable_tip_block.as_ref() else {
-                        return Err(strict_error);
-                    };
-                    if self
-                        .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
-                            durable_tip,
-                        )?
-                        .is_some()
-                    {
-                        return Err(strict_error);
+            for entry_hash in carrier_hashes {
+                let entry = self
+                    .merge_log
+                    .lock()
+                    .entry_by_hash(entry_hash)?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "startup post-WSV carrier set names a missing merge entry",
+                        )
+                    })?;
+                let carrier = match self
+                    .merge_carrier_for_entry_under_prune_and_canonical_guards(entry_hash)
+                {
+                    Ok(Some(carrier)) => carrier,
+                    Ok(None) => {
+                        return Err(Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "startup post-WSV carrier set names a missing carrier",
+                        ));
                     }
-                    let Some(tip_carrier) =
-                        self.merge_carrier_record_for_block(durable_tip, tip_block.hash())?
-                    else {
-                        return Err(strict_error);
-                    };
-                    if tip_carrier.entry_hash != entry_hash {
-                        return Err(strict_error);
-                    }
-                    self.authenticate_post_wsv_lane_artifact_carrier_pre_finality_under_prune_and_canonical_guards(
+                    Err(strict_error) => {
+                        // A crash after the canonical carrier commit point but
+                        // before finality loses the process-local reservation.
+                        // Startup admits only that exact durable tip through the
+                        // same prepublication proof used by `store_block_durable`.
+                        let Some(tip_block) = durable_tip_block.as_ref() else {
+                            return Err(strict_error);
+                        };
+                        if self
+                            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                                durable_tip,
+                            )?
+                            .is_some()
+                        {
+                            return Err(strict_error);
+                        }
+                        let Some(tip_carrier) =
+                            self.merge_carrier_record_for_block(durable_tip, tip_block.hash())?
+                        else {
+                            return Err(strict_error);
+                        };
+                        if tip_carrier.entry_hash != entry_hash {
+                            return Err(strict_error);
+                        }
+                        self.authenticate_post_wsv_lane_artifact_carrier_pre_finality_under_prune_and_canonical_guards(
                         &entry,
                         tip_block.as_ref(),
                     )?;
-                    tip_carrier
-                }
-            };
-            authenticated_carriers.push((entry_hash, carrier));
+                        tip_carrier
+                    }
+                };
+                authenticated_carriers.push((entry_hash, carrier));
+            }
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            let _sidecar_guard = self.sidecar_lock.lock();
+            for (entry_hash, carrier) in authenticated_carriers {
+                let entry = self
+                    .merge_log
+                    .lock()
+                    .entry_by_hash(entry_hash)?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            self.store_root.clone(),
+                            "authenticated startup post-WSV carrier lost its immutable merge entry",
+                        )
+                    })?;
+                self.ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(
+                    pending_canonical_bytes,
+                    &entry,
+                    carrier.block_height,
+                    carrier.block_hash,
+                )?;
+            }
+            Ok(())
+        })();
+        if result.is_ok() {
+            self.post_wsv_resident_recovery_complete
+                .store(true, Ordering::Release);
+            if let Some(resource_fence) = resource_fence {
+                let _ = resource_fence.publish(&[(
+                    resource_inventory::Family::ResidentFrontier,
+                    resource_inventory::Usage::default(),
+                    resource_inventory::Usage::default(),
+                )]);
+            }
         }
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let _sidecar_guard = self.sidecar_lock.lock();
-        for (entry_hash, carrier) in authenticated_carriers {
-            let entry = self
-                .merge_log
-                .lock()
-                .entry_by_hash(entry_hash)?
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "authenticated startup post-WSV carrier lost its immutable merge entry",
-                    )
-                })?;
-            self.ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(
-                pending_canonical_bytes,
-                &entry,
-                carrier.block_height,
-                carrier.block_hash,
-            )?;
-        }
-        Ok(())
+        result
     }
     fn lane_artifact_required_bytes_for_block(
         &self,

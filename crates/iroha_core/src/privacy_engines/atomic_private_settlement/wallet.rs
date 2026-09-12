@@ -554,6 +554,40 @@ fn validate_preparation_context_v1(
     Ok(())
 }
 
+/// Derive a positive funding note before choosing a settlement bundle.
+///
+/// A funded input commitment is independent of the later bundle, authority
+/// height and virtual dummy. This lets a wallet establish its pool first and
+/// then prove a spend against an observed finalized authority context. The
+/// caller supplies the spending-authority digest and retains its secret.
+///
+/// # Errors
+///
+/// Rejects inactive, zero-value or dummy openings and malformed note fields.
+/// The opening remains unchanged on failure.
+pub fn prepare_atomic_private_settlement_funding_note_v1(
+    opening: &mut PrivateSettlementAuditNoteOpeningV1,
+) -> Result<(), AtomicPrivateSettlementWalletErrorV1> {
+    if !opening.active || opening.value == 0 || opening.dummy_domain.is_some() {
+        return Err(AtomicPrivateSettlementWalletErrorV1::SecretMaterial);
+    }
+    let profile =
+        PrivateNoteRelationProfileV1::exact_three_output_balanced([[1_u8; 32]; 3], [1; 32]);
+    let note = PrivateNotePlaintextV1::new_profiled_input_v1(
+        opening.value,
+        opening.spending_authority,
+        opening.rho,
+        opening.blinding,
+        opening.memo_digest,
+        profile,
+    )
+    .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+    let commitment = derive_profiled_input_commitment_v1(&note, profile)
+        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::SecretMaterial)?;
+    opening.commitment = commitment;
+    Ok(())
+}
+
 /// Derive both fixed input commitments under the settlement-only note profile.
 ///
 /// Inactive slots receive their unique bundle-bound dummy memo here.  Active
@@ -1193,6 +1227,46 @@ mod tests {
     };
     use iroha_data_model::privacy::{PrivacyNullifierV1, PrivacyRootV1};
     use rand_08::{SeedableRng as _, rngs::StdRng};
+
+    #[test]
+    fn funding_note_survives_later_authority_context_and_virtual_dummy() {
+        let fixture = sidecar_fixture();
+        let mut openings = fixture.plaintext.inputs.clone();
+        let expected = openings[0].commitment;
+        openings[0].commitment = PrivacyCommitmentV1::new([0; 32]);
+        prepare_atomic_private_settlement_funding_note_v1(&mut openings[0])
+            .expect("prepare funding before a settlement exists");
+        assert_eq!(openings[0].commitment, expected);
+
+        let mut manifest = fixture.sidecar.manifest;
+        let mut statement = fixture.sidecar.payload.statement;
+        let old_dummy = openings[1].commitment;
+        manifest.authority_context_height += 3;
+        manifest.bundle_id = manifest.computed_bundle_id().expect("later bundle");
+        statement.authority_context_height = manifest.authority_context_height;
+        statement.bundle_id = manifest.bundle_id;
+        prepare_atomic_private_settlement_input_openings_v1(&manifest, &statement, &mut openings)
+            .expect("bind a spend after extra admission blocks");
+        assert_eq!(openings[0].commitment, expected);
+        assert_ne!(openings[1].commitment, old_dummy);
+    }
+
+    #[test]
+    fn funding_note_rejects_inactive_zero_and_dummy_without_mutation() {
+        let fixture = sidecar_fixture();
+        for mutation in 0..3 {
+            let mut opening = fixture.plaintext.inputs[0].clone();
+            match mutation {
+                0 => opening.active = false,
+                1 => opening.value = 0,
+                2 => opening.dummy_domain = Some(Hash::new(b"not a funding note")),
+                _ => unreachable!(),
+            }
+            let before = opening.clone();
+            assert!(prepare_atomic_private_settlement_funding_note_v1(&mut opening).is_err());
+            assert_eq!(opening, before);
+        }
+    }
 
     fn input_secrets() -> [AtomicPrivateSettlementInputSecretV1; 2] {
         [

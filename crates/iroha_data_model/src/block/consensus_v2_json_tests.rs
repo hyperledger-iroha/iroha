@@ -1,5 +1,5 @@
 // JSON wire-contract tests included by `consensus_v2_tests.rs`.
-#[cfg(feature = "json")]
+
 #[test]
 fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
     let context = context(&[1, 1, 1, 1]);
@@ -49,7 +49,7 @@ fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
         .insert("unknown".to_owned(), norito::json::Value::Bool(true));
     assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
 }
-#[cfg(feature = "json")]
+
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -240,35 +240,34 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
     assert_required_nullable_field!(SumeragiV2QcResponse, qc_response, "locked_prepare_qc");
 }
 
-#[cfg(feature = "json")]
+fn assert_required_status_fields<T>(canonical: &T, fields: &[&str])
+where
+    T: norito::json::JsonSerialize + norito::json::JsonDeserialize + std::fmt::Debug,
+{
+    let value = norito::json::to_value(canonical).expect("serialize current status layout");
+    for field in fields {
+        let mut missing = value.clone();
+        missing
+            .as_object_mut()
+            .expect("current status layout is an object")
+            .remove(*field);
+        let error = norito::json::from_value::<T>(missing)
+            .expect_err("omitted current status field must reject");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("missing field `{field}`")),
+            "unexpected missing-field diagnostic for `{field}`: {error}"
+        );
+    }
+}
+
 #[test]
 fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
-    macro_rules! assert_fields_required {
-        ($ty:ty, $value:expr, [$($field:literal),+ $(,)?]) => {{
-            let canonical: $ty = $value;
-            let value = norito::json::to_value(&canonical).expect("serialize current status layout");
-            $(
-                let mut missing = value.clone();
-                missing
-                    .as_object_mut()
-                    .expect("current status layout is an object")
-                    .remove($field);
-                let error = norito::json::from_value::<$ty>(missing)
-                    .expect_err("omitted current status field must reject");
-                assert!(
-                    error.to_string().contains(concat!("missing field `", $field, "`")),
-                    "unexpected missing-field diagnostic for `{}`: {error}",
-                    $field
-                );
-            )+
-        }};
-    }
-
     let context = context(&[1, 1, 1, 1]);
-    assert_fields_required!(
-        SumeragiV2Status,
-        status(&context),
-        [
+    assert_required_status_fields::<SumeragiV2Status>(
+        &status(&context),
+        &[
             "protocol_version",
             "node_fingerprint",
             "build_fingerprint",
@@ -289,12 +288,11 @@ fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
             "height_context",
             "last_commit_qc",
             "liveness",
-        ]
+        ],
     );
-    assert_fields_required!(
-        SumeragiV2LivenessStatus,
-        SumeragiV2LivenessStatus::default(),
-        [
+    assert_required_status_fields::<SumeragiV2LivenessStatus>(
+        &SumeragiV2LivenessStatus::default(),
+        &[
             "generation",
             "prepare_quorums",
             "commit_quorums",
@@ -306,11 +304,10 @@ fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
             "no_progress_age_ms",
             "blocker",
             "ignore_counts",
-        ]
+        ],
     );
-    assert_fields_required!(
-        SumeragiV2OutboundIntentStatus,
-        SumeragiV2OutboundIntentStatus {
+    assert_required_status_fields::<SumeragiV2OutboundIntentStatus>(
+        &SumeragiV2OutboundIntentStatus {
             kind: SumeragiV2OutboundIntentKind::TimeoutVote,
             round: round(&context, 0),
             proposal_round: None,
@@ -318,39 +315,37 @@ fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
             execution_commitment: None,
             stage: SumeragiV2OutboundIntentStage::Sent,
         },
-        [
+        &[
             "kind",
             "round",
             "proposal_round",
             "subject",
             "execution_commitment",
             "stage",
-        ]
+        ],
     );
-    assert_fields_required!(
-        SumeragiV2QueueStatus,
-        SumeragiV2QueueStatus {
+    assert_required_status_fields::<SumeragiV2QueueStatus>(
+        &SumeragiV2QueueStatus {
             queue: SumeragiV2QueueKind::RuntimeProgress,
             depth: 0,
             capacity: 1,
             oldest_age_ms: None,
             service_debt: 0,
         },
-        [
+        &[
             "queue",
             "depth",
             "capacity",
             "oldest_age_ms",
             "service_debt",
-        ]
+        ],
     );
-    assert_fields_required!(
-        SumeragiV2QcResponse,
-        SumeragiV2QcResponse::default(),
-        ["highest_prepare_qc", "locked_prepare_qc"]
+    assert_required_status_fields::<SumeragiV2QcResponse>(
+        &SumeragiV2QcResponse::default(),
+        &["highest_prepare_qc", "locked_prepare_qc"],
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn authenticated_consensus_json_rejects_unknown_fields_at_every_signed_layer() {
     macro_rules! assert_unknown_rejected {
@@ -446,7 +441,7 @@ fn authenticated_consensus_json_rejects_unknown_fields_at_every_signed_layer() {
         }
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
     use iroha_schema::{IntoSchema as _, Metadata};

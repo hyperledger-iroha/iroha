@@ -24,16 +24,18 @@ use iroha_crypto::{
     PublicKey, Signature,
 };
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     asset::AssetId,
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
     bridge::SccpRegistryV1,
-    nexus::{LaneCatalog, LaneId},
-    state_path::StatePath,
+    nexus::LaneCatalog,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::state_path::StatePath;
+use iroha_model_base::topology::LaneId;
 use mv::{
     cell::Cell,
     storage::{Storage, StorageReadOnly},
@@ -327,6 +329,8 @@ const SNAPSHOT_GENERATION_GC_MAX_ENTRIES: usize = 4096;
 static SNAPSHOT_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// Constant-size authority needed by emergency Fast startup.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::snapshot::EmergencyFastSnapshotManifestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct EmergencyFastSnapshotManifestV1 {
     version: u8,
@@ -1430,14 +1434,17 @@ fn bind_current_snapshot_generation_with_mode(
     emergency_fast: bool,
 ) -> Result<BoundSnapshotGeneration, TryReadError> {
     let store_dir_identity = direct_snapshot_directory_identity(store_dir)?;
-    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
-    let generations_dir_identity = direct_snapshot_directory_identity(&generations_dir)?;
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
     let Some((pointer, pointer_bytes)) =
         bind_snapshot_file(&pointer_path, SNAPSHOT_CURRENT_MAX_BYTES)?
     else {
+        // An owned snapshot root exists before its first publication (including
+        // after a public reset). Without a committed pointer there is no snapshot;
+        // the writer has not necessarily created the generations directory yet.
         return Err(TryReadError::NotFound);
     };
+    let generations_dir = store_dir.join(SNAPSHOT_GENERATIONS_DIR_NAME);
+    let generations_dir_identity = direct_snapshot_directory_identity(&generations_dir)?;
     let digest_hex = parse_snapshot_current_pointer(&pointer_bytes, &pointer_path)?;
     let generation_dir = generations_dir.join(&digest_hex);
     let generation_dir_identity = direct_snapshot_directory_identity(&generation_dir)?;
@@ -4863,8 +4870,39 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadEr
         },
     }
 }
+/// Publish an untrusted bootstrap envelope through the actual signed byte writer.
+///
+/// This test bridge returns bytes only. The normal reader and startup verifier
+/// must authenticate them before any finalization authority exists.
+#[cfg(test)]
+pub(crate) fn publish_signed_snapshot_payload_for_physical_test(
+    store_dir: &Path,
+    state: &State,
+    record: &SnapshotV2BootstrapRecord,
+    signing_key: &KeyPair,
+) -> Vec<u8> {
+    assert!(state.authenticated_snapshot_v2_bootstrap().is_none());
+    record
+        .validate()
+        .expect("well-formed untrusted bootstrap record");
+    let mut ordinary = String::new();
+    // Keep the complete production snapshot shape, including consensus topology.
+    // Canonical WSV hash bytes deliberately omit those sidecars and are not a snapshot.
+    serialize_state_snapshot(state, &mut ordinary);
+    let lineage = json::to_json(record).expect("encode untrusted bootstrap envelope");
+    // The signed reader requires the same top-level field order as the typed
+    // serializer: chain_id, network_id, bootstrap lineage, then world.
+    let (identity, world) = ordinary
+        .split_once(",\"world\":")
+        .expect("typed snapshot identity precedes its world field");
+    let payload =
+        format!("{identity},\"sumeragi_v2_bootstrap\":{lineage},\"world\":{world}").into_bytes();
+    tests::write_snapshot_bundle_from_bytes(store_dir, &payload, signing_key);
+    payload
+}
 #[cfg(test)]
 mod tests {
+    use iroha_model_base::topology::LaneId;
     include!("snapshot/support_policy_tests.rs");
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");

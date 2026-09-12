@@ -1,10 +1,128 @@
+/// One observed durable inventory routed under one exact consensus authority.
+/// The sorted certificate hashes are the pending-admission generation: coalesced
+/// wakeups need no independent sequence number or mutable transport authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePlanAdmissionHandoffGeneration {
+    round: wire::ConsensusRound,
+    leader: PeerId,
+    pending: BTreeSet<Hash>,
+}
+
+impl QueuePlanAdmissionHandoffGeneration {
+    fn same_destination(&self, other: &Self) -> bool {
+        self.round == other.round && self.leader == other.leader
+    }
+}
+
+#[derive(Debug)]
+struct QueuePlanAdmissionHandoffProgress {
+    generation: QueuePlanAdmissionHandoffGeneration,
+    enqueued: BTreeSet<Hash>,
+}
+
+/// Readiness is scoped to the exact view and durable certificate inventory.
+/// `Enqueued` means ownership reached the retained adapter/output corridor; it
+/// never means network delivery, canonical admission, or transaction finality.
+#[derive(Debug)]
+enum QueuePlanAdmissionHandoffState {
+    Unobserved,
+    Pending(QueuePlanAdmissionHandoffProgress),
+    Enqueued(QueuePlanAdmissionHandoffProgress),
+}
+
+impl QueuePlanAdmissionHandoffState {
+    fn progress(&self) -> Option<&QueuePlanAdmissionHandoffProgress> {
+        match self {
+            Self::Unobserved => None,
+            Self::Pending(progress) | Self::Enqueued(progress) => Some(progress),
+        }
+    }
+
+    fn needs_refresh(&self, round: wire::ConsensusRound, leader: &PeerId) -> bool {
+        match self {
+            Self::Enqueued(progress) => {
+                progress.generation.round != round || &progress.generation.leader != leader
+            }
+            Self::Unobserved | Self::Pending(_) => true,
+        }
+    }
+
+    fn begin(&mut self, generation: QueuePlanAdmissionHandoffGeneration) {
+        let enqueued = self
+            .progress()
+            .filter(|progress| progress.generation.same_destination(&generation))
+            .map(|progress| {
+                progress
+                    .enqueued
+                    .intersection(&generation.pending)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        *self = Self::Pending(QueuePlanAdmissionHandoffProgress {
+            generation,
+            enqueued,
+        });
+    }
+
+    fn is_enqueued(&self) -> bool {
+        matches!(self, Self::Enqueued(_))
+    }
+
+    fn contains(&self, hash: &Hash) -> bool {
+        self.progress()
+            .is_some_and(|progress| progress.enqueued.contains(hash))
+    }
+
+    fn admit(&mut self, generation: &QueuePlanAdmissionHandoffGeneration, hash: Hash) -> bool {
+        match self {
+            Self::Pending(progress)
+                if progress.generation == *generation && generation.pending.contains(&hash) =>
+            {
+                progress.enqueued.insert(hash);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn finish(&mut self, generation: &QueuePlanAdmissionHandoffGeneration) -> bool {
+        if !matches!(self, Self::Pending(progress) if progress.generation == *generation) {
+            return false;
+        }
+        if let Self::Pending(progress) = std::mem::replace(self, Self::Unobserved) {
+            *self = Self::Enqueued(progress);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 impl V2LaneWorkAdapter {
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn set_queue_plan_test_network_id(
-        &mut self,
-        network_id: iroha_data_model::NetworkId,
-    ) {
-        self.context.network_id = network_id;
+    /// A new destination or a capacity-pending inventory needs another bounded turn.
+    pub(crate) fn queue_plan_admission_handoffs_need_refresh(
+        &self,
+        active_view: wire::View,
+    ) -> Result<bool, V2LaneWorkError> {
+        let leader = self
+            .context
+            .roster
+            .get(usize::try_from(self.context.leader(active_view)).unwrap_or(usize::MAX))
+            .map(|entry| &entry.validator)
+            .ok_or_else(|| {
+                V2LaneWorkError::InvalidContext(
+                    "QueuePlan handoff leader is outside the frozen roster".to_owned(),
+                )
+            })?;
+        Ok(self.queue_plan_admission_handoff.needs_refresh(
+            wire::ConsensusRound {
+                context_id: self.context.id(),
+                height: self.context.height,
+                view: active_view,
+            },
+            leader,
+        ))
     }
 
     pub(crate) fn reconcile_pending_queue_plan_admissions(
@@ -30,6 +148,34 @@ impl V2LaneWorkAdapter {
                 self.kura.pending_queue_plan_admission_capacity(),
             )
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        let generation = QueuePlanAdmissionHandoffGeneration {
+            round: wire::ConsensusRound {
+                context_id: self.context.id(),
+                height: self.context.height,
+                view: active_view,
+            },
+            leader: leader_peer.clone(),
+            pending: pending.iter().map(|(hash, _)| *hash).collect(),
+        };
+        // A certified view transition supersedes only the old adapter-owned
+        // handoff. Kura remains the exact source; already transferred worker
+        // occurrences cannot complete this new generation.
+        self.effects.retain(|effect| match effect {
+            V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+                peer,
+                view,
+                certificate,
+            } => {
+                *view == active_view
+                    && *peer == leader_peer
+                    && generation
+                        .pending
+                        .contains(&Hash::new(certificate.as_slice()))
+            }
+            _ => true,
+        });
+        self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
+        self.queue_plan_admission_handoff.begin(generation.clone());
         let count = pending.len();
         let start = if local_is_leader || count == 0 {
             0
@@ -85,6 +231,12 @@ impl V2LaneWorkAdapter {
                     ));
                 }
                 PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
+                    if self
+                        .queue_plan_admission_handoff
+                        .contains(&certificate_hash)
+                    {
+                        continue;
+                    }
                     let effect = V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
                         peer: leader_peer.clone(),
                         view: active_view,
@@ -92,18 +244,30 @@ impl V2LaneWorkAdapter {
                     };
                     let queued = self.effect_keys.contains(&lane_work_effect_key(&effect));
                     if !queued && !self.push_effect(effect) {
-                        self.queue_plan_admission_handoff_retry_required = true;
                         self.queue_plan_admission_handoff_cursor = (start + offset) % count;
                         completed = false;
                         break;
                     }
+                    if !self
+                        .queue_plan_admission_handoff
+                        .admit(&generation, certificate_hash)
+                    {
+                        return Err(V2LaneWorkError::InvalidContext(
+                            "QueuePlan handoff admission lost its exact generation".to_owned(),
+                        ));
+                    }
                 }
-                PendingQueuePlanAdmissionDisposition::Future
+                PendingQueuePlanAdmissionDisposition::Future { .. }
                 | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
             }
         }
         if !local_is_leader && count != 0 && completed {
             self.queue_plan_admission_handoff_cursor = (start + 1) % count;
+        }
+        if completed && !self.queue_plan_admission_handoff.finish(&generation) {
+            return Err(V2LaneWorkError::InvalidContext(
+                "QueuePlan handoff completion lost its exact generation".to_owned(),
+            ));
         }
         admissions.sort_by(|left, right| {
             left.0

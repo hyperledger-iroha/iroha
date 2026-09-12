@@ -122,7 +122,8 @@ fn request(track: ClassedRaceTrackV1, players: u8, refund: bool) -> ClassedRaceP
 fn retained_session(
     request: &ClassedRaceProverRequestV1,
 ) -> iroha_data_model::game::GameSessionRecordV1 {
-    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId, game::*};
+    use iroha_data_model::{asset::AssetDefinitionId, game::*};
+    use iroha_model_base::domain::DomainId;
     let replay = &request.replay;
     assert_eq!(replay.frames.len(), 6);
     let checkpoint_state = request.checkpoint_state.as_ref().unwrap();

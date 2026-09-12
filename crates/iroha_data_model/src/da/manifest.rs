@@ -1,21 +1,26 @@
-#[cfg(feature = "json")]
-use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{
-    da::types::{
-        BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
-        RetentionPolicy, StorageTicketId,
-    },
-    nexus::LaneId,
+use crate::da::types::{
+    BlobClass, BlobCodec, BlobDigest, ChunkDigest, DaRentQuote, ErasureProfile, ExtraMetadata,
+    RetentionPolicy, StorageTicketId,
 };
+use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
+use iroha_model_base::topology::LaneId;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Role for a chunk within an erasure-coded stripe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "role", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "role", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::manifest::ChunkRole")]
 pub enum ChunkRole {
@@ -30,8 +35,18 @@ pub enum ChunkRole {
     StripeParity,
 }
 /// Chunk commitment record produced during manifest generation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -109,8 +124,19 @@ impl ChunkCommitment {
 /// Every field is required in both binary and JSON encodings. Its JSON object
 /// and the manifest-owned carrier objects nested within it reject unknown
 /// fields rather than interpreting pre-release layouts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::manifest::DaManifestV1")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),

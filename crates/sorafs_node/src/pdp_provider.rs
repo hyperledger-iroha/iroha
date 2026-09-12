@@ -428,6 +428,8 @@ fn stored_challenge_status(record: &StoredChallengeV1) -> PdpChallengeStatusV1 {
         },
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pdp_provider::PdpProviderCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PdpProviderCheckpointV1 {
     version: u8,
@@ -2736,6 +2738,16 @@ mod tests {
             .expect("pending challenge");
         assert_eq!(next.sequence, 1);
         assert_eq!(next.challenge, fixture.challenge);
+        let checkpoint = protocol.state.lock().unwrap().runtime.checkpoint();
+        let checkpoint_bytes = crate::frame_test_support::assert_current_frame(
+            &checkpoint,
+            "sorafs_node::pdp_provider::PdpProviderCheckpointV1",
+        );
+        assert_eq!(
+            fs::read(&protocol.checkpoint_store.as_ref().unwrap().checkpoint_path).unwrap(),
+            checkpoint_bytes
+        );
+
         let sink = RecordingHandoff::default();
         let proof_bytes = norito::to_bytes(&fixture.proof).expect("proof bytes");
         let accepted = protocol
@@ -3508,5 +3520,46 @@ mod tests {
             .expect("symlink checkpoint");
             assert!(PdpProviderProtocol::open(policy, root.path()).is_err());
         }
+    }
+    #[test]
+    fn persisted_pdp_checkpoint_frame_declares_identity_and_rejects_foreign_root() {
+        let policy = PdpProviderProtocolPolicyV1::default();
+        let directory = TempDir::new().unwrap();
+        let protocol = PdpProviderProtocol::open(policy, directory.path()).unwrap();
+        let fixture = fixture(70);
+        enqueue(&protocol, &fixture);
+        let path = directory.path().join(PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1);
+        let bytes = fs::read(&path).unwrap();
+        let checkpoint: PdpProviderCheckpointV1 =
+            norito::decode_from_bytes_with_limits(&bytes, checkpoint_decode_limits(policy))
+                .unwrap();
+        validate_checkpoint(&checkpoint, policy).unwrap();
+        assert_eq!(checkpoint.records.len(), 1);
+        assert_eq!(norito::to_bytes(&checkpoint).unwrap(), bytes);
+        for (frame, identity) in [(
+            bytes.as_slice(),
+            "sorafs_node::pdp_provider::PdpProviderCheckpointV1",
+        )] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        drop(protocol);
+        drop(
+            PdpProviderProtocol::open(policy, directory.path())
+                .expect("reopen declared checkpoint"),
+        );
+        let foreign = norito::encode_canonical(&7_u64).unwrap();
+        assert_eq!(norito::decode_canonical::<u64>(&foreign).unwrap(), 7);
+        assert!(matches!(
+            norito::decode_from_bytes::<PdpProviderCheckpointV1>(&foreign),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        fs::write(&path, &foreign).unwrap();
+        assert!(matches!(
+            PdpProviderProtocol::open(policy, directory.path()),
+            Err(PdpProviderProtocolError::InvalidCheckpoint(_))
+        ));
     }
 }

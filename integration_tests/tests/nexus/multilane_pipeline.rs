@@ -22,14 +22,16 @@ use iroha_core::{
 use iroha_data_model::{
     da::commitment::DaProofScheme,
     isi::{InstructionBox, prelude::SetKeyValue},
-    metadata::Metadata,
     nexus::{
-        DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig as LaneConfigMetadata, LaneId, LaneStorageProfile, LaneVisibility,
+        DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig as LaneConfigMetadata,
+        LaneStorageProfile, LaneVisibility,
     },
     prelude::*,
     transaction::TransactionBuilder,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
@@ -167,6 +169,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, block_count) =

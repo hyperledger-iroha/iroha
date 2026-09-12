@@ -4,7 +4,7 @@ use super::{
     KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1, KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
     KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -15,9 +15,9 @@ use sha2::{Digest as _, Sha256};
 pub const KAGEMUSHA_HALO2_K_V1: u32 = 16;
 /// Exact serialized transparent IPA parameters for either Pasta parity.
 pub const KAGEMUSHA_PARAMS_BYTES_V1: u64 = 4_194_372;
-/// Maximum compact-v1 state proving-key bytes for either parity.
+/// Maximum structured-v1 state proving-key bytes for either parity.
 pub const KAGEMUSHA_STATE_PROVING_KEY_MAX_BYTES_V1: u64 = 48_234_934;
-/// Maximum compact-v1 helper proving-key bytes for either parity.
+/// Maximum structured-v1 helper proving-key bytes for either parity.
 pub const KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Maximum processed verifying-key bytes for one role and parity.
 pub const KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1: u64 = 64 * 1024;
@@ -93,8 +93,20 @@ const RELEASE_ATTESTATION_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:release-at
 const RELEASE_PROFILE_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:release-profile";
 
 /// Canonical role of one preinstalled transparent Halo2 artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -329,8 +341,20 @@ impl KagemushaArtifactRoleV1 {
 }
 
 /// Digest and byte length of one authenticated artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -340,7 +364,7 @@ pub struct KagemushaArtifactBindingV1 {
     /// Artifact role.
     pub role: KagemushaArtifactRoleV1,
     /// SHA-256 of the exact file bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub sha256: [u8; 32],
     /// Exact file length.
     pub byte_len: u64,
@@ -353,8 +377,20 @@ pub struct KagemushaArtifactBindingV1 {
 /// complete file, verify its length and SHA-256, validate its typed contents,
 /// and only then construct and sign a receipt. Runtime code authenticates that
 /// signed projection; it cannot demonstrate the external file's semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -362,15 +398,25 @@ pub struct KagemushaArtifactBindingV1 {
 )]
 pub struct KagemushaEvidenceFileV1 {
     /// SHA-256 of the exact evidence-file bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub sha256: [u8; 32],
     /// Exact file length.
     pub byte_len: u64,
 }
 
 /// One hardware profile enabled by a release manifest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -380,16 +426,16 @@ pub struct KagemushaEnabledProfileV1 {
     /// Complete governed non-forking hardware-service profile.
     pub hardware_profile: super::KagemushaHardwareProfileV1,
     /// Digest-derived [`super::KagemushaHardwareProfileV1`] identity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_profile_id: [u8; 32],
     /// Exact proof suite admitted for credentials under this profile.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub suite_id: [u8; 32],
     /// Digest of every authenticated verifier artifact plus state and helper protocol identities.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub vk_digest: [u8; 32],
     /// Digest of this profile's exact typed qualification matrix.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub qualification_digest: [u8; 32],
     /// Exact governed policy epoch.
     pub policy_epoch: u64,
@@ -401,16 +447,30 @@ pub struct KagemushaEnabledProfileV1 {
 ///
 /// This record never contains the provider secret. The receipt authorizes its
 /// SHA-256 commitment, while the credential circuit proves possession.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.provider-policy-entry")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProviderPolicyEntryV1",
+    frame = "iroha.kagemusha.v1.provider-policy-entry"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaProviderPolicyEntryV1 {
     /// Exact enabled hardware profile; entries are strictly ordered by this ID.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_profile_id: [u8; 32],
     /// SHA-256 commitment under the provider-proof-authority domain.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub provider_authority_commitment: [u8; 32],
     /// Unique leaf position in the fixed-depth 16 provider registry.
     pub provider_profile_index: u16,
@@ -418,8 +478,11 @@ pub struct KagemushaProviderPolicyEntryV1 {
     pub issuer_signature: super::KagemushaDeviceSignatureV1,
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.provider-policy-authorization")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_release_v1::ProviderPolicyAuthorizationPreimageV1",
+    frame = "iroha.kagemusha.v1.provider-policy-authorization"
+)]
 struct ProviderPolicyAuthorizationPreimageV1 {
     domain: Vec<u8>,
     version: u16,
@@ -457,8 +520,20 @@ pub fn kagemusha_provider_policy_signing_bytes_v1(
 }
 
 /// Recursive relation qualified for each enabled hardware profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "relation", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -486,8 +561,20 @@ pub enum KagemushaQualifiedRelationV1 {
 }
 
 /// Helper circuit qualified alongside the eight release relations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "helper", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -562,8 +649,18 @@ impl KagemushaQualifiedHelperCircuitV1 {
 }
 
 /// Release-bound compiled protocol identity for one helper circuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -573,10 +670,10 @@ pub struct KagemushaHelperProtocolV1 {
     /// Helper circuit whose compiled protocols are identified.
     pub helper: KagemushaQualifiedHelperCircuitV1,
     /// Compiled Eq/Fp protocol digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep/Fq protocol digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Exact raw Eq/Fp proof bytes for an internal-only helper.
     ///
@@ -592,8 +689,18 @@ pub struct KagemushaHelperProtocolV1 {
 }
 
 /// Real-circuit qualification for one non-state helper circuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -603,10 +710,10 @@ pub struct KagemushaHelperQualificationV1 {
     /// Helper circuit measured by this record.
     pub helper: KagemushaQualifiedHelperCircuitV1,
     /// Compiled Eq/Fp protocol digest exercised by the measurement.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep/Fq protocol digest exercised by the measurement.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Exact Eq/Fp verifier artifact exercised by the measurement.
     pub eq_verifying_key: KagemushaArtifactBindingV1,
@@ -696,8 +803,18 @@ impl KagemushaQualifiedRelationV1 {
 }
 
 /// Per-relation real-circuit measurements for one enabled hardware profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -707,10 +824,10 @@ pub struct KagemushaRelationQualificationV1 {
     /// Relation measured by this record.
     pub relation: KagemushaQualifiedRelationV1,
     /// Compiled Eq/Fp protocol digest exercised by this relation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Compiled Ep/Fq protocol digest exercised by this relation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Exact Eq/Fp verifier artifact exercised by the measurement.
     pub eq_verifying_key: KagemushaArtifactBindingV1,
@@ -735,8 +852,18 @@ pub struct KagemushaRelationQualificationV1 {
 }
 
 /// One real recursive-depth qualification run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -758,8 +885,18 @@ pub struct KagemushaRecursiveDepthQualificationV1 {
 }
 
 /// Quantitative aggregate-balance qualification for one profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -777,8 +914,18 @@ pub struct KagemushaAggregateBalanceQualificationV1 {
 }
 
 /// Sustained thermally throttled receive-fold qualification for one profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -798,8 +945,18 @@ pub struct KagemushaThermalQualificationV1 {
 }
 
 /// Complete three-message exchange-size and handoff measurement for one profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -817,8 +974,17 @@ pub struct KagemushaEnvelopeQualificationV1 {
 }
 
 /// Complete real-circuit and physical-device evidence for one enabled profile.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -844,8 +1010,20 @@ pub struct KagemushaProfileQualificationV1 {
 }
 
 /// Closed release-acceptance case set. Every case is mandatory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "case", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[repr(u8)]
@@ -996,9 +1174,9 @@ pub enum KagemushaAcceptanceCaseV1 {
     AeadAssociatedDataSubstitution,
     /// Injected explicit randomness yields deterministic seal/open known-answer vectors.
     DeterministicEncryptionInjectedRandomnessKat,
-    /// Each ReceiveFold consumes exactly one valid staged credit.
+    /// Each `ReceiveFold` consumes exactly one valid staged credit.
     ReceiveFoldSingleCredit,
-    /// ReceiveFold replay insertion and balance addition commit atomically.
+    /// `ReceiveFold` replay insertion and balance addition commit atomically.
     ReceiveFoldReplayAtomicity,
     /// Pending-credit backlog size never causes a count-based rejection.
     PendingCreditBacklogNoCountRejection,
@@ -1171,8 +1349,18 @@ impl KagemushaAcceptanceCaseV1 {
     ];
 }
 /// Evidence binding for one mandatory closed acceptance case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1188,8 +1376,18 @@ pub struct KagemushaAcceptanceCaseEvidenceV1 {
 }
 
 /// One independent byte-for-byte reproducible artifact build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1197,10 +1395,10 @@ pub struct KagemushaAcceptanceCaseEvidenceV1 {
 )]
 pub struct KagemushaReproducibleBuildV1 {
     /// Stable identity of the independent builder/environment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub builder_id: [u8; 32],
     /// Artifact inventory digest reproduced by this build.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_set_digest: [u8; 32],
     /// Exact reproducibility report.
     pub report: KagemushaEvidenceFileV1,
@@ -1214,8 +1412,18 @@ pub struct KagemushaReproducibleBuildV1 {
 /// every typed report. Candidate-selected executables are never part of this
 /// corridor. The receipt digest, and therefore every release-authority
 /// signature, authenticates this complete projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1227,10 +1435,10 @@ pub struct KagemushaEvidenceClosureV1 {
     /// Exact separately selected trusted observer/verifier policy.
     pub observer_policy: KagemushaEvidenceFileV1,
     /// Domain-separated SHA-256 of the canonical ordered signed-observation projection.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub verification_records_digest: [u8; 32],
     /// Domain-separated identity of the source, lockfile, artifacts, protocols, profiles, and observer policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub candidate_context_digest: [u8; 32],
     /// Number of distinct signed observations represented by the digest.
     pub verification_record_count: u32,
@@ -1251,8 +1459,17 @@ pub struct KagemushaEvidenceClosureV1 {
 /// Every report hash/length below is only a provenance binding. The release
 /// tool must verify each referenced file and the semantics projected into this
 /// bounded typed receipt before asking authorities to sign it.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1262,32 +1479,32 @@ pub struct KagemushaInternalValidationReceiptV1 {
     /// Receipt version.
     pub version: u16,
     /// SHA-256 identity of the reviewed source tree and commit metadata.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub source_tree_digest: [u8; 32],
     /// SHA-256 of the unchanged root `Cargo.lock`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub cargo_lock_digest: [u8; 32],
     /// Exact state/helper circuit-profile digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub profile_digest: [u8; 32],
     /// Exact tagged native circuit-layout digest checked before artifact decoding.
     /// This is distinct from the report-derived evidence `profile_digest`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub native_profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol exercised by qualification.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Canonical little-endian Fq Poseidon digest of the compiled Ep protocol exercised by qualification.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Digest of the canonically ordered artifact inventory.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_set_digest: [u8; 32],
     /// Digest of the exact enabled-profile list, distinct from the provider Merkle root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_policy_digest: [u8; 32],
     /// Independently derived SHA-256 provider registry root admitted by this receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub provider_policy_root: [u8; 32],
     /// Exactly one public provider proof-authority binding per enabled profile.
     pub provider_policy: Vec<KagemushaProviderPolicyEntryV1>,
@@ -1314,8 +1531,17 @@ pub struct KagemushaInternalValidationReceiptV1 {
 }
 
 /// Canonical release manifest accepted by kagemusha runtime code.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1325,28 +1551,28 @@ pub struct KagemushaReleaseManifestV1 {
     /// Manifest version.
     pub version: u16,
     /// Digest-derived release identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
     /// SHA-256 identity of the reviewed source tree and commit metadata.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub source_tree_digest: [u8; 32],
     /// SHA-256 of the unchanged root `Cargo.lock`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub cargo_lock_digest: [u8; 32],
     /// Exact state/helper circuit-profile digest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub eq_protocol_digest: [u8; 32],
     /// Canonical little-endian Fq Poseidon digest of the compiled Ep protocol.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub ep_protocol_digest: [u8; 32],
     /// Digest of the exact enabled-profile list, distinct from the provider Merkle root.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub hardware_policy_digest: [u8; 32],
     /// SHA-256 of the canonical internal-validation receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub validation_receipt_digest: [u8; 32],
     /// Fixed Halo2 domain exponent.
     pub halo2_k: u32,
@@ -1363,8 +1589,17 @@ pub struct KagemushaReleaseManifestV1 {
 /// This policy is deployment configuration, not evidence supplied by an
 /// untrusted release bundle. Callers must select the trusted policy before
 /// authenticating any manifest or attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1374,7 +1609,7 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
     /// Policy format version.
     pub version: u16,
     /// Deployment-selected identity for this authority set.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub authority_set_id: [u8; 32],
     /// Minimum number of distinct authorized approvals.
     pub threshold: u16,
@@ -1383,8 +1618,18 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
 }
 
 /// Immutable release subject approved by every KAGEMUSHA V1 authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1394,25 +1639,34 @@ pub struct KagemushaReleaseAttestationSubjectV1 {
     /// Subject format version.
     pub version: u16,
     /// Digest of the locally selected authority policy.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub authority_policy_digest: [u8; 32],
     /// Digest-derived release identifier.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
     /// Digest of the complete canonical release manifest.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub manifest_digest: [u8; 32],
     /// Digest of the exact internal-validation receipt.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub validation_receipt_digest: [u8; 32],
     /// Digest of the ordered complete artifact inventory.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub artifact_set_digest: [u8; 32],
 }
 
 /// Domain-separated payload signed by one KAGEMUSHA V1 release authority.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1426,8 +1680,17 @@ pub struct KagemushaReleaseApprovalPayloadV1 {
 }
 
 /// One authority signature in an KAGEMUSHA V1 release attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1441,8 +1704,17 @@ pub struct KagemushaReleaseApprovalV1 {
 }
 
 /// Threshold-signed KAGEMUSHA V1 release attestation.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -1476,9 +1748,7 @@ struct KagemushaReleaseSubjectV1 {
     artifacts: Vec<KagemushaArtifactBindingV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-vk-set-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaVkSetSubjectV1",
     frame = "iroha.kagemusha.v1.release-vk-set-digest-subject"
@@ -1491,9 +1761,7 @@ struct KagemushaVkSetSubjectV1 {
     verifying_keys: Vec<KagemushaArtifactBindingV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-artifact-set-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaArtifactSetDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-artifact-set-digest-subject"
@@ -1502,9 +1770,7 @@ struct KagemushaArtifactSetDigestSubjectV1 {
     artifacts: Vec<KagemushaArtifactBindingV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-hardware-policy-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaHardwarePolicyDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-hardware-policy-digest-subject"
@@ -1513,9 +1779,7 @@ struct KagemushaHardwarePolicyDigestSubjectV1 {
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-profile-qualification-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProfileQualificationDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-profile-qualification-digest-subject"
@@ -1524,9 +1788,7 @@ struct KagemushaProfileQualificationDigestSubjectV1 {
     qualification: KagemushaProfileQualificationV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.release-profile-digest-subject")]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseProfileDigestSubjectV1",
     frame = "iroha.kagemusha.v1.release-profile-digest-subject"
@@ -1666,7 +1928,7 @@ fn validate_evidence_closure(closure: KagemushaEvidenceClosureV1) -> bool {
         && closure.total_observed_cpu_ms <= KAGEMUSHA_RELEASE_OBSERVED_TIME_TOTAL_MAX_MS_V1
 }
 
-fn validate_enabled_profile(profile: KagemushaEnabledProfileV1) -> bool {
+fn validate_enabled_profile(profile: &KagemushaEnabledProfileV1) -> bool {
     profile.hardware_profile.validate().is_ok()
         && digest_is_nonzero(profile.hardware_profile_id)
         && digest_is_nonzero(profile.suite_id)
@@ -1708,16 +1970,16 @@ fn validate_helper_protocols(protocols: &[KagemushaHelperProtocolV1]) -> bool {
 const fn valid_internal_helper_proof_length(length: u32) -> bool {
     length != 0
         && length <= KAGEMUSHA_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1
-        && length % 32 == 0
+        && length.is_multiple_of(32)
 }
 
 fn protocol_digests_are_unique(
     state_eq: [u8; 32],
-    state_ep: [u8; 32],
+    companion_ep_digest: [u8; 32],
     helpers: &[KagemushaHelperProtocolV1],
 ) -> bool {
     let mut digests = Vec::with_capacity(2 + 2 * helpers.len());
-    digests.extend([state_eq, state_ep]);
+    digests.extend([state_eq, companion_ep_digest]);
     for helper in helpers {
         digests.extend([helper.eq_protocol_digest, helper.ep_protocol_digest]);
     }
@@ -1748,12 +2010,12 @@ fn distinct_relation_protocols(
 
 fn profile_protocol_digests_are_unique(
     state_eq: [u8; 32],
-    state_ep: [u8; 32],
+    companion_ep_digest: [u8; 32],
     helpers: &[KagemushaHelperProtocolV1],
     distinct_relations: KagemushaDistinctRelationProtocolsV1,
 ) -> bool {
     let mut digests = Vec::with_capacity(2 + 2 * helpers.len() + 2 * distinct_relations.len());
-    digests.extend([state_eq, state_ep]);
+    digests.extend([state_eq, companion_ep_digest]);
     for helper in helpers {
         digests.extend([helper.eq_protocol_digest, helper.ep_protocol_digest]);
     }
@@ -1773,7 +2035,6 @@ fn validate_enabled_profiles(
         || profiles.len() > KAGEMUSHA_RELEASE_MAX_ENABLED_PROFILES_V1
         || profiles
             .iter()
-            .copied()
             .any(|profile| !validate_enabled_profile(profile))
         || !profiles
             .windows(2)
@@ -1833,14 +2094,14 @@ pub fn kagemusha_artifact_set_digest_v1(
 pub fn kagemusha_vk_set_digest_v1(
     artifacts: &[KagemushaArtifactBindingV1],
     state_eq_protocol_digest: [u8; 32],
-    state_ep_protocol_digest: [u8; 32],
+    companion_ep_digest: [u8; 32],
     helper_protocols: &[KagemushaHelperProtocolV1],
 ) -> Result<[u8; 32], KagemushaReleaseErrorV1> {
     validate_artifacts(artifacts)?;
     if !validate_helper_protocols(helper_protocols)
         || !protocol_digests_are_unique(
             state_eq_protocol_digest,
-            state_ep_protocol_digest,
+            companion_ep_digest,
             helper_protocols,
         )
     {
@@ -1856,7 +2117,7 @@ pub fn kagemusha_vk_set_digest_v1(
         &KagemushaVkSetSubjectV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             state_eq_protocol_digest,
-            state_ep_protocol_digest,
+            state_ep_protocol_digest: companion_ep_digest,
             helper_protocols: helper_protocols.to_vec(),
             verifying_keys,
         },
@@ -2040,14 +2301,14 @@ pub fn kagemusha_profile_qualification_digest_v1(
 pub fn kagemusha_release_profile_digest_v1(
     circuit_shape_report: KagemushaEvidenceFileV1,
     state_eq_protocol_digest: [u8; 32],
-    state_ep_protocol_digest: [u8; 32],
+    companion_ep_digest: [u8; 32],
     helper_protocols: &[KagemushaHelperProtocolV1],
 ) -> Result<[u8; 32], KagemushaReleaseErrorV1> {
     if !validate_evidence_file(circuit_shape_report)
         || !validate_helper_protocols(helper_protocols)
         || !protocol_digests_are_unique(
             state_eq_protocol_digest,
-            state_ep_protocol_digest,
+            companion_ep_digest,
             helper_protocols,
         )
     {
@@ -2060,7 +2321,7 @@ pub fn kagemusha_release_profile_digest_v1(
             halo2_k: KAGEMUSHA_HALO2_K_V1,
             circuit_shape_report,
             state_eq_protocol_digest,
-            state_ep_protocol_digest,
+            state_ep_protocol_digest: companion_ep_digest,
             helper_protocols: helper_protocols.to_vec(),
         },
     )
@@ -2145,7 +2406,7 @@ impl KagemushaProfileQualificationV1 {
 fn validate_profile_qualification(
     qualification: &KagemushaProfileQualificationV1,
     state_eq_protocol_digest: [u8; 32],
-    state_ep_protocol_digest: [u8; 32],
+    companion_ep_digest: [u8; 32],
     helper_protocols: &[KagemushaHelperProtocolV1],
     distinct_relation_protocols: KagemushaDistinctRelationProtocolsV1,
 ) -> Result<(), KagemushaReleaseErrorV1> {
@@ -2159,12 +2420,12 @@ fn validate_profile_qualification(
         .expect("raw complete-exchange maximum fits u32");
     let text_complete_exchange_max = u32::try_from(KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1)
         .expect("text complete-exchange maximum fits u32");
-    if !validate_enabled_profile(qualification.profile)
+    if !validate_enabled_profile(&qualification.profile)
         || qualification.relations.len() != KagemushaQualifiedRelationV1::ALL.len()
         || qualification.helper_circuits.len() != KagemushaQualifiedHelperCircuitV1::ALL.len()
         || !profile_protocol_digests_are_unique(
             state_eq_protocol_digest,
-            state_ep_protocol_digest,
+            companion_ep_digest,
             helper_protocols,
             distinct_relation_protocols,
         )
@@ -2175,22 +2436,62 @@ fn validate_profile_qualification(
     {
         return Err(invalid());
     }
-    for (relation, expected_relation) in qualification
-        .relations
+    validate_relation_qualifications(
+        &qualification.relations,
+        state_eq_protocol_digest,
+        companion_ep_digest,
+        distinct_relation_protocols,
+        maximum_circuit_rows,
+        proof_max,
+    )?;
+    validate_helper_qualifications(
+        &qualification.helper_circuits,
+        helper_protocols,
+        maximum_circuit_rows,
+        proof_max,
+    )?;
+    let invariant_depth_sizes = validate_recursive_depth_qualifications(
+        &qualification.recursive_depths,
+        proof_max,
+        raw_complete_exchange_max,
+        text_complete_exchange_max,
+    )?;
+    validate_operation_measurements(
+        qualification.aggregate_balance,
+        qualification.thermal,
+        qualification.envelope,
+        invariant_depth_sizes,
+        raw_complete_exchange_max,
+        text_complete_exchange_max,
+    )?;
+    validate_profile_acceptance_cases(&qualification.acceptance_cases)
+}
+
+// Validate relation evidence only after the profile/count/digest guard.
+fn validate_relation_qualifications(
+    relations: &[KagemushaRelationQualificationV1],
+    state_eq_protocol_digest: [u8; 32],
+    companion_ep_digest: [u8; 32],
+    distinct_relation_protocols: KagemushaDistinctRelationProtocolsV1,
+    maximum_circuit_rows: u32,
+    proof_max: u32,
+) -> Result<(), KagemushaReleaseErrorV1> {
+    let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
+    for (relation, expected_relation) in relations
         .iter()
         .zip(KagemushaQualifiedRelationV1::ALL.iter().copied())
     {
-        let (expected_eq_vk, expected_ep_vk) = expected_relation.expected_vk_roles();
-        let (expected_eq_protocol, expected_ep_protocol) =
-            expected_relation.distinct_protocol_index().map_or(
-                (state_eq_protocol_digest, state_ep_protocol_digest),
-                |index| distinct_relation_protocols[index],
-            );
+        let verifier_roles = expected_relation.expected_vk_roles();
+        let expected_protocols = expected_relation
+            .distinct_protocol_index()
+            .map_or((state_eq_protocol_digest, companion_ep_digest), |index| {
+                distinct_relation_protocols[index]
+            });
         if relation.relation != expected_relation
-            || relation.eq_protocol_digest != expected_eq_protocol
-            || relation.ep_protocol_digest != expected_ep_protocol
-            || !validate_vk_reference(relation.eq_verifying_key, expected_eq_vk)
-            || !validate_vk_reference(relation.ep_verifying_key, expected_ep_vk)
+            || relation.eq_protocol_digest != expected_protocols.0
+            || relation.ep_protocol_digest != expected_protocols.1
+            || !validate_vk_reference(relation.eq_verifying_key, verifier_roles.0)
+            || !validate_vk_reference(relation.ep_verifying_key, verifier_roles.1)
             || relation.eq_verifying_key.sha256 == relation.ep_verifying_key.sha256
             || relation.eq_circuit_rows == 0
             || relation.eq_circuit_rows > maximum_circuit_rows
@@ -2210,14 +2511,23 @@ fn validate_profile_qualification(
             return Err(invalid());
         }
     }
+    Ok(())
+}
 
-    for ((helper, protocol), expected_helper) in qualification
-        .helper_circuits
+// Match helper measurements to their admitted ordered protocol inventory.
+fn validate_helper_qualifications(
+    helpers: &[KagemushaHelperQualificationV1],
+    helper_protocols: &[KagemushaHelperProtocolV1],
+    maximum_circuit_rows: u32,
+    proof_max: u32,
+) -> Result<(), KagemushaReleaseErrorV1> {
+    let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
+    for ((helper, protocol), expected_helper) in helpers
         .iter()
         .zip(helper_protocols)
         .zip(KagemushaQualifiedHelperCircuitV1::ALL)
     {
-        let (expected_eq_vk, expected_ep_vk) = expected_helper.expected_vk_roles();
+        let verifier_roles = expected_helper.expected_vk_roles();
         let valid_proof_measurement = if expected_helper.uses_internal_proof_evidence() {
             helper.eq_proof_bytes == protocol.eq_proof_bytes
                 && helper.ep_proof_bytes == protocol.ep_proof_bytes
@@ -2233,8 +2543,8 @@ fn validate_profile_qualification(
             || protocol.helper != expected_helper
             || helper.eq_protocol_digest != protocol.eq_protocol_digest
             || helper.ep_protocol_digest != protocol.ep_protocol_digest
-            || !validate_vk_reference(helper.eq_verifying_key, expected_eq_vk)
-            || !validate_vk_reference(helper.ep_verifying_key, expected_ep_vk)
+            || !validate_vk_reference(helper.eq_verifying_key, verifier_roles.0)
+            || !validate_vk_reference(helper.ep_verifying_key, verifier_roles.1)
             || helper.eq_verifying_key.sha256 == helper.ep_verifying_key.sha256
             || helper.eq_circuit_rows == 0
             || helper.eq_circuit_rows > maximum_circuit_rows
@@ -2253,16 +2563,27 @@ fn validate_profile_qualification(
             return Err(invalid());
         }
     }
+    Ok(())
+}
 
-    if qualification.recursive_depths.len() != 4 {
+// Return the common proof/transport sizes only after checking the fixed depth
+// inventory and every recursive measurement. No indexing precedes the guard.
+fn validate_recursive_depth_qualifications(
+    depths: &[KagemushaRecursiveDepthQualificationV1],
+    proof_max: u32,
+    raw_complete_exchange_max: u32,
+    text_complete_exchange_max: u32,
+) -> Result<(u32, u32, u32), KagemushaReleaseErrorV1> {
+    let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
+    if depths.len() != 4 {
         return Err(invalid());
     }
     let invariant_depth_sizes = (
-        qualification.recursive_depths[0].complete_proof_bytes,
-        qualification.recursive_depths[0].raw_complete_exchange_bytes,
-        qualification.recursive_depths[0].text_complete_exchange_bytes,
+        depths[0].complete_proof_bytes,
+        depths[0].raw_complete_exchange_bytes,
+        depths[0].text_complete_exchange_bytes,
     );
-    for depth in &qualification.recursive_depths {
+    for depth in depths {
         if depth.depth == 0
             || depth.verified_handoffs != depth.depth
             || depth.complete_proof_bytes == 0
@@ -2281,15 +2602,26 @@ fn validate_profile_qualification(
             return Err(invalid());
         }
     }
-    if qualification.recursive_depths[0].depth != 8
-        || qualification.recursive_depths[1].depth != 64
-        || qualification.recursive_depths[2].depth != KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1
-        || qualification.recursive_depths[3].depth <= KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1
+    if depths[0].depth != 8
+        || depths[1].depth != 64
+        || depths[2].depth != KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1
+        || depths[3].depth <= KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1
     {
         return Err(invalid());
     }
+    Ok(invariant_depth_sizes)
+}
 
-    let aggregate = qualification.aggregate_balance;
+// Keep aggregate, sustained-thermal and complete-handoff evidence in that order.
+fn validate_operation_measurements(
+    aggregate: KagemushaAggregateBalanceQualificationV1,
+    thermal: KagemushaThermalQualificationV1,
+    envelope: KagemushaEnvelopeQualificationV1,
+    invariant_depth_sizes: (u32, u32, u32),
+    raw_complete_exchange_max: u32,
+    text_complete_exchange_max: u32,
+) -> Result<(), KagemushaReleaseErrorV1> {
+    let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
     if aggregate.independent_payments < KAGEMUSHA_MIN_QUALIFIED_AGGREGATED_CREDITS_V1
         || aggregate.folded_credits != aggregate.independent_payments
         || aggregate.spend_payments != 1
@@ -2297,7 +2629,6 @@ fn validate_profile_qualification(
     {
         return Err(invalid());
     }
-    let thermal = qualification.thermal;
     if thermal.folded_credits < KAGEMUSHA_MIN_THERMAL_FOLDED_CREDITS_V1
         || thermal.fold_p95_ms == 0
         || thermal.fold_p95_ms > KAGEMUSHA_PROVE_P95_MAX_MS_V1
@@ -2308,7 +2639,6 @@ fn validate_profile_qualification(
     {
         return Err(invalid());
     }
-    let envelope = qualification.envelope;
     if envelope.raw_complete_exchange_bytes == 0
         || envelope.raw_complete_exchange_bytes > raw_complete_exchange_max
         || envelope.text_complete_exchange_bytes == 0
@@ -2321,11 +2651,18 @@ fn validate_profile_qualification(
     {
         return Err(invalid());
     }
-    if qualification.acceptance_cases.len() != KagemushaAcceptanceCaseV1::ALL.len() {
+    Ok(())
+}
+
+// Every required acceptance case remains present in the canonical order.
+fn validate_profile_acceptance_cases(
+    cases: &[KagemushaAcceptanceCaseEvidenceV1],
+) -> Result<(), KagemushaReleaseErrorV1> {
+    let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
+    if cases.len() != KagemushaAcceptanceCaseV1::ALL.len() {
         return Err(invalid());
     }
-    for (evidence, expected_case) in qualification
-        .acceptance_cases
+    for (evidence, expected_case) in cases
         .iter()
         .zip(KagemushaAcceptanceCaseV1::ALL.iter().copied())
     {
@@ -2743,19 +3080,19 @@ impl KagemushaReleaseManifestV1 {
                 // Redemption-terminal and payment-commit-wrapper protocol identities are distinct relation
                 // fields authenticated by both the profile qualification digest and the
                 // manifest's receipt digest.
-                let (eq_role, ep_role) = relation.relation.expected_vk_roles();
-                let eq_artifact = self
-                    .artifacts
-                    .iter()
-                    .find(|artifact| artifact.role == eq_role)
-                    .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?;
-                let ep_artifact = self
-                    .artifacts
-                    .iter()
-                    .find(|artifact| artifact.role == ep_role)
-                    .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?;
-                if relation.eq_verifying_key != *eq_artifact
-                    || relation.ep_verifying_key != *ep_artifact
+                let verifier_roles = relation.relation.expected_vk_roles();
+                let verifying_keys = (
+                    self.artifacts
+                        .iter()
+                        .find(|artifact| artifact.role == verifier_roles.0)
+                        .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?,
+                    self.artifacts
+                        .iter()
+                        .find(|artifact| artifact.role == verifier_roles.1)
+                        .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?,
+                );
+                if relation.eq_verifying_key != *verifying_keys.0
+                    || relation.ep_verifying_key != *verifying_keys.1
                     || (relation.relation.distinct_protocol_index().is_none()
                         && (relation.eq_protocol_digest != self.eq_protocol_digest
                             || relation.ep_protocol_digest != self.ep_protocol_digest))
@@ -2768,20 +3105,19 @@ impl KagemushaReleaseManifestV1 {
                 .iter()
                 .zip(&self.helper_protocols)
             {
-                let (eq_role, ep_role) = helper.helper.expected_vk_roles();
-                let eq_artifact = self
-                    .artifacts
-                    .iter()
-                    .find(|artifact| artifact.role == eq_role)
-                    .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?;
-                let ep_artifact = self
-                    .artifacts
-                    .iter()
-                    .find(|artifact| artifact.role == ep_role)
-                    .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?;
+                let verifier_roles = helper.helper.expected_vk_roles();
+                let verifying_keys = (
+                    self.artifacts
+                        .iter()
+                        .find(|artifact| artifact.role == verifier_roles.0)
+                        .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?,
+                    self.artifacts
+                        .iter()
+                        .find(|artifact| artifact.role == verifier_roles.1)
+                        .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?,
+                );
                 if helper.helper != protocol.helper
-                    || helper.eq_verifying_key != *eq_artifact
-                    || helper.ep_verifying_key != *ep_artifact
+                    || (&helper.eq_verifying_key, &helper.ep_verifying_key) != verifying_keys
                     || helper.eq_protocol_digest != protocol.eq_protocol_digest
                     || helper.ep_protocol_digest != protocol.ep_protocol_digest
                 {
@@ -3128,7 +3464,6 @@ mod inner_mint_artifact_tests {
         assert!(validate_artifacts(&decoded).is_ok());
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn mint_hash_roles_roundtrip_json_with_distinct_canonical_names() {
         let names = [
@@ -3152,7 +3487,6 @@ mod inner_mint_artifact_tests {
         }
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn inner_mint_roles_roundtrip_json_with_distinct_canonical_names() {
         let names = [
@@ -3295,3 +3629,394 @@ mod inner_mint_artifact_tests {
 
 #[cfg(test)]
 mod captured_kagemusha_release_v1_schema_tests;
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaProviderPolicyEntryV1>(
+            "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaProviderPolicyEntryV1",
+            "iroha.kagemusha.v1.provider-policy-entry",
+            "33503249cdefa762f6d0ffa42983c6f1",
+        );
+    }
+
+    #[test]
+    fn captured_serialize_only_preimage_identity() {
+        fn check<T: norito::NoritoSerialize>(nominal: &str, frame: &str, hash: &str) {
+            assert_eq!(T::nominal_name(), nominal);
+            assert_eq!(T::frame_name(), frame);
+            assert_eq!(
+                hex::encode(norito::schema::identity::frame_hash::<T>()),
+                hash
+            );
+        }
+        check::<super::ProviderPolicyAuthorizationPreimageV1>(
+            "iroha_data_model::kagemusha::kagemusha_release_v1::ProviderPolicyAuthorizationPreimageV1",
+            "iroha.kagemusha.v1.provider-policy-authorization",
+            "779107008bd31fb01e66d644a082ad5e",
+        );
+    }
+}
+
+#[cfg(test)]
+mod qualification_validation_tests {
+    use super::*;
+
+    const STATE_PROTOCOL: [u8; 32] = [1; 32];
+    const COMPANION_EP_DIGEST: [u8; 32] = [2; 32];
+    const DISTINCT_PROTOCOLS: KagemushaDistinctRelationProtocolsV1 =
+        [([3; 32], [4; 32]), ([5; 32], [6; 32])];
+
+    fn evidence() -> KagemushaEvidenceFileV1 {
+        KagemushaEvidenceFileV1 {
+            sha256: [9; 32],
+            byte_len: 1,
+        }
+    }
+
+    fn verifier(role: KagemushaArtifactRoleV1, seed: u8) -> KagemushaArtifactBindingV1 {
+        KagemushaArtifactBindingV1 {
+            role,
+            sha256: [seed; 32],
+            byte_len: 32,
+        }
+    }
+
+    fn limits() -> (u32, u32, u32) {
+        (
+            u32::try_from(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1).unwrap(),
+            u32::try_from(KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1).unwrap(),
+            u32::try_from(KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1).unwrap(),
+        )
+    }
+
+    fn relations() -> Vec<KagemushaRelationQualificationV1> {
+        KagemushaQualifiedRelationV1::ALL
+            .into_iter()
+            .map(|relation| {
+                let roles = relation.expected_vk_roles();
+                let protocols = relation
+                    .distinct_protocol_index()
+                    .map_or((STATE_PROTOCOL, COMPANION_EP_DIGEST), |index| {
+                        DISTINCT_PROTOCOLS[index]
+                    });
+                KagemushaRelationQualificationV1 {
+                    relation,
+                    eq_protocol_digest: protocols.0,
+                    ep_protocol_digest: protocols.1,
+                    eq_verifying_key: verifier(roles.0, 7),
+                    ep_verifying_key: verifier(roles.1, 8),
+                    eq_circuit_rows: 1,
+                    ep_circuit_rows: 1,
+                    complete_proof_bytes: limits().0,
+                    prove_p95_ms: 1,
+                    verify_p95_ms: 1,
+                    process_rss_bytes: 1,
+                    operation_energy_millijoules: 1,
+                    report: evidence(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn relation_phase_keeps_both_protocol_and_verifier_bindings() {
+        let baseline = relations();
+        let check = |values: &[KagemushaRelationQualificationV1]| {
+            validate_relation_qualifications(
+                values,
+                STATE_PROTOCOL,
+                COMPANION_EP_DIGEST,
+                DISTINCT_PROTOCOLS,
+                1_u32 << KAGEMUSHA_HALO2_K_V1,
+                limits().0,
+            )
+        };
+        assert_eq!(check(&baseline), Ok(()));
+        for index in 0..baseline.len() {
+            for binding in 0..5 {
+                let mut changed = baseline.clone();
+                let relation = &mut changed[index];
+                match binding {
+                    0 => relation.eq_protocol_digest = relation.ep_protocol_digest,
+                    1 => relation.ep_protocol_digest = relation.eq_protocol_digest,
+                    2 => relation.eq_verifying_key = relation.ep_verifying_key,
+                    3 => relation.ep_verifying_key = relation.eq_verifying_key,
+                    4 => relation.complete_proof_bytes += 1,
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    check(&changed),
+                    Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+                    "relation {index}, binding {binding}"
+                );
+            }
+        }
+    }
+
+    fn helper_evidence() -> (
+        Vec<KagemushaHelperProtocolV1>,
+        Vec<KagemushaHelperQualificationV1>,
+    ) {
+        KagemushaQualifiedHelperCircuitV1::ALL
+            .into_iter()
+            .map(|helper| {
+                let roles = helper.expected_vk_roles();
+                let (first_length, paired_length, complete) =
+                    if helper.uses_internal_proof_evidence() {
+                        (32, 64, 96)
+                    } else {
+                        (0, 0, limits().0)
+                    };
+                (
+                    KagemushaHelperProtocolV1 {
+                        helper,
+                        eq_protocol_digest: [1; 32],
+                        ep_protocol_digest: [2; 32],
+                        eq_proof_bytes: first_length,
+                        ep_proof_bytes: paired_length,
+                    },
+                    KagemushaHelperQualificationV1 {
+                        helper,
+                        eq_protocol_digest: [1; 32],
+                        ep_protocol_digest: [2; 32],
+                        eq_verifying_key: verifier(roles.0, 7),
+                        ep_verifying_key: verifier(roles.1, 8),
+                        eq_circuit_rows: 1,
+                        ep_circuit_rows: 1,
+                        eq_proof_bytes: first_length,
+                        ep_proof_bytes: paired_length,
+                        complete_proof_bytes: complete,
+                        prove_p95_ms: 1,
+                        verify_p95_ms: 1,
+                        process_rss_bytes: 1,
+                        operation_energy_millijoules: 1,
+                        report: evidence(),
+                    },
+                )
+            })
+            .unzip()
+    }
+
+    #[test]
+    fn helper_phase_keeps_internal_and_wire_proof_measurements_distinct() {
+        let (protocols, baseline) = helper_evidence();
+        let check = |values: &[KagemushaHelperQualificationV1]| {
+            validate_helper_qualifications(
+                values,
+                &protocols,
+                1_u32 << KAGEMUSHA_HALO2_K_V1,
+                limits().0,
+            )
+        };
+        assert_eq!(check(&baseline), Ok(()));
+        for index in 0..baseline.len() {
+            for binding in 0..5 {
+                let mut changed = baseline.clone();
+                let helper = &mut changed[index];
+                match binding {
+                    0 => helper.eq_protocol_digest = helper.ep_protocol_digest,
+                    1 => helper.ep_verifying_key = helper.eq_verifying_key,
+                    2 => helper.eq_proof_bytes += 32,
+                    3 => helper.ep_proof_bytes += 32,
+                    4 => helper.complete_proof_bytes += 1,
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    check(&changed),
+                    Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+                    "helper {index}, binding {binding}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn internal_proof_alignment_keeps_nonzero_and_inclusive_limits() {
+        let maximum = KAGEMUSHA_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1;
+        for (length, expected) in [
+            (0, false),
+            (1, false),
+            (31, false),
+            (32, true),
+            (33, false),
+            (64, true),
+            (maximum - 1, false),
+            (maximum, true),
+            (maximum + 1, false),
+            (u32::MAX, false),
+        ] {
+            assert_eq!(
+                valid_internal_helper_proof_length(length),
+                expected,
+                "length {length}"
+            );
+        }
+    }
+
+    fn depths() -> Vec<KagemushaRecursiveDepthQualificationV1> {
+        let sizes = limits();
+        [
+            8,
+            64,
+            KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1,
+            KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1 + 1,
+        ]
+        .into_iter()
+        .map(|depth| KagemushaRecursiveDepthQualificationV1 {
+            depth,
+            verified_handoffs: depth,
+            complete_proof_bytes: sizes.0,
+            raw_complete_exchange_bytes: sizes.1,
+            text_complete_exchange_bytes: sizes.2,
+            report: evidence(),
+        })
+        .collect()
+    }
+
+    #[test]
+    fn recursive_phase_checks_length_before_slots_and_preserves_common_sizes() {
+        let baseline = depths();
+        let sizes = limits();
+        let check = |values: &[KagemushaRecursiveDepthQualificationV1]| {
+            validate_recursive_depth_qualifications(values, sizes.0, sizes.1, sizes.2)
+        };
+        assert_eq!(check(&baseline), Ok(sizes));
+        for count in 0..4 {
+            assert_eq!(
+                check(&baseline[..count]),
+                Err(KagemushaReleaseErrorV1::InvalidValidationReceipt)
+            );
+        }
+        let mut too_many = baseline.clone();
+        too_many.push(baseline[3]);
+        assert_eq!(
+            check(&too_many),
+            Err(KagemushaReleaseErrorV1::InvalidValidationReceipt)
+        );
+        for field in 0..5 {
+            let mut changed = baseline.clone();
+            match field {
+                0 => changed[0].complete_proof_bytes -= 1,
+                1 => changed[1].raw_complete_exchange_bytes -= 1,
+                2 => changed[2].text_complete_exchange_bytes -= 1,
+                3 => changed[3].verified_handoffs -= 1,
+                4 => {
+                    changed[3].depth = KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1;
+                    changed[3].verified_handoffs = KAGEMUSHA_MIN_QUALIFIED_HANDOFFS_V1;
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                check(&changed),
+                Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+                "field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn operation_phase_preserves_aggregate_thermal_and_transport_boundaries() {
+        let sizes = limits();
+        let aggregate = KagemushaAggregateBalanceQualificationV1 {
+            independent_payments: KAGEMUSHA_MIN_QUALIFIED_AGGREGATED_CREDITS_V1,
+            folded_credits: KAGEMUSHA_MIN_QUALIFIED_AGGREGATED_CREDITS_V1,
+            spend_payments: 1,
+            report: evidence(),
+        };
+        let thermal = KagemushaThermalQualificationV1 {
+            folded_credits: KAGEMUSHA_MIN_THERMAL_FOLDED_CREDITS_V1,
+            fold_p95_ms: KAGEMUSHA_PROVE_P95_MAX_MS_V1,
+            process_rss_bytes: KAGEMUSHA_PROCESS_RSS_MAX_BYTES_V1,
+            operation_energy_millijoules: 1,
+            report: evidence(),
+        };
+        let envelope = KagemushaEnvelopeQualificationV1 {
+            raw_complete_exchange_bytes: sizes.1,
+            text_complete_exchange_bytes: sizes.2,
+            handoff_p95_ms: KAGEMUSHA_HANDOFF_P95_MAX_MS_V1,
+            report: evidence(),
+        };
+        assert_eq!(
+            validate_operation_measurements(aggregate, thermal, envelope, sizes, sizes.1, sizes.2),
+            Ok(())
+        );
+        for field in 0..5 {
+            let mut balance = aggregate;
+            let mut sustained = thermal;
+            let mut exchange = envelope;
+            match field {
+                0 => balance.spend_payments += 1,
+                1 => sustained.fold_p95_ms += 1,
+                2 => sustained.process_rss_bytes += 1,
+                3 => exchange.raw_complete_exchange_bytes -= 1,
+                4 => exchange.text_complete_exchange_bytes -= 1,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_operation_measurements(
+                    balance, sustained, exchange, sizes, sizes.1, sizes.2
+                ),
+                Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+                "field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_phase_requires_each_ordered_case_and_its_validator_count() {
+        let baseline = KagemushaAcceptanceCaseV1::ALL
+            .iter()
+            .copied()
+            .map(|case| KagemushaAcceptanceCaseEvidenceV1 {
+                case,
+                validator_count: if matches!(
+                    case,
+                    KagemushaAcceptanceCaseV1::FourPeerActivationRestartReplay
+                ) {
+                    KAGEMUSHA_VALIDATOR_COUNT_V1
+                } else {
+                    0
+                },
+                report: evidence(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(validate_profile_acceptance_cases(&baseline), Ok(()));
+        assert_eq!(
+            validate_profile_acceptance_cases(&baseline[1..]),
+            Err(KagemushaReleaseErrorV1::InvalidValidationReceipt)
+        );
+        for index in 0..baseline.len() {
+            let mut changed = baseline.clone();
+            changed[index].validator_count = if changed[index].validator_count == 0 {
+                KAGEMUSHA_VALIDATOR_COUNT_V1
+            } else {
+                0
+            };
+            assert_eq!(
+                validate_profile_acceptance_cases(&changed),
+                Err(KagemushaReleaseErrorV1::InvalidValidationReceipt),
+                "case {index}"
+            );
+        }
+        let mut unordered = baseline;
+        unordered.swap(0, 1);
+        assert_eq!(
+            validate_profile_acceptance_cases(&unordered),
+            Err(KagemushaReleaseErrorV1::InvalidValidationReceipt)
+        );
+    }
+}

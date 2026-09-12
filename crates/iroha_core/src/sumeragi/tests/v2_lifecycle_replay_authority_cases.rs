@@ -2153,3 +2153,116 @@ fn typed_sources_reject_locator_role_signature_and_outcome_drift() {
         Err(ReplayAuthorityValidationError::RecordMismatch)
     ));
 }
+
+#[test]
+fn resolved_report_owner_tracks_terminal_and_statement_not_retry_encoding() {
+    let fixture = Fixture::new();
+    let original = fixture
+        .cases()
+        .into_iter()
+        .find(|case| case.work_class == LifecycleWorkClass::InvalidBodyReport)
+        .expect("fixture has the exact invalid-body source")
+        .authority;
+    let terminal_root = CausalRoot::new(digest_from_hash(&Hash::new(b"resolved Report terminal")));
+    let original_root = resolved_invalid_body_report_causal_key(terminal_root, 17, &original)
+        .expect("invalid-body source has an independent identity");
+    let mut retried = original.clone();
+    let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut retried.source else {
+        panic!("fixture selects invalid-body source");
+    };
+    // Identity selection does not authenticate these altered signatures. Exact
+    // current source authentication remains mandatory at publication/cold open.
+    source.validation_origin.tag.generation += 1;
+    source.certificate.signers.push(31);
+    source.certificate.aggregate_signature.push(0xA5);
+    assert_eq!(
+        resolved_invalid_body_report_causal_key(terminal_root, 17, &retried),
+        Some(original_root),
+    );
+    assert_ne!(
+        resolved_invalid_body_report_causal_key(terminal_root, 18, &original),
+        Some(original_root),
+    );
+    let LifecycleReplaySourceV1::InvalidCertifiedBody(source) = &mut retried.source else {
+        unreachable!("same fixture source");
+    };
+    source.outcome.body_frame_hash[0] ^= 1;
+    assert_ne!(
+        resolved_invalid_body_report_causal_key(terminal_root, 17, &retried),
+        Some(original_root),
+    );
+    assert_eq!(
+        resolved_invalid_body_report_causal_key(
+            terminal_root,
+            17,
+            &fixture.cases().remove(0).authority,
+        ),
+        None,
+    );
+}
+
+#[test]
+fn decision_body_retirement_preserves_current_winner_and_rejects_future_tags() {
+    let fixture = Fixture::new();
+    let fixture = Fixture::for_record(fixture.context, 1);
+    let tag = EventTag::new(
+        fixture.tag.height,
+        fixture.tag.view,
+        Generation::new(fixture.tag.generation),
+    );
+    let next_generation = EventTag::new(
+        tag.height(),
+        tag.view(),
+        Generation::new(tag.generation().get() + 1),
+    );
+    let next_view = EventTag::new(tag.height(), tag.view() + 1, Generation::INITIAL);
+    let next_view_same_generation = EventTag::new(tag.height(), tag.view() + 1, tag.generation());
+    let earlier = EventTag::new(
+        tag.height(),
+        tag.view(),
+        Generation::new(tag.generation().get() - 1),
+    );
+    let earlier_view_high_generation =
+        EventTag::new(tag.height(), tag.view() - 1, Generation::new(u64::MAX));
+    let foreign_height = EventTag::new(
+        tag.height() + 1,
+        tag.view(),
+        Generation::new(tag.generation().get() + 1),
+    );
+    let mut body_sources = 0;
+    for case in fixture.cases() {
+        let authority = &case.authority;
+        let bytes = authority.encode();
+        let ordinary = authority.is_local_body_origin()
+            || authority.is_remote_proposal_origin()
+            || authority.is_certified_body_origin();
+        body_sources += usize::from(ordinary);
+        assert!(!authority.ordinary_body_is_obsolete_for_decision(tag, true));
+        assert_eq!(
+            authority.ordinary_body_is_obsolete_for_decision(tag, false),
+            ordinary
+        );
+        for decided_body in [false, true] {
+            for later in [next_generation, next_view, next_view_same_generation] {
+                assert_eq!(
+                    authority.ordinary_body_is_obsolete_for_decision(later, decided_body),
+                    ordinary
+                );
+            }
+            assert!(!authority.ordinary_body_is_obsolete_for_decision(earlier, decided_body));
+            assert!(!authority.ordinary_body_is_obsolete_for_decision(
+                earlier_view_high_generation,
+                decided_body
+            ));
+            assert!(
+                !authority.ordinary_body_is_obsolete_for_decision(foreign_height, decided_body)
+            );
+        }
+        assert_eq!(
+            authority.encode(),
+            bytes,
+            "classification cannot rewrite immutable replay authority"
+        );
+    }
+    assert!(body_sources > 0);
+}

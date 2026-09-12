@@ -86,3 +86,23 @@ harness = false
 [[example]]
 name = "inner_product"
 required-features = ["test-utils"]
+
+# Keep the vendored library's complete upstream test surface independently
+# selectable without adding vendor development dependencies to Iroha's graph.
+[workspace]
+resolver = "2"
+
+# Unit tests must exercise the same maintained cryptographic implementations
+# selected by the root workspace.
+[patch.crates-io]
+halo2-axiom = { path = "../halo2-axiom" }
+halo2curves-axiom = { path = "../halo2curves-axiom" }
+
+# Use a stable low-debug test profile in the Base-owned warm target lane.
+[profile.test]
+split-debuginfo = "unpacked"
+debug = 0
+incremental = false
+
+[profile.test.build-override]
+debug = 0

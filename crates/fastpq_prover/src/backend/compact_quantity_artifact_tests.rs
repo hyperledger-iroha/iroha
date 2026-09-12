@@ -90,7 +90,7 @@ fn fixed_quantity_profile_is_nominal_distinct_and_codec_independent() {
     assert_ne!(expected, diagnostic_profile_id());
     assert_eq!(
         hex::encode(diagnostic_profile_id().0),
-        "19093354f57a228cf17a92d94212a4419167225d04e4e2ab46d0a2a6c6860ba4"
+        "0f1fcc226630bbf6f89e84dc6a4841868e4835b8d4a5d6a9261f057194a70676"
     );
     for flags in [0, 1, 2, 3, norito::core::default_encode_flags()] {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
@@ -264,6 +264,8 @@ fn complete_retained_quantity_artifact(is_axt: bool) {
     let f = fixture();
     let expected = f.expected();
     let label = if is_axt { "axt" } else { "ordinary" };
+    // TODO: Pin new six-lane bundle hashes from actual final-geometry proof
+    // captures; the old hash is retained as a failing migration control.
     let bundle_hash = if is_axt {
         "3ceff34c2ca74ef1554f23bc7e8ec1f4c493a286dd9e532614b511cdfbd5bb20"
     } else {

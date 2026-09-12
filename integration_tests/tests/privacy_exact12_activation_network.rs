@@ -34,7 +34,6 @@ use iroha_data_model::{
         Grant, InstructionBox, Log,
         privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
     },
-    metadata::Metadata,
     permission::Permission,
     privacy::{
         PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
@@ -45,6 +44,7 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use std::time::Duration;
 use tokio::time::{Instant, sleep, timeout};
@@ -451,7 +451,7 @@ fn intent_bound_privacy_transaction(
     let transaction = TransactionBuilder::from_payload(payload)
         .wrap_err("reopen unavailable-protocol payload")?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.client().key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("sign unavailable-protocol transaction")?;
     ensure!(
         transaction
@@ -909,7 +909,7 @@ async fn canonical_exact12_governance_survives_four_peer_activation_replay_and_r
         .await?;
         submit_instruction(
             &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account.clone()),
+            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account().clone()),
             "grant CanEnactGovernance for exact-12 activation",
         )
         .await?;

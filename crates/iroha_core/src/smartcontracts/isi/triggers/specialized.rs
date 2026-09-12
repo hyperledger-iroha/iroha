@@ -5,11 +5,11 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId,
     events::{EventFilter, EventFilterBox},
-    metadata::Metadata,
     prelude::*,
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::trace;
+use iroha_model_base::metadata::Metadata;
 #[cfg(feature = "json")]
 use norito::json::native::Number as JsonNumber;
 #[cfg(feature = "json")]
@@ -341,7 +341,10 @@ impl<F> LoadedAction<F> {
     }
 }
 /// Internal retry runtime state for scheduled time triggers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::triggers::specialized::TimeTriggerRetryState"
+)]
 pub struct TimeTriggerRetryState {
     /// Number of automatic retries already consumed.
     pub retries_used: u32,
@@ -368,7 +371,7 @@ impl json::JsonDeserialize for TimeTriggerRetryState {
             .map_err(|err| json::Error::Message(err.to_string()))?;
         let archived = norito::from_bytes::<TimeTriggerRetryState>(&bytes)
             .map_err(|err| json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::core::DeserializePayload::try_deserialize(archived)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
@@ -539,8 +542,10 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]
     use iroha_data_model::prelude::{
-        AccountId, DataEventFilter, InstructionBox, Level, Log, Metadata, Repeats,
+        AccountId, DataEventFilter, InstructionBox, Level, Log, Repeats,
     };
+    #[cfg(feature = "json")]
+    use iroha_model_base::metadata::Metadata;
     #[cfg(feature = "json")]
     use iroha_primitives::const_vec::ConstVec;
     #[cfg(feature = "json")]
@@ -553,6 +558,40 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn retry_state_json_preserves_one_complete_owned_frame() {
+        use base64::Engine as _;
+        let state = TimeTriggerRetryState {
+            retries_used: 2,
+            next_retry_at_ms: 42_000,
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &state,
+            "iroha_core::smartcontracts::isi::triggers::specialized::TimeTriggerRetryState",
+        );
+        let json = norito::json::to_json(&state).expect("retry state JSON");
+        let encoded: String = norito::json::from_json(&json).expect("base64 JSON field");
+        let frame = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("decode retry frame base64");
+        assert_eq!(frame, norito::to_bytes(&state).expect("retry owner frame"));
+        assert_eq!(
+            norito::json::from_json::<TimeTriggerRetryState>(&json)
+                .expect("persisted retry roundtrip"),
+            state,
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22]
+            .copy_from_slice(&norito::schema::identity::frame_hash::<iroha_crypto::Hash>());
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        for malformed in [wrong_owner, frame[..frame.len() - 1].to_vec(), trailing] {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(malformed);
+            let json = norito::json::to_json(&encoded).expect("base64 JSON control");
+            assert!(norito::json::from_json::<TimeTriggerRetryState>(&json).is_err());
+        }
     }
     #[cfg(feature = "json")]
     #[test]

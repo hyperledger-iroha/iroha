@@ -5,9 +5,10 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
             AccountAddress,
             rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
         },
-        nexus::{DataSpaceCatalog, DataSpaceId},
+        nexus::DataSpaceCatalog,
         sns::{NameControllerV1, NameRecordV1, NameStatus, NameTombstoneStateV1},
     };
+    use iroha_model_base::topology::DataSpaceId;
     let retired = checked_account_id();
     let active = checked_account_id();
     let unrelated = checked_account_id();
@@ -110,8 +111,9 @@ fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() 
         .transition_provenance
         .push(AccountRekeyTransitionProvenance::AccountIdRekey);
     state_transaction.world.replace_account_rekey_record(cyclic);
-    assert!(
-        !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-            .expect("malformed lineage check")
-    );
+    assert!(matches!(
+        initial_accounts_share_active_lineage(&state_transaction, &retired, &active),
+        Err(ValidationFail::InternalError(message))
+            if message == "account rekey lineage contains an active, duplicate, or cyclic predecessor"
+    ));
 }

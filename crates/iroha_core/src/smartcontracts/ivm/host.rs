@@ -27,7 +27,7 @@ use iroha_crypto::{Hash, HashOf, PublicKey, streaming::TransportCapabilityResolu
 #[cfg(test)]
 use iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1;
 use iroha_data_model::{
-    DataSpaceId, NetworkId, ValidationFail,
+    NetworkId, ValidationFail,
     account::rekey::AccountAlias,
     asset::{AssetBalancePolicy, AssetBalanceScope},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
@@ -82,7 +82,6 @@ use iroha_data_model::{
     soracloud::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
-    state_path::StatePath,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -90,6 +89,12 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::topology::DataSpaceId;
+use iroha_model_base::topology::LaneId;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     bigint::BigInt,
     calendar,
@@ -1569,7 +1574,7 @@ fn visit_bounded_durable_state_positions(
 #[cfg(test)]
 mod durable_state_merge_tests {
     use super::*;
-    use iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
+    use iroha_model_base::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
     #[test]
     fn bounded_merge_seeks_after_deleted_positions_and_stops_without_lookahead() {
@@ -4234,7 +4239,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
     /// Set the human-readable chain label returned by the chain-id sysvar.
-    pub fn set_chain_id(&mut self, chain: &iroha_data_model::ChainId) {
+    pub fn set_chain_id(&mut self, chain: &iroha_model_base::chain::ChainId) {
         self.default
             .set_chain_id_bytes(chain.to_string().into_bytes());
         self.chain_id_bytes = chain.to_string().into_bytes();
@@ -5999,7 +6004,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// by the current syscall policy, or the Norito payload cannot be decoded.
     pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
-        T: norito::codec::Decode + norito::codec::Encode,
+        T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
@@ -6033,7 +6038,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
-        T: norito::codec::Decode + norito::codec::Encode,
+        T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
@@ -6254,7 +6259,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn decode_header<T>(payload: &[u8]) -> Result<T, ivm::VMError>
     where
-        T: norito::codec::Decode + norito::codec::Encode,
+        T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         decode_canonical_norito(payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
@@ -11005,7 +11010,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_SM4_CCM_OPEN
         ) {
             return if self.crypto.sm_helpers_enabled() {
-                self.default.prepare_syscall(number, vm)
+                let quote = self.default.prepare_syscall(number, vm);
+                // A malformed request rejected during quoting never reaches syscall dispatch.
+                #[cfg(feature = "telemetry")]
+                if quote.is_err()
+                    && let Some(telemetry) = self.telemetry.as_ref()
+                {
+                    Self::record_sm_syscall(telemetry, number, &quote);
+                }
+                quote
             } else {
                 Ok(0)
             };
@@ -15836,7 +15849,7 @@ seiyaku PrivilegedBinding {
                 .expect("canonical test network id"),
             &host.authority,
             0,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::ActivateContractInstance {
@@ -15867,7 +15880,7 @@ seiyaku PrivilegedBinding {
                 .expect("canonical test network id"),
             &host.authority,
             1,
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let request = scode::DeactivateContractInstance {
@@ -17052,7 +17065,7 @@ seiyaku PrivilegedBinding {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "n1".parse().unwrap(),
         );
-        let key: iroha_data_model::name::Name = "k".parse().unwrap();
+        let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let value = iroha_primitives::json::Json::new("v");
         let nft_blob = norito::to_bytes(&nft_id).expect("encode nft id");
         let key_blob = norito::to_bytes(&key).expect("encode name");
@@ -17109,7 +17122,7 @@ seiyaku PrivilegedBinding {
         let program = build_program(&code, 0);
         vm.load_program(&program).unwrap();
         // payload is a Name
-        let key: iroha_data_model::name::Name = "k".parse().unwrap();
+        let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let key_blob = norito::to_bytes(&key).expect("encode key");
         // Wrong version
         let mut tlv_wrong_ver = Vec::new();
@@ -17186,6 +17199,7 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
     };
+    use iroha_model_base::chain::ChainId;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
@@ -19714,8 +19728,14 @@ seiyaku OpaqueInstructionSubmission {
             .syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("batch entry");
         for _ in 0..10_000 {
-            host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
-                .expect("over-limit batch entry remains metered");
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm),
+                Err(ivm::VMError::HostOutputBudgetExceeded {
+                    resource: ivm::HostOutputResource::Items,
+                    attempted: 2,
+                    limit: 1,
+                }),
+            );
         }
         let asset_id = AssetId::of(asset_def, from.clone());
         let isi = Transfer::asset_quantity(asset_id, amount, to);
@@ -19962,6 +19982,10 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn fastpq_batch_apply_rejects_noncanonical_amount() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::NonCanonicalNumeric"
+        )]
         #[derive(norito::Encode)]
         struct NonCanonicalNumeric {
             #[codec(compact)]
@@ -19969,6 +19993,10 @@ seiyaku OpaqueInstructionSubmission {
             #[codec(compact)]
             scale: u32,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::ForgedTransferAssetBatchEntry"
+        )]
         #[derive(norito::Encode)]
         struct ForgedTransferAssetBatchEntry {
             from: AccountId,
@@ -19976,6 +20004,10 @@ seiyaku OpaqueInstructionSubmission {
             asset_definition: AssetDefinitionId,
             amount: NonCanonicalNumeric,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::ForgedTransferAssetBatch"
+        )]
         #[derive(norito::Encode)]
         struct ForgedTransferAssetBatch {
             entries: Vec<ForgedTransferAssetBatchEntry>,
@@ -19997,7 +20029,55 @@ seiyaku OpaqueInstructionSubmission {
                 },
             }],
         };
-        let payload = norito::to_bytes(&batch).expect("encode batch");
+        let entry = &batch.entries[0];
+        let current = TransferAssetBatch::new(vec![TransferAssetBatchEntry::new(
+            entry.from.clone(),
+            entry.to.clone(),
+            entry.asset_definition.clone(),
+            1_u64,
+        )]);
+        let (current_payload, current_flags, forged_payload, flags) = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (current_payload, current_flags) =
+                norito::codec::encode_with_header_flags(&current);
+            let (forged_payload, flags) = norito::codec::encode_with_header_flags(&batch);
+            (current_payload, current_flags, forged_payload, flags)
+        };
+        let control = norito::core::frame_bare_with_header_flags::<TransferAssetBatch>(
+            &current_payload,
+            current_flags,
+        )
+        .unwrap();
+        assert_eq!(control, norito::encode_canonical(&current).unwrap());
+        let mut control_host = CoreHost::new(entry.from.clone());
+        let mut control_vm = IVM::new(1_000);
+        control_vm
+            .load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load control metadata");
+        let control_ptr = store_tlv(&mut control_vm, PointerType::NoritoBytes, &control);
+        control_vm.set_register(10, control_ptr);
+        let gas = control_host
+            .syscall(ivm_sys::SYSCALL_TRANSFER_V1_BATCH_APPLY, &mut control_vm)
+            .expect("current canonical amount passes through the same frame construction");
+        let expected = InstructionBox::from(current);
+        assert_eq!(gas, crate::gas::meter_instruction(&expected));
+        assert_eq!(control_host.queued, vec![expected]);
+        let payload = norito::core::frame_bare_with_header_flags::<TransferAssetBatch>(
+            &forged_payload,
+            flags,
+        )
+        .unwrap();
+        let view = norito::core::from_bytes_view(&payload)
+            .expect("valid current batch owner, length and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<TransferAssetBatch>()
+        );
+        assert_eq!(view.as_bytes(), forged_payload.as_slice());
+        let error = norito::decode_canonical::<TransferAssetBatch>(&payload)
+            .expect_err("noncanonical numeric payload must fail inside the actual batch owner");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
         assert!(matches!(
@@ -23786,10 +23866,10 @@ seiyaku Callee {
 
         artifacts
             .apply_to_transaction(&mut transaction, &authority)
-            .expect_err("missing verifying key must reject the queued proof");
+            .expect_err("restricted initial executor must reject the queued proof");
 
-        assert_eq!(transaction.zk_confidential_ops_in_tx, 1);
-        assert_eq!(transaction.zk_verify_calls_in_tx, 1);
+        assert_eq!(transaction.zk_confidential_ops_in_tx, 0);
+        assert_eq!(transaction.zk_verify_calls_in_tx, 0);
         assert_eq!(
             transaction.confidential_gas_used_in_tx, confidential_gas_delta,
             "host-artifact gas must be retained before queued execution can reject"
@@ -23801,9 +23881,9 @@ seiyaku Callee {
         let mut mutable_host_transaction = block.transaction();
         mutable_host
             .apply_queued(&mut mutable_host_transaction, &authority)
-            .expect_err("missing verifying key must reject the mutable host queue");
-        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 1);
-        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 1);
+            .expect_err("restricted initial executor must reject the mutable host queue");
+        assert_eq!(mutable_host_transaction.zk_confidential_ops_in_tx, 0);
+        assert_eq!(mutable_host_transaction.zk_verify_calls_in_tx, 0);
         assert_eq!(
             mutable_host_transaction.confidential_gas_used_in_tx, confidential_gas_delta,
             "mutable-host gas must be retained before queued execution can reject"
@@ -23955,7 +24035,7 @@ seiyaku DurableOwner {
         let commitment = [0x77; 32];
         let mut rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -23976,7 +24056,7 @@ seiyaku DurableOwner {
         let commitment = [0x78; 32];
         let mut rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24004,7 +24084,7 @@ seiyaku DurableOwner {
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24039,7 +24119,12 @@ seiyaku DurableOwner {
         let vk_bytes = norito::encode_canonical(&payload).expect("encode weak STARK key");
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
-            commitment, [0x43; 32], backend, circuit_id, "core", vk_bytes,
+            commitment,
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            backend,
+            circuit_id,
+            "core",
+            vk_bytes,
         );
         let mut host = CoreHost::new(fixture_account("alice"));
         assert!(
@@ -24063,7 +24148,7 @@ seiyaku DurableOwner {
         let id = VerifyingKeyId::new(backend, "cached-vk");
         let rec = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",
@@ -24097,7 +24182,7 @@ seiyaku DurableOwner {
         let id = VerifyingKeyId::new(backend, "original");
         let original = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24108,7 +24193,7 @@ seiyaku DurableOwner {
         let original_record = Arc::clone(host.verifying_keys.get(&id).expect("original record"));
         let mut missing_schedule = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24129,14 +24214,19 @@ seiyaku DurableOwner {
         assert_eq!(host.prepared_verifying_keys.len(), 1);
         let first = active_vk_record(
             commitment,
-            [0x42; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
             vk_bytes.clone(),
         );
         let second = active_vk_record(
-            commitment, [0x43; 32], backend, circuit_id, "core", vk_bytes,
+            commitment,
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            backend,
+            circuit_id,
+            "core",
+            vk_bytes,
         );
         assert!(
             host.set_verifying_keys(BTreeMap::from([
@@ -26900,7 +26990,7 @@ seiyaku DurableOwner {
         let backend = "halo2/ipa";
         let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
         let commitment = [0x61; 32];
-        let schema_hash = [5u8; 32];
+        let schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
         let mut rec = active_vk_record(
             commitment,
             schema_hash,
@@ -27074,7 +27164,7 @@ seiyaku DurableOwner {
 
         let mut prior_vk = active_vk_record(
             [0x71; 32],
-            [0x72; 32],
+            crate::zk::ivm_execution_public_inputs_schema_hash(),
             "halo2/ipa",
             crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
             "core",

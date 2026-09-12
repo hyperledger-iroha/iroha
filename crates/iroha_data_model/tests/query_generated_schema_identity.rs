@@ -1,5 +1,4 @@
 //! Captured complete frames for every concrete type emitted by `queries!`.
-#![cfg(feature = "json")]
 
 use std::{collections::BTreeMap, fmt::Debug};
 
@@ -8,12 +7,12 @@ use iroha_data_model::{
     account::{AccountAlias, AccountAliasDomain, address::ChainDiscriminantGuard},
     da::types::StorageTicketId,
     escrow::{AssetEscrowStatus, EscrowId},
-    nexus::{DataSpaceId, FeeSponsorProgramId, LaneId, LaneRelayEnvelopeRef, UniversalAccountId},
+    nexus::{FeeSponsorProgramId, LaneRelayEnvelopeRef, UniversalAccountId},
     oracle::{
         DefiOracleAttestationKey, FeedId, KeyedHash, OracleChangeId, OracleDisputeId,
         OracleProviderKey,
     },
-    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NftId},
+    prelude::{AccountId, AssetDefinitionId, AssetId, NftId},
     proof::{ProofId, ProofStatus},
     query,
     sorafs::{
@@ -37,8 +36,10 @@ use iroha_data_model::{
         reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
     },
 };
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    NoritoDeserialize, NoritoSerialize,
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 
@@ -58,6 +59,14 @@ where
     let bytes = norito::to_bytes(value).expect("encode generated query frame");
     let decoded: T = norito::decode_from_bytes(&bytes).expect("decode generated query frame");
     assert_eq!(&decoded, value);
+    let header = norito::core::Header::read(bytes.as_slice()).expect("read frame header");
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+    let mut wrong_schema = bytes.clone();
+    wrong_schema[6] ^= 1;
+    assert!(matches!(
+        norito::decode_from_bytes::<T>(&wrong_schema),
+        Err(norito::Error::SchemaMismatch)
+    ));
     hex(&bytes)
 }
 
@@ -73,8 +82,6 @@ where
         + PartialEq,
 {
     let identity_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), identity_hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), identity_hash);
     assert_eq!(T::frame_name(), T::nominal_name());
     let cases = values
         .into_iter()
@@ -97,14 +104,8 @@ where
         .collect();
     json::object([
         ("nominal", Value::String(T::nominal_name())),
-        (
-            "serialize_hash",
-            Value::String(hex(&<T as NoritoSerialize>::schema_hash())),
-        ),
-        (
-            "deserialize_hash",
-            Value::String(hex(&<T as NoritoDeserialize>::schema_hash())),
-        ),
+        ("serialize_hash", Value::String(hex(&identity_hash))),
+        ("deserialize_hash", Value::String(hex(&identity_hash))),
         ("cases", Value::Array(cases)),
     ])
     .expect("query type")

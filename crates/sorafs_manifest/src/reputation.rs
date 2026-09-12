@@ -50,6 +50,8 @@ pub const REPUTATION_EIGENTRUST_MAX_ITERATIONS: usize = 100;
 /// Convergence threshold for the L1 score delta, in basis points.
 pub const REPUTATION_EIGENTRUST_CONVERGENCE_L1_BPS: u64 = 1;
 /// Governance-controlled reputation weights expressed in basis points.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationWeightsV1")]
 #[derive(
     Debug,
     Clone,
@@ -116,6 +118,8 @@ impl ReputationWeightsV1 {
     }
 }
 /// Reserve+Rent lifecycle stage used as a reputation multiplier input.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationReserveStageV1")]
 #[derive(
     Debug,
     Clone,
@@ -152,6 +156,8 @@ impl ReputationReserveStageV1 {
     }
 }
 /// Degradation flags attached to a provider reputation entry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationDegradationFlagV1")]
 #[derive(
     Debug,
     Clone,
@@ -187,6 +193,8 @@ pub enum ReputationDegradationFlagV1 {
     LowScore,
 }
 /// Canonical provider metrics consumed by the reputation scorer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationProviderMetricsV1")]
 #[derive(
     Debug,
     Clone,
@@ -235,6 +243,8 @@ impl ReputationProviderMetricsV1 {
     }
 }
 /// Per-provider reputation input used for deterministic score generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationProviderInputV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -272,6 +282,8 @@ impl ReputationProviderInputV1 {
     }
 }
 /// Pairwise settlement-satisfaction trust edge used by the EigenTrust step.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationTrustEdgeV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -308,6 +320,8 @@ impl ReputationTrustEdgeV1 {
     }
 }
 /// Published provider reputation record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ProviderReputationV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -359,6 +373,8 @@ impl ProviderReputationV1 {
     }
 }
 /// Merkle proof for one provider reputation record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationMerkleProofV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -420,6 +436,8 @@ impl ReputationMerkleProofV1 {
     }
 }
 /// Published reputation snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationSnapshotV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -547,6 +565,8 @@ impl ReputationSnapshotV1 {
     }
 }
 /// Event emitted when a reputation snapshot is accepted for publication.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::ReputationSnapshotEventV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -2244,3 +2264,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("reputation/captured_owner_identity_tests.rs");

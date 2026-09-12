@@ -235,8 +235,8 @@ if [[ ! "$features" =~ ^$|^[A-Za-z0-9_+.-]+(,[A-Za-z0-9_+.-]+)*$ ]]; then
   printf 'features must be a canonical comma-separated feature list\n' >&2
   exit 1
 fi
-if [[ ! "$source_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
-  printf '%s\n' '--source-commit must be a full 40- or 64-hex commit identifier' >&2
+if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+  printf '%s\n' '--source-commit must be the exact 40-hex compiled release identity' >&2
   exit 1
 fi
 if [[ -z "$source_date_epoch" ]]; then
@@ -643,6 +643,7 @@ docker_build_args=(
   --build-arg "CONFIG_PROFILE=${config}"
   --build-arg "BINARIES=${binaries}"
   --build-arg "IROHA_GIT_COMMIT_HASH=${source_commit}"
+  --build-arg "VERGEN_GIT_SHA=${source_commit}"
   --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}"
   --build-arg "IROHA_RUST_BUILDER_IMAGE=${builder_base_image}"
   --build-arg "IROHA_RUNTIME_IMAGE=${runtime_base_image}"

@@ -164,7 +164,7 @@ impl Command {
 }
 impl Run for RootsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let value = client
             .client()
             .get_zk_roots_json(&self.asset_id, self.max)?;
@@ -183,7 +183,7 @@ pub struct VerifyBatchArgs {
 }
 impl Run for VerifyBatchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         if let Some(p) = self.norito {
             let body = read_zk_file_bounded(&p, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK verify batch")?;
             let value = client.client().post_zk_verify_batch_norito(&body)?;
@@ -306,7 +306,7 @@ pub struct ProofListArgs {
 }
 impl Run for ProofListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let mut filter = self.filter.as_filter()?;
         if self.ids_only {
             filter.ids_only = Some(true);
@@ -323,7 +323,7 @@ pub struct ProofCountArgs {
 }
 impl Run for ProofCountArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let filter = self.filter.as_filter()?;
         let count = client.get_zk_proofs_count(&filter)?;
         let value = json_utils::json_object(vec![("count", json_utils::json_value(&count)?)])?;
@@ -342,7 +342,7 @@ pub struct ProofGetArgs {
 }
 impl Run for ProofGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let backend =
             ensure_verifier_backend_registry_label_v1(&self.backend, "proof get backend")?;
         let hash_hex = parse_hex32_lower(&self.hash, "proof hash")?;
@@ -359,7 +359,7 @@ impl Run for ProofRetentionArgs {
             .operator_key_pair()
             .cloned()
             .ok_or_else(|| eyre::eyre!("proof retention requires an operator signing key"))?;
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let operator = client.operator_client(operator_key_pair)?;
         let status = operator.get_proof_retention_status()?;
         context.print_data(&status)?;
@@ -414,7 +414,7 @@ pub struct IvmDeriveArgs {
 }
 impl Run for IvmDeriveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM derive request")?;
         let value = client.post_zk_ivm_derive_json(&req)?;
         context.print_data(&value)?;
@@ -438,7 +438,7 @@ pub struct IvmProveArgs {
 }
 impl Run for IvmProveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let req: norito::json::Value = decode_zk_json_file(&self.json, "ZK IVM prove request")?;
         let created = client.post_zk_ivm_prove_json(&req)?;
         if !self.wait {
@@ -484,7 +484,7 @@ pub struct IvmProveGetArgs {
 }
 impl Run for IvmProveGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_zk_ivm_prove_job_json(&self.job_id)?;
         context.print_data(&value)?;
         Ok(())
@@ -498,7 +498,7 @@ pub struct IvmProveDeleteArgs {
 }
 impl Run for IvmProveDeleteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.delete_zk_ivm_prove_job_json(&self.job_id)?;
         context.print_data(&value)?;
         Ok(())
@@ -558,7 +558,7 @@ pub struct VoteTallyArgs {
 }
 impl Run for VoteTallyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.post_zk_vote_tally_json(&self.election_id)?;
         context.print_data(&value)?;
         Ok(())
@@ -599,7 +599,7 @@ pub struct AttachmentUploadArgs {
 }
 impl Run for AttachmentUploadArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let body = read_zk_file_bounded(&self.file, ZK_CLI_INPUT_MAX_BYTES_V1, "ZK attachment")?;
         let value = client.post_zk_attachment(&body, &self.content_type)?;
         context.print_data(&value)?;
@@ -610,7 +610,7 @@ impl Run for AttachmentUploadArgs {
 pub struct AttachmentListArgs {}
 impl Run for AttachmentListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_zk_attachments_list()?;
         context.print_data(&value)?;
         Ok(())
@@ -627,7 +627,7 @@ pub struct AttachmentGetArgs {
 }
 impl Run for AttachmentGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let (bytes, _ct) = client.get_zk_attachment_raw(&self.id)?;
         std::fs::write(&self.out, &bytes)?;
         context.println(format!(
@@ -646,7 +646,7 @@ pub struct AttachmentDeleteArgs {
 }
 impl Run for AttachmentDeleteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         client.delete_zk_attachment(&self.id)?;
         context.println("Deleted")?;
         Ok(())
@@ -740,7 +740,7 @@ fn select_attachment_ids(
 }
 impl Run for AttachmentCleanupArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let list = client.get_zk_attachments_list()?;
         let now_ms = now_ms_u64();
         let before_ms = if self.older_than_secs.is_some() {
@@ -1440,7 +1440,7 @@ enum VkSubmissionOperation {
 }
 fn signed_vk_register_transaction(
     client: &BlockingClient,
-    metadata: iroha::data_model::prelude::Metadata,
+    metadata: iroha_model_base::metadata::Metadata,
     prepared: PreparedVkSubmission,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
@@ -1458,7 +1458,7 @@ fn signed_vk_register_transaction(
 }
 fn signed_vk_update_transaction(
     client: &BlockingClient,
-    metadata: iroha::data_model::prelude::Metadata,
+    metadata: iroha_model_base::metadata::Metadata,
     prepared: PreparedVkSubmission,
     fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 ) -> Result<iroha::data_model::prelude::SignedTransaction> {
@@ -1638,7 +1638,7 @@ fn load_vk_submission(
 }
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Register)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
         let fee_payment = context.transaction_fee_payment()?;
@@ -1661,7 +1661,7 @@ pub struct VkUpdateArgs {
 }
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = BlockingClient::from_client(context.client_from_config())?;
+        let client = BlockingClient::from_client(context.client_from_config()?)?;
         let prepared = load_vk_submission(&self.json, VkSubmissionOperation::Update)?;
         let metadata = context.transaction_metadata().cloned().unwrap_or_default();
         let fee_payment = context.transaction_fee_payment()?;
@@ -1691,7 +1691,7 @@ impl Run for VkGetArgs {
         if name.is_empty() {
             eyre::bail!("verifying key get name must be non-empty");
         }
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let v = client.get_zk_vk_json(backend, name)?;
         context.print_data(&v)?;
         Ok(())

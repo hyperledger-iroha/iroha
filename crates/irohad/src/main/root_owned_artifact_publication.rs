@@ -1,4 +1,4 @@
-//! Root-custodied, immutable, no-replace artifact publication.
+//! Unix custody-test support for immutable, no-replace artifact publication.
 
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -299,63 +299,6 @@ fn require_no_xattrs(_opened: &fs::File, path: &Path, label: &str) -> Result<(),
 }
 
 impl RootOwnedNoReplaceArtifactPublicationTarget {
-    /// Prepare an absent root-owned destination while pinning its parent.
-    pub(super) fn prepare_root_owned(
-        path: &Path,
-        label: &'static str,
-    ) -> Result<Self, RootOwnedArtifactPublicationError> {
-        #[cfg(unix)]
-        {
-            let effective_uid = rustix::process::geteuid().as_raw();
-            if effective_uid != 0 {
-                return Err(RootOwnedArtifactPublicationError::pre_commit(format!(
-                    "{label} publication requires effective uid 0, got {effective_uid}"
-                )));
-            }
-            Self::pin_for_owner(path, 0, label, true)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = path;
-            Err(RootOwnedArtifactPublicationError::pre_commit(format!(
-                "root-owned atomic {label} publication is unsupported on this platform"
-            )))
-        }
-    }
-
-    /// Return the immutable final path.
-    #[must_use]
-    pub(super) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Read one bounded, stable artifact from a root-owned immutable path.
-    pub(super) fn read_root_owned_bounded(
-        path: &Path,
-        max_bytes: usize,
-        label: &'static str,
-    ) -> Result<Vec<u8>, String> {
-        #[cfg(unix)]
-        {
-            let effective_uid = rustix::process::geteuid().as_raw();
-            if effective_uid != 0 {
-                return Err(format!(
-                    "{label} read requires effective uid 0, got {effective_uid}"
-                ));
-            }
-            Self::pin_for_owner(path, 0, label, false)
-                .map_err(|error| error.to_string())?
-                .read_pinned_bounded(max_bytes)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (path, max_bytes);
-            Err(format!(
-                "root-owned stable {label} reads are unsupported on this platform"
-            ))
-        }
-    }
-
     /// Read using an explicit owner; exposed for Unix custody tests.
     #[cfg(all(test, unix))]
     pub(super) fn read_bounded_for_owner(

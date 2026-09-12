@@ -12,12 +12,14 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::peer::PeerId;
-use iroha_data_model::{ChainId, Registrable};
+use iroha_data_model::Registrable;
 use iroha_data_model::{
     account::{Account, AccountId},
-    domain::{Domain, DomainId},
+    domain::Domain,
 };
+use iroha_model_base::chain::ChainId;
+use iroha_model_base::domain::DomainId;
+use iroha_model_base::peer::PeerId;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
@@ -73,6 +75,7 @@ fn build_torii(
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -169,3 +172,6 @@ async fn push_registration_succeeds_with_credentials() {
     assert_eq!(devices, 1);
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

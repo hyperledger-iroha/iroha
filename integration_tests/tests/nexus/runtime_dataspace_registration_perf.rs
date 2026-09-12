@@ -17,13 +17,11 @@ use iroha::{
             Grant, InstructionBox,
             space_directory::{PublishSpaceDirectoryManifest, RevokeSpaceDirectoryManifest},
         },
-        metadata::Metadata,
         nexus::{
-            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-            LaneConfig, LaneId, LaneLifecyclePlan, LaneVisibility, ManifestEffect, ManifestEntry,
-            ManifestVersion, UniversalAccountId,
+            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, LaneConfig,
+            LaneLifecyclePlan, LaneVisibility, ManifestEffect, ManifestEntry, ManifestVersion,
+            UniversalAccountId,
         },
-        peer::PeerId,
         permission::Permission,
         prelude::Quantity,
         query::builder::prelude::QueryBuilderExt,
@@ -32,6 +30,9 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+use iroha_model_base::metadata::Metadata;
+use iroha_model_base::peer::PeerId;
+use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
@@ -596,7 +597,7 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
     let required_permission = Permission::from(CanPublishSpaceDirectoryManifest { dataspace });
     let grant_instruction = InstructionBox::from(Grant::account_permission(
         required_permission.clone(),
-        client.client().account.clone(),
+        client.client().account().clone(),
     ));
     let grant_tx = {
         let account = client.account_client();
@@ -618,7 +619,7 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
     .wrap_err("grant CanPublishSpaceDirectoryManifest permission transaction did not reach Approved state")?;
     wait_for_account_permissions(
         client,
-        &client.client().account,
+        client.client().account(),
         &[required_permission],
         "wait for CanPublishSpaceDirectoryManifest permission visibility",
     )
@@ -632,8 +633,9 @@ async fn submit_and_wait_for_tx_approval(
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(tx_hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(tx_hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -669,7 +671,7 @@ async fn submit_and_wait_for_tx_approval(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for transaction approval"))??;
-    events.close().await;
+    events.close().await?;
     Ok((submit_latency, commit_apply_started.elapsed()))
 }
 fn benchmark_manifest(uaid: UniversalAccountId, issued_ms: u64) -> AssetPermissionManifest {
@@ -1257,11 +1259,11 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
 mod tests {
     use super::{
         ALICE_ID, Algorithm, BENCH_MANIFEST_DATASPACE, BENCH_MANIFEST_DATASPACE_HASH, KeyPair,
-        NEXUS_ALIAS, PeerId, benchmark_lane_manifest_peer_bindings,
-        benchmark_lane_manifest_peer_seed, duration_min_avg_max, format_duration,
-        parse_positive_usize_override,
+        NEXUS_ALIAS, benchmark_lane_manifest_peer_bindings, benchmark_lane_manifest_peer_seed,
+        duration_min_avg_max, format_duration, parse_positive_usize_override,
     };
-    use iroha::data_model::nexus::DataSpaceId;
+    use iroha_model_base::peer::PeerId;
+    use iroha_model_base::topology::DataSpaceId;
     use std::time::Duration;
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
